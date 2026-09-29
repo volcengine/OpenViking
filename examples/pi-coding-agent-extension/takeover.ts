@@ -35,6 +35,7 @@ export function createTakeoverManager(opts: {
       },
       getWatermark: () => sync.syncedCount,
       droppedCount: () => sync.droppedCount,
+      lastCommitError: () => sync.lastCommitError,
       availableTools: () => typeof pi?.getActiveTools === "function" ? pi.getActiveTools() : [],
       log: opts.log,
     },

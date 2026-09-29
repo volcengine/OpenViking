@@ -80,6 +80,8 @@ export interface TakeoverIo {
   sleep?: (ms: number) => Promise<void>;
   /** Clock for handler deadlines; defaults to Date.now. */
   now?: () => number;
+  /** Why the last commit request returned no result, e.g. `HTTP 500: ...`. */
+  lastCommitError?: () => string;
   log?: (message: string) => void;
 }
 
@@ -112,6 +114,8 @@ export function buildOverviewMessage(overview: string, firstKeptTs?: number, bud
 export function countUndeliveredForSession(pendingEntries: any[], sid: string): number;
 export function deriveHistoryUri(archiveUri: string): string;
 export function commitOutcome(committed: unknown): CommitOutcome;
+/** A user-facing reading of a `skipped` commit's `reason`. */
+export function describeSkip(reason: string, keepRecentCount?: number): string;
 
 export type TakeoverState = TakeoverPersistedState & {
   coveredThroughEntryId: string;
@@ -128,6 +132,8 @@ export class TakeoverCore {
   constructor(opts?: { config?: TakeoverConfig; io?: TakeoverIo });
   get enabled(): boolean;
   get state(): TakeoverState;
+  /** Why the last commitAndAdvance() returned false; empty after a success. */
+  lastFailure: string;
   restore(entries: any[]): TakeoverState;
   /** `branch` is pi's `getBranch()`; the boundary is located on its context projection. */
   transformContext(messages: TakeoverMessage[], branch?: any[] | (() => any[])): TakeoverMessage[];

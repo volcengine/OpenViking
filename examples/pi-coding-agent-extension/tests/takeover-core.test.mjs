@@ -7,6 +7,7 @@ import {
   buildOverviewMessage,
   commitOutcome,
   countUndeliveredForSession,
+  describeSkip,
   countUserTurns,
   estimatePayloadTokens,
   estimateTokens,
@@ -1042,4 +1043,66 @@ test("shutdown persists deduped state once", async () => {
   await core.shutdown();
   assert.equal(calls.persisted.length, 1);
   assert.equal(calls.persisted[0].data.syncedEntryCount, 9);
+});
+
+test("a manual commit the server skips says why instead of a bare failure", async () => {
+  // 0.4.22 user report: /viking commit POSTed keep_recent_count=125, the server
+  // answered 200 `skipped: all_within_keep_window`, and pi only showed
+  // "commit failed".
+  const { core } = makeCore({
+    commitResult: {
+      status: "skipped", archived: false, archive_uri: null, task_id: null,
+      reason: "all_within_keep_window", trace_id: "",
+    },
+  });
+  const branch = branchOf(user("one"), assistant("a"), user("two"), assistant("b"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.match(core.lastFailure, /^nothing new to archive/);
+  assert.match(core.lastFailure, /all_within_keep_window/);
+  assert.match(core.lastFailure, / 2 most recent messages/);
+  assert.equal(core.state.coveredThroughEntryId, "");
+});
+
+test("a rejected commit carries the HTTP status and server message", async () => {
+  const { core } = makeCore({
+    commitResult: null,
+    io: { lastCommitError: () => "HTTP 500: Session commit failed: disk full" },
+  });
+  const branch = branchOf(user("one"), user("two"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.equal(core.lastFailure, "the server rejected the commit (HTTP 500: Session commit failed: disk full)");
+});
+
+test("every commit that does not advance records a reason; a success clears it", async () => {
+  const cases = [
+    ["too few turns", makeCore(), branchOf(user("only")), /nothing new to archive: the context needs more than 1 user turns/],
+    ["flush closed", makeCore({ flushResult: false }), branchOf(user("one"), user("two")), /not delivered yet/],
+    ["capture gap", makeCore({ syncResult: { permanentFailures: 1 } }), branchOf(user("one"), user("two")), /capture gap/],
+    ["no archive uri", makeCore({ commitResult: { status: "accepted", archived: true } }), branchOf(user("one"), user("two")), /no archive \(no_archive_uri\)/],
+    ["throws", makeCore({ io: { syncBranch: async () => { throw new Error("boom"); } } }), branchOf(user("one"), user("two")), /archive preparation failed: boom/],
+  ];
+  for (const [name, { core }, branch, expected] of cases) {
+    assert.equal(await core.commitAndAdvance(branch), false, name);
+    assert.match(core.lastFailure, expected, name);
+  }
+  const { core } = makeCore();
+  core.lastFailure = "stale";
+  assert.equal(await core.commitAndAdvance(branchOf(user("one"), user("two"))), true);
+  assert.equal(core.lastFailure, "");
+});
+
+test("an archive that failed on the server without a summary is named in the reason", async () => {
+  const { core } = makeCore({ overviews: [""], io: { archiveState: async () => "failed" } });
+  const branch = branchOf(user("one"), user("two"));
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.ok(core.state.pendingArchive);
+  assert.equal(await core.commitAndAdvance(branch), false);
+  assert.equal(core.state.pendingArchive, null);
+  assert.match(core.lastFailure, /^archive_001 failed on the server without a Working Memory summary/);
+});
+
+test("describeSkip reads the server skip reasons", () => {
+  assert.match(describeSkip("no_messages"), /no live messages/);
+  assert.match(describeSkip("all_within_keep_window", 125), /at most the 125 most recent messages/);
+  assert.equal(describeSkip("weird"), "the server skipped the archive (weird)");
 });

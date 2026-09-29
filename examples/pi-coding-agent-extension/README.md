@@ -411,6 +411,7 @@ TypeScript is loaded directly by pi's jiti transpiler. The official MCP client i
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
 | Takeover never advances                  | Pending addMessage replay or commit failed, or the archive summary never arrives (Working Memory disabled on the server) | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
+| `/viking commit`: `nothing new to archive … (all_within_keep_window)` | The server already archived everything older than the last `takeoverKeepRecentTurns` user turns (an earlier archive whose summary failed, a native-compaction archive, or a 0.3.x commit) | Nothing to fix; the next commit archives once more user turns accumulate. If it follows `archive_NNN failed on the server`, check the server log for the Phase 2 (Working Memory) error |
 
 ## License
 

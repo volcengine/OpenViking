@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SyncManager } from "../sync.ts";
+import { SyncManager, describeCommitError } from "../sync.ts";
 import { enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
@@ -113,6 +113,27 @@ test("commit writes failure trace_id to the pi debug log", async () => {
     assert.equal(record.data.trace_id, "trace-pi-error");
     assert.equal(record.data.error, "commit failed");
   });
+});
+
+test("a failed commit keeps its status and server message for /viking commit", async () => {
+  await withPendingDir(async () => {
+    let response = { result: null, status: 403, error: { message: "identity  deleted\n" } };
+    const sync = new SyncManager(client({ commitSessionResponse: async () => response }), config());
+    await sync.ensureSession("pi-commit-error");
+
+    assert.equal(await sync.commit({ queueOnFailure: false }), null);
+    assert.equal(sync.lastCommitError, "HTTP 403: identity deleted");
+    response = { result: { status: "accepted", archive_uri: "viking://archive/1" } };
+    assert.ok(await sync.commit({ queueOnFailure: false }));
+    assert.equal(sync.lastCommitError, "");
+  });
+});
+
+test("describeCommitError names a missing response and bounds the message", () => {
+  assert.equal(describeCommitError(0, { message: "fetch failed" }), "no response: fetch failed");
+  assert.equal(describeCommitError(undefined, null), "no response: unknown error");
+  const long = describeCommitError(500, { message: "x".repeat(300) });
+  assert.equal(long, `HTTP 500: ${"x".repeat(200)}…`);
 });
 
 test("queued addMessage makes takeover flush barrier false until replay succeeds", async () => {

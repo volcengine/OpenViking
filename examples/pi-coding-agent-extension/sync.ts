@@ -39,6 +39,8 @@ export class SyncManager {
    * signal. Takeover persists the resulting boolean with its own session state.
    */
   private droppedForever = 0;
+  /** Why the last commit request got no result, for `/viking commit` to show. */
+  private lastCommitFailure = "";
 
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
@@ -53,6 +55,8 @@ export class SyncManager {
   get syncedCount(): number { return this.syncedEntryCount; }
   /** Messages OpenViking will never receive; they are missing from the archive. */
   get droppedCount(): number { return this.droppedForever; }
+  /** `HTTP <status>: <server message>` of the last failed commit; empty after a success. */
+  get lastCommitError(): string { return this.lastCommitFailure; }
 
   /**
    * How many payloads the capture path would actually send for a slice of the
@@ -287,7 +291,10 @@ export class SyncManager {
   async commit(
     opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number } = {},
   ): Promise<any | null> {
-    if (!this.ovSessionId) return null;
+    if (!this.ovSessionId) {
+      this.lastCommitFailure = "no OpenViking session yet";
+      return null;
+    }
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,
@@ -295,6 +302,7 @@ export class SyncManager {
     );
     const result = response.result;
     if (!result) {
+      this.lastCommitFailure = describeCommitError(response.status, response.error);
       this.logger.log("commit", {
         session: this.ovSessionId,
         ok: false,
@@ -309,6 +317,7 @@ export class SyncManager {
       }
       return null;
     }
+    this.lastCommitFailure = "";
     this.logger.log("commit", {
       session: this.ovSessionId,
       ok: true,
@@ -320,6 +329,14 @@ export class SyncManager {
   async shutdown(): Promise<void> {
     return;
   }
+}
+
+/** One line for a failed commit request: status (0 = no response) and the server's message. */
+export function describeCommitError(status: number | undefined, error: any): string {
+  const code = Number(status) || 0;
+  const raw = String(error?.message || error?.code || "unknown error").replace(/\s+/g, " ").trim();
+  const message = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+  return code > 0 ? `HTTP ${code}: ${message}` : `no response: ${message}`;
 }
 
 async function hasProcessingMessage(sessionId: string): Promise<boolean> {

@@ -25,7 +25,7 @@ import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-gua
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
-import { HANDLER_BUDGET_MS } from "./lib/takeover-core.mjs";
+import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -447,9 +447,11 @@ export default async function (pi: ExtensionAPI) {
         const commitResult = config.takeoverEnabled ? null : await sync.commit();
         // Manual commit freezes and confirms the boundary against the current
         // branch, exactly like the automatic path.
+        // A `skipped` result archived nothing; it is not a successful commit.
+        const skipped = commitResult?.status === "skipped";
         const ok = config.takeoverEnabled
           ? await takeover.commitAndAdvance(() => ctx.sessionManager.getBranch())
-          : commitResult !== null;
+          : commitResult !== null && !skipped;
         if (!ok && config.takeoverEnabled && takeover.state.pendingArchive) {
           ctx.ui.notify(
             "OpenViking: committed; the context is trimmed once the archive summary is ready",
@@ -462,7 +464,19 @@ export default async function (pi: ExtensionAPI) {
             "info",
           );
         } else {
-          ctx.ui.notify("OpenViking: commit failed", "error");
+          // Say why: a bare "commit failed" left users with nothing to act on.
+          const reason = config.takeoverEnabled
+            ? takeover.lastFailure
+            : skipped
+              ? describeSkip(String(commitResult?.reason || ""), config.commitKeepRecentCount)
+              : sync.lastCommitError;
+          logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
+          if (reason.startsWith("nothing")) {
+            // Not an error: the server already holds this history.
+            ctx.ui.notify(`OpenViking: ${reason}`, "warning");
+          } else {
+            ctx.ui.notify(`OpenViking: commit failed${reason ? ` — ${reason}` : ""}`, "error");
+          }
         }
         return;
       }
