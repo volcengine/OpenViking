@@ -698,7 +698,7 @@ def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
     assert evaluation.communicate_checks[0].met is True
 
 
-def test_tau2_configure_tools_removes_only_openviking_tools():
+def test_tau2_configure_tools_keeps_read_file_and_lists_loader_tools_last():
     from benchmark.tau2.train.rollout_executor import _configure_tools
     from benchmark.tau2.train.rollout_executor_vikingbot import (
         normalize_tau2_experience_loader_mode,
@@ -721,6 +721,9 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
 
         def register(self, tool):
             self.registered.append(tool.name)
+
+        def get(self, name):
+            return SimpleNamespace(name=name)
 
     class FakeAgent:
         def __init__(self):
@@ -746,12 +749,18 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
 
     _configure_tools(agent, FakeProvider(), keep_default_tools=True)
 
-    assert agent.tools.unregistered == ["openviking_search", "openviking_memory_commit"]
-    assert agent.tools.tool_names == ["read_file", "web_search"]
+    assert agent.tools.unregistered == [
+        "read_file",
+        "openviking_search",
+        "openviking_memory_commit",
+        "web_search",
+    ]
+    # Business tools first; read_file (for the loader skill) and memory tools last.
     assert agent.tools.registered == [
+        "get_user_details",
+        "read_file",
         "search_experience",
         "read_experience",
-        "get_user_details",
     ]
 
     constraint_agent = FakeAgent()

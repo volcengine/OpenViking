@@ -230,7 +230,8 @@ def test_auto_experience_configuration_excludes_memory_tools_and_native():
         keep_default_tools=True,
         loader_mode="auto_experience",
     )
-    assert names == ["read_file"]
+    # No loader skill to read in auto_experience mode, so no default tool stays visible.
+    assert names == []
     tools.register.assert_not_called()
     prompt = module._build_system_prompt(
         "policy", keep_default_tools=True, rollout_language="default", loader_mode="auto_experience"
