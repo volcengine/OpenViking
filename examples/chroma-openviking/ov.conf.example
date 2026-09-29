@@ -1,0 +1,18 @@
+{
+  "storage": {
+    "workspace": "./data/chroma-ov-demo"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
+      "api_key": "set-me"
+    }
+  },
+  "vlm": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "api_key": "set-me"
+  }
+}
