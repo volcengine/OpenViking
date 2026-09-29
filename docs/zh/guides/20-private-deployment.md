@@ -38,6 +38,30 @@ ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
 
 `vikinglist` 里的下载地址带签名和有效期，返回 `HTTP 403` 时向交付方重新获取。部署机无法访问下载地址时，在联网机器下载后，把 `repo` 目录拷到部署机。部署机没有 Docker daemon 时，`skopeo login` 后给 `import-registry` 加 `--skopeo-bin "$(command -v skopeo)"`。Registry 中已有的同名 tag 默认跳过，可以放心重跑。`check-registry` 不再报告缺失镜像后继续。
 
+导入时注意：
+
+- Registry 不会自动建仓库时（如 Amazon ECR），先用 `import-registry --dry-run` 列出目标镜像，逐个创建仓库。
+- `--crane-bin` 会把 `.tar.gz` 直接交给 `crane push`，而 crane 只接受未压缩的 tar，会报 `archive/tar: invalid tar header`。改用 `--skopeo-bin`，或先 `gunzip` 再用 `crane push <file>.tar <target>` 逐个推送。
+- `import-registry` 遇到第一个失败就停止整批导入。修复原因后重跑即可，已导入的 tag 会跳过。
+
+**初始化镜像不在 `vikinglist` 中。** 使用 Flyway 自动初始化基础组件（随包《基础组件配置要求》方式二）时，初始化 Job 默认引用下面三个镜像。它们是 Docker Hub 上的公开镜像，需要自行同步到 Registry 的对应路径：
+
+| 用途 | 默认引用 | 公开来源 |
+| --- | --- | --- |
+| MySQL DDL | `${IMAGE_REGISTRY}/infra/apecloud/mysql:8.0.39` | `docker.io/apecloud/mysql:8.0.39` |
+| Kafka Topic | `${IMAGE_REGISTRY}/infra/apecloud/kafka:3.8.1-debian-12-r2` | `docker.io/apecloud/kafka:3.8.1-debian-12-r2` |
+| HBase 表、HDFS 目录 | `${IMAGE_REGISTRY}/infra/apecloud/hbase-hmaster:v2.5.6-1.0.0` | `docker.io/apecloud/hbase-hmaster:v2.5.6-1.0.0` |
+
+```bash
+crane copy docker.io/apecloud/mysql:8.0.39 "${IMAGE_REGISTRY}/infra/apecloud/mysql:8.0.39"
+crane copy docker.io/apecloud/kafka:3.8.1-debian-12-r2 "${IMAGE_REGISTRY}/infra/apecloud/kafka:3.8.1-debian-12-r2"
+crane copy docker.io/apecloud/hbase-hmaster:v2.5.6-1.0.0 "${IMAGE_REGISTRY}/infra/apecloud/hbase-hmaster:v2.5.6-1.0.0"
+```
+
+使用自备的客户端镜像时，在 `vdb.yaml` 的 `spec.global.flywayInitImages` 中配置 repository 和 tag。MySQL DDL 内置在 ovadmin 中，由 Flyway Job 执行，交付包里没有单独的 SQL 文件。
+
+`setup apply --dry-run` 会逐个检查 Registry 中的镜像，业务镜像和初始化镜像都同步完成后才能预览完整计划。
+
 隔离环境还要准备基础组件、模型服务，以及 License 续期和遥测回传方案；镜像到位不代表系统可以完全离线运行。
 
 ## 2. 生成并编辑配置
@@ -71,6 +95,26 @@ kubectl label node '<node-name>' nodeLevel=online --overwrite
 kubectl label node '<offline-node-name>' nodeLevel=offline --overwrite
 kubectl get nodes -L nodeLevel
 ```
+
+生成的 `vdb.yaml` 还要按实际环境补充或修改下面几项：
+
+| 项目 | 原因 | 做法 |
+| --- | --- | --- |
+| `spec.middleware.hdfs.configMapName` | `init config` 不生成此字段；缺少时 dry-run 也不会校验 HDFS ConfigMap | 手工加上 `hdfs: {configMapName: hadoop-config}`，名称与实际 ConfigMap 一致 |
+| `spec.observability.oneAgent.enabled` | `cluster` profile 默认为 `true`，one-agent 的下游写入 `viking-infra` namespace；没有配套观测栈时 apply 报 `namespaces "viking-infra" not found` | 未部署配套观测栈时设为 `false` |
+| 各组件 `replicas` 与 `resources` | 默认值按大规格节点估算，可能超出节点池容量 | 按节点池可分配容量调整，见[部署前检查](19-deployment-checklist.md) |
+| `spec.tbase` 调度 | 本版 Operator 不把 `spec.tbase` 下的 `tolerations` 渲染到 tbase-api / tbase-scan；直接修改 Deployment 会被授权 webhook 拒绝 | 专用节点带污点时，用 `spec.tbase.nodeSelector` 把 tbase 调度到无污点、容量足够的节点 |
+
+专用节点带污点时，其他组件在 `vdb.yaml` 中逐一配置 `tolerations` 即可生效。
+
+HDFS 模型目录要让 `root` 可写（原因见[部署前检查](19-deployment-checklist.md)）。Flyway 默认以 `hadoop` 用户创建目录并设为 `755`，运行时 fermat 以 `root` 写入。目录创建后，用 HDFS 管理员身份添加 ACL：
+
+```bash
+hdfs dfs -setfacl -R -m user:root:rwx,default:user:root:rwx,default:user:hadoop:rwx /home/vikingdb_data
+hdfs dfs -getfacl /home/vikingdb_data
+```
+
+HDFS 未开启 ACL 时，改用 `hdfs dfs -chown -R root /home/vikingdb_data` 或其他符合客户规范的授权方式。缺少写权限时，VikingDB 仍会 Ready，但索引一直停在 `INIT`。
 
 然后核对业务与 Operator namespace、外部依赖 Secret / ConfigMap 和 StorageClass。按随包《基础组件配置要求》完成依赖初始化。执行配置预检，并在配置所指定的 namespace 初始化拉镜像 Secret：
 
@@ -106,6 +150,19 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status
 ```
 
 `.vlic` 必须由本集群的 `fingerprint.json` 签发，其他集群的指纹或改过的文件都会校验失败。
+
+使用在线授权时，不需要 fingerprint 和 `.vlic`。同样等 CR 完成首次状态同步后，用一次性 activation code 激活，再用同一配置重跑 apply：
+
+```bash
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license activate \
+  --system-namespace viking-system \
+  --code '<activation-code>' \
+  --endpoint 'https://<license-endpoint>' \
+  --yes
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status vikingdb
+```
+
+activation code 只能成功使用一次，不要写入配置文件、脚本或日志。激活后 `license status` 的 Mode 为 `online`，续期和遥测由 Operator 自动完成，续期凭据保存在 `viking-system/viking-license-renewal`。离线和在线两种方式不能混用。等待授权时，CR 的原因文案固定为 `provide offline .vlic via import secret`，在线授权环境按本段激活即可。
 
 未启用授权时跳过授权步骤。确认 VikingDB Ready 后再继续：
 
@@ -190,6 +247,14 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check smoketest \
 ```
 
 生成配置内含 Root API Key，仅用于初始化与管理。业务数据访问需 User / Admin Key；P0 冒烟会 provision 测试 User Key。不要将客户端配置提交到代码库或贴入日志。
+
+生成配置把 Root API Key 写在 `api_key` 字段。较新的 `ov` CLI 执行 `--sudo` 管理命令时读取 `root_api_key` 字段，因此先在客户端配置中加一个值相同的 `root_api_key`，再注册业务用户，并把返回的 User Key 写回 `api_key`：
+
+```bash
+ov admin register-user default '<user-id>' --sudo
+```
+
+之后日常的 `ov` 命令使用 User Key，`root_api_key` 只留给管理命令。
 
 客户端在集群内可用 `gen-conf --endpoint-type service`。集群外需可访问的入口，可用 `--endpoint '<openviking-endpoint>'` 指定；生成配置不会替你创建 Ingress、TLS 或负载均衡。已存在的输出文件需确认后才加 `--force` 覆盖。
 
