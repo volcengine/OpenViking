@@ -83,7 +83,8 @@ int PersistStore::delete_data(const std::vector<std::string>& keys) {
 
 int PersistStore::clear_data() {
   leveldb::WriteBatch batch;
-  leveldb::Iterator* it = db_->NewIterator(leveldb::ReadOptions());
+  std::unique_ptr<leveldb::Iterator> it(
+      db_->NewIterator(leveldb::ReadOptions()));
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
     batch.Delete(it->key().ToString());
   }
