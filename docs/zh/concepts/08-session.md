@@ -101,12 +101,14 @@ class Message:
 commit() 分两阶段执行：
 
 **Phase 1（同步，立即完成）**：
+
 1. 递增 compression_index
 2. 写入消息到归档目录（`messages.jsonl`）
 3. 清空当前消息列表
 4. 返回 `task_id`
 
 **Phase 2（异步后台）**：
+
 5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
 6. 提取长期记忆
 7. 写入 `memory_diff.json`（记忆变更审计日志）到归档目录
