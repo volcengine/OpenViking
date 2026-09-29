@@ -687,6 +687,48 @@ def test_vectors_only_missing_file_uses_parent_overview_summary():
     assert action.summary == "Current overview summary."
 
 
+def test_vectors_only_reuses_one_overview_parse_per_parent(monkeypatch):
+    from openviking.storage import context_update_plan
+    from openviking.storage.context_update_plan import build_rfv_context_update_plan
+    from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
+
+    root = "viking://resources/demo"
+    snapshot = RFVSnapshot(
+        request=RequestIntent(root, "vectors_only"),
+        formal=RFVFormalSnapshot(
+            {
+                "": RFVEntry(root, "", True, {0: "root-l0", 1: "root-l1"}),
+                "a.md": RFVEntry(f"{root}/a.md", "a.md", False, {2: "a-md5"}),
+                "b.md": RFVEntry(f"{root}/b.md", "b.md", False, {2: "b-md5"}),
+            }
+        ),
+        vectors=VectorIndexSnapshot(
+            {
+                "root-l0": VectorRecordSnapshot("root-l0", root, "", 0, {"md5": "root-l0"}),
+                "root-l1": VectorRecordSnapshot("root-l1", root, "", 1, {"md5": "root-l1"}),
+            },
+            frozenset({"id", "uri", "level", "md5"}),
+        ),
+        source_contents={(root, 1): "already loaded overview"},
+    )
+    calls = []
+
+    def parse(overview):
+        calls.append(overview)
+        return {"a.md": "a summary", "b.md": "b summary"}
+
+    monkeypatch.setattr(context_update_plan, "parse_overview_file_summaries", parse)
+
+    _, plan = build_rfv_context_update_plan(
+        snapshot=snapshot,
+        context_type="resource",
+        account_id="acc",
+    )
+
+    assert [action.summary for action in plan.direct_index_actions] == ["a summary", "b summary"]
+    assert calls == ["already loaded overview"]
+
+
 @pytest.mark.asyncio
 async def test_non_recursive_semantic_plan_reuses_direct_child_summaries_without_rebuilding_them():
     from openviking.storage.context_update_plan import (

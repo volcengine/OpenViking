@@ -584,12 +584,19 @@ def _field_patch(request: RequestIntent, record: VectorRecordSnapshot | None) ->
 
 
 def _rfv_file_summary(
-    snapshot: Any, relative_path: str, record: VectorRecordSnapshot | None
+    snapshot: Any,
+    relative_path: str,
+    record: VectorRecordSnapshot | None,
+    overview_summaries: dict[str, Mapping[str, str]],
 ) -> str:
     parent_uri = _uri(snapshot.request.target_uri, _parent(relative_path))
     overview = snapshot.source_contents.get((parent_uri, 1))
     if isinstance(overview, (str, bytes)):
-        summary = parse_overview_file_summaries(overview).get(relative_path.rsplit("/", 1)[-1])
+        summaries = overview_summaries.get(parent_uri)
+        if summaries is None:
+            summaries = parse_overview_file_summaries(overview)
+            overview_summaries[parent_uri] = summaries
+        summary = summaries.get(relative_path.rsplit("/", 1)[-1])
         if summary:
             return summary
     return str(record.fields.get("abstract") or "") if record else ""
@@ -1148,6 +1155,7 @@ def build_rfv_context_update_plan(
             raise ValueError("RFV maintenance plan must not mutate formal content")
         return diff, plan
     records_by_path, duplicate_records = _records_by_path(snapshot.vectors.records_by_id)
+    overview_summaries: dict[str, Mapping[str, str]] = {}
     direct_actions: list[DirectIndexAction] = [
         DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
         for record in duplicate_records
@@ -1196,7 +1204,7 @@ def build_rfv_context_update_plan(
                         ),
                         field_patch=field_patch,
                         md5=entry.level_md5s.get(level),
-                        summary=_rfv_file_summary(snapshot, path, record),
+                        summary=_rfv_file_summary(snapshot, path, record, overview_summaries),
                     )
                 )
             elif field_patch is not None and record is not None:
