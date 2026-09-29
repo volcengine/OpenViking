@@ -3,7 +3,7 @@
 
 import pytest
 
-from openviking.message import Message, ToolPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.experience_lineage import (
@@ -79,6 +79,72 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
     ]
 
     assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri, opencode_uri]
+
+
+def test_collect_read_experience_uris_includes_skill_experience_injections():
+    first_uri = "viking://user/alice/memories/experiences/review.md"
+    second_uri = "viking://user/alice/memories/experiences/release.md"
+    messages = [
+        Message(
+            id="injected",
+            role="user",
+            parts=[
+                TextPart(
+                    text=(
+                        "Hook context:\n"
+                        '<openviking-context source="skill-experience" '
+                        'format="experience-digest">\n'
+                        "Relevant prior experience for skill: pr-review\n"
+                        f"- [experience 88%] Check migrations first. ({first_uri})\n"
+                        "- [experience 70%] Ignore another user's memory. "
+                        "(viking://user/bob/memories/experiences/private.md)\n"
+                        "- [experience 65%] Ignore non-experience memory. "
+                        "(viking://user/alice/memories/preferences/style.md)\n"
+                        f"- [experience 61%] Verify the release notes. ({second_uri})\n"
+                        "Use these as operational guidance, not user facts.\n"
+                        "</openviking-context>\n"
+                        f"Outside lookalike: - [experience 99%] ({first_uri})"
+                    )
+                )
+            ],
+        ),
+        Message(
+            id="explicit-read",
+            role="assistant",
+            parts=[
+                ToolPart(
+                    tool_id="read-1",
+                    tool_name="read",
+                    tool_input={"uri": first_uri},
+                    tool_status="completed",
+                )
+            ],
+        ),
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [first_uri, second_uri]
+
+
+def test_collect_read_experience_uris_ignores_other_context_envelopes():
+    uri = "viking://user/alice/memories/experiences/not-applied.md"
+    messages = [
+        Message(
+            id="other-context",
+            role="user",
+            parts=[
+                TextPart(
+                    text=(
+                        '<openviking-context source="auto-recall" '
+                        'format="experience-digest">\n'
+                        f"- [experience 99%] Recalled but not applied. ({uri})\n"
+                        "</openviking-context>"
+                    )
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == []
 
 
 @pytest.mark.parametrize(
