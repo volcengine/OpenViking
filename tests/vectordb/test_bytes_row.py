@@ -207,6 +207,31 @@ class TestBytesRow(unittest.TestCase):
         self.assertEqual(row.deserialize_field(serialized, "tags"), ["a", "b"])
         self.assertAlmostEqual(row.deserialize_field(serialized, "score"), 0.0, places=5)
 
+    def test_truncated_fixed_width_fields_use_defaults(self):
+        cases = [
+            ("int64", engine.FieldType.int64, 0x1122334455667788, -1),
+            ("uint64", engine.FieldType.uint64, 0x8877665544332211, 123),
+            ("float32", engine.FieldType.float32, 1.25, 2.5),
+        ]
+
+        for field_name, field_type, value, default_value in cases:
+            with self.subTest(field_type=field_type):
+                schema = engine.Schema(
+                    [{
+                        "name": field_name,
+                        "data_type": field_type,
+                        "id": 0,
+                        "default_value": default_value,
+                    }]
+                )
+                row = engine.BytesRow(schema)
+                serialized = row.serialize({field_name: value})
+
+                self.assertEqual(
+                    row.deserialize_field(serialized[:-1], field_name),
+                    default_value,
+                )
+
 
 class TestBytesRowConsistency(unittest.TestCase):
     def setUp(self):
