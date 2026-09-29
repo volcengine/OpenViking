@@ -51,7 +51,7 @@ class OVCLIConfig(BaseModel):
     # opaque so a harness can add its own knobs without touching this schema.
     plugin: Optional[Dict[str, Any]] = None
 
-    # Authentication mode: "api_key", "trusted", "ldap", "oidc"
+    # Authentication mode: "api_key", "ldap", "oidc"
     auth_mode: Optional[str] = None
     # LDAP credentials
     ldap_username: Optional[str] = None
@@ -77,7 +77,7 @@ class OVCLIConfig(BaseModel):
             raise ValueError("actor_peer_id cannot be used with agent_id")
 
         # auth_mode must be one of the supported types
-        valid_auth_modes = {None, "api_key", "trusted", "ldap", "oidc"}
+        valid_auth_modes = {None, "api_key", "ldap", "oidc"}
         if self.auth_mode not in valid_auth_modes:
             raise ValueError(
                 f"auth_mode must be one of: "
