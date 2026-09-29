@@ -16,6 +16,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.exceptions import UnauthenticatedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -89,8 +90,12 @@ async def health_check(request: Request):
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)
                 result["role"] = str(identity.role)
+            except UnauthenticatedError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to resolve identity: {e}")
+    except UnauthenticatedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get health check: {e}")
 

@@ -6,12 +6,14 @@
 import asyncio
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from openviking.server.app import _initialize_auth_plugin, _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
+from openviking_cli.exceptions import UnauthenticatedError
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -47,6 +49,35 @@ async def test_health_endpoint_resolves_identity_with_api_key(caplog, service):
     assert "role" in body
     assert body["role"] == "root"
     assert "Failed to resolve identity" not in caplog.text
+
+
+async def test_health_endpoint_rejects_invalid_api_key():
+    """An explicitly supplied invalid credential should not look healthy."""
+    app = create_app(
+        config=ServerConfig(
+            auth_mode="api_key",
+            host="127.0.0.1",
+            root_api_key="test-root-key",
+        ),
+        service=SimpleNamespace(),
+    )
+    app.state.auth_plugin = SimpleNamespace(
+        resolve_identity=AsyncMock(
+            side_effect=UnauthenticatedError("Invalid API Key"),
+        ),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health", headers={"X-API-Key": "stale-key"})
+
+    assert response.status_code == 401
+    assert response.json()["error"] == {
+        "code": "UNAUTHENTICATED",
+        "message": "Invalid API Key",
+        "details": {},
+    }
 
 
 async def test_health_endpoint_without_api_key():
@@ -98,7 +129,11 @@ async def test_health_trusted_identity_contract(root_key, credentials, caplog, s
     ) as client:
         response = await client.get("/health", headers=headers)
     body = response.json()
-    assert response.status_code == 200
+    expected_status = 401 if root_key and credentials in ("trusted", "malformed") else 200
+    assert response.status_code == expected_status
+    if expected_status == 401:
+        assert body["error"]["code"] == "UNAUTHENTICATED"
+        return
     if credentials == "keyed" or (credentials == "trusted" and not root_key):
         assert (body["account_id"], body["user_id"], body["role"]) == ("account-a", "alice", "user")
     else:
