@@ -34,7 +34,8 @@ BOUNDED = {
 async def _search_schema() -> dict:
     tools = await mcp_endpoint.mcp.list_tools()
     search = next(tool for tool in tools if tool.name == "search")
-    return search.inputSchema["properties"]
+    wire_tool = search.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return wire_tool["inputSchema"]["properties"]
 
 
 @pytest.mark.asyncio

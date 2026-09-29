@@ -19,14 +19,16 @@ from __future__ import annotations
 import base64
 import contextvars
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, ParamSpec, TypeVar, Union
 from urllib.parse import quote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     AudioContent,
@@ -41,6 +43,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking import __version__
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.uri_validation import (
@@ -62,6 +65,7 @@ from openviking.server.auth import (
     normalize_actor_peer_header,
     resolve_identity,
 )
+from openviking.server.config import DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -242,11 +246,26 @@ class _IdentityASGIMiddleware:
 # MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
-    "openviking",
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    stateless_http=True,
-)
+mcp = MCPServer("openviking", version=__version__)
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _translate_openviking_errors(
+    func: Callable[_P, Awaitable[_R]],
+) -> Callable[_P, Awaitable[_R]]:
+    """Expose expected OpenViking failures as actionable MCP tool errors."""
+
+    @wraps(func)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return await func(*args, **kwargs)
+        except OpenVikingError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
+
 
 # Each static profile describes the tool's most consequential supported mode.
 _READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
@@ -337,6 +356,7 @@ def _resolve_context_type_filter(
 
 
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def find(
     query: str,
     target_uri: str = "",
@@ -390,6 +410,7 @@ _MCP_CONTEXT_ONLY_ALIASES = {
 
 
 @mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def search(
     query: str,
     target_uri: str = "",
@@ -714,6 +735,7 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 @_mcp_error_results(structured_output=False)
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
+@_translate_openviking_errors
 async def read(
     uris: str | list[str],
     offset: int = 0,
@@ -866,6 +888,7 @@ async def read(
 
 
 @mcp.tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def ls(
     uri: str = "viking://",
     recursive: bool = False,
@@ -947,6 +970,7 @@ def _tree_abstract(entry: Dict[str, Any]) -> str:
 
 
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def tree(
     uri: str = "viking://",
     level_limit: int = 3,
@@ -1026,6 +1050,7 @@ class StoreMessage(BaseModel):
 
 
 @mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
@@ -1051,6 +1076,7 @@ async def remember(messages: list[StoreMessage]) -> str:
 
 
 @mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def write(
     uri: str,
     content: str,
@@ -1091,6 +1117,7 @@ async def write(
 
 
 @mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def edit(
     uri: str,
     old_string: str,
@@ -1263,6 +1290,7 @@ def _resource_add_error(result: Any) -> _MCPToolFailure | None:
 
 @_mcp_error_results()
 @mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1556,6 +1584,7 @@ def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> 
 
 @_mcp_error_results()
 @mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def add_skill(
     data: str = "",
     path: str = "",
@@ -1724,6 +1753,7 @@ async def add_skill(
 
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
@@ -1757,6 +1787,7 @@ async def list_watches() -> str:
 
 @_mcp_error_results()
 @mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -1801,6 +1832,7 @@ async def cancel_watch(to_uri: str) -> str:
 
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
 ) -> str:
@@ -1875,6 +1907,7 @@ async def grep(
 
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
@@ -1901,6 +1934,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 
 @mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def forget(uri: str, recursive: bool = False) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
 
@@ -1917,6 +1951,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 
 
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_translate_openviking_errors
 async def health() -> str:
     """Check whether the OpenViking server is healthy."""
     try:
@@ -2031,12 +2066,19 @@ async def mcp_lifespan():
         yield
 
 
-def create_mcp_app() -> ASGIApp:
+def create_mcp_app(
+    *,
+    max_request_body_size: int = DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES,
+) -> ASGIApp:
     """Create the MCP ASGI app with identity middleware.
 
     IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
     serving requests. The session manager task group must be initialized.
     """
-    starlette_app = mcp.streamable_http_app()
+    starlette_app = mcp.streamable_http_app(
+        stateless_http=True,
+        max_request_body_size=max_request_body_size,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
     handler = starlette_app.routes[0].app
     return _IdentityASGIMiddleware(handler)

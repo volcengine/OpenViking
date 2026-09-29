@@ -1780,6 +1780,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "127.0.0.1",
     "port": 1933,
+    "mcp_max_request_body_size_bytes": 4194304,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "profile_enabled": false,
@@ -1811,6 +1812,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
+| `mcp_max_request_body_size_bytes` | int | Maximum MCP Streamable HTTP request body size in bytes. Requests above the limit return HTTP 413 before JSON parsing or tool dispatch. | `4194304` (4 MiB) |
 | `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
@@ -1825,6 +1827,10 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
 | `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
 | `agent_evolution.enabled` | bool | Startup cluster default for Agent Evolution. Account and Cluster Admin settings may override it at runtime. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. Existing memories remain readable and searchable when disabled. | `false` |
+
+The 4 MiB default is a new limit introduced with the MCP SDK v2 migration; the previous MCP SDK did not impose a request-body limit here. It applies to request bodies for every MCP Streamable HTTP method. Keep the smallest limit required by your clients. Reverse proxies can enforce a lower limit.
+
+For large resource or skill files, use the upload flow returned by `add_resource` or `add_skill`. The `write` tool has no upload fallback. A trusted client that must send more than 4 MiB inline must increase this limit and any proxy limit, or split the content into smaller `write` calls using `create`/`replace` followed by `append`.
 
 Omitting `auth_mode` (or setting it to `null`) selects `api_key` when a non-empty `root_api_key` is configured, and `dev` otherwise. `dev` is allowed only on localhost and accepts requests without authentication. An empty-string `root_api_key` is invalid.
 

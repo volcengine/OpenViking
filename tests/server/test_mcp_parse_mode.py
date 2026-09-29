@@ -38,7 +38,8 @@ def mcp_context(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_context):
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    schema = tools["add_resource"].inputSchema
+    wire_tool = tools["add_resource"].model_dump(mode="json", by_alias=True, exclude_none=True)
+    schema = wire_tool["inputSchema"]
 
     assert "parse_mode" not in schema["properties"]
     assert "args" in schema["properties"]

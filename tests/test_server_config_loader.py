@@ -59,6 +59,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "workers": 2,
                     "executor_threads": 64,
                     "timeout_keep_alive": 120,
+                    "mcp_max_request_body_size_bytes": 8388608,
                     "auth_mode": "trusted",
                     "with_bot": True,
                     "bot_api_url": "http://localhost:19999",
@@ -77,6 +78,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.workers == 2
     assert config.executor_threads == 64
     assert config.timeout_keep_alive == 120
+    assert config.mcp_max_request_body_size_bytes == 8388608
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
     assert config.bot_api_url == "http://localhost:19999"
@@ -92,6 +94,7 @@ def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
 
     assert config.timeout_keep_alive == 5
     assert config.executor_threads == 0
+    assert config.mcp_max_request_body_size_bytes == 4 * 1024 * 1024
 
 
 def test_load_server_config_rejects_negative_default_executor_size(tmp_path):

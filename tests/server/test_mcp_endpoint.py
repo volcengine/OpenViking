@@ -9,12 +9,14 @@ and service dependency, avoiding MCP protocol complexity.
 
 import base64
 import re
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import AudioContent, ImageContent, TextContent
 from starlette.routing import Route
 
@@ -60,6 +62,25 @@ DEFAULT_CTX = RequestContext(
     user=UserIdentifier.the_default_user("test_user"),
     role=Role.ROOT,
 )
+
+
+def _wire_tool(tool):
+    return tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _tool_content(result):
+    return result if isinstance(result, list) else result.content
+
+
+def _wire_content(content):
+    return content.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+@contextmanager
+def _raises_tool_error(cause_type, match=None):
+    with pytest.raises(ToolError, match=match) as exc_info:
+        yield exc_info
+    assert isinstance(exc_info.value.__cause__, cause_type)
 
 
 @pytest.fixture(autouse=True)
@@ -192,7 +213,7 @@ async def test_search_tools_expose_only_context_type_parameter():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     for tool_name in ("find", "search"):
-        properties = tools[tool_name].inputSchema["properties"]
+        properties = _wire_tool(tools[tool_name])["inputSchema"]["properties"]
         assert "context_type" in properties
         assert "filter" not in properties
 
@@ -201,7 +222,7 @@ async def test_recall_tool_is_replaced_by_search_context_mode():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     assert "recall" not in tools
-    search_properties = tools["search"].inputSchema["properties"]
+    search_properties = _wire_tool(tools["search"])["inputSchema"]["properties"]
     assert search_properties["mode"]["enum"] == ["list", "context"]
     for parameter in (
         "query_expansion",
@@ -243,7 +264,7 @@ async def test_tool_schemas_are_portable():
     tools = await mcp_endpoint.mcp.list_tools()
     assert tools
     for tool in tools:
-        assert_portable(tool.inputSchema, tool.name)
+        assert_portable(_wire_tool(tool)["inputSchema"], tool.name)
 
 
 def test_portable_schema_collapses_unions():
@@ -652,7 +673,7 @@ async def test_find_tool_inlines_visible_content_when_requested(service, monkeyp
 
 
 async def test_search_tool_rejects_read_content_in_context_mode():
-    with pytest.raises(InvalidArgumentError, match="read_content"):
+    with _raises_tool_error(InvalidArgumentError, match="read_content"):
         await mcp_endpoint.search(query="visible", mode="context", read_content=True)
 
 
@@ -754,7 +775,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
 
 
 async def test_search_context_mode_rejects_target_uri():
-    with pytest.raises(InvalidArgumentError, match="target_uri.*mode='context'"):
+    with _raises_tool_error(InvalidArgumentError, match="target_uri.*mode='context'"):
         await search(
             query="what happened",
             mode="context",
@@ -786,7 +807,7 @@ async def test_search_mode_defaults_preserve_list_threshold_but_not_context_thre
 
 async def test_search_context_schema_uses_portable_scalar_types():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    properties = tools["search"].inputSchema["properties"]
+    properties = _wire_tool(tools["search"])["inputSchema"]["properties"]
 
     assert properties["detail"]["type"] == "string"
     assert properties["detail"]["enum"] == [
@@ -950,13 +971,15 @@ async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
     )
     uri = "viking://resources/notes.md"
 
-    result = await mcp_endpoint.mcp.call_tool(
-        "read",
-        {
-            "uris": uri,
-            "offset": 2,
-            "limit": 2,
-        },
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool(
+            "read",
+            {
+                "uris": uri,
+                "offset": 2,
+                "limit": 2,
+            },
+        )
     )
 
     assert isinstance(result, list)
@@ -995,13 +1018,13 @@ async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_byt
             )
         ),
     )
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = _tool_content(await mcp_endpoint.mcp.call_tool("read", {"uris": uri}))
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], ImageContent)
-    assert result[1].mimeType == mime_type
+    assert _wire_content(result[1])["mimeType"] == mime_type
     assert base64.b64decode(result[1].data) == image_bytes
     read_file_bytes.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
@@ -1026,14 +1049,16 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
     text_uri = "viking://resources/notes.md"
     image_uri = "viking://resources/chart.jpg"
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [text_uri, image_uri]})
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool("read", {"uris": [text_uri, image_uri]})
+    )
 
     assert isinstance(result, list)
     assert [block.type for block in result] == ["text", "text", "text", "image"]
     assert result[0].text == f"=== {text_uri} ==="
     assert result[1].text == "notes"
     assert result[2].text == f"=== {image_uri} ==="
-    assert result[3].mimeType == "image/jpeg"
+    assert _wire_content(result[3])["mimeType"] == "image/jpeg"
 
 
 @pytest.mark.parametrize(
@@ -1063,13 +1088,13 @@ async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_byt
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = _tool_content(await mcp_endpoint.mcp.call_tool("read", {"uris": uri}))
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], AudioContent)
-    assert result[1].mimeType == mime_type
+    assert _wire_content(result[1])["mimeType"] == mime_type
     assert base64.b64decode(result[1].data) == audio_bytes
 
 
@@ -1214,7 +1239,9 @@ async def test_read_rejects_media_batch_over_aggregate_limit_before_read(monkeyp
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [first_uri, second_uri]})
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool("read", {"uris": [first_uri, second_uri]})
+    )
 
     assert isinstance(result, list)
     assert "combined media size" in result[3].text
@@ -1245,7 +1272,7 @@ async def test_read_svg_remains_text(monkeypatch):
 async def test_read_tool_has_no_structured_output_schema():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
-    assert tools["read"].outputSchema is None
+    assert "outputSchema" not in _wire_tool(tools["read"])
 
 
 # ---------------------------------------------------------------------------
@@ -1891,7 +1918,7 @@ async def test_forget_directory_without_recursive_fails(service):
     await service.viking_fs.mkdir(dir_uri, ctx=ctx, exist_ok=True)
     await service.viking_fs.write(child_uri, "child data", ctx=ctx)
 
-    with pytest.raises(FailedPreconditionError):
+    with _raises_tool_error(FailedPreconditionError):
         await forget(uri=dir_uri)
 
 
@@ -1940,7 +1967,7 @@ async def test_forget_rejects_namespace_roots_for_non_root(
 
     token = _mcp_ctx.set(ctx)
     try:
-        with pytest.raises(PermissionDeniedError, match=re.escape(expected_message)):
+        with _raises_tool_error(PermissionDeniedError, match=re.escape(expected_message)):
             await forget(uri=uri, recursive=True)
     finally:
         _mcp_ctx.reset(token)
@@ -1974,7 +2001,7 @@ async def test_write_replace_overwrites_existing(service):
 async def test_write_create_fails_when_file_exists(service):
     uri = "viking://resources/test_write_create_exists.md"
     await write(uri=uri, content="v1")
-    with pytest.raises(AlreadyExistsError):
+    with _raises_tool_error(AlreadyExistsError):
         await write(uri=uri, content="v2", mode="create")
 
 
@@ -1987,21 +2014,21 @@ async def test_write_append_appends_to_existing(service):
 
 
 async def test_write_append_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
+    with _raises_tool_error(NotFoundError):
         await write(
             uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
         )
 
 
 async def test_write_create_rejects_disallowed_extension(service):
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_ext.csv", content="a,b\n", mode="create")
 
 
 async def test_write_rejects_derived_semantic_file(service):
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.abstract.md", content="x")
-    with pytest.raises(InvalidArgumentError):
+    with _raises_tool_error(InvalidArgumentError):
         await write(uri="viking://resources/test_write_derived/.relations.json", content="x")
 
 
@@ -2032,7 +2059,7 @@ async def test_edit_sequential_edits_compose(service):
 async def test_edit_requires_unique_match(service):
     uri = "viking://resources/test_edit_multi.md"
     await write(uri=uri, content="dup\ndup\n")
-    with pytest.raises(InvalidArgumentError, match="matches 2 locations"):
+    with _raises_tool_error(InvalidArgumentError, match="matches 2 locations"):
         await edit(uri=uri, old_string="dup", new_string="x")
 
 
@@ -2047,28 +2074,28 @@ async def test_edit_replace_all(service):
 async def test_edit_missing_old_string_fails(service):
     uri = "viking://resources/test_edit_missing.md"
     await write(uri=uri, content="alpha\n")
-    with pytest.raises(InvalidArgumentError, match="not found"):
+    with _raises_tool_error(InvalidArgumentError, match="not found"):
         await edit(uri=uri, old_string="zzz", new_string="x")
 
 
 async def test_edit_line_ending_mismatch_says_so(service):
     uri = "viking://resources/test_edit_crlf.md"
     await write(uri=uri, content="line 1\r\nline 2\r\n")
-    with pytest.raises(InvalidArgumentError, match="CRLF/LF"):
+    with _raises_tool_error(InvalidArgumentError, match="CRLF/LF"):
         await edit(uri=uri, old_string="line 1\nline 2\n", new_string="x")
-    with pytest.raises(InvalidArgumentError, match=r"not found in \S+\. Re-read"):
+    with _raises_tool_error(InvalidArgumentError, match=r"not found in \S+\. Re-read"):
         await edit(uri=uri, old_string="zzz", new_string="x")
 
 
 async def test_edit_empty_old_string_fails(service):
     uri = "viking://resources/test_edit_empty.md"
     await write(uri=uri, content="alpha\n")
-    with pytest.raises(InvalidArgumentError, match="must not be empty"):
+    with _raises_tool_error(InvalidArgumentError, match="must not be empty"):
         await edit(uri=uri, old_string="", new_string="x")
 
 
 async def test_edit_on_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
+    with _raises_tool_error(NotFoundError):
         await edit(uri="viking://resources/test_edit_ghost.md", old_string="a", new_string="b")
 
 
@@ -2166,29 +2193,31 @@ async def test_edit_user_root_file_via_canonical_uri(service):
 
 
 async def test_write_user_managed_subtree_rejected(service):
-    with pytest.raises(InvalidArgumentError, match="user root"):
+    with _raises_tool_error(InvalidArgumentError, match="user root"):
         await write(uri="viking://user/test_user/sessions/fake-session.md", content="x")
-    with pytest.raises(InvalidArgumentError, match="user root"):
+    with _raises_tool_error(InvalidArgumentError, match="user root"):
         await write(uri="viking://user/test_user/skills/demo/SKILL.md", content="x")
 
 
 async def test_write_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["write"].inputSchema["properties"]
+    schema = _wire_tool(tools["write"])["inputSchema"]
+    props = schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["content"]["type"] == "string"
     assert props["mode"]["enum"] == ["replace", "append", "create"]
-    assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
+    assert {"uri", "content"} <= set(schema.get("required", []))
 
 
 async def test_edit_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["edit"].inputSchema["properties"]
+    schema = _wire_tool(tools["edit"])["inputSchema"]
+    props = schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["old_string"]["type"] == "string"
     assert props["new_string"]["type"] == "string"
     assert props["replace_all"]["type"] == "boolean"
-    assert {"uri", "old_string", "new_string"} <= set(tools["edit"].inputSchema.get("required", []))
+    assert {"uri", "old_string", "new_string"} <= set(schema.get("required", []))
 
 
 # ---------------------------------------------------------------------------
