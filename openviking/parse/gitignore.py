@@ -19,13 +19,62 @@ def _is_comment_line(line: str) -> bool:
     return line.startswith("#")
 
 
-def _transform_gitignore_line(line: str, base_rel: str) -> str:
-    """
-    Transform a gitignore pattern line from a nested .gitignore to root-relative.
+def _strip_trailing_spaces(pattern: str) -> str:
+    """Strip unescaped trailing spaces, mirroring git's ``trim_trailing_spaces``.
 
-    - Patterns without '/' should match anywhere under base_rel.
-    - Patterns with '/' are scoped to base_rel.
-    - Leading '/' anchors to base_rel.
+    A backslash escapes the character that follows it, so ``foo\\ `` keeps its
+    trailing space (it names a file called ``foo ``) while ``foo  `` is
+    trimmed to ``foo``.  A plain ``str.rstrip(" ")`` would also eat escaped
+    spaces and leave a dangling backslash, which pathspec rejects.
+    """
+    last_space = None
+    i = 0
+    length = len(pattern)
+    while i < length:
+        char = pattern[i]
+        if char == " ":
+            if last_space is None:
+                last_space = i
+        else:
+            if char == "\\":
+                i += 1  # the next character is escaped, never a trailing space
+                if i >= length:
+                    return pattern  # lone trailing backslash: nothing to trim
+            last_space = None
+        i += 1
+    return pattern if last_space is None else pattern[:last_space]
+
+
+def _transform_gitignore_line(line: str, base_rel: str) -> str:
+    """Transform a gitignore pattern line from a nested .gitignore to root-relative.
+
+    Gitignore semantics (simplified)
+    --------------------------------
+    * Patterns without ``/`` match at any depth under the .gitignore's directory.
+    * Patterns containing ``/`` (including a leading ``/``) are anchored to the
+      .gitignore's directory.
+    * A trailing ``/`` marks a **directory-only** pattern -- it must be stripped
+      before the anchoring decision, then re-appended afterward.
+      (Without this, ``build/`` would look like a path with a separator and be
+      incorrectly anchored.)
+    * Trailing spaces are ignored unless escaped with a backslash.
+    * Negation prefix ``!`` is preserved through the transform.
+    * Degenerate patterns that match nothing in git (``/``, ``//``,
+      ``build///`` -- i.e. an empty body or an empty trailing path segment)
+      are transformed to the empty string, which pathspec treats as a no-op.
+
+    Parameters
+    ----------
+    line : str
+        A single .gitignore line (may include leading/trailing whitespace).
+    base_rel : str
+        Root-relative path of the directory containing the .gitignore file,
+        or ``""`` for the repository root.
+
+    Returns
+    -------
+    str
+        The transformed pattern line suitable for pathspec matching.
     """
     raw = line.rstrip("\n")
     if not raw or _is_comment_line(raw):
@@ -40,14 +89,34 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
     if not base_rel:
         return raw
 
-    scoped = pattern
-    if scoped.startswith("/"):
-        scoped = scoped.lstrip("/")
-        scoped = f"{base_rel}/{scoped}" if scoped else base_rel
-    elif "/" in scoped:
-        scoped = f"{base_rel}/{scoped}"
+    # Strip trailing whitespace per gitignore spec: trailing spaces are ignored
+    # unless escaped with a backslash.
+    scoped = _strip_trailing_spaces(pattern)
+    if not scoped:
+        return ""  # whitespace-only line -> empty (no-op) pattern
+
+    is_dir_only = scoped.endswith("/")
+    # Strip the single directory-only marker before deciding anchoring, then
+    # re-append it afterward.  Git strips exactly one trailing slash; if the
+    # body still ends with '/' (e.g. "build///") the pattern has an empty
+    # trailing segment and matches nothing in git, so emit a no-op.
+    body = scoped[:-1] if is_dir_only else scoped
+    if is_dir_only and (not body or body.endswith("/")):
+        return ""  # "/", "//", "build///", ... match nothing in git
+
+    if body.startswith("/"):
+        # Leading '/' anchors the pattern to base_rel.
+        body = body.lstrip("/")
+        scoped = f"{base_rel}/{body}" if body else base_rel
+    elif "/" in body:
+        # A non-leading '/' means the pattern is anchored to base_rel.
+        scoped = f"{base_rel}/{body}"
     else:
-        scoped = f"{base_rel}/**/{scoped}" if scoped else base_rel
+        # No '/' -- pattern matches at any depth under base_rel.
+        scoped = f"{base_rel}/**/{body}" if body else base_rel
+
+    if is_dir_only and scoped:
+        scoped = f"{scoped}/"
 
     return f"!{scoped}" if negated else scoped
 
