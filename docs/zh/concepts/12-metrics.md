@@ -217,8 +217,8 @@ scrape_configs:
 
 说明：
 
-- `openviking_model_*` 是统一模型视角，便于同时看 embedding / vlm
-- `openviking_vlm_*` 和 `openviking_embedding_*` 更适合业务侧针对性看板
+- `openviking_model_*` 是统一模型视角，便于同时看 embedding / rerank / vlm
+- `openviking_vlm_*`、`openviking_embedding_*` 和 `openviking_rerank_*` 更适合业务侧针对性看板
   - `*_requests_*` 更偏“业务请求视角”
   - `*_calls_* / *_call_duration_* / *_tokens_*` 更偏“模型调用视角”（按 `provider/model_name` 聚合）
  - `openviking_operation_tokens_total` 不存 `token_type="all/total"` 这类预聚合标签，总账建议在 TSDB 查询侧用 `sum(...)` 聚合得到
