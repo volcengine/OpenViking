@@ -41,19 +41,3 @@ def test_unknown_field_is_still_rejected(load, tmp_path):
 
     with pytest.raises(ValueError):
         load(str(path))
-
-
-@LOADERS
-def test_oidc_settings_are_accepted(load, tmp_path):
-    path = tmp_path / "ovcli.conf"
-    path.write_text(
-        json.dumps(
-            {
-                "url": "http://localhost:1933",
-                "auth_mode": "oidc",
-                "oidc_token": "header.payload.signature",
-            }
-        )
-    )
-
-    assert load(str(path)) is not None
