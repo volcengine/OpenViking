@@ -17,12 +17,16 @@ from openviking.session.memory.merge_op.base import (
     MergeOpBase,
     get_python_type_for_field,
 )
+from openviking.session.memory.utils.line_numbers import strip_line_numbers_if_present
 
 
 class ReplaceOp(MergeOpBase):
     """Full-replacement merge operation for string fields."""
 
     op_type = MergeOp.REPLACE
+
+    def __init__(self, field_type: FieldType | None = None):
+        self._field_type = field_type
 
     def get_output_schema_type(self, field_type: FieldType) -> Type[Any]:
         return get_python_type_for_field(field_type)
@@ -37,4 +41,6 @@ class ReplaceOp(MergeOpBase):
     async def apply(self, current_value: Any, patch_value: Any) -> Any:
         if patch_value is None or patch_value == "":
             return current_value
+        if self._field_type == FieldType.STRING and isinstance(patch_value, str):
+            return strip_line_numbers_if_present(patch_value)
         return patch_value
