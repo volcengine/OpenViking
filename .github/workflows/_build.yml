@@ -140,7 +140,7 @@ jobs:
         # Retry apt-get update
         for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
         apt-get install -y \
-          git ca-certificates cmake build-essential clang tzdata curl \
+          git ca-certificates cmake build-essential binutils clang tzdata curl \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
@@ -294,6 +294,9 @@ jobs:
         rm dist/*.whl
         mv dist_fixed/*.whl dist/
         rmdir dist_fixed
+
+    - name: Verify RAGFS wheel has no ASan runtime (Linux)
+      run: uv run python -m build_support.ragfs_wheel dist/*.whl
 
     - name: Smoke test built wheel (Linux)
       shell: bash
