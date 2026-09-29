@@ -19,6 +19,8 @@ from openviking_cli.retrieve.types import QueryResult, TypedQuery
 class SkillPackageRetriever(HierarchicalRetriever):
     """Reuse hit conversion and thresholds; keep package pagination out of general search."""
 
+    MIN_PAGE_SIZE = 10
+
     async def retrieve_skills(
         self,
         query: TypedQuery,
@@ -45,7 +47,7 @@ class SkillPackageRetriever(HierarchicalRetriever):
                 embedded = await embed_compat(self.embedder, query.query, is_query=True)
                 query_vector, sparse_vector = embedded.dense_vector, embedded.sparse_vector
 
-        page_size = max(limit, self.GLOBAL_SEARCH_TOPK)
+        page_size = max(limit, self.MIN_PAGE_SIZE)
         offset = 0
         seen = set()
         candidates = {}

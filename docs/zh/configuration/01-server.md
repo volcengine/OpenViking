@@ -158,7 +158,6 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 {
   "retrieval": {
     "hotness_alpha": 0,
-    "score_propagation_alpha": 1,
     "enable_intent": true
   }
 }
@@ -169,7 +168,6 @@ Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭�
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
 | `hotness_alpha` | number，`0`–`1` | `0` | 热度分数权重；`0` 表示关闭热度加权 |
-| `score_propagation_alpha` | number，`0`–`1` | `1` | 层级检索时子结果自身分数的权重 |
 | `enable_intent` | boolean | `true` | 有 `session_id` 时是否进行意图分析和查询规划 |
 
 Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK 请求中覆盖。`retrieval.enable_intent` 控制带 Session 的 Search 是否执行 LLM 查询规划；只有配置了可用的 `rerank` provider 时才会执行结果重排。

@@ -54,11 +54,9 @@ class Files:
 class PagedStore:
     collection_name = "context"
 
-    def __init__(self, records=(), children=None):
+    def __init__(self, records=()):
         self.records = list(records)
-        self.children = children or {}
         self.calls = []
-        self.child_calls = []
 
     async def _acl_enabled(self, ctx):
         return False
@@ -97,10 +95,6 @@ class PagedStore:
     async def filter_in_tenant(self, ctx, **kwargs):
         self.calls.append(kwargs)
         return self._page(self.records, kwargs)
-
-    async def search_children_in_tenant(self, ctx, parent_uri, **kwargs):
-        self.child_calls.append({"parent_uri": parent_uri, **kwargs})
-        return self._page(self.children.get(parent_uri, []), kwargs)
 
 
 def query(target=SKILLS):

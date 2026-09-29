@@ -1105,7 +1105,6 @@ Retrieval ranking configuration for final search scores.
 {
   "retrieval": {
     "hotness_alpha": 0.0,
-    "score_propagation_alpha": 1.0,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1115,7 +1114,6 @@ Retrieval ranking configuration for final search scores.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
-| `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `1.0` ignores the parent score (semantic similarity only); `0.5` is an equal blend with the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `1.0` |
 
 Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
 
@@ -2066,8 +2064,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "extra_headers": {}
   },
   "retrieval": {
-    "hotness_alpha": 0.0,
-    "score_propagation_alpha": 1.0
+    "hotness_alpha": 0.0
   },
   "encryption": {
     "enabled": false,

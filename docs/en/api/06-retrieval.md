@@ -17,12 +17,12 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 The core retrieval pipeline is as follows:
 
 ```
-Query → Intent Analysis (search only) → Vector Search (L0) → Rerank (L1) → Results
+Query → Intent Analysis (search only, optional) → Global Vector Search → Rerank (search only, optional) → Results
 ```
 
 1. **Intent Analysis** (search only): Understand query intent, expand queries
 2. **Vector Search**: Find candidates using embeddings
-3. **Rerank**: Re-score using content for better accuracy
+3. **Rerank**: THINKING with a usable reranker reranks `3 × limit` recalled candidates once; otherwise recall is limited to `limit` hits
 4. **Results**: Return top-k contexts
 
 ## API Reference
@@ -33,14 +33,12 @@ Basic vector similarity search without session context.
 
 #### 1. API Implementation Introduction
 
-The `find()` method performs pure vector similarity search for simple query scenarios. It uses hierarchical retrieval to search at the L0 summary level first, then matches in detail at L1/L2 levels.
+The `find()` method runs one global vector similarity search in QUICK mode for simple query scenarios. It recalls `limit` candidates and supports filtering by L0/L1/L2 through `level`.
 
 **Processing Pipeline**:
 1. Convert query text to vector
 2. Perform global vector search within specified target URI
-3. Use hierarchical retrieval strategy to recursively search relevant directories and files
-4. Optional: Use rerank model to optimize result ordering
-5. Return matched context list
+3. Apply the score threshold and return matched contexts without reranking
 
 **Code Entry Points**:
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK entry (HTTP)
@@ -374,7 +372,7 @@ The `search()` method adds session context understanding and intent analysis cap
 1. Load session context (if session_id is provided)
 2. Analyze query intent, understand actual needs combined with conversation history
 3. Expand queries to improve recall rate
-4. Execute same hierarchical retrieval pipeline as `find()`
+4. Run one global search per query; with a usable reranker, recall `3 × limit` candidates and rerank once to return at most `limit` results, otherwise recall `limit` hits directly
 5. Return search results with query plan
 
 **Code Entry Points**:

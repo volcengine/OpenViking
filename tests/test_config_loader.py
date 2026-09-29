@@ -450,7 +450,6 @@ def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch)
     config = OpenVikingConfig.from_dict({})
 
     assert config.retrieval.hotness_alpha == 0.0
-    assert config.retrieval.score_propagation_alpha == 1.0
     assert config.storage.transaction.redo_recovery_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
@@ -473,8 +472,7 @@ def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
-@pytest.mark.parametrize("field_name", ["hotness_alpha", "score_propagation_alpha"])
-def test_openviking_config_retrieval_alpha_validates_range(monkeypatch, field_name):
+def test_openviking_config_retrieval_alpha_validates_range(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -483,7 +481,7 @@ def test_openviking_config_retrieval_alpha_validates_range(monkeypatch, field_na
     )
 
     with pytest.raises(ValueError):
-        OpenVikingConfig.from_dict({"retrieval": {field_name: 1.5}})
+        OpenVikingConfig.from_dict({"retrieval": {"hotness_alpha": 1.5}})
 
     OpenVikingConfigSingleton.reset_instance()
 

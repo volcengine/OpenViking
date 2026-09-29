@@ -344,7 +344,7 @@ peer_enabled: true
 
 - `semantic.overview_generation`
   - 生效环节：目录级概览生成阶段
-  - 影响能力：目录 overview、层级检索与导航体验
+  - 影响能力：目录 overview、全局检索与导航体验
   - 作用：根据文件摘要和子目录 abstract 生成目录级 overview
   - 关键输入：`dir_name`、`file_summaries`、`children_abstracts`、`output_language`
 

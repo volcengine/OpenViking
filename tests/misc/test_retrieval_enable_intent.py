@@ -9,8 +9,8 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.retrieve.types import QueryResult
-from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
 def _ctx() -> RequestContext:
@@ -20,12 +20,13 @@ def _ctx() -> RequestContext:
 def _make_viking_fs(*, enable_intent: bool) -> VikingFS:
     fs = VikingFS.__new__(VikingFS)
     fs.agfs = MagicMock()
+    fs.acl_manager = None
     fs.query_embedder = MagicMock(name="embedder")
     fs.rerank_config = None
     fs.retrieval_config = RetrievalConfig(enable_intent=enable_intent)
     fs.vector_store = MagicMock(name="vector_store")
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_intent_test", default=None)
-    fs._ensure_access = MagicMock()
+    fs._ensure_access = AsyncMock()
     fs._get_vector_store = MagicMock(return_value=fs.vector_store)
     fs._get_embedder = MagicMock(return_value=fs.query_embedder)
     fs._ctx_or_default = MagicMock(return_value=_ctx())

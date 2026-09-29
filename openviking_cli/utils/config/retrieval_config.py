@@ -16,16 +16,6 @@ class RetrievalConfig(BaseModel):
             "0 disables hotness boost; 1 uses only hotness."
         ),
     )
-    score_propagation_alpha: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Weight for each child result's own score when blending with its parent score "
-            "during hierarchical retrieval. 0 uses only the parent score; "
-            "1 uses only the child score."
-        ),
-    )
     recall_intent_timeout_s: float = Field(
         default=5.0,
         gt=0.0,

@@ -158,7 +158,6 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 {
   "retrieval": {
     "hotness_alpha": 0,
-    "score_propagation_alpha": 1,
     "enable_intent": true
   }
 }
@@ -169,7 +168,6 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
 | `hotness_alpha` | number, `0`–`1` | `0` | Hotness score weight; `0` disables it |
-| `score_propagation_alpha` | number, `0`–`1` | `1` | Child-result score weight in hierarchical retrieval |
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
 
 Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.

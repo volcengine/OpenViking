@@ -58,7 +58,7 @@ class EmbeddingMsgConverter:
             if owner_fields is not None:
                 context_data["owner_user_id"] = owner_fields["owner_user_id"]
 
-        # Derive level field for hierarchical retrieval.
+        # Derive the level field used by retrieval filters.
         uri = context_data.get("uri", "")
         context_level = context.level
         if context_level is not None:

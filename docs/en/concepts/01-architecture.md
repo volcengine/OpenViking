@@ -55,7 +55,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 |--------|----------------|------------------|
 | **Client** | Unified entry | Provides all operation interfaces, delegates to Service layer |
 | **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, PackService, DebugService |
-| **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
+| **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), global retrieval (HierarchicalRetriever), Rerank |
 | **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
 | **Compressor** | Memory compression | Schema-driven memory extraction and LLM deduplication decisions |
@@ -99,12 +99,12 @@ Input → Parser → TreeBuilder → AGFS → SemanticQueue → Vector Index
 ### Retrieving Context
 
 ```
-Query → Intent Analysis → Hierarchical Retrieval → Rerank → Results
+Query → Intent Analysis → Global Retrieval → Rerank → Results
 ```
 
 1. **Intent Analysis**: Analyze query intent, generate 0-5 typed queries
-2. **Hierarchical Retrieval**: Directory-level recursive search using priority queue
-3. **Rerank**: Scalar filtering + model reranking
+2. **Global Retrieval**: One vector search per query within the permitted scope
+3. **Rerank**: Optional single pass over the recalled candidates
 4. **Results**: Return contexts sorted by relevance
 
 ### Session Commit

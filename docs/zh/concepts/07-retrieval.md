@@ -1,13 +1,11 @@
 # 检索机制
 
-OpenViking 采用两阶段检索：意图分析 + 层级检索 + Rerank。
+OpenViking 使用全局向量检索，并可在召回完成后对候选结果执行一次 Rerank。会话意图分析是独立的前置阶段。
 
 ## 概览
 
 ```
-查询 → 意图分析 → 层级检索 → Rerank → 结果
-         ↓           ↓          ↓
-     TypedQuery  目录递归    精排评分
+查询 → 意图分析（可选）→ 全局向量检索 → Rerank（可选）→ 结果
 ```
 
 ## find() vs search()
@@ -71,93 +69,32 @@ class TypedQuery:
 - **0 个查询**：闲聊、问候等不需要检索的场景
 - **多个查询**：复杂任务可能需要技能 + 资源 + 记忆
 
-## 层级检索
+## 全局检索
 
-HierarchicalRetriever 使用优先队列递归搜索目录结构。
+`HierarchicalRetriever` 对每条查询执行一次全局向量检索。目标目录、上下文类型、权限、元数据过滤和 `level` 一起限定搜索范围。未指定 `level` 时，文本查询可直接命中 L0/L1/L2；不再先定位目录再逐层搜索。
 
-### 流程
+### 检索模式
 
-```
-Step 1: 根据 context_type 确定根目录
-        ↓
-Step 2: 全局向量搜索定位起始目录
-        ↓
-Step 3: 合并起始点 + Rerank 评分
-        ↓
-Step 4: 递归搜索（优先队列）
-        ↓
-Step 5: 转换为 MatchedContext
-```
+| 模式 | 向量候选数 | Rerank |
+|------|------------|--------|
+| QUICK | `limit` | 不执行 |
+| THINKING，且配置了可用的 Rerank | `3 × limit` | 对召回候选统一执行一次，返回最多 `limit` 条 |
+| THINKING，未配置可用的 Rerank | `limit` | 不执行 |
 
-### 根目录映射
+`find()` 使用 QUICK。`search()` 配置了可用的 Rerank 时自动使用 THINKING，否则使用 QUICK。这是内部检索模式，不是 LLM 的思考参数，也不控制会话意图分析。意图分析生成的多条查询仍分别检索和排序，再按现有方式汇总。
 
-| context_type | 根目录 |
-|--------------|--------|
-| MEMORY | `viking://~/memories` |
-| RESOURCE | `viking://resources` |
-| SKILL | `viking://~/skills` 与 `viking://agent/skills` |
-
-### 递归搜索算法
-
-```python
-while dir_queue:
-    current_uri, parent_score = heapq.heappop(dir_queue)
-
-    # 搜索子节点
-    results = await search(parent_uri=current_uri)
-
-    for r in results:
-        # 分数传播
-        final_score = score_propagation_alpha * embedding_score + (1 - score_propagation_alpha) * parent_score
-
-        if final_score > threshold:
-            collected.append(r)
-
-            if not r.is_leaf:  # 目录继续递归
-                heapq.heappush(dir_queue, (r.uri, final_score))
-
-    # 收敛检测
-    if topk_unchanged_for_3_rounds:
-        break
-```
-
-### 关键参数
-
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| `retrieval.score_propagation_alpha` | 1.0 | 分数传播混合中子节点自身分数的权重；`1.0` 表示仅使用子节点自身分数，忽略父节点分数 |
-| `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
-| `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
+图像查询跳过文本 Rerank，候选数为 `limit`；未指定 `level` 时默认搜索 L2。
 
 ## Rerank 策略
 
-Rerank 在 THINKING 模式下对候选结果精排。
+Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例如 `limit=10`，启用 Rerank 时先召回向量分数最高的 30 条，再按 Rerank 结果返回最多 10 条；未启用时直接召回 10 条。
 
-### 触发条件
+- 使用候选索引记录的 `abstract` 字段作为 Rerank 文本。
+- 分数阈值在 Rerank 后应用；未启用 Rerank 时使用向量分数。
+- Rerank 请求失败或返回无效结果时，保留已有的向量分数回退行为。
+- 不再使用目录优先队列、父子分数传播或多轮收敛判断。
 
-- 配置了 Rerank AK/SK
-- 使用 THINKING 模式（search() 默认）
-- 如果 rerank 返回无效结果或 API 调用失败，会回退到向量分数
-
-### 评分方式
-
-```python
-if rerank_client and mode == THINKING:
-    scores = rerank_client.rerank_batch(query, documents)
-else:
-    scores = [r["_score"] for r in results]  # 向量分数
-```
-
-### 使用位置
-
-1. **起始点评估**：评估全局搜索的候选目录
-2. **递归搜索**：评估每层的子节点
-
-### 后端支持
-
-| 后端 | 模型 |
-|------|------|
-| Volcengine | doubao-seed-rerank |
+支持的 provider 和配置见 [Rerank 配置](../guides/01-configuration.md#rerank)。
 
 ## 检索结果
 

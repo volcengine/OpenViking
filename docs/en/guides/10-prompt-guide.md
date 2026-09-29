@@ -344,7 +344,7 @@ These prompts are mainly used to generate file-level and directory-level summari
 
 - `semantic.overview_generation`
   - Effective stage: directory overview generation stage
-  - Affects: directory overviews, hierarchical retrieval, and navigation experience
+  - Affects: directory overviews, global retrieval, and navigation experience
   - Purpose: generates a directory-level overview from file summaries and child directory abstracts
   - Key inputs: `dir_name`, `file_summaries`, `children_abstracts`, `output_language`
 

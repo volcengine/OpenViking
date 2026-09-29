@@ -54,7 +54,7 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 |------|------|---------|
 | **Client** | 统一入口 | 提供所有操作接口，委托给 Service 层 |
 | **Service** | 业务逻辑 | FSService、SearchService、SessionService、ResourceService、PackService、DebugService |
-| **Retrieve** | 上下文检索 | 意图分析（IntentAnalyzer）、层级检索（HierarchicalRetriever）、Rerank 精排 |
+| **Retrieve** | 上下文检索 | 意图分析（IntentAnalyzer）、全局检索（HierarchicalRetriever）、Rerank 精排 |
 | **Session** | 会话管理 | 消息记录、使用追踪、会话压缩、记忆提交 |
 | **Parse** | 上下文提取 | 文档解析（PDF/MD/HTML）、树构建（TreeBuilder）、异步语义生成 |
 | **Compressor** | 记忆压缩 | Schema 驱动的记忆提取、LLM 去重决策 |
@@ -98,12 +98,12 @@ OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存�
 ### 检索上下文
 
 ```
-查询 → 意图分析 → 层级检索 → Rerank → 结果
+查询 → 意图分析 → 全局检索 → Rerank → 结果
 ```
 
 1. **意图分析**：分析查询意图，生成 0-5 个类型化查询
-2. **层级检索**：目录级递归搜索，使用优先队列
-3. **Rerank**：标量过滤 + 模型重排
+2. **全局检索**：每条查询在权限范围内执行一次向量搜索
+3. **Rerank**：可选，对召回候选统一精排一次
 4. **结果**：返回按相关性排序的上下文
 
 ### 会话提交
