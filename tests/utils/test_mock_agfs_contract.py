@@ -1,0 +1,401 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+"""Contract tests for the AGFS test double.
+
+These tests keep tests.utils.mock_agfs.MockLocalAGFS in sync with the
+production AGFS interface the rest of the codebase dispatches through
+AsyncAGFSClient. If the production interface grows or changes, these tests
+fail until the test double catches up.
+"""
+
+import inspect
+import re
+from pathlib import Path
+
+import pytest
+
+from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.protocols import AGFSSyncClientProtocol
+from tests.utils.mock_agfs import MockLocalAGFS
+
+
+def _async_client_run_method_names() -> set[str]:
+    """Collect every sync client method name AsyncAGFSClient dispatches via run()."""
+    source = inspect.getsource(AsyncAGFSClient)
+    return set(re.findall(r'self\.run\(\s*"([a-z_]+)"', source))
+
+
+def _protocol_method_names() -> set[str]:
+    """Collect every method name required by AGFSSyncClientProtocol."""
+    names = set()
+    for name, member in inspect.getmembers(AGFSSyncClientProtocol):
+        if name.startswith("_"):
+            continue
+        if inspect.isfunction(member):
+            names.add(name)
+    return names
+
+
+def _make_mock(tmp_path: Path) -> MockLocalAGFS:
+    return MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
+
+
+class TestMockAgfsSatisfiesProductionProtocol:
+    """The test double must implement the documented sync client protocol."""
+
+    def test_mock_is_agfs_sync_client_protocol(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        assert isinstance(mock, AGFSSyncClientProtocol)
+
+    def test_mock_implements_every_protocol_method(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        missing = sorted(_protocol_method_names() - set(dir(mock)))
+        assert not missing, f"MockLocalAGFS missing protocol methods: {missing}"
+
+    def test_mock_implements_every_async_dispatch_method(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        missing = sorted(_async_client_run_method_names() - set(dir(mock)))
+        assert not missing, f"MockLocalAGFS missing dispatch methods: {missing}"
+
+
+class TestMockAgfsPathlockContract:
+    """Pathlock behavior must match the semantics production code relies on."""
+
+    def test_acquire_returns_owned_lease(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        assert lease["owned"] is True
+        assert lease["lease_ref"]
+        assert lease["ownership_ref"]
+        assert lease["owner_id"]
+        assert lease["lock_paths"] == ["/local/test/a.txt"]
+
+    def test_release_frees_lock(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        mock.pathlock_release(None, lease)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is False
+
+    def test_acquired_lock_is_observed(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        snapshot = mock.pathlock_observe(None)
+        assert snapshot["active_locks"] >= 1
+
+    def test_acquire_batch_acquires_all(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact_batch(
+            None,
+            ["/local/test/a.txt", "/local/test/b.txt"],
+        )
+        assert lease["owned"] is True
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        assert mock.pathlock_is_locked(None, "/local/test/b.txt") is True
+        mock.pathlock_release(None, lease)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is False
+        assert mock.pathlock_is_locked(None, "/local/test/b.txt") is False
+
+    def test_reentrant_acquire_reuses_owner_and_reference_counts(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        path = "/local/test/a.txt"
+        outer = mock.pathlock_acquire_exact(None, path)
+        nested = mock.pathlock_acquire_exact(None, path, owner_lease_ref=outer)
+        assert nested["owner_id"] == outer["owner_id"]
+        assert nested["lease_ref"] != outer["lease_ref"]
+
+        mock.pathlock_release(None, outer)
+        assert mock.pathlock_is_locked(None, path) is True
+        mock.pathlock_release(None, nested)
+        assert mock.pathlock_is_locked(None, path) is False
+
+    def test_reentrant_acquire_rejects_forged_owner_capability(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        outer = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(outer, ownership_ref="attacker-value")
+        with pytest.raises(ValueError, match="capability does not match"):
+            mock.pathlock_acquire_exact(
+                None,
+                "/local/test/a.txt",
+                owner_lease_ref=forged,
+            )
+        mock.pathlock_release(None, outer)
+
+    def test_tree_handoff_preserves_covered_path_kind(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_tree(None, "/local/test/tree")
+        handoff = mock.pathlock_to_handoff(None, lease)
+        assert handoff["covered_paths"] == [{"path": "/local/test/tree", "kind": "tree"}]
+        mock.pathlock_release(None, lease)
+
+    def test_mixed_batch_preserves_kinds_and_prefers_tree_for_same_path(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact_tree_batch(
+            None,
+            ["/local/test/exact", "/local/test/shared"],
+            ["/local/test/tree", "/local/test/shared"],
+        )
+        handoff = mock.pathlock_to_handoff(None, lease)
+        assert handoff["covered_paths"] == [
+            {"path": "/local/test/exact", "kind": "exact"},
+            {"path": "/local/test/shared", "kind": "tree"},
+            {"path": "/local/test/tree", "kind": "tree"},
+        ]
+        mock.pathlock_release(None, lease)
+
+    def test_borrowed_lease_cannot_release(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        borrowed = mock.pathlock_as_borrowed(None, owned)
+        assert borrowed["owned"] is False
+        assert borrowed["owner_id"] == owned["owner_id"]
+        assert borrowed["lock_paths"] == owned["lock_paths"]
+        assert "ownership_ref" not in borrowed
+        with pytest.raises(ValueError):
+            mock.pathlock_release(None, borrowed)
+        with pytest.raises((TypeError, ValueError)):
+            mock.pathlock_release(None, borrowed["lease_ref"])
+
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            lambda mock, lease: mock.pathlock_refresh(None, lease),
+            lambda mock, lease: mock.pathlock_release(None, lease),
+            lambda mock, lease: mock.pathlock_release_selected(None, lease, ["/local/test/a.txt"]),
+            lambda mock, lease: mock.pathlock_to_handoff(None, lease),
+            lambda mock, lease: mock.pathlock_handoff(None, lease),
+        ],
+    )
+    def test_owned_lifecycle_rejects_forged_ownership_ref(self, tmp_path, operation):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(owned, ownership_ref="attacker-value")
+        with pytest.raises(ValueError, match="capability does not match"):
+            operation(mock, forged)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        mock.pathlock_release(None, owned)
+
+    def test_handoff_uses_canonical_lease_metadata(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        forged = dict(owned, owner_id="forged-owner", lock_paths=["/local/test/b.txt"])
+        handoff = mock.pathlock_to_handoff(None, forged)
+        assert handoff["owner_id"] == owned["owner_id"]
+        assert handoff["lock_paths"] == owned["lock_paths"]
+        mock.pathlock_release(None, owned)
+
+    def test_handoff_and_adopt_roundtrip(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        assert handoff["lease_ref"] == owned["lease_ref"]
+        assert handoff["lock_paths"]
+        mock.pathlock_handoff(None, owned)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        with pytest.raises(ValueError):
+            mock.pathlock_release(None, owned)
+        adopted = mock.pathlock_adopt(None, handoff)
+        assert adopted["owned"] is True
+        assert adopted["lease_ref"] != owned["lease_ref"]
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        mock.pathlock_release(None, adopted)
+
+    def test_adopt_requires_pending_handoff(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+        mock.pathlock_release(None, owned)
+
+    def test_adopt_rejects_forged_lock_paths(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["lock_paths"] = ["/local/test/b.txt"]
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is True
+        handoff["lock_paths"] = ["/local/test/a.txt"]
+        adopted = mock.pathlock_adopt(None, handoff)
+        mock.pathlock_release(None, adopted)
+
+    def test_adopt_rejects_forged_owner(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["owner_id"] = "forged-owner"
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+
+    def test_adopt_rejects_forged_coverage(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        handoff = mock.pathlock_to_handoff(None, owned)
+        mock.pathlock_handoff(None, owned)
+        handoff["covered_paths"] = [{"path": "/local/test/b.txt", "kind": "exact"}]
+        with pytest.raises(ValueError):
+            mock.pathlock_adopt(None, handoff)
+
+    def test_release_selected_keeps_others(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        lease = mock.pathlock_acquire_exact_batch(
+            None,
+            ["/local/test/a.txt", "/local/test/b.txt"],
+        )
+        mock.pathlock_release_selected(None, lease, ["/local/test/a.txt"])
+        assert mock.pathlock_is_locked(None, "/local/test/a.txt") is False
+        assert mock.pathlock_is_locked(None, "/local/test/b.txt") is True
+        mock.pathlock_release(None, lease)
+
+    def test_acquire_batch_rejects_invalid_requests(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        with pytest.raises(ValueError):
+            mock.pathlock_acquire_batch(None, [])
+        with pytest.raises(ValueError):
+            mock.pathlock_acquire_batch(None, [{"kind": "exact"}])
+        with pytest.raises(ValueError):
+            mock.pathlock_acquire_batch(None, [{"path": "relative", "kind": "tree"}])
+        with pytest.raises(ValueError):
+            mock.pathlock_acquire_batch(None, [{"path": "/local/test/a", "kind": "other"}])
+
+    def test_refresh_reports_state(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        owned = mock.pathlock_acquire_exact(None, "/local/test/a.txt")
+        assert mock.pathlock_refresh(None, owned) == "refreshed"
+        mock.pathlock_release(None, owned)
+        with pytest.raises(ValueError, match="capability does not match"):
+            mock.pathlock_refresh(None, owned)
+
+
+class TestMockAgfsFileContract:
+    """Filesystem methods must follow the production return shapes."""
+
+    def test_mkdir_returns_dict(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        assert isinstance(mock.mkdir("/local/test/dir"), dict)
+
+    def test_ensure_parent_dirs_creates_parents(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.ensure_parent_dirs("/local/test/a/b/c.txt")
+        assert mock.exists("/local/test/a/b")
+
+    def test_write_read_roundtrip(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.write("/local/test/a.txt", b"hello")
+        assert mock.read("/local/test/a.txt") == b"hello"
+        assert mock.cat("/local/test/a.txt") == b"hello"
+
+    def test_rm_and_recursive(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.write("/local/test/file.txt", b"x")
+        assert isinstance(mock.rm("/local/test/file.txt"), dict)
+        with pytest.raises(FileNotFoundError):
+            mock.rm("/local/test/missing.txt")
+
+        mock.mkdir("/local/test/dir")
+        mock.write("/local/test/dir/f.txt", b"x")
+        mock.rm("/local/test/dir", recursive=True)
+        assert not mock.exists("/local/test/dir")
+
+    def test_copy_within_mount(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.write("/local/test/a.txt", b"copy me")
+        result = mock.copy_within_mount("/local/test/a.txt", "/local/test/b.txt")
+        assert result["performed"] is True
+        assert mock.read("/local/test/b.txt") == b"copy me"
+
+    def test_tree_directory_shape(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.write("/local/test/dir/nested/file.md", b"# t")
+        entries = mock.tree_directory("/local/test/dir", level_limit=3)
+        assert any(e["rel_path"] == "nested/file.md" for e in entries)
+        for entry in entries:
+            assert "path" in entry
+            assert "info" in entry
+            assert entry["info"]["name"]
+
+    def test_grep_shape(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        mock.write("/local/test/dir/a.md", b"needle here\nplain line\n")
+        result = mock.grep(path="/local/test/dir", pattern="needle")
+        assert result["count"] == 1
+        assert result["matches"][0]["content"] == "needle here"
+        assert "files_scanned" in result
+
+    def test_system_sync_returns_dicts(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        assert isinstance(mock.system_sync_status("/local/test/a.txt"), dict)
+        assert isinstance(mock.system_sync_retry("/local/test/a.txt"), dict)
+
+
+class TestMockAgfsQueueContract:
+    """QueueFS virtual-path semantics must keep NamedQueue working."""
+
+    def test_enqueue_dequeue_roundtrip(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/TestQueue"
+        payload = '{"task_id":"abc"}'
+        write_result = mock.writeto(f"{queue_path}/enqueue", payload.encode())
+        assert write_result == f"Written {len(payload.encode())} bytes"
+        raw = mock.read_file(f"{queue_path}/dequeue")
+        import json as json_mod
+
+        message = json_mod.loads(raw)
+        assert message["id"] != write_result
+        assert message["data"] == payload
+        assert message["id"] != "abc"
+
+    def test_worker_queue_path_uses_nested_queue_name(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/worker-2/TestQueue"
+        payload = '{"task_id":"nested"}'
+        mock.writeto(f"{queue_path}/enqueue", payload.encode())
+
+        import json as json_mod
+
+        peeked = json_mod.loads(mock.read_file(f"{queue_path}/peek"))
+        assert peeked["data"] == payload
+        assert int(mock.read_file(f"{queue_path}/size")) == 1
+        dequeued = json_mod.loads(mock.read_file(f"{queue_path}/dequeue"))
+        assert dequeued == peeked
+
+    def test_queue_size_and_messages(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/TestQueue"
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-1"}')
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-2"}')
+        assert int(mock.read_file(f"{queue_path}/size")) == 2
+        snapshot = mock.read_file(f"{queue_path}/messages")
+        import json as json_mod
+
+        messages = json_mod.loads(snapshot)
+        assert len({m["id"] for m in messages}) == 2
+        assert not {"business-1", "business-2"} & {m["id"] for m in messages}
+        assert {m["data"] for m in messages} == {
+            '{"id": "business-1"}',
+            '{"id": "business-2"}',
+        }
+
+    def test_ack_removes_processing_message(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/TestQueue"
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "business-id"}')
+        import json as json_mod
+
+        message = json_mod.loads(mock.read_file(f"{queue_path}/dequeue"))
+        mock.writeto(f"{queue_path}/ack", message["id"].encode())
+        snapshot = mock.read_file(f"{queue_path}/messages")
+
+        messages = json_mod.loads(snapshot)
+        assert messages == []
+
+    def test_clear_empties_queue(self, tmp_path):
+        mock = _make_mock(tmp_path)
+        queue_path = "/queue/TestQueue"
+        mock.writeto(f"{queue_path}/enqueue", b'{"id": "m1"}')
+        mock.writeto(f"{queue_path}/clear", b"")
+        assert int(mock.read_file(f"{queue_path}/size")) == 0
