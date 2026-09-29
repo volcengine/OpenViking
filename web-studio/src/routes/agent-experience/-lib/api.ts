@@ -10,13 +10,24 @@ import {
 import type { SourceTrajectoryLink } from './experience'
 import type {
   AgentEvolutionStatus,
+  ExperienceFileItem,
   ExperiencePage,
   OutcomeDistribution,
   TimeRange,
   TrajectoryPage,
 } from './types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+/**
+ * Upper bound on `fs/ls` pages scanned for one experience page.
+ *
+ * `fs/ls` sorts directories before files, so a listing whose head is full of
+ * directories yields pages without a single experience file. Scanning forward
+ * keeps the page filled; the bound stops a pathological directory (thousands
+ * of sub-directories) from turning one page into an unbounded request loop.
+ */
+const MAX_EXPERIENCE_SCAN_PAGES = 20
+
+/** Fetch one page; keeps scanning while `fs/ls` only returns directories. */
 export async function fetchExperiences(options: {
   experiencesUri: string
   page: number
@@ -25,24 +36,39 @@ export async function fetchExperiences(options: {
 }): Promise<ExperiencePage> {
   const { experiencesUri, page, pageSize, signal } = options
   try {
-    const result = await getOvResult<unknown>(
-      ovClient.client.get({
-        query: {
-          limit: pageSize + 1,
-          offset: (page - 1) * pageSize,
-          output: 'original',
-          sort_by: 'mtime',
-          sort_order: 'desc',
-          uri: experiencesUri,
-        },
-        signal,
-        url: '/api/v1/fs/ls',
-      }),
-    )
-    if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+    const items: ExperienceFileItem[] = []
+    let offset = (page - 1) * pageSize
+    let hasMore = false
+
+    for (
+      let scanned = 0;
+      items.length < pageSize && scanned < MAX_EXPERIENCE_SCAN_PAGES;
+    ) {
+      const result = await getOvResult<unknown>(
+        ovClient.client.get({
+          query: {
+            limit: pageSize + 1,
+            offset,
+            output: 'original',
+            sort_by: 'mtime',
+            sort_order: 'desc',
+            uri: experiencesUri,
+          },
+          signal,
+          url: '/api/v1/fs/ls',
+        }),
+      )
+      if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+      items.push(...normalizeExperienceFiles(result))
+      hasMore = result.length > pageSize
+      if (!hasMore) break
+      offset += pageSize
+      scanned += 1
+    }
+
     return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
+      items: items.slice(0, pageSize),
+      hasMore,
       page,
       pageSize,
     }
