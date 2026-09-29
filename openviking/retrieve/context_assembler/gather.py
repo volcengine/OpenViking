@@ -226,9 +226,10 @@ async def gather_candidates(
     searched: Dict[str, int] = {}
     retrieval_errors: List[str] = []
     excluded_count = 0
+    scoped_out_count = 0
 
     def _build(items: Sequence[Tuple[Any, Optional[str]]]) -> List[Candidate]:
-        nonlocal excluded_count
+        nonlocal excluded_count, scoped_out_count
         built: List[Candidate] = []
         for item, bucket in items:
             uri = _uri(item)
@@ -255,6 +256,14 @@ async def gather_candidates(
                 excluded_count += 1
                 continue
             origin = origin_for_uri(base_uri, ctx.actor_peer_id, user_root)
+            if peer_scope == "actor" and origin == "other_peer":
+                # `actor` is the documented isolation boundary, so another
+                # peer's memories are not candidates at all. The base searches
+                # are not peer-scoped — an empty target_uri reaches every
+                # peer's memories — so the scope has to be enforced here too,
+                # not only on the extra peers sweep below.
+                scoped_out_count += 1
+                continue
             score = _score(item)
             penalty = penalties.get(category, 0.0) if origin == "other_peer" else 0.0
             built.append(
@@ -463,6 +472,8 @@ async def gather_candidates(
         "peer_scope": peer_scope,
         "quotas": dict(quotas) if quotas is not None else None,
     }
+    if peer_scope == "actor":
+        stats["scoped_out"] = scoped_out_count
     if retrieval_errors:
         stats["retrieval_errors"] = retrieval_errors[:5]
     return candidates, stats
