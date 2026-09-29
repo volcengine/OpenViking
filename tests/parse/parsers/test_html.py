@@ -1,4 +1,7 @@
+from unittest.mock import patch
+
 from openviking.parse.parsers.html import HTMLParser
+from openviking_cli.utils.config.parser_config import HTMLConfig
 
 
 class TestHTMLParserMarkdownCleaning:
@@ -76,3 +79,25 @@ class TestHTMLParserTitleExtraction:
     def test_returns_empty_on_no_title(self):
         html = "<html><body>no title</body></html>"
         assert self.parser._extract_title(html, "http://example.com/") == ""
+
+    def test_metadata_enabled_injects_title(self):
+        parser = HTMLParser(config=HTMLConfig(extract_metadata=True))
+        with (
+            patch.object(parser, "_extract_markdown", return_value="Visible body"),
+            patch.object(parser, "_extract_title", return_value="Document title") as extract_title,
+        ):
+            markdown = parser._html_to_markdown("<html></html>")
+
+        assert markdown == "# Document title\n\nVisible body"
+        extract_title.assert_called_once()
+
+    def test_metadata_disabled_does_not_inject_title(self):
+        parser = HTMLParser(config=HTMLConfig(extract_metadata=False))
+        with (
+            patch.object(parser, "_extract_markdown", return_value="Visible body"),
+            patch.object(parser, "_extract_title", return_value="Private title") as extract_title,
+        ):
+            markdown = parser._html_to_markdown("<html></html>")
+
+        assert markdown == "Visible body"
+        extract_title.assert_not_called()
