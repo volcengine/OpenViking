@@ -1963,18 +1963,37 @@ class AgentLoop:
             raise ValueError("AGENT_OUTPUT_INVALID: Agent did not submit a valid Wiki bundle")
         return bundle, tools_used, token_usage, iteration
 
+    async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
+        """
+        Process a single inbound message, serialized per session.
+
+        The bus loop already serializes its own messages, but
+        process_direct (cron on_job / heartbeat) enters the same
+        pipeline from its own asyncio task. Holding the per-session
+        turn lock for the whole turn keeps concurrent turns on one
+        cached Session from interleaving their history mutations
+        (pair-order inversion, /new ghost history — issue #4756).
+
+        Args:
+            msg: The inbound message to process.
+
+        Returns:
+            The response message, or None if no response needed.
+        """
+        async with self.sessions.get_turn_lock(msg.session_key):
+            return await self._process_message_turn(msg)
+
     @trace(
         name="process_message",
         extract_session_id=lambda msg: msg.session_key.safe_name(),
         extract_user_id=lambda msg: msg.sender_id,
     )
-    async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
+    async def _process_message_turn(self, msg: InboundMessage) -> OutboundMessage | None:
         """
-        Process a single inbound message.
+        Process a single inbound message (caller holds the session turn lock).
 
         Args:
             msg: The inbound message to process.
-            session_key: Override session key (used by process_direct).
 
         Returns:
             The response message, or None if no response needed.
