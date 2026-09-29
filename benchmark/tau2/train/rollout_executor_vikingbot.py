@@ -2005,6 +2005,7 @@ async def _prepare_experience_loader_skill(
         sandbox_manager=sandbox_manager,
         eval=True,
         system_prompt_profile=system_prompt_profile,
+        config=getattr(agent, "config", None),
     )
     context_builder.latest_experience_loader_skill_content = skill_content
     return context_builder

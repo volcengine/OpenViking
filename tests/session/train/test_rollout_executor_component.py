@@ -1909,6 +1909,7 @@ async def test_tau2_prepare_experience_loader_skill_writes_static_required_skill
     class FakeAgent:
         sandbox_manager = FakeSandboxManager()
         context = SimpleNamespace(workspace=tmp_path)
+        config = SimpleNamespace(agents=SimpleNamespace(disable_current_time=True))
 
     context_builder = await module._prepare_experience_loader_skill(
         agent=FakeAgent(),
@@ -1918,6 +1919,8 @@ async def test_tau2_prepare_experience_loader_skill_writes_static_required_skill
     skill_path = tmp_path / "skills" / "experience_loader" / "SKILL.md"
     content = skill_path.read_text(encoding="utf-8")
     assert context_builder.workspace == tmp_path
+    # The rebuilt builder must honour agent config such as disable_current_time.
+    assert context_builder._config is FakeAgent.config
     assert "name: experience_loader" in content
     assert "search_experience" in content
     assert "read_experience" in content
