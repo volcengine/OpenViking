@@ -107,6 +107,16 @@ class MatchedContext:
     match_reason: str                # Why this matched
 ```
 
+**Score reproducibility**
+
+Treat `score` as a ranking signal, not a stable identifier. Identical text can
+produce slightly different embeddings when a provider uses different execution
+paths, such as a cold request versus a KV-prefix-cache hit. Approximate or
+quantized vector indexes can amplify those small differences. Do not compare
+scores for exact equality across calls or deployments; use a tolerance suitable
+for the configured embedding and index backends, and verify ranking separately.
+Results close to `score_threshold` can consequently move across the threshold.
+
 #### 3. Usage Examples
 
 **HTTP API**
