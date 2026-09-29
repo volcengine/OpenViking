@@ -85,7 +85,7 @@
 
 ## Roadmap
 
-任务 DAG（`blocked_by`）、scoped kanban、会话启动召回、claim-aware loop、原子 claim、`ov compile`，见 [skill README](../../agent-plugins/skills/ov-kanban/README.md#roadmap)。
+任务 DAG（`blocked_by`）、scoped kanban、会话启动召回、claim-aware loop、原子 claim、`ov compile`，见 [skill README](https://github.com/volcengine/OpenViking/blob/main/agent-plugins/skills/ov-kanban/README.md#roadmap)。
 
 ## 演练记录（2026-09-18，herdr，board `demo`）
 
