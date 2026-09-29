@@ -293,25 +293,11 @@ overview = await client.overview(uri="viking://resources")
 
 ### How is the retrieval result score calculated?
 
-OpenViking uses a score propagation mechanism:
+Results use vector scores directly when reranking is disabled. When reranking is enabled, its scores determine the final ranking; failed requests or invalid rerank results fall back to vector scores. Access frequency, update time, and parent-directory scores do not add any weight.
 
-```
-Final Score = 0.5 × Embedding Similarity + 0.5 × Parent Directory Score
-```
+### How does global retrieval work?
 
-This design gives content under high-scoring directories a boost, reflecting the importance of "contextual environment".
-
-### What is directory recursive retrieval?
-
-Directory recursive retrieval is OpenViking's innovative retrieval strategy:
-
-1. **Intent Analysis**: Analyze query to generate multiple retrieval conditions
-2. **Initial Positioning**: Vector retrieval to locate high-scoring directories
-3. **Refined Exploration**: Secondary retrieval within high-scoring directories
-4. **Recursive Drill-down**: Layer-by-layer recursion until convergence
-5. **Result Aggregation**: Return the most relevant context
-
-This strategy finds semantically matching fragments while understanding the complete context of the information.
+Each query runs one global vector search within its directory scope, permission filters, and requested levels. THINKING with a usable reranker recalls at most `2 × limit` candidates, reranks them once, and returns at most `limit` results. Without reranking, it recalls `limit` hits directly. Retrieval does not navigate directories recursively or trigger further searches after reranking.
 
 ## Troubleshooting
 

@@ -90,6 +90,7 @@ Image queries skip text reranking and recall `limit` candidates. They default to
 Rerank processes only the candidates from the completed global search; it never starts another search. For example, with `limit=10`, reranking recalls the top 20 vector hits and returns at most 10 results after reranking. Without reranking, recall is limited to 10 hits.
 
 - Candidate index records supply the `abstract` text for reranking.
+- Scores and ranking use rerank scores when available, otherwise vector scores; access frequency, update time, and parent-directory scores do not affect them.
 - Score thresholds apply after reranking, or to vector scores when reranking is disabled.
 - Failed requests or invalid rerank results retain the existing fallback to vector scores.
 - Directory priority queues, parent-to-child score propagation, and convergence rounds are removed.

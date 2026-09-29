@@ -5,17 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class RetrievalConfig(BaseModel):
-    """Configuration for retrieval ranking behavior."""
+    """Configuration for query planning and context assembly."""
 
-    hotness_alpha: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Weight for blending hotness into final retrieval scores. "
-            "0 disables hotness boost; 1 uses only hotness."
-        ),
-    )
     recall_intent_timeout_s: float = Field(
         default=5.0,
         gt=0.0,

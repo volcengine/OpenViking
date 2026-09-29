@@ -1062,12 +1062,12 @@ Jev 适配器将 query 和候选文档作为结构化 System One `state`，并�
 
 ### retrieval
 
-最终搜索分数的召回排序配置。
+会话意图分析和上下文组装的超时配置。
 
 ```json
 {
   "retrieval": {
-    "hotness_alpha": 0.0,
+    "enable_intent": true,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1076,9 +1076,7 @@ Jev 适配器将 query 和候选文档作为结构化 System One `state`，并�
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `hotness_alpha` | float | hotness 分数在最终召回分数中的混合权重。`0.0` 表示关闭 hotness boost，最终分数等于语义相似度；`1.0` 表示只使用 hotness。有效范围：`0.0` 到 `1.0`。 | `0.0` |
-
-如果需要分数严格反映向量相似度，保持 `hotness_alpha` 为 `0.0`。只有当希望高频访问或最近更新的上下文获得排序提升时，才将它设置为大于 `0.0`。
+| `enable_intent` | bool | `search()` 收到 `session_id` 时是否执行意图分析和查询规划。 | `true` |
 
 `/search` 的 `mode="context"` 组装面用到两个超时熔断：
 
@@ -2030,7 +2028,7 @@ Task 记录文件位于所属账号的系统目录：
     "extra_headers": {}
   },
   "retrieval": {
-    "hotness_alpha": 0.0
+    "enable_intent": true
   },
   "encryption": {
     "enabled": false,

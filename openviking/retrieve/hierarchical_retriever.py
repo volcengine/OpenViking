@@ -7,14 +7,12 @@ Global vector retrieval with optional reranking of the recalled candidates.
 import asyncio
 import math
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.models.rerank import RerankClient
-from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
@@ -22,7 +20,6 @@ from openviking.storage.expr import FilterExpr
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.tags import normalize_search_tags
-from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import (
     estimate_text_tokens,
     truncate_text_to_token_budget,
@@ -34,7 +31,7 @@ from openviking_cli.retrieve.types import (
     QueryResult,
     TypedQuery,
 )
-from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,7 +53,6 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
-        retrieval_config: Optional[RetrievalConfig] = None,
     ):
         """Initialize retriever with rerank_config.
 
@@ -64,14 +60,11 @@ class HierarchicalRetriever:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
-            retrieval_config: Retrieval ranking configuration.
         """
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
         self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
-        self.retrieval_config = retrieval_config or RetrievalConfig()
-        self.hotness_alpha = self.retrieval_config.hotness_alpha
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -211,11 +204,7 @@ class HierarchicalRetriever:
             if self._passes_threshold(score, effective_threshold, score_gte)
         ]
         telemetry.count("vector.passed", len(candidates))
-        matched = await self._convert_to_matched_contexts(
-            candidates,
-            ctx=ctx,
-            apply_hotness=use_rerank,
-        )
+        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
         final = matched[:limit]
 
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -305,41 +294,11 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
-        apply_hotness: bool = True,
     ) -> List[MatchedContext]:
-        """Convert candidate results to MatchedContext list.
-
-        Blends semantic similarity with a hotness score derived from
-        ``active_count`` and ``updated_at`` when configured. The blend weight
-        is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
-        """
+        """Convert candidates to contexts ordered by vector or rerank score."""
         results = []
         for c in candidates:
-            # Fix: clamp inf/nan scores from vector search (#inf-score)
-            semantic_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
-
-            alpha = self.hotness_alpha
-            if apply_hotness and alpha > 0:
-                updated_at_raw = c.get("updated_at")
-                if isinstance(updated_at_raw, str):
-                    try:
-                        updated_at_val = parse_iso_datetime(updated_at_raw)
-                    except (ValueError, TypeError):
-                        updated_at_val = None
-                elif isinstance(updated_at_raw, datetime):
-                    updated_at_val = updated_at_raw
-                else:
-                    updated_at_val = None
-
-                h_score = hotness_score(
-                    active_count=c.get("active_count", 0),
-                    updated_at=updated_at_val,
-                )
-                final_score = (1 - alpha) * semantic_score + alpha * h_score
-            else:
-                final_score = semantic_score
-            if not math.isfinite(final_score):
-                final_score = 0.0
+            final_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
             abstract = c.get("abstract", "")
@@ -369,7 +328,6 @@ class HierarchicalRetriever:
                 )
             )
 
-        # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)
         return results
 

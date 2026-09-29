@@ -215,7 +215,7 @@ def init_viking_fs(
         agfs: Pre-initialized AGFS client (HTTP or Binding)
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
-        retrieval_config: Retrieval ranking configuration
+        retrieval_config: Retrieval behavior configuration
         grep_config: Grep engine configuration
         glob_config: Glob engine configuration
         vector_store: Vector store instance

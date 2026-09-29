@@ -1099,12 +1099,12 @@ If rerank is not configured, search uses vector similarity only.
 
 ### retrieval
 
-Retrieval ranking configuration for final search scores.
+Configuration for session intent analysis and context assembly timeouts.
 
 ```json
 {
   "retrieval": {
-    "hotness_alpha": 0.0,
+    "enable_intent": true,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1113,9 +1113,7 @@ Retrieval ranking configuration for final search scores.
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
-
-Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
+| `enable_intent` | bool | Run intent analysis and query planning when `search()` receives a `session_id`. | `true` |
 
 The `mode="context"` assembly face on `/search` uses two timeout fuses:
 
@@ -2064,7 +2062,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "extra_headers": {}
   },
   "retrieval": {
-    "hotness_alpha": 0.0
+    "enable_intent": true
   },
   "encryption": {
     "enabled": false,

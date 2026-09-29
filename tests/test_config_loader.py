@@ -439,7 +439,7 @@ def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch):
+def test_openviking_config_transaction_redo_recovery_enabled_defaults_true(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -449,7 +449,6 @@ def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch)
 
     config = OpenVikingConfig.from_dict({})
 
-    assert config.retrieval.hotness_alpha == 0.0
     assert config.storage.transaction.redo_recovery_enabled is True
 
     OpenVikingConfigSingleton.reset_instance()
@@ -472,30 +471,16 @@ def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(mon
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_retrieval_alpha_validates_range(monkeypatch):
-    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
-
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
-    )
-
-    with pytest.raises(ValueError):
-        OpenVikingConfig.from_dict({"retrieval": {"hotness_alpha": 1.5}})
-
-    OpenVikingConfigSingleton.reset_instance()
-
-
 def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_path, monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
     config_path = tmp_path / "ov.conf"
-    config_path.write_text('{"retrieval": {"hotness_alpha": 1.5}}')
+    config_path.write_text('{"retrieval": {"recall_intent_timeout_s": 0}}')
 
     OpenVikingConfigSingleton.reset_instance()
-    with pytest.raises(ValueError, match="retrieval.hotness_alpha"):
+    with pytest.raises(ValueError, match="retrieval.recall_intent_timeout_s"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
 

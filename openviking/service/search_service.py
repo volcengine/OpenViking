@@ -205,7 +205,6 @@ class SearchService:
             storage=storage,
             embedder=embedder,
             rerank_config=fs.rerank_config,
-            retrieval_config=fs.retrieval_config,
         )
         result = await retriever.retrieve_skills(
             TypedQuery(query, ContextType.SKILL, "", target_directories=targets),
