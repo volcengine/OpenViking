@@ -65,6 +65,7 @@ def _stub_ingest(service, monkeypatch, root_uri: str = "viking://resources/uploa
         captured["reason"] = kwargs.get("reason")
         captured["tags"] = kwargs.get("tags")
         captured["tag_mode"] = kwargs.get("tag_mode")
+        captured["acl"] = kwargs.get("acl")
         captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
         return {"root_uri": root_uri}
 
@@ -76,7 +77,21 @@ async def test_token_upload_auto_ingests_and_returns_result(
     client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
 ):
     captured = _stub_ingest(service, monkeypatch)
-    token = _issue()
+    from urllib.parse import parse_qs, urlparse
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.server.mcp_endpoint import _mcp_ctx, add_resource
+    from openviking.storage.acl import AclSpec
+    from openviking_cli.session.user_id import UserIdentifier
+
+    acl = AclSpec(acl_mode="restricted", entries=[{"principal": "user:bob", "level": "read"}])
+    identity_token = _mcp_ctx.set(RequestContext(UserIdentifier("acct", "user"), Role.USER))
+    try:
+        instruction = await add_resource(path="/tmp/hello.md", acl=acl)
+    finally:
+        _mcp_ctx.reset(identity_token)
+    upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)
+    token = parse_qs(urlparse(upload_url).query)["token"][0]
     resp = await client.post(
         "/api/v1/resources/temp_upload",
         params={"token": token},
@@ -87,6 +102,7 @@ async def test_token_upload_auto_ingests_and_returns_result(
     # Auto-ingest returns the final resource, not a temp_file_id handshake.
     assert result["root_uri"] == "viking://resources/uploaded"
     assert "temp_file_id" not in result
+    assert captured["acl"] == acl
     # The stored file was resolved and handed to add_resource as a local path.
     assert captured["allow_local_path_resolution"] is True
     assert captured["content"] == b"hello world"

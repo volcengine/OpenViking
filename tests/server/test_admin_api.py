@@ -3316,6 +3316,47 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     assert "api_key" not in hidden["users"][0]
     assert "key_prefix" not in hidden["users"][0]
 
+    # MCP exposes an account directory, not the admin response or credentials.
+    from types import SimpleNamespace
+
+    import openviking.server.mcp_endpoint as mcp_endpoint
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    await manager.create_group(acct, "engineering")
+    await manager.add_group_member(acct, "engineering", "user-1")
+    request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
+    context = SimpleNamespace(request_context=SimpleNamespace(request=request))
+    for role in (Role.USER, Role.ADMIN, Role.ROOT):
+        identity = RequestContext(UserIdentifier(acct, "user-1"), role)
+        token = mcp_endpoint._mcp_ctx.set(identity)
+        try:
+            directory = await mcp_endpoint.list_users(context, query="user-2832")
+            assert directory == {"users": [{"user_id": "user-2832"}], "total": 1}
+            assert await mcp_endpoint.list_groups(context) == {
+                "groups": [{"group_id": "engineering"}]
+            }
+            if role == Role.USER:
+                # Explicit opt-in is rejected even for an empty search result.
+                with pytest.raises(PermissionDeniedError, match="ADMIN or ROOT"):
+                    await mcp_endpoint.list_users(
+                        context, query="missing", include_credentials=True
+                    )
+            else:
+                credentials = await mcp_endpoint.list_users(
+                    context, query="user-2832", include_credentials=True
+                )
+                assert credentials["users"][0]["api_key"] == "test-key-2832"
+                original_config = lightweight_admin_app.state.config
+                lightweight_admin_app.state.config = ServerConfig(auth_mode="trusted")
+                try:
+                    with pytest.raises(PermissionDeniedError, match="trusted"):
+                        await mcp_endpoint.list_users(context, include_credentials=True)
+                    assert await mcp_endpoint.list_users(context, query="user-2832") == directory
+                finally:
+                    lightweight_admin_app.state.config = original_config
+        finally:
+            mcp_endpoint._mcp_ctx.reset(token)
+
 
 async def test_user_page_summary_respects_account_access(lightweight_admin_client):
     acct = _uid()

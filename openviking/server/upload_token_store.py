@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
+from openviking.storage.acl import AclSpec
 
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
 _TOKEN_LENGTH = 6
@@ -58,6 +59,7 @@ class _TokenInfo:
     skill_target_uri: str = ""
     skill_names: Optional[list[str]] = None
     list_only: bool = False
+    acl: AclSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,7 @@ class ConsumedUploadToken:
     skill_target_uri: str = ""
     skill_names: Optional[list[str]] = None
     list_only: bool = False
+    acl: AclSpec | None = None
 
 
 class UploadTokenStore:
@@ -102,6 +105,7 @@ class UploadTokenStore:
         skill_target_uri: str = "",
         skill_names: Optional[list[str]] = None,
         list_only: bool = False,
+        acl: AclSpec | None = None,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -128,6 +132,7 @@ class UploadTokenStore:
             skill_target_uri,
             skill_names,
             list_only,
+            acl,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -160,6 +165,7 @@ class UploadTokenStore:
             skill_target_uri=info.skill_target_uri,
             skill_names=info.skill_names,
             list_only=info.list_only,
+            acl=info.acl,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

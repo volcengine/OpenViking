@@ -11,7 +11,7 @@ from mcp.types import CallToolRequest, CallToolRequestParams
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -160,7 +160,7 @@ async def test_grep_partial_failure_without_matches_stays_partial(monkeypatch):
 
 
 async def test_read_all_failures_set_error_result(monkeypatch):
-    read_visible = AsyncMock(side_effect=InvalidArgumentError("not readable"))
+    read_visible = AsyncMock(side_effect=PermissionDeniedError("read permission required"))
     monkeypatch.setattr(
         mcp_endpoint,
         "get_service",
@@ -178,12 +178,29 @@ async def test_read_all_failures_set_error_result(monkeypatch):
 
     assert type(direct_result) is str
     assert direct_result == (
-        "=== viking://resources/a.md ===\nnot readable\n\n"
-        "=== viking://resources/b.md ===\nnot readable"
+        "=== viking://resources/a.md ===\nPERMISSION_DENIED: read permission required\n\n"
+        "=== viking://resources/b.md ===\nPERMISSION_DENIED: read permission required"
     )
     assert result["isError"] is True
-    assert "not readable" in result["content"][0]["text"]
+    assert "PERMISSION_DENIED: read permission required" in result["content"][0]["text"]
     assert "structuredContent" not in result
+
+    uri = "viking://resources/a.md"
+    service = SimpleNamespace(
+        fs=SimpleNamespace(
+            write=AsyncMock(
+                side_effect=PermissionDeniedError("write permission required", resource=uri)
+            )
+        )
+    )
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    result = await _call_tool("write", {"uri": uri, "content": "denied"})
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"] == {
+        "code": "PERMISSION_DENIED",
+        "message": "write permission required",
+        "details": {"resource": uri},
+    }
 
 
 async def test_read_partial_failure_remains_a_success_result(monkeypatch):

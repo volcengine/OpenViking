@@ -214,6 +214,7 @@ async def temp_upload(
             tags=signed.tags,
             tag_mode=signed.tag_mode,
             parse_mode=signed.parse_mode,
+            acl=signed.acl,
         )
 
     try:

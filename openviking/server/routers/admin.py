@@ -15,10 +15,12 @@ from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
+    registry_watcher_running,
     require_auth_root,
     require_auth_root_or_admin,
+    should_expose_user_key,
 )
-from openviking.server.config import ServerConfig, UserConfig
+from openviking.server.config import UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
@@ -235,19 +237,6 @@ def _get_runtime_config_manager():
     return manager
 
 
-def _should_expose_user_key(request: Request) -> bool:
-    config = getattr(request.app.state, "config", None)
-    if not isinstance(config, ServerConfig):
-        return True
-    return config.get_effective_auth_mode() != "trusted"
-
-
-def _registry_watcher_running(request: Request) -> bool:
-    plugin = getattr(request.app.state, "auth_plugin", None)
-    watch_task = getattr(plugin, "_watch_task", None)
-    return watch_task is not None and not watch_task.done()
-
-
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
     """ADMIN can only operate on their own account."""
     if ctx.role == Role.ADMIN and ctx.account_id != account_id:
@@ -260,7 +249,7 @@ async def _check_account_exists(
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
         return None
-    watcher_running = _registry_watcher_running(request)
+    watcher_running = registry_watcher_running(request)
     if not watcher_running:
         await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts()
@@ -511,7 +500,7 @@ async def create_account(
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,
     }
-    if _should_expose_user_key(request):
+    if should_expose_user_key(request):
         result["user_key"] = user_key
     return Response(status="ok", result=result)
 
@@ -528,7 +517,7 @@ async def list_accounts(
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
-    if not _registry_watcher_running(request):
+    if not registry_watcher_running(request):
         await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts(name_filter=name, limit=limit, page=page, query_filter=query)
     return Response(status="ok", result=accounts)
@@ -873,7 +862,7 @@ async def register_user(
         "account_id": account_id,
         "user_id": body.user_id,
     }
-    if _should_expose_user_key(request):
+    if should_expose_user_key(request):
         result["user_key"] = user_key
     return Response(status="ok", result=result)
 
@@ -900,9 +889,9 @@ async def list_users(
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    if not _registry_watcher_running(request):
+    if not registry_watcher_running(request):
         await manager.refresh_account_users_from_store(account_id)
-    expose_key = _should_expose_user_key(request)
+    expose_key = should_expose_user_key(request)
     users = manager.get_users_page(
         account_id,
         limit=limit,

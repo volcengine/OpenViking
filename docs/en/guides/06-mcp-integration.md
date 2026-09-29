@@ -129,7 +129,7 @@ If you already have HTTPS configured, just connect to `https://your-server.com/m
 
 ## Available MCP Tools
 
-Once connected, OpenViking exposes 16 tools:
+Once connected, OpenViking exposes 20 tools:
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
@@ -139,9 +139,9 @@ Once connected, OpenViking exposes 16 tools:
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
 | `remember` | Store messages into long-term memory (triggers extraction) | `messages` (list of `{role, content}`) |
-| `write` | Write text to a `viking://` file (create/overwrite/append). Parent directories are created automatically; use `read` first to see current content before overwriting, and prefer `edit` for changing part of an existing file. Skill packages are not maintained this way: the caller's own `skills/` subtree is refused, and a write under `viking://agent/skills` produces a plain file that skips skill installation — use `add_skill` | `uri`, `content`, `mode` (optional: `replace` default — overwrites or creates if missing; `append` — appends or creates if missing; `create` — fails if it exists), `wait` (optional, block until re-indexed), `timeout` (optional) |
+| `write` | Write text to a `viking://` file (create/overwrite/append). Parent directories are created automatically; use `read` first to see current content before overwriting, and prefer `edit` for changing part of an existing file. Skill packages are not maintained this way: the caller's own `skills/` subtree is refused, and a write under `viking://agent/skills` produces a plain file that skips skill installation — use `add_skill` | `uri`, `content`, `mode` (optional: `replace` default — overwrites or creates if missing; `append` — appends or creates if missing; `create` — fails if it exists), `wait` (optional, block until re-indexed), `timeout` (optional), `acl` (optional) |
 | `edit` | Replace an exact string with new text in an existing `viking://` file — for targeted changes instead of a full rewrite. The file is left unchanged if `old_string` is not found, or matches multiple times while `replace_all` is false. Editing a file inside a skill package does not re-run skill installation — use `add_skill` | `uri`, `old_string`, `new_string`, `replace_all` (optional), `wait` (optional, block until re-indexed), `timeout` (optional) |
-| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or access/refresh tokens plus an optional `feishu_app_id` / `feishu_app_secret` pair for Feishu user-token watches) |
+| `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or access/refresh tokens plus an optional `feishu_app_id` / `feishu_app_secret` pair for Feishu user-token watches), `acl` (optional) |
 | `add_skill` | Create, install, or replace an agent skill. New skills pass the full SKILL.md text; Git and GitHub tree URLs install every skill in the source unless `skills` names some; a local SKILL.md, directory, or zip returns a signed upload URL like `add_resource` | `data` (SKILL.md text) or `path` (Git URL or local path), `skills` (optional), `target_uri` (optional; `viking://agent/skills` shares with the account), `list_only` (optional) |
 | `list_watches` | List watch tasks (auto-refresh subscriptions) visible to the current agent. Each entry shows target URI, refresh interval (minutes), active/paused status, and next scheduled execution time | none |
 | `cancel_watch` | Cancel (delete) a watch task by its target URI. To change the cadence or pause temporarily, cancel and re-add with a new `watch_interval` | `to_uri` (must match the watch task's `to` value, e.g. `viking://resources/...`) |
@@ -149,6 +149,10 @@ Once connected, OpenViking exposes 16 tools:
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
+| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
+| `list_groups` | List group IDs in the caller's account without membership | None |
+| `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
+| `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
 
 To address your own workspace from an MCP tool, use the home alias `viking://~`. It
 expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,
@@ -167,6 +171,46 @@ user spaces, not a shortcut to yours. See
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. One-time user-token imports pass only `args.feishu_access_token`; user-token watches must also pass `args.feishu_refresh_token`. They may pass `args.feishu_app_id` and `args.feishu_app_secret` together for that watch, or fall back to the server app credentials. The app must match the issuer of the user token.
 
 > `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
+
+### Resource permissions and sharing
+
+All account users may call `list_users` and `list_groups`; neither tool accepts a different account.
+The default output contains only user IDs and a matching total, or group IDs. Even administrators
+must explicitly set `include_credentials=true` to include available credentials. A USER requesting
+credentials receives `PERMISSION_DENIED`, even when the query matches no users. Trusted auth mode
+forbids credential disclosure. Group membership remains available through the admin API.
+
+`get_acl` and `set_acl` require resource `manage` permission. A resource manager does not gain
+account administrator privileges. `write` and `add_resource` accept an optional `acl` object;
+explicit ACL changes require manage on an existing target or inherited from the parent for a new target.
+Omitting ACL preserves an existing target's permissions or inherits on creation. Remote imports,
+temp-file imports and signed local uploads all carry ACL to the kernel's authorization checks.
+
+For example, `set_acl` accepts:
+
+```json
+{
+  "uri": "viking://resources/project-a",
+  "acl": {
+    "acl_mode": "restricted",
+    "entries": [{"principal": "user:bob", "level": "read"}]
+  }
+}
+```
+
+`entries` replaces direct grants; omit it to preserve them. `inherit` includes parent grants;
+`restricted` uses only direct grants. Reset with `{"acl_mode":"inherit","entries":[]}`.
+A restricted ACL can remove the caller's own access; account ADMIN retains implicit management access.
+
+With account ACL enabled, shared-resource results in `list`, `tree`, `find` and `search(mode="list")`
+include `my_permission=read/write/manage`, describing only the caller's ACL level. It may be `none`
+if access was just revoked. Private namespaces and accounts with ACL disabled omit this annotation.
+Actual operations always enforce permissions again.
+
+Failed tool calls set MCP `isError=true` and retain business codes such as `PERMISSION_DENIED` in
+text. Tools supporting structured output also include `error.code/message/details` alongside the
+existing `result` text. Partial batch reads or searches preserve successful results and report
+failed items separately.
 
 ### Adding local-file resources (single-step upload)
 

@@ -229,7 +229,10 @@ class _AccessMixin:
         access = await self._can_access_many(uris, real_ctx, action=action)
         denied = next((uri for uri in uris if not access.get(uri, False)), None)
         if denied is not None:
-            raise PermissionDeniedError(f"Access denied for {denied}", resource=denied)
+            raise PermissionDeniedError(
+                f"Access denied for {denied}: {action.value} permission required",
+                resource=denied,
+            )
 
         if action is AclAction.READ:
             return
@@ -289,7 +292,35 @@ class _AccessMixin:
             effective = await self.acl_manager.resolve(uri, real_ctx)
             if acl_allows(effective, real_ctx, AclAction.MANAGE):
                 return real_ctx
-        raise PermissionDeniedError(f"ACL management denied for {uri}", resource=uri)
+        raise PermissionDeniedError(
+            f"ACL management denied for {uri}: manage permission required", resource=uri
+        )
+
+    async def get_acl_permissions(self, uris: Sequence[str], ctx: RequestContext) -> Dict[str, str]:
+        """Return only the caller's ACL level for shared resources with ACL enabled.
+
+        Namespace access is a separate policy, so private paths and accounts with
+        ACL disabled have no ACL-level annotation. No grant lists are disclosed.
+        """
+        shared = list(dict.fromkeys(uri for uri in uris if is_acl_uri(uri)))
+        for uri in shared:
+            self._safe_uri_parts(uri)
+        if not shared or not await self._acl_enabled(ctx):
+            return {}
+        if has_implicit_manage(ctx, shared[0]):
+            return dict.fromkeys(shared, AclLevel.MANAGE.value)
+        effective = await self.acl_manager.resolve_many(shared, ctx)
+        return {
+            uri: next(
+                (
+                    action.value
+                    for action in (AclAction.MANAGE, AclAction.WRITE, AclAction.READ)
+                    if acl_allows(effective[uri], ctx, action)
+                ),
+                "none",
+            )
+            for uri in shared
+        }
 
     async def _ensure_acl_target_exists(self, uri: str, ctx: RequestContext) -> bool:
         """Return whether the ACL target is a directory; raise if it is missing."""

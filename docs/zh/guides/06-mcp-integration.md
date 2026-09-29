@@ -121,7 +121,7 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 16 个工具：
+连接后，OpenViking MCP 端点暴露 20 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
@@ -131,9 +131,9 @@ claude mcp add --transport http openviking \
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述) |
 | `remember` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — 已存在则失败), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
+| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — 已存在则失败), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选), `acl`(可选) |
 | `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
 | `add_skill` | 新建、安装或替换 agent skill。新 skill 直接传完整 SKILL.md 文本；Git 与 GitHub tree URL 默认安装源里的全部 skill，可用 `skills` 挑选；本地 SKILL.md、目录或 zip 会和 `add_resource` 一样返回签名上传 URL | `data`（SKILL.md 文本）或 `path`（Git URL 或本地路径）, `skills`(可选), `target_uri`(可选；`viking://agent/skills` 表示账户共享), `list_only`(可选) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
@@ -141,6 +141,10 @@ claude mcp add --transport http openviking \
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`(可选) |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+| `list_users` | 查询当前 account 的用户 ID；默认不返回凭证，管理员也一样 | `query`(可选，ID 子串), `limit`(默认 100), `page`(默认 1), `include_credentials`(默认 false，仅 ADMIN/ROOT 可设为 true) |
+| `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
+| `get_acl` | 查看共享资源的直接、继承和有效 ACL；要求该节点的 manage 或账号 ADMIN | `uri` |
+| `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此
@@ -157,6 +161,43 @@ claude mcp add --transport http openviking \
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。一次性用户 token 导入只传 `args.feishu_access_token`；用户 token watch 还必须传 `args.feishu_refresh_token`。可为该 watch 同时传入 `args.feishu_app_id` 和 `args.feishu_app_secret`，也可回退使用服务端应用凭证；实际使用的应用必须与用户 token 的签发应用一致。
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
+
+### 资源权限与授权对象
+
+`list_users`、`list_groups` 对当前 account 的普通用户开放，不接受跨 account 查询参数。
+`list_users` 默认仅返回 `user_id` 和匹配总数，`list_groups` 仅返回 `group_id`。
+管理员也必须显式传 `include_credentials=true` 才会返回可用的凭证字段；普通用户传该参数会得到
+`PERMISSION_DENIED`，即使查询结果为空也一样。trusted 鉴权模式禁止返回凭证。
+组成员管理和成员名单查询仍使用管理员接口。
+
+完整 ACL 的查询和修改都要求资源的 `manage` 权限；普通用户即使是资源 manager，也不会因此获得
+读取账号凭证的权限。`write` 和 `add_resource` 接受可选的 `acl` 参数，复用内核的权限校验：
+已有目标要求自身 manage，新目标要求从父目录继承 manage。不传 ACL 时，已有目标保留原权限，新目标继承父目录。
+`add_resource` 的远程导入、临时文件导入、本地文件上传后自动导入均保留这个参数。
+
+例如，将已有共享资料只授权给 Bob 读取：
+
+```json
+{
+  "uri": "viking://resources/project-a",
+  "acl": {
+    "acl_mode": "restricted",
+    "entries": [{"principal": "user:bob", "level": "read"}]
+  }
+}
+```
+
+以上为 `set_acl` 的参数。`entries` 完整替换直接授权，省略则保留；`acl_mode=inherit` 合并父级授权，
+`restricted` 只使用直接授权。重置为继承使用 `{"acl_mode":"inherit","entries":[]}`。
+受限 ACL 可能移除操作者自身的访问权限；账号 ADMIN 始终保留治理权限。
+
+账号开启 ACL 时，`list`、`tree`、`find` 和 `search(mode="list")` 的共享资源结果带有
+`my_permission=read/write/manage`，仅表示调用者自身的 ACL 等级；若权限刚被撤回，可为 `none`。
+个人空间和 ACL 未开启的账号不附加该字段。它不替代实际操作时的鉴权。
+
+工具执行失败会标记 MCP `isError=true`，业务错误文本保留 `PERMISSION_DENIED` 等错误码；
+支持结构化输出的工具还返回 `error.code/message/details`，同时保留原有 `result` 文本。
+批量读取或搜索部分失败时保留成功结果，并在失败项中显示原因。
 
 ### 添加本地文件资源(单步上传)
 

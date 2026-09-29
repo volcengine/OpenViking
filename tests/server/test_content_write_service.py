@@ -105,7 +105,7 @@ async def test_memory_replace_preserves_metadata(service):
 
 @pytest.mark.asyncio
 async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
-    service, sample_markdown_file
+    service, sample_markdown_file, monkeypatch
 ):
     """Shared content inherits permissions without granting its creator extra access."""
     writer = RequestContext(user=service.user, role=Role.USER, group_ids=("writers",))
@@ -134,6 +134,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     # Content created with ACL disabled gains default management when enabled.
     await service.fs.mkdir(public_uri, ctx=writer)
     await service.resources.wait_processed()
+    assert await service.viking_fs.get_acl_permissions([public_uri], writer) == {}
     with pytest.raises(PermissionDeniedError):
         await service.fs.get_acl(public_uri, ctx=outsider)
     await service.runtime_config_manager.patch_account(
@@ -176,6 +177,41 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         await service.fs.get_acl(uri, ctx=writer)
     with pytest.raises(PermissionDeniedError):
         await service.fs.set_acl(uri, [], ctx=writer)
+
+    # MCP publishes only the caller's level, while full ACL stays manage-only.
+    import openviking.server.mcp_endpoint as mcp_endpoint
+    from openviking.storage.acl import AclSpec
+
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    for caller, level in (
+        (writer, "write"),
+        (reader, "read"),
+        (admin, "manage"),
+        (outsider, "none"),
+    ):
+        assert await service.viking_fs.get_acl_permissions([uri], caller) == {uri: level}
+    token = mcp_endpoint._mcp_ctx.set(reader)
+    try:
+        listing = await mcp_endpoint.ls(parent_uri)
+        assert "my_permission=read" in listing
+        assert "group:readers" not in listing
+        with pytest.raises(PermissionDeniedError):
+            await mcp_endpoint.get_acl(uri)
+        with pytest.raises(PermissionDeniedError):
+            await mcp_endpoint.set_acl(uri, AclSpec(acl_mode="inherit"))
+        with pytest.raises(PermissionDeniedError, match="write permission required"):
+            await mcp_endpoint.write(uri, "denied")
+    finally:
+        mcp_endpoint._mcp_ctx.reset(token)
+    token = mcp_endpoint._mcp_ctx.set(admin)
+    try:
+        await mcp_endpoint.write(
+            uri, "line1\n", wait=True, acl=AclSpec(acl_mode="restricted", entries=inherited_entries)
+        )
+        assert (await mcp_endpoint.get_acl(uri))["direct_entries"] == inherited_entries
+        await mcp_endpoint.set_acl(uri, AclSpec(acl_mode="inherit", entries=[]))
+    finally:
+        mcp_endpoint._mcp_ctx.reset(token)
 
     imported = await service.resources.add_resource(
         path=str(sample_markdown_file),
