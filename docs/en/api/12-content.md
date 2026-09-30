@@ -6,7 +6,7 @@ The Content API reads L0/L1/L2 content, writes text, and maintains semantic and 
 
 ### abstract()
 
-Read the L0 abstract (an approximately 100-token summary), excluding the OKF header.
+Read the L0 abstract, excluding the OKF header. Directory abstracts have a default limit of 256 characters; this is not a token count.
 
 **Parameters**
 

@@ -447,7 +447,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     }'
 ```
 
-**不带会话的搜索（仍会进行意图分析）**
+**不带会话的搜索（使用原始查询）**
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/search \
@@ -523,7 +523,7 @@ for context in results.get("resources", []):
 
 ```python
 # search 也可以在没有会话的情况下使用
-# 它仍然会对查询进行意图分析
+# 没有会话内容时使用原始查询，不调用意图分析
 results = client.search(
     query="how to implement OAuth 2.0 authorization code flow"
 )

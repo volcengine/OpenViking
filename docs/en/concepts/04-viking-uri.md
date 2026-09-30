@@ -165,7 +165,7 @@ segments, for example `alice` or `web-visitor-alice`.
 
 ```
 viking://user/{user_id}/sessions/{session_id}/          # Session root
-viking://user/{user_id}/sessions/{session_id}/messages  # Session messages
+viking://user/{user_id}/sessions/{session_id}/messages.jsonl  # Session messages
 viking://user/{user_id}/sessions/{session_id}/tools     # Tool executions
 viking://user/{user_id}/sessions/{session_id}/history   # Archived history
 viking://~/sessions/{session_id}/                       # Your own session, via the home alias
@@ -371,9 +371,8 @@ Each directory may contain special files:
 
 | File | Purpose |
 |------|---------|
-| `.abstract.md` | L0 abstract (~100 tokens) |
-| `.overview.md` | L1 overview (~2k tokens) |
-| `` | Related resources |
+| `.abstract.md` | L0 directory abstract (default body limit: 256 characters) |
+| `.overview.md` | L1 directory overview (default body limit: 4,000 characters) |
 | `.meta.json` | Metadata |
 
 ## Best Practices

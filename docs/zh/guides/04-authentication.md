@@ -726,7 +726,7 @@ make build-cli
 RUST_LOG=debug ov ls viking://
 
 # 检查配置
-ov doctor
+ov config validate
 ```
 
 ---

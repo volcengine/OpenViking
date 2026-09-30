@@ -104,7 +104,7 @@ Protocol or content validation failures return HTTP `400` with the error code
 - duplicate asset identities in one Manifest.
 
 Empty fields, incorrect field types, or length-limit violations are rejected by
-request validation with HTTP `422`.
+request validation with HTTP `400` and `INVALID_ARGUMENT`; field details are returned in `error.details.validation_errors`.
 
 ## Preflight Git repository access
 

@@ -757,8 +757,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 When resources are added, VLM generates:
 
-1. **L0 (Abstract)**: ~100 token summary
-2. **L1 (Overview)**: ~2k token overview with navigation
+1. **L0 (Abstract)**: file or directory summary, with a default limit of 256 characters
+2. **L1 (Overview)**: directory overview with navigation, with a default limit of 4000 characters
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
 

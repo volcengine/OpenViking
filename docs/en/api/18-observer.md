@@ -4,7 +4,7 @@ The Observer API reports immediate status for queues, the vector database, model
 
 ## Observer API
 
-The observer API provides detailed component-level monitoring.
+Python examples below use `SyncHTTPClient`. Observer accessors are properties returning dictionaries: use `client.observer.queue`, without parentheses. Each access makes a request; keep the result when reading several fields.
 
 ### observer.queue
 
@@ -37,13 +37,9 @@ curl -X GET http://localhost:1933/api/v1/observer/queue \
 **Python SDK**
 
 ```python
-print(client.observer.queue())
-# Output:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
+status = client.observer.queue
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -118,16 +114,9 @@ curl -X GET 'http://localhost:1933/api/v1/observer/vikingdb?format=json' \
 **Python SDK**
 
 ```python
-print(client.observer.vikingdb())
-# Output:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# Access specific attributes
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # Status table string
+status = client.observer.vikingdb
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -213,13 +202,9 @@ curl -X GET http://localhost:1933/api/v1/observer/models \
 **Python SDK**
 
 ```python
-print(client.observer.models())
-# Output:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
+status = client.observer.models
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -444,18 +429,9 @@ curl -X GET http://localhost:1933/api/v1/observer/system \
 **Python SDK**
 
 ```python
-print(client.observer.system())
-# Output:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
+status = client.observer.system
+print(status["is_healthy"])
+print(status["components"])
 ```
 
 **TypeScript SDK**

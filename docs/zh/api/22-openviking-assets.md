@@ -96,7 +96,7 @@ Manifest 按名称选择资产时，把 Catalog YAML 放入 `catalog_yaml`，来
 - 连接器、仓库 URL、Git 引用或资产身份不合法；
 - 同一份 Manifest 中出现重复资产身份。
 
-请求字段为空、类型错误或超过长度限制时，由请求模型返回 HTTP `422`。
+请求字段为空、类型错误或超过长度限制时，返回 HTTP `400` 和 `INVALID_ARGUMENT`，字段详情见 `error.details.validation_errors`。
 
 ## 预检 Git 仓库权限
 

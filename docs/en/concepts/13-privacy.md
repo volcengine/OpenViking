@@ -110,9 +110,8 @@ Current matching is suffix-based: `/skills/{name}/SKILL.md`, so it supports user
    -> add to extra-config notice (`Configured but not referenced in content`).
 
 4. If `unresolved_entries` or extra-config entries exist, append notice block:
-   - `[OpenViking Privacy Notice]`
-   - `Related configured privacy values: ...`
-   - `Not replaced (missing config): ...` (if any)
+   - `[Privacy Config Notice]`
+   - `Missing config: ...` (if any)
    - `Configured but not referenced in content: ...` (if any)
 
 > Current implementation only runs restore when a `current` privacy config exists for that skill. If no current config exists, no notice is appended.

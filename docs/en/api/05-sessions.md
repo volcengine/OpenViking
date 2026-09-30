@@ -1237,7 +1237,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 |------|------|------|--------|------|
 | session_id | str | Yes | - | Session ID |
 | messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
-| options | BatchAddMessagesOptions | No | None | Advanced batch options such as `telemetry`; pass `options={"telemetry": true}` to include operation telemetry data |
+| options | BatchAddMessagesOptions | No | None | Advanced batch options such as `telemetry`; pass `options={"telemetry": True}` to include operation telemetry data |
 
 > **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
 

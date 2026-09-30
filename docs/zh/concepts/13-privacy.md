@@ -110,9 +110,8 @@ fs.read(uri)
    -> 记入“额外配置”提示（`Configured but not referenced in content`）。
 
 4. 当存在 `unresolved_entries` 或“额外配置”时，会在内容末尾追加：
-   - `[OpenViking Privacy Notice]`
-   - `Related configured privacy values: ...`
-   - `Not replaced (missing config): ...`（如有）
+   - `[Privacy Config Notice]`
+   - `Missing config: ...`（如有）
    - `Configured but not referenced in content: ...`（如有）
 
 > 注意：当前实现中，仅当该 skill 已有 `current` 配置时才会进入 restore。若没有当前配置，不会追加 notice。

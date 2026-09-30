@@ -427,7 +427,7 @@ curl http://localhost:1933/health
 
 # 就绪探针
 curl http://localhost:1933/ready
-# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok", "embedding": "ok", "ollama": "ok"}}
+# {"status":"ready","checks":{"agfs":{"status":"ok","checks":{"filesystem":"ok","multiwrite_sync":"not_supported"}},"vectordb":"ok","api_key_manager":"ok","embedding":"ok","ollama":"not_configured"}}
 ```
 
 在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。

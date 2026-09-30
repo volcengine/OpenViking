@@ -445,7 +445,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     }'
 ```
 
-**Search without Session (Still Performs Intent Analysis)**
+**Search without Session (Uses the Original Query)**
 
 ```bash
 curl -X POST http://localhost:1933/api/v1/search/search \
@@ -521,7 +521,7 @@ for context in results.get("resources", []):
 
 ```python
 # search can also be used without session
-# It still performs intent analysis on the query
+# Without session content, it uses the original query without intent analysis
 results = client.search(
     query="how to implement OAuth 2.0 authorization code flow"
 )

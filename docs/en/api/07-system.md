@@ -137,7 +137,7 @@ ov --profile health
 
 #### 1. API Implementation Overview
 
-Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, and Ollama (if configured) status. Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
+Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, embedding, and Ollama (if configured). Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:readiness_check` - HTTP route
@@ -147,9 +147,10 @@ Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManage
 No parameters.
 
 **Check Item Descriptions**:
-- `agfs`: Whether Viking filesystem is accessible
+- `agfs`: Nested filesystem and multi-write sync checks
 - `vectordb`: Whether vector database is healthy
 - `api_key_manager`: Whether API key manager is loaded
+- `embedding`: Whether the embedding provider was initialized at startup; no provider request is sent
 - `ollama`: Whether Ollama service is reachable (only if configured)
 
 #### 3. Usage Examples
@@ -170,9 +171,10 @@ curl -X GET http://localhost:1933/ready
 {
   "status": "ready",
   "checks": {
-    "agfs": "ok",
+    "agfs": {"status": "ok", "checks": {"filesystem": "ok", "multiwrite_sync": "not_supported"}},
     "vectordb": "ok",
     "api_key_manager": "ok",
+    "embedding": "ok",
     "ollama": "not_configured"
   }
 }
@@ -208,18 +210,7 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
-**Python SDK**
-
-```python
-status = client.get_status()
-print(status)
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getStatus());
-```
+The public SDK `get_status()` / `getStatus()` / `GetStatus()` methods return aggregate Observer status, not this endpoint’s identity payload. Use HTTP for this endpoint; see [Observer](18-observer.md) for those SDK methods.
 
 **CLI**
 

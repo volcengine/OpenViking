@@ -135,7 +135,7 @@ ov --profile health
 
 #### 1. API 实现介绍
 
-部署环境使用的就绪探针。检查 AGFS、VectorDB、APIKeyManager 和 Ollama（如配置）的状态。当所有配置的子系统都准备完成时返回 200，否则返回 503。无需认证（专为 Kubernetes 探针设计）。
+部署环境使用的就绪探针。检查 AGFS、VectorDB、APIKeyManager、Embedding 和 Ollama（如配置）的状态。当所有配置的子系统都准备完成时返回 200，否则返回 503。无需认证（专为 Kubernetes 探针设计）。
 
 **代码入口**:
 - `openviking/server/routers/system.py:readiness_check` - HTTP 路由
@@ -145,9 +145,10 @@ ov --profile health
 无参数。
 
 **检查项说明**:
-- `agfs`: Viking 文件系统是否可访问
+- `agfs`: 包含文件系统访问和多写同步状态的嵌套检查结果
 - `vectordb`: 向量数据库是否健康
 - `api_key_manager`: API 密钥管理器是否已加载
+- `embedding`: 启动时 Embedding provider 是否已初始化；不发起模型请求
 - `ollama`: Ollama 服务是否可达（仅当配置时）
 
 #### 3. 使用示例
@@ -168,9 +169,10 @@ curl -X GET http://localhost:1933/ready
 {
   "status": "ready",
   "checks": {
-    "agfs": "ok",
+    "agfs": {"status": "ok", "checks": {"filesystem": "ok", "multiwrite_sync": "not_supported"}},
     "vectordb": "ok",
     "api_key_manager": "ok",
+    "embedding": "ok",
     "ollama": "not_configured"
   }
 }
@@ -206,18 +208,7 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
-**Python SDK**
-
-```python
-status = client.get_status()
-print(status)
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getStatus());
-```
+公开 SDK 的 `get_status()` / `getStatus()` / `GetStatus()` 返回 Observer 汇总状态，不是本接口的身份信息。访问本接口使用 HTTP；这些 SDK 方法见[运行观测](18-observer.md)。
 
 **CLI**
 

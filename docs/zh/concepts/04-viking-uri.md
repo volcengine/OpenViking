@@ -154,7 +154,7 @@ Peer 数据使用 `viking://user/<user_id>/peers/<peer_id>/...`。
 
 ```
 viking://user/{user_id}/sessions/{session_id}/          # 会话根目录
-viking://user/{user_id}/sessions/{session_id}/messages  # 会话消息
+viking://user/{user_id}/sessions/{session_id}/messages.jsonl  # 会话消息
 viking://user/{user_id}/sessions/{session_id}/tools     # 工具执行
 viking://user/{user_id}/sessions/{session_id}/history   # 归档历史
 viking://~/sessions/{session_id}/                       # 自己的会话（家目录别名写法）
@@ -352,9 +352,8 @@ overview = await client.overview(uri="viking://resources/docs/")
 
 | 文件 | 用途 |
 |------|------|
-| `.abstract.md` | L0 摘要（~100 tokens） |
-| `.overview.md` | L1 概览（~2k tokens） |
-| `` | 相关资源 |
+| `.abstract.md` | L0 目录摘要（默认正文上限 256 字符） |
+| `.overview.md` | L1 目录概览（默认正文上限 4,000 字符） |
 | `.meta.json` | 元数据 |
 
 ## 最佳实践

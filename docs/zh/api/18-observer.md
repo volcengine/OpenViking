@@ -4,7 +4,7 @@ Observer API 提供队列、向量库、模型、锁、检索和文件系统等�
 
 ## Observer API
 
-Observer API 提供详细的组件级监控。
+以下 Python 示例使用 `SyncHTTPClient`。Observer 接口是返回字典的属性，使用 `client.observer.queue`，不加括号。每次访问都会请求服务端；需要读取多个字段时，先保存返回值。
 
 ### observer.queue
 
@@ -37,13 +37,9 @@ curl -X GET http://localhost:1933/api/v1/observer/queue \
 **Python SDK**
 
 ```python
-print(client.observer.queue())
-# 输出:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
+status = client.observer.queue
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -118,16 +114,9 @@ curl -X GET 'http://localhost:1933/api/v1/observer/vikingdb?format=json' \
 **Python SDK**
 
 ```python
-print(client.observer.vikingdb())
-# 输出:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# 访问特定属性
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # 状态表字符串
+status = client.observer.vikingdb
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -213,13 +202,9 @@ curl -X GET http://localhost:1933/api/v1/observer/models \
 **Python SDK**
 
 ```python
-print(client.observer.models())
-# 输出:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
+status = client.observer.models
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -444,18 +429,9 @@ curl -X GET http://localhost:1933/api/v1/observer/system \
 **Python SDK**
 
 ```python
-print(client.observer.system())
-# 输出:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
+status = client.observer.system
+print(status["is_healthy"])
+print(status["components"])
 ```
 
 **TypeScript SDK**
