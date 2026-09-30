@@ -2853,6 +2853,7 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
     ):
         captured["summary_dict"] = summary_dict
         captured["scalar_override"] = scalar_override
+        captured["ingest_options"] = ingest_options
         return True
 
     monkeypatch.setattr(
@@ -2872,9 +2873,9 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
     # abstract still travels unchanged as a stored scalar.
     assert captured["summary_dict"]["summary"] == expected_summary
     assert captured["scalar_override"]["_record_id"] == "id-a"
+    assert captured["ingest_options"].search_tags is None
     if scalar_override.get("abstract"):
         assert captured["scalar_override"]["abstract"] == scalar_override["abstract"]
-
 
 
 def test_semantic_message_roundtrip_uses_explicit_plan():

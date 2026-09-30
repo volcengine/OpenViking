@@ -134,7 +134,6 @@ async def vectorize_resource_file(
     file_uri: str,
     *,
     ctx: RequestContext,
-    ingest_options: IngestOptions | None = None,
     file_md5: str | None = None,
     scalar_override: Optional[dict[str, Any]] = None,
     field_patch: FieldPatch | None = None,
@@ -164,7 +163,10 @@ async def vectorize_resource_file(
         parent_uri=parent.uri,
         context_type=context_type_for_uri(file_uri),
         ctx=ctx,
-        ingest_options=IngestOptions.from_value(ingest_options),
+        # Direct actions carry resolved scalar fields in ``scalar_override``.
+        # Reapplying request options here could apply tag modes twice; ACL is
+        # committed separately by the caller after the plan execution.
+        ingest_options=IngestOptions(),
         file_md5=file_md5,
         scalar_override=scalar_override,
         field_patch=field_patch,
