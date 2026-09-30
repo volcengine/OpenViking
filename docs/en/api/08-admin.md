@@ -311,7 +311,7 @@ Only the existing `language` context variable is available; body fields,
 the same as the restricted bodies below: conditionals, local variables, bounded
 literal loops, safe string methods, approved string filters and tests, but no arbitrary calls.
 For example, <code v-pre>Use {{ language.upper() }}.</code> renders as `Use EN.` when the existing
-schema-rendering context supplies `language=en`. Rendering uses the language supplied by the calling path; the Python protocol also has a static field-description path. Missing language retains the previous undefined/empty-output behavior;
+schema-rendering context supplies `language=en`. Rendering uses the language supplied by the calling path; both Python and JSON protocols render field descriptions with that context. Missing language retains the previous undefined/empty-output behavior;
 use `language or 'English'` for a fallback. Context values are not recursively
 evaluated as Jinja. Invalid custom expressions are rejected before publication,
 and persisted overrides are revalidated before extraction. Deployment descriptions
@@ -1917,12 +1917,12 @@ ov --sudo admin migrate --output json
 ov --sudo admin migrate --cleanup --output json
 ```
 
-**Response Example**
+**CLI Response Example (default compact output)**
 
 ```json
 {
-  "status": "ok",
-  "result": {"task_id": "legacy_migration_..."}
+  "ok": true,
+  "result": {"task_id": "6de05fc3-0334-40d6-ba9b-dd317eb4d351"}
 }
 ```
 

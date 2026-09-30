@@ -274,7 +274,7 @@ Registry；无关类型变更不会触发拆批。不同 Schema 分开合并、�
 `description`（类型说明及 `fields[].description`）统一支持受限 Jinja，不因来自部署默认值或账户覆盖而改变规则，不再记录或检查说明来源标志。
 仅开放已有上下文中的 `language`，不开放正文变量、`extract_context` 或任意对象。语法复用下节受限正文的条件、局部变量、有界字面量循环、安全字符串方法、白名单字符串过滤器及测试；不支持任意调用。
 例如已有 Schema 渲染上下文提供 `language=en` 时，<code v-pre>请使用 {{ language.upper() }}。</code> 会展开为 `请使用 EN。`，用户修改文字不会让变量停止展开。
-渲染使用调用路径传入的语言，Python 协议还保留静态字段说明展示路径。缺失语言时保留原来的 undefined/空字符串行为，可用 `language or '中文'` 提供回退；上下文值中的 Jinja 不会被递归执行。
+渲染使用调用路径传入的语言，Python 和 JSON 协议均使用该上下文渲染字段说明。缺失语言时保留原来的 undefined/空字符串行为，可用 `language or '中文'` 提供回退；上下文值中的 Jinja 不会被递归执行。
 越界的自定义表达式在保存前拒绝，已保存说明在抽取加载时重新校验；部署说明渲染也受同样限制，已有部署若使用白名单外语法，需要调整，不能凭来源绕过限制。
 每条说明最多 2048 个 AST 节点，渲染结果最多 1 MiB。正文 `content_template` 的变量、源码大小及默认正文兼容规则仍按下节处理。
 每个可编辑 `description` 最多 50,000 个 Unicode 码点，按提交的原文计数，包含空格、换行和模板样式的文字，不按 UTF-8 字节或渲染后的长度计数。各说明独立计数，不合并计算；整个配置仍受 1 MiB 上限约束。超过上限返回 400，不修改当前配置。
@@ -1792,12 +1792,12 @@ ov --sudo admin migrate --output json
 ov --sudo admin migrate --cleanup --output json
 ```
 
-**响应示例**
+**CLI 响应示例（默认 compact 输出）**
 
 ```json
 {
-  "status": "ok",
-  "result": {"task_id": "legacy_migration_..."}
+  "ok": true,
+  "result": {"task_id": "6de05fc3-0334-40d6-ba9b-dd317eb4d351"}
 }
 ```
 
