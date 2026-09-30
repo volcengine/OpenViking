@@ -1,8 +1,12 @@
 # Queue State and Completion Semantics
 
+QueueFS determines completion from one backend status snapshot: a queue is empty only when both `pending` and `processing` are zero. An empty pending queue alone does not mean processing has finished.
+
+An empty queue means no messages are currently unacknowledged. It does not prove every operation succeeded or prevent new work from arriving. To verify an import or session commit, inspect its [task](../api/17-tasks.md), including the terminal status and error.
+
 ## Problem
 
-Queue completion is currently inferred from two independent sources:
+The previous implementation inferred completion from two independent sources:
 
 - QueueFS `/size`, which reports messages still pending for dequeue.
 - Python `NamedQueue._in_progress`, which reports work observed by the current
@@ -18,7 +22,9 @@ timing windows. It cannot make the backend state transition and local counter
 update one atomic operation, so it does not strictly solve the problem across
 threads, event loops, or processes.
 
-## Previous Backend Behavior
+<a id="previous-backend-behavior"></a>
+
+## ACK Lifecycle
 
 SQLite and cache-backed queues implement an acknowledgement lifecycle:
 
@@ -26,15 +32,11 @@ SQLite and cache-backed queues implement an acknowledgement lifecycle:
 enqueue -> pending -> dequeue -> processing -> ack -> removed
 ```
 
-Before this change, the memory backend did not implement the same lifecycle.
-Its `dequeue` operation removed the message from its only queue immediately.
-Although the backend exposed an `ack` method, the dequeued message was no
-longer stored, so a later ACK normally had nothing to remove. The memory
-backend therefore had no effective `processing` state or ACK lifecycle.
+The memory backend also maintains a processing collection. Dequeue moves messages into it; ACK removes them. It uses the same completion condition as the other backends, but does not preserve queued work across process restarts.
 
 ## State Model
 
-Queue length is not one scalar. QueueFS must maintain these current-state
+Queue length is not one scalar. QueueFS maintains these current-state
 gauges:
 
 | Field | Meaning |
@@ -71,14 +73,13 @@ The following cumulative counters are also not queue length:
 - `requeue_count`
 - `error_count`
 
-They describe processing outcomes rather than current queue occupancy. They can
-remain in the processing or metrics layer for this fix. Moving them into
+They describe processing outcomes rather than current queue occupancy. They remain in the processing or metrics layer. Moving them into
 QueueFS would require an explicit backend outcome protocol because the backend
 cannot infer a handler result from dequeue or ACK alone.
 
 ## Backend Contract
 
-QueueFS should expose one atomic status operation:
+QueueFS `/status` returns counts read atomically:
 
 ```json
 {
@@ -96,7 +97,7 @@ Backend requirements:
 
 - **SQLite:** read both counts from one database snapshot.
 - **Cache:** return `LLEN(pending)` and `ZCARD(processing)` from one Lua script.
-- **Memory:** add a processing collection; dequeue moves a message into it and
+- **Memory:** maintain a processing collection; dequeue moves a message into it and
   ACK removes the message from it.
 
 `NamedQueue.get_status()` consumes this backend snapshot. `wait_complete()` and

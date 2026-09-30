@@ -1,8 +1,12 @@
 # 队列状态与完成语义
 
+QueueFS 通过同一份后端状态快照判断队列是否完成：只有 `pending` 和 `processing` 都为零，队列才为空。仅检查待出队消息数不能证明处理已结束。
+
+队列为空只描述当前没有未确认的消息，不证明每个业务操作成功，也不保证之后不会入队新任务。需要确认一次导入或会话提交是否成功，请查询对应 [task](../api/17-tasks.md)，检查最终状态及错误。
+
 ## 问题
 
-当前队列完成状态由两个相互独立的数据源推断：
+旧实现通过两个相互独立的数据源推断完成状态：
 
 - QueueFS `/size`：返回仍可被 dequeue 的 pending 消息数。
 - Python `NamedQueue._in_progress`：返回当前进程观察到的执行中任务数。
@@ -15,7 +19,9 @@
 状态迁移与本地计数更新成为同一个原子操作，因此无法严格解决跨线程、跨 event loop
 或跨进程的并发判断问题。
 
-## 改动前的后端行为
+<a id="改动前的后端行为"></a>
+
+## ACK 生命周期
 
 SQLite 和缓存后端实现了 ACK 生命周期：
 
@@ -23,14 +29,11 @@ SQLite 和缓存后端实现了 ACK 生命周期：
 enqueue -> pending -> dequeue -> processing -> ack -> removed
 ```
 
-改动前，MemoryBackend 没有实现相同的生命周期。它的 `dequeue` 会直接从唯一的
-队列中删除消息。虽然接口上存在 `ack` 方法，但被 dequeue 的消息已经不再保存，
-后续 ACK 通常找不到可删除的消息。因此，MemoryBackend 实际上没有有效的
-`processing` 状态和 ACK 生命周期。
+MemoryBackend 也维护 `processing` 集合：dequeue 将消息移入该集合，ACK 再移除消息。它与其他后端使用相同的完成条件，但不提供进程重启后的持久化恢复。
 
 ## 状态模型
 
-队列长度不是单一数字。QueueFS 必须维护以下当前状态指标：
+队列长度不是单一数字。QueueFS 维护以下当前状态指标：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -63,13 +66,12 @@ Python 不应再组合 backend 的 `pending` 和进程内计数来判断完成�
 - `requeue_count`
 - `error_count`
 
-它们描述的是处理结果，而不是当前队列占用。本次修复中可以继续由处理层或指标层
-维护。如果需要将它们下沉到 QueueFS，必须先定义显式的处理结果协议，因为 backend
+它们描述的是处理结果，而不是当前队列占用。由处理层或指标层维护。如果需要将它们下沉到 QueueFS，必须先定义显式的处理结果协议，因为 backend
 无法仅根据 dequeue 或 ACK 推断 handler 的处理结果。
 
 ## Backend 契约
 
-QueueFS 应提供一个原子状态操作：
+QueueFS `/status` 返回同一次原子读取取得的状态：
 
 ```json
 {
@@ -88,7 +90,7 @@ QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`d
 - **SQLite：** 在同一个数据库快照中读取两个计数。
 - **Cache：** 通过一个 Lua 脚本返回 `LLEN(pending)` 和
   `ZCARD(processing)`。
-- **Memory：** 增加 processing 集合；dequeue 将消息移入该集合，ACK 从该集合
+- **Memory：** 维护 processing 集合；dequeue 将消息移入该集合，ACK 从该集合
   删除消息。
 
 `NamedQueue.get_status()` 只消费 backend 返回的状态快照。`wait_complete()` 和
