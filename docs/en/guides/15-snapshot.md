@@ -1,6 +1,6 @@
 # Snapshots (Multi-Version Management) Guide
 
-Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
+Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, and `restore` to recover saved content. Snapshots do not save uncommitted changes or files excluded at commit time; ACLs and vector indexes are not versioned. Restore compares the source snapshot with HEAD, so affected paths can overwrite uncommitted changes.
 
 Multi-version management is powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. It is fully transparent to callers — you never run any `git` command yourself.
 
@@ -177,6 +177,7 @@ client.write(
     content="# Guide\n\nv1 content\n",
     mode="create",
 )
+print(client.wait_processed(timeout=120))
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 if not v1.get("commit_oid"):
     raise RuntimeError(f"No snapshot created: {v1}")
@@ -188,6 +189,7 @@ client.write(
     content="# Guide\n\nv2 content\n",
     mode="replace",
 )
+print(client.wait_processed(timeout=120))
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. Walk history
@@ -203,7 +205,7 @@ print(client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], 
 client.close()
 ```
 
-The example uses a new directory on each run and ends with a preview. After reviewing the plan, reconnect and call `restore` with the same `project_dir` and `source_commit`, with `dry_run=False`, to apply it.
+The example uses a new directory on each run, waits for background processing before each commit, and ends with a preview. Inspect the processing results for errors; queue completion alone does not prove index consistency. After reviewing the plan, reconnect and call `restore` with the same `project_dir` and `source_commit`, with `dry_run=False`, to apply it.
 
 ### CLI
 
@@ -266,7 +268,7 @@ Replace `<commit_oid>` with the saved commit ID. The restore request above is a 
 `restore` uses **forward-commit** semantics: it reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. Therefore:
 
 - The new commit's parent is the HEAD that existed before the restore — **not** `source_commit`.
-- A restore that changes files adds a commit without rewriting existing history. A no-op restore may return no new commit. Snapshot storage still needs backups.
+- When the source and HEAD trees differ in the selected scope, restore adds a commit without rewriting history. If those trees match, it returns `result: "noop"` without a new commit, even if the working files differ. Snapshot storage still needs backups.
 - `restore` only affects files within `project_dir` (the whole account tree when omitted); files outside that scope are left untouched.
 
 ## Excluding Files with `.ovgitignore`

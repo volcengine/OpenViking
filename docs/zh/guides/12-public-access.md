@@ -172,7 +172,9 @@ OAuth 元数据和 `WWW-Authenticate` 头需要包含公网 origin。OAuth 地�
 3. `X-Forwarded-Proto` + `X-Forwarded-Host` 请求头
 4. 请求的 `Host` 头
 
-MCP 上传 URL 的配置回退项是 `server.public_base_url`，并非 `oauth.issuer`。统一设置环境变量可让两者使用同一地址；若同时设置 `oauth.issuer`，保持 origin 一致。
+授权服务器的 issuer 在启动时确定：环境变量 → `oauth.issuer` → `http://127.0.0.1:1933`，转发请求头不会改变它。受保护资源元数据的 `authorization_servers` 优先使用显式配置的 `oauth.issuer`，即使已设置环境变量。
+
+MCP 上传 URL 的顺序是：环境变量 → `server.public_base_url` → 转发 host/protocol → `Host` → 监听地址回退。统一设置环境变量可让两者使用同一地址；若同时设置 `oauth.issuer`，保持 origin 一致。
 
 使用反向代理时，在服务端进程环境中设置选项 1：
 

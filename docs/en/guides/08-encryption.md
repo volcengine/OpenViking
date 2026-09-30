@@ -286,6 +286,10 @@ vault write -f transit/keys/openviking-root-key type=aes256-gcm96
 For the configuration above, the service token needs Transit key metadata access, encrypt/decrypt access, and KV access to store the wrapped root key. With the engines and Transit key pre-created, a policy example is:
 
 ```hcl
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
 path "transit/keys/openviking-root-key" {
   capabilities = ["read"]
 }
@@ -302,6 +306,8 @@ path "transit/decrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 ```
+
+For KV v1, replace `secret/data/openviking-encrypted-root-key` with `secret/openviking-encrypted-root-key`. The provider also probes `sys/mounts`; denial is logged as a warning and does not stop startup when Transit is already enabled.
 
 ---
 
@@ -474,7 +480,7 @@ Error: Invalid credentials
 
 Check that the deployment still has the original root key, provider settings, account identity, and intact ciphertext. For Vault, retain both the Transit key and the KV entry containing the wrapped root key; for KMS, retain the KMS key and local wrapped-key file. Do not generate a replacement root key to repair access to existing ciphertext.
 
-If a partial read returns ciphertext, record the server version and compare full and partial reads on a copied test file. Check the storage encryption configuration and relevant fixes before upgrading, and keep the original data and keys available for rollback.
+Partial reads load and authenticate the full encrypted file, then return the requested plaintext slice. If a partial read returns ciphertext, record the server version and compare full and partial reads on a copied test file. Check the storage encryption configuration and relevant fixes before upgrading, and keep the original data and keys available for rollback.
 
 ---
 

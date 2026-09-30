@@ -1,6 +1,6 @@
 # 多版本管理（快照）指南
 
-快照将指定范围内的文件树保存为不可变版本。使用 `commit` 保存、`log` 查看历史、`show` 读取旧版文件、`restore` 恢复已保存的内容。未提交或被排除的文件不在恢复范围内，ACL 和向量索引也不保存历史版本。
+快照将指定范围内的文件树保存为不可变版本。使用 `commit` 保存、`log` 查看历史、`show` 读取旧版文件、`restore` 恢复已保存的内容。快照不保存未提交的改动或提交时被排除的文件，ACL 和向量索引也不保存历史版本。恢复会比较来源快照与 HEAD，因此受影响路径上的未提交改动可能被覆盖。
 
 多版本管理由内嵌在 Rust RAGFS 层的 [gitoxide](https://github.com/Byron/gitoxide) 驱动，以 `account_id` 为粒度维护一个逻辑 Git 仓库（每个账号一个仓库），对调用方完全透明——你无需手动执行任何 `git` 命令。
 
@@ -177,6 +177,7 @@ client.write(
     content="# Guide\n\nv1 content\n",
     mode="create",
 )
+print(client.wait_processed(timeout=120))
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 if not v1.get("commit_oid"):
     raise RuntimeError(f"No snapshot created: {v1}")
@@ -188,6 +189,7 @@ client.write(
     content="# Guide\n\nv2 content\n",
     mode="replace",
 )
+print(client.wait_processed(timeout=120))
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. 查看历史
@@ -203,7 +205,7 @@ print(client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], 
 client.close()
 ```
 
-示例每次创建新目录，最后只预览恢复计划。检查计划后，重新连接客户端，使用相同的 `project_dir` 和 `source_commit`，并设置 `dry_run=False` 才会执行恢复。
+示例每次创建新目录，在每次提交前等待后台处理结束，最后只预览恢复计划。检查处理结果中的错误；队列结束不代表索引一致。检查计划后，重新连接客户端，使用相同的 `project_dir` 和 `source_commit`，并设置 `dry_run=False` 才会执行恢复。
 
 ### CLI
 
@@ -266,7 +268,7 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 `restore` 采用**正向恢复（forward-commit）**：它读取 `source_commit` 的内容，把差异写回工作区，并在**当前 HEAD 之上生成一个新的提交**。因此：
 
 - 新提交的父提交是恢复操作发生前的 HEAD，**不是** `source_commit`。
-- 恢复产生文件改动时会追加提交，不改写已有历史；没有改动时可能不生成新提交。快照存储本身仍需要备份。
+- 所选范围内的来源快照与 HEAD 文件树存在差异时，恢复会追加提交，不改写历史。两棵树相同时返回 `result: "noop"`，不创建提交，即使工作区文件已有变化。快照存储本身仍需要备份。
 - `restore` 只影响 `project_dir`（省略时为整棵账号树）范围内的文件，范围之外的文件保持不变。
 
 ## 使用 `.ovgitignore` 排除文件

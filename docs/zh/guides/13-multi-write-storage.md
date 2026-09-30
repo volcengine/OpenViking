@@ -99,7 +99,7 @@
 | 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
 | `use_path_style` | 可选，默认 `true` | 使用路径风格 URL（`http://host/bucket/key`），按 endpoint 支持的方式选择。 |
-| `directory_marker_mode` | backup 项必填 | `none` 不创建标记，`empty` 创建零字节标记，`nonempty` 创建带内容的标记。每个 S3 backup 项都要显式设置；省略时启动会报 `AGFSConfigError: invalid directory_marker_mode: null`。 |
+| `directory_marker_mode` | backup 项必填 | `none` 不创建标记，`empty` 创建零字节标记，`nonempty` 创建带内容的标记。每个 S3 backup 项都要显式设置；省略时启动会报 `AGFSConfigError: configuration error: invalid directory_marker_mode: null (valid: none, empty, nonempty)`。 |
 | `use_ssl` | 可选 | HTTP 端点（如 `http://localhost:9000`）需要设置为 `false`。 |
 
 **S3 兼容存储最小示例（RustFS/MinIO）：**

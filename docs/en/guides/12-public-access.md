@@ -176,7 +176,9 @@ OAuth metadata and `WWW-Authenticate` headers need the public origin. The OAuth 
 3. `X-Forwarded-Proto` + `X-Forwarded-Host` request headers
 4. The request's `Host` header
 
-For MCP upload URLs, `server.public_base_url` is the configuration fallback instead of `oauth.issuer`. Setting the environment variable keeps both aligned; if you also set `oauth.issuer`, use the same origin.
+The authorization-server issuer is fixed at startup: environment variable → `oauth.issuer` → `http://127.0.0.1:1933`; forwarded headers do not change it. Protected-resource metadata uses an explicit `oauth.issuer` for `authorization_servers`, even when the environment variable is set.
+
+MCP upload URLs use: environment variable → `server.public_base_url` → forwarded host/protocol → `Host` → listen-address fallback. Setting the environment variable keeps both aligned; if you also set `oauth.issuer`, use the same origin.
 
 Behind a reverse proxy, set option 1 in the server process environment:
 

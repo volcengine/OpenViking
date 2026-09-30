@@ -286,6 +286,10 @@ vault write -f transit/keys/openviking-root-key type=aes256-gcm96
 对于上面的配置，服务 token 需要读取 Transit key 元数据、加解密权限，以及保存封装根密钥的 KV 读写权限。提前创建引擎和 Transit key 后，可参考：
 
 ```hcl
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
 path "transit/keys/openviking-root-key" {
   capabilities = ["read"]
 }
@@ -302,6 +306,8 @@ path "transit/decrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 ```
+
+使用 KV v1 时，将 `secret/data/openviking-encrypted-root-key` 改为 `secret/openviking-encrypted-root-key`。provider 还会检查 `sys/mounts`；权限不足会记录警告，Transit 已启用时不会因此停止启动。
 
 ---
 
@@ -474,7 +480,7 @@ Error: Invalid credentials
 
 检查原根密钥、provider 配置、account 身份和密文是否仍然完整。Vault 需要保留 Transit key 和存放封装根密钥的 KV 条目；KMS 需要保留 KMS key 和本地封装密钥文件。不要通过生成新根密钥修复旧密文的读取问题。
 
-部分读取返回密文时，记录服务版本，在测试副本上比较完整读取与部分读取，核对存储加密配置和相关修复后再升级。保留原数据及密钥，以便回退。
+部分读取会先加载并校验整个加密文件，再返回所需的明文切片。部分读取返回密文时，记录服务版本，在测试副本上比较完整读取与部分读取，核对存储加密配置和相关修复后再升级。保留原数据及密钥，以便回退。
 
 ---
 

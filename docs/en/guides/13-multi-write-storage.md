@@ -99,7 +99,7 @@ Match these `s3` fields to the endpoint and object-store configuration:
 | Field | Required? | Description |
 | --- | --- | --- |
 | `use_path_style` | Optional; default `true` | Use path-style URLs (`http://host/bucket/key`); select the style your endpoint supports. |
-| `directory_marker_mode` | Yes for backup items | `none` creates no marker, `empty` creates a zero-byte marker, and `nonempty` creates a marker with content. Set it explicitly in each S3 backup item; if omitted, startup fails with `AGFSConfigError: invalid directory_marker_mode: null`. |
+| `directory_marker_mode` | Yes for backup items | `none` creates no marker, `empty` creates a zero-byte marker, and `nonempty` creates a marker with content. Set it explicitly in each S3 backup item; if omitted, startup fails with `AGFSConfigError: configuration error: invalid directory_marker_mode: null (valid: none, empty, nonempty)`. |
 | `use_ssl` | Optional | Set to `false` for HTTP endpoints (e.g. `http://localhost:9000`). |
 
 **Minimal S3-compatible example (RustFS/MinIO):**
