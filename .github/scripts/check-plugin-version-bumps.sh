@@ -80,7 +80,9 @@ for entry in "${PLUGINS[@]}"; do
   dir="${entry%%:*}"
   manifest="${entry#*:}"
 
-  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" | grep -v '/node_modules/' || true)"
+  # Test-only edits do not change the distributed plugin runtime.
+  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" \
+    ':(exclude)**/*.test.mjs' | grep -v '/node_modules/' || true)"
   [ -n "$changed" ] || continue
 
   # A plugin added in this branch has no baseline version to compare against.

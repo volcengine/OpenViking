@@ -2396,17 +2396,10 @@ async def test_tree_include_abstract_renders_directory_abstracts(service, monkey
             entries=[
                 {
                     "rel_path": "pr-review",
-                    "uri": f"{uri}/pr-review",
                     "isDir": True,
                     "abstract": "name: pr-review\ndescription: Review a PR diff",
                 },
-                {
-                    "rel_path": "pr-review/SKILL.md",
-                    "uri": f"{uri}/pr-review/SKILL.md",
-                    "isDir": False,
-                    "size": 42,
-                    "abstract": "",
-                },
+                {"rel_path": "pr-review/SKILL.md", "isDir": False, "size": 42, "abstract": ""},
             ],
             has_more=False,
         )

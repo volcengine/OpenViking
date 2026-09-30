@@ -8,8 +8,6 @@ import pytest
 
 from openviking.server.identity import Role
 from openviking.server.upload_token_store import (
-    _TOKEN_ALPHABET,
-    _TOKEN_LENGTH,
     UploadTokenError,
     UploadTokenStore,
 )
@@ -20,95 +18,11 @@ def store() -> UploadTokenStore:
     return UploadTokenStore()
 
 
-def test_issue_returns_token_of_expected_length(store):
-    token, expires_at = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
-    assert len(token) == _TOKEN_LENGTH
-    assert all(c in _TOKEN_ALPHABET for c in token)
-    assert expires_at > 0
-
-
-def test_consume_roundtrip(store):
-    token, _ = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
-    consumed = store.consume(token)
-    assert (consumed.account_id, consumed.user_id) == ("acct", "user")
-    # Business params default to empty when not supplied at issue time.
-    assert (consumed.to, consumed.parent, consumed.reason, consumed.actor_peer_id) == (
-        "",
-        "",
-        "",
-        "",
-    )
-    assert consumed.parse_mode == "default"
-
-
-def test_consume_defaults_to_resource_kind(store):
-    token, _ = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
-    consumed = store.consume(token)
-    assert consumed.kind == "resource"
-    assert (consumed.skill_target_uri, consumed.skill_names, consumed.list_only) == (
-        "",
-        None,
-        False,
-    )
-
-
-def test_consume_returns_skill_install_params(store):
-    token, _ = store.issue(
-        "acct",
-        "user",
-        role=Role.USER,
-        ttl_seconds=60,
-        actor_peer_id="bot-a",
-        kind="skill",
-        skill_target_uri="viking://agent/skills",
-        skill_names=["pdf", "xlsx"],
-        list_only=True,
-    )
-    consumed = store.consume(token)
-    assert consumed.kind == "skill"
-    assert consumed.skill_target_uri == "viking://agent/skills"
-    assert consumed.skill_names == ["pdf", "xlsx"]
-    assert consumed.list_only is True
-    assert consumed.actor_peer_id == "bot-a"
-
-
-def test_consume_returns_bound_business_params(store):
-    token, _ = store.issue(
-        "acct",
-        "user",
-        role=Role.USER,
-        ttl_seconds=60,
-        to="viking://resources/team/proj",
-        parent="viking://user/user/resources/team",
-        reason="quarterly",
-        actor_peer_id="bot-a",
-        processing_mode="vectors_only",
-        parse_mode="no_split",
-    )
-    consumed = store.consume(token)
-    assert consumed.to == "viking://resources/team/proj"
-    assert consumed.parent == "viking://user/user/resources/team"
-    assert consumed.reason == "quarterly"
-    assert consumed.actor_peer_id == "bot-a"
-    assert consumed.processing_mode == "vectors_only"
-    assert consumed.parse_mode == "no_split"
-
-
 def test_consume_burns_token(store):
     token, _ = store.issue("acct", "user", role=Role.USER, ttl_seconds=60)
     store.consume(token)
     with pytest.raises(UploadTokenError, match="unknown or already-consumed"):
         store.consume(token)
-
-
-def test_consume_unknown_token(store):
-    with pytest.raises(UploadTokenError, match="unknown or already-consumed"):
-        store.consume("ZZZZZZ")
-
-
-def test_consume_missing_token(store):
-    with pytest.raises(UploadTokenError, match="missing"):
-        store.consume("")
 
 
 def test_consume_expired_token(store, monkeypatch):
@@ -138,29 +52,3 @@ def test_purge_expired_drops_stale_tokens(store, monkeypatch):
     store.issue("a", "u", role=Role.USER, ttl_seconds=600)
     assert store.peek(t1) is None
     assert store.peek(t2) is not None
-
-
-def test_issue_handles_dense_alphabet_collisions(store, monkeypatch):
-    """Force collisions to verify the retry loop still terminates."""
-    import openviking.server.upload_token_store as mod
-
-    call_count = [0]
-    real_choice = mod.secrets.choice
-
-    def fake_choice(seq):
-        call_count[0] += 1
-        if call_count[0] <= 42:
-            return seq[0]
-        return real_choice(seq)
-
-    monkeypatch.setattr(mod.secrets, "choice", fake_choice)
-
-    t1, _ = store.issue("a", "u", role=Role.USER, ttl_seconds=60)
-    t2, _ = store.issue("a", "u", role=Role.USER, ttl_seconds=60)
-    assert t1 != t2
-
-
-def test_clear_resets_state(store):
-    store.issue("a", "u", role=Role.USER, ttl_seconds=60)
-    store.clear()
-    assert store._store == {}

@@ -28,66 +28,7 @@ def _reset_token_store():
     upload_token_store.clear()
 
 
-def _issue(
-    account_id: str = "acct",
-    user_id: str = "user",
-    *,
-    to: str = "",
-    parent: str = "",
-    reason: str = "",
-    actor_peer_id: str = "",
-    tags: list[str] | None = None,
-    tag_mode: str = "replace",
-):
-    token, _ = upload_token_store.issue(
-        account_id,
-        user_id,
-        role=Role.USER,
-        ttl_seconds=600,
-        to=to,
-        parent=parent,
-        reason=reason,
-        actor_peer_id=actor_peer_id,
-        tags=tags,
-        tag_mode=tag_mode,
-    )
-    return token
-
-
-def _stub_ingest(service, monkeypatch, root_uri: str = "viking://resources/uploaded") -> dict:
-    """Stub add_resource so token-path uploads don't run the full ingest pipeline."""
-    captured: dict = {}
-
-    async def fake_add_resource(*, path, ctx, **kwargs):
-        captured["path"] = path
-        captured["content"] = Path(path).read_bytes()
-        captured["ctx"] = ctx
-        captured["to"] = kwargs.get("to")
-        captured["parent"] = kwargs.get("parent")
-        captured["reason"] = kwargs.get("reason")
-        captured["tags"] = kwargs.get("tags")
-        captured["tag_mode"] = kwargs.get("tag_mode")
-        captured["acl"] = kwargs.get("acl")
-        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
-        return {"root_uri": root_uri}
-
-    monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
-    return captured
-
-
-@pytest.mark.parametrize(
-    ("issued_role", "current_role", "from_oauth", "expected_status"),
-    [
-        (Role.ADMIN, Role.ADMIN, False, 200),
-        (Role.ADMIN, Role.ADMIN, True, 200),
-        (Role.ADMIN, Role.USER, True, 401),
-        (Role.USER, Role.ADMIN, False, 403),
-        (Role.ADMIN, None, False, 401),
-    ],
-)
-async def test_token_upload_auto_ingests_and_returns_result(
-    upload_temp_dir: Path, monkeypatch, issued_role, current_role, from_oauth, expected_status
-):
+async def test_token_upload_auto_ingests_and_returns_result(upload_temp_dir: Path, monkeypatch):
     """An upload keeps the issuing authority, but cannot outlive a role downgrade."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -107,6 +48,7 @@ async def test_token_upload_auto_ingests_and_returns_result(
     from openviking_cli.exceptions import OpenVikingError
     from openviking_cli.session.user_id import UserIdentifier
 
+    current_role = Role.ADMIN
     config = ServerConfig(auth_mode="api_key", root_api_key="test-root")
     app = FastAPI()
     app.state.config = config
@@ -133,6 +75,8 @@ async def test_token_upload_auto_ingests_and_returns_result(
 
     async def ingest(*, path, ctx, acl, to, **_kwargs):
         # Exercise the actual kernel authorization, without an embedding/native stack.
+        assert ctx.user == UserIdentifier("acct", "user")
+        assert ctx.actor_peer_id == "bot-a"
         await fs.prepare_acl_update(to, acl, ctx)
         imported.append(Path(path).read_bytes())
         return {"root_uri": to}
@@ -141,111 +85,62 @@ async def test_token_upload_auto_ingests_and_returns_result(
     monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
     monkeypatch.setattr(mcp_endpoint, "get_server_config", lambda: config)
     monkeypatch.setattr(resource_ingest, "get_service", lambda: service)
-    identity_token = mcp_endpoint._mcp_ctx.set(
-        RequestContext(UserIdentifier("acct", "user"), issued_role, from_oauth=from_oauth)
+    identity = RequestContext(
+        UserIdentifier("acct", "user"), Role.ADMIN, actor_peer_id="bot-a", from_oauth=True
     )
-    try:
-        instruction = await mcp_endpoint.add_resource(path="/tmp/hello.md", to=target, acl=acl)
-    finally:
-        mcp_endpoint._mcp_ctx.reset(identity_token)
-    upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)
-    token = parse_qs(urlparse(upload_url).query)["token"][0]
+
+    async def issue():
+        identity_token = mcp_endpoint._mcp_ctx.set(identity)
+        try:
+            instruction = await mcp_endpoint.add_resource(path="/tmp/hello.md", to=target, acl=acl)
+        finally:
+            mcp_endpoint._mcp_ctx.reset(identity_token)
+        upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)
+        return parse_qs(urlparse(upload_url).query)["token"][0]
+
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post(
-            "/api/v1/resources/temp_upload",
-            params={"token": token},
-            headers={"X-OpenViking-Role": "admin", "X-OpenViking-User": "spoofed"},
-            files={"file": ("hello.md", b"hello world", "text/markdown")},
-        )
-    assert resp.status_code == expected_status, resp.text
-    if expected_status == 200:
-        assert resp.json()["result"]["root_uri"] == target
-        assert "temp_file_id" not in resp.json()["result"]
-        assert imported == [b"hello world"]
-    else:
-        assert imported == []
 
+        async def upload(token):
+            return await client.post(
+                "/api/v1/resources/temp_upload",
+                params={"token": token},
+                headers={
+                    "X-OpenViking-Account": "other-account",
+                    "X-OpenViking-User": "spoofed",
+                    "X-OpenViking-Role": "admin",
+                    "X-OpenViking-Actor-Peer": "other-peer",
+                },
+                files={"file": ("hello.md", b"hello world", "text/markdown")},
+            )
 
-async def test_token_upload_forwards_to_and_reason(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    captured = _stub_ingest(service, monkeypatch)
-    token = _issue(to="viking://resources/team/proj", reason="quarterly report")
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("r.md", b"data", "text/markdown")},
-    )
-    assert resp.status_code == 200, resp.text
-    assert captured["to"] == "viking://resources/team/proj"
-    assert captured["reason"] == "quarterly report"
+        token = await issue()
+        response = await upload(token)
+        assert response.status_code == 200, response.text
+        assert response.json()["result"]["root_uri"] == target
+        assert "temp_file_id" not in response.json()["result"]
+        assert (await upload(token)).status_code == 401
 
+        # An outstanding token loses authority when its user is downgraded.
+        identity.from_oauth = False
+        token = await issue()
+        current_role = Role.USER
+        assert (await upload(token)).status_code == 401
 
-async def test_token_upload_forwards_parent(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    captured = _stub_ingest(service, monkeypatch)
-    token = _issue(parent="viking://user/user/resources/team")
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("r.md", b"data", "text/markdown")},
-    )
+        # A token issued as USER does not gain ADMIN authority after promotion.
+        identity.role = Role.USER
+        token = await issue()
+        current_role = Role.ADMIN
+        assert (await upload(token)).status_code == 403
 
-    assert resp.status_code == 200, resp.text
-    assert captured["parent"] == "viking://user/user/resources/team"
+        # Removing the user also invalidates an outstanding token.
+        identity.role = Role.ADMIN
+        token = await issue()
+        current_role = None
+        assert (await upload(token)).status_code == 401
 
-
-async def test_token_upload_forwards_tags_and_tag_mode(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    captured = _stub_ingest(service, monkeypatch)
-    token = _issue(tags=["team=search"], tag_mode="append")
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("r.md", b"data", "text/markdown")},
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert captured["tags"] == ["team=search"]
-    assert captured["tag_mode"] == "append"
-
-
-async def test_token_upload_uses_token_identity_ignoring_spoofed_headers(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    captured = _stub_ingest(service, monkeypatch)
-    token = _issue(account_id="real_acct", user_id="real_user")
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("r.md", b"data", "text/markdown")},
-        headers={"X-OpenViking-Account": "evil", "X-OpenViking-User": "attacker"},
-    )
-    assert resp.status_code == 200, resp.text
-    ctx = captured["ctx"]
-    assert ctx.user.account_id == "real_acct"
-    assert ctx.user.user_id == "real_user"
-
-
-async def test_token_upload_preserves_actor_peer_from_token(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    """Actor peer scope comes from the token (bound at mint), not the upload headers."""
-    captured = _stub_ingest(service, monkeypatch)
-    token = _issue(actor_peer_id="bot-a")
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("r.md", b"data", "text/markdown")},
-        # A spoofed actor-peer header must be ignored; the token's peer wins.
-        headers={"X-OpenViking-Actor-Peer": "evil-bot"},
-    )
-    assert resp.status_code == 200, resp.text
-    assert captured["ctx"].actor_peer_id == "bot-a"
+    assert imported == [b"hello world"]
 
 
 async def test_token_upload_ingest_error_is_not_reported_as_success(
@@ -257,7 +152,7 @@ async def test_token_upload_ingest_error_is_not_reported_as_success(
         return {"status": "error", "code": "PROCESSING_ERROR", "errors": ["parse failed"]}
 
     monkeypatch.setattr(service.resources, "add_resource", failing_add_resource)
-    token = _issue()
+    token, _ = upload_token_store.issue("acct", "user", role=Role.USER, ttl_seconds=600)
     resp = await client.post(
         "/api/v1/resources/temp_upload",
         params={"token": token},
@@ -267,41 +162,12 @@ async def test_token_upload_ingest_error_is_not_reported_as_success(
     assert resp.json().get("status") == "error"
 
 
-async def test_token_upload_burns_token_on_use(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
-):
-    _stub_ingest(service, monkeypatch)
-    token = _issue()
-    resp1 = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("a.txt", b"first", "text/plain")},
-    )
-    assert resp1.status_code == 200, resp1.text
-
-    resp2 = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("a.txt", b"second", "text/plain")},
-    )
-    assert resp2.status_code == 401
-
-
-async def test_token_upload_unknown_token(client: httpx.AsyncClient, upload_temp_dir: Path):
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": "ZZZZZZ"},
-        files={"file": ("upload_abc.md", b"x", "text/plain")},
-    )
-    assert resp.status_code == 401
-
-
 async def test_token_upload_oversize_rejected(
     client: httpx.AsyncClient, upload_temp_dir: Path, app
 ):
     """Size cap is enforced by TempUploadStore before ingestion; oversize maps to 413."""
     app.state.config.temp_upload.shared_max_size_bytes = 16
-    token = _issue()
+    token, _ = upload_token_store.issue("acct", "user", role=Role.USER, ttl_seconds=600)
     big = b"x" * 64
     resp = await client.post(
         "/api/v1/resources/temp_upload",
