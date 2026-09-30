@@ -2838,9 +2838,21 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
 
     captured = {}
 
-    async def _fake_vectorize_file(*, summary_dict, **kwargs):
+    async def _fake_vectorize_file(
+        *,
+        file_path,
+        summary_dict,
+        parent_uri,
+        context_type,
+        ctx,
+        ingest_options,
+        file_md5,
+        scalar_override,
+        field_patch,
+        action,
+    ):
         captured["summary_dict"] = summary_dict
-        captured["scalar_override"] = kwargs.get("scalar_override")
+        captured["scalar_override"] = scalar_override
         return True
 
     monkeypatch.setattr(

@@ -49,7 +49,7 @@ from openviking.storage.resource_diff import (
     build_rnfv_snapshot,
     make_inline_file_inventory,
 )
-from openviking.storage.resource_rnfv import RequestIntent
+from openviking.storage.resource_rnfv import FormalEntry, RequestIntent
 from openviking.storage.resource_target import AgfsResourceTarget
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
@@ -182,43 +182,28 @@ class ContentWriteCoordinator:
 
         # ``create`` is an upsert alias for ``replace``: it overwrites an existing
         # file or materializes a missing one, never conflicting. Normalize it away
-        # so no create-specific write branch survives; ``response_mode`` still
-        # echoes the caller's requested mode for API stability.
+        # so no caller-visible create mode enters the write pipeline;
+        # ``response_mode`` still echoes the request for API stability.
         response_mode = mode
         if mode == "create":
             mode = "replace"
 
-        # Single stat is the sole source of truth for existence and kind.
-        stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=True)
-        exists = not stat.get("not_found")
-        if exists and stat.get("isDir"):
-            raise InvalidArgumentError(
-                f"write only supports existing files, got directory: {normalized_uri}"
-            )
-        if not exists:
-            # Materializing a new file (any mode): a generated sidecar can never be
-            # created directly, and the file type must pass the create whitelist.
-            if is_abstract_overview_uri(normalized_uri):
-                raise InvalidArgumentError(
-                    f"cannot create generated abstract overview directly: {normalized_uri}"
-                )
-            self._validate_create_extension(normalized_uri)
-
         context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(
-            normalized_uri, ctx=ctx, _allow_not_found=not exists, anchor_to_parent=True
+            normalized_uri,
+            ctx=ctx,
+            _allow_not_found=True,
+            anchor_to_parent=True,
+            validate_storage=False,
         )
         telemetry_id = get_current_telemetry().telemetry_id
-        # A missing target is materialized via ``create`` rendering (memory files
-        # need a fresh trailer); an existing target keeps the requested mode.
-        effective_mode = "create" if not exists else mode
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
                 uri=normalized_uri,
                 root_uri=root_uri,
                 content=content,
-                mode=effective_mode,
+                mode=mode,
                 response_mode=response_mode,
                 wait=wait,
                 timeout=timeout,
@@ -231,10 +216,9 @@ class ContentWriteCoordinator:
             uri=normalized_uri,
             root_uri=root_uri,
             content=content,
-            mode=effective_mode,
+            mode=mode,
             response_mode=response_mode,
             context_type=context_type,
-            target_preexisting=exists,
             wait=wait,
             timeout=timeout,
             ctx=ctx,
@@ -840,7 +824,6 @@ class ContentWriteCoordinator:
         mode: str,
         response_mode: str,
         context_type: str,
-        target_preexisting: bool,
         wait: bool,
         timeout: Optional[float],
         ctx: RequestContext,
@@ -879,10 +862,21 @@ class ContentWriteCoordinator:
         lock_released = False
         request_registered = False
         try:
+            stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+            target_preexisting = not stat.get("not_found")
+            if target_preexisting and stat.get("isDir"):
+                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+            if not target_preexisting:
+                self._validate_create_extension(uri)
+            is_new_file = not target_preexisting
             if mode == "append":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
-                uri, content, mode=mode, existing_raw=previous_content
+                uri,
+                content,
+                mode=mode,
+                existing_raw=previous_content,
+                is_new_file=is_new_file,
             )
             request = RequestIntent.from_ingest_options(
                 target_uri=uri,
@@ -908,6 +902,11 @@ class ContentWriteCoordinator:
                 request_intent=request,
                 root_is_file=True,
                 target_preexisting=target_preexisting,
+                formal_snapshot=(
+                    ({"": FormalEntry(is_dir=bool(stat.get("isDir")))}, True)
+                    if target_preexisting
+                    else ({}, True)
+                ),
                 artifact_inventory=inline_inventory,
                 vector_scope="self",
             )
@@ -1192,6 +1191,7 @@ class ContentWriteCoordinator:
         *,
         mode: str,
         existing_raw: str | bytes | None,
+        is_new_file: bool = False,
     ) -> bytes:
         """Render the final on-disk bytes for a write without touching storage.
 
@@ -1214,14 +1214,16 @@ class ContentWriteCoordinator:
             return rendered.encode("utf-8")
 
         if context_type_for_uri(uri) == "memory":
-            if mode == "replace":
+            if is_new_file:
+                mf = MemoryFileUtils.read(content, uri=uri)
+            elif mode == "replace":
                 mf = MemoryFileUtils.read(existing_raw, uri=uri)
                 mf.content = content
             elif mode == "append":
                 mf = MemoryFileUtils.read(existing_raw, uri=uri)
                 mf.content = mf.content + content
             else:
-                mf = MemoryFileUtils.read(content, uri=uri)
+                raise InvalidArgumentError(f"unsupported memory write mode: {mode}")
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
             return MemoryFileUtils.write(mf).encode("utf-8")
 
@@ -1245,10 +1247,19 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]] = None,
         existing_raw: str | bytes | None = None,
+        is_new_file: bool | None = None,
     ) -> bytes:
+        if is_new_file is None:
+            # batch-write still uses its historical create mode internally; map it
+            # to the same explicit materialization state as single-file write.
+            is_new_file = mode == "create"
         if is_abstract_overview_uri(uri) and existing_raw is None:
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-        elif context_type_for_uri(uri) == "memory" and mode in {"replace", "append"}:
+        elif (
+            context_type_for_uri(uri) == "memory"
+            and not is_new_file
+            and mode in {"replace", "append"}
+        ):
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
         elif (
             context_type_for_uri(uri) != "memory"
@@ -1258,7 +1269,11 @@ class ContentWriteCoordinator:
         ):
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
         final_bytes = self._render_final_bytes(
-            uri, content, mode=mode, existing_raw=existing_raw
+            uri,
+            content,
+            mode=mode,
+            existing_raw=existing_raw,
+            is_new_file=is_new_file,
         )
         await self._viking_fs.write_file_bytes(uri, final_bytes, ctx=ctx, lease_ref=lease_ref)
         return final_bytes
@@ -1339,7 +1354,25 @@ class ContentWriteCoordinator:
         released = False
         request_registered = False
         try:
-            final_bytes = await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
+            stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+            target_preexisting = not stat.get("not_found")
+            if target_preexisting and stat.get("isDir"):
+                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+            is_new_file = not target_preexisting
+            if is_new_file:
+                self._validate_create_extension(uri)
+            write_kwargs = {
+                "mode": mode,
+                "ctx": ctx,
+                "lease_ref": lease,
+            }
+            if is_new_file:
+                write_kwargs["is_new_file"] = True
+            final_bytes = await self._write_in_place(
+                uri,
+                content,
+                **write_kwargs,
+            )
             written_bytes = len(final_bytes)
             await self._viking_fs._async_agfs.pathlock_release(lease)
             released = True
@@ -1576,6 +1609,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         _allow_not_found: bool = False,
         anchor_to_parent: bool = False,
+        validate_storage: bool = True,
     ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
@@ -1636,10 +1670,11 @@ class ContentWriteCoordinator:
                 if parent is not None:
                     root_uri = parent.uri
 
-        stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
-        if stat.get("not_found") or not stat.get("isDir"):
-            parent = VikingURI(uri).parent
-            if parent is None:
-                raise InvalidArgumentError(f"could not resolve write root for {uri}")
-            root_uri = parent.uri
+        if validate_storage:
+            stat = await self._safe_stat(root_uri, ctx=ctx, allow_not_found=_allow_not_found)
+            if stat.get("not_found") or not stat.get("isDir"):
+                parent = VikingURI(uri).parent
+                if parent is None:
+                    raise InvalidArgumentError(f"could not resolve write root for {uri}")
+                root_uri = parent.uri
         return root_uri

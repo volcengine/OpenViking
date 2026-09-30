@@ -1043,9 +1043,11 @@ async def test_create_mode_new_file_success(monkeypatch):
 
     write_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
-        del mode, ctx, lock_handle, lease_ref
-        write_calls.append((uri, content))
+    async def _fake_write_in_place(
+        uri, content, *, mode, ctx, lock_handle=None, lease_ref=None, is_new_file=None
+    ):
+        del ctx, lock_handle, lease_ref
+        write_calls.append((uri, content, mode, is_new_file))
         return content
 
     async def _fake_wait_for_queues(*, timeout):
@@ -1060,7 +1062,7 @@ async def test_create_mode_new_file_success(monkeypatch):
     )
 
     assert result["mode"] == "create"
-    assert write_calls == [(file_uri, "new content")]
+    assert write_calls == [(file_uri, "new content", "replace", True)]
 
 
 @pytest.mark.asyncio
@@ -1078,9 +1080,11 @@ async def test_create_mode_refreshes_canonical_user_memory_uri(monkeypatch):
     write_calls = []
     refresh_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
-        del mode, ctx, lock_handle, lease_ref
-        write_calls.append((uri, content))
+    async def _fake_write_in_place(
+        uri, content, *, mode, ctx, lock_handle=None, lease_ref=None, is_new_file=None
+    ):
+        del ctx, lock_handle, lease_ref
+        write_calls.append((uri, content, mode, is_new_file))
         return content
 
     async def _fake_refresh_schema_overview(**kwargs):
@@ -1105,7 +1109,7 @@ async def test_create_mode_refreshes_canonical_user_memory_uri(monkeypatch):
     assert result["uri"] == canonical_uri
     assert result["root_uri"] == root_uri
     assert result["context_type"] == "memory"
-    assert write_calls == [(canonical_uri, "new content")]
+    assert write_calls == [(canonical_uri, "new content", "replace", True)]
     assert refresh_calls[0]["directory_uri"] == root_uri
 
 
@@ -1121,9 +1125,11 @@ async def test_create_mode_overwrites_existing_file(monkeypatch):
 
     write_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
+    async def _fake_write_in_place(
+        uri, content, *, mode, ctx, lock_handle=None, lease_ref=None, is_new_file=None
+    ):
         del ctx, lock_handle, lease_ref
-        write_calls.append((uri, content, mode))
+        write_calls.append((uri, content, mode, is_new_file))
         return content.encode("utf-8")
 
     async def _fake_refresh_schema_overview(**kwargs):
@@ -1143,7 +1149,7 @@ async def test_create_mode_overwrites_existing_file(monkeypatch):
     # response echoes the requested mode, but an existing target uses replace
     # rendering (memory keeps its metadata trailer).
     assert result["mode"] == "create"
-    assert write_calls == [(file_uri, "content", "replace")]
+    assert write_calls == [(file_uri, "content", "replace", None)]
 
 
 @pytest.mark.asyncio
@@ -1179,9 +1185,11 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
 
     write_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
-        del mode, ctx, lock_handle, lease_ref
-        write_calls.append((uri, content))
+    async def _fake_write_in_place(
+        uri, content, *, mode, ctx, lock_handle=None, lease_ref=None, is_new_file=None
+    ):
+        del ctx, lock_handle, lease_ref
+        write_calls.append((uri, content, mode, is_new_file))
         return content
 
     async def _fake_wait_for_queues(*, timeout):
@@ -1196,7 +1204,7 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
     )
 
     assert result["mode"] == "create"
-    assert write_calls == [(file_uri, "nested content")]
+    assert write_calls == [(file_uri, "nested content", "replace", True)]
 
 
 @pytest.mark.asyncio
