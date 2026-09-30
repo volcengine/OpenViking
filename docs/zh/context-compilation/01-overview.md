@@ -1,22 +1,22 @@
 # 上下文编译概览
 
-`ov compile` 把散落在 OpenViking 里的原始材料——文档、笔记、网页、访谈记录、研究资料、代码仓库——**编译**成结构化、可检索、方便人和 Agent 反复使用的知识产物。
+`ov compile` 读取 OpenViking 中的文档、笔记、网页或会话记录，按指定 Skill 整理成 Wiki、知识图谱、日报等内容，并写回 OpenViking。
 
 ## 它是怎么工作的
 
-你只需要提供三样东西：
+每次编译需要指定：
 
-- **从哪里来（`--from`）**：一个或多个来源目录/文件；
-- **到哪里去（`--to`）**：产物写入的目标目录；
-- **用哪个 Skill（`--skill`）**：一份描述「要编译成什么样」的说明书。
+- `--from`：一个或多个来源目录或文件。
+- `--to`：输出目录。
+- `--skill`：已安装的 Skill URI，定义输出内容和结构。
 
-再加上一个可选的 **`--instruction`**：给这次编译的补充指令，比如范围、受众、语言、侧重点。Skill 定义了「编译成什么形态」，`--instruction` 则在此之上告诉 Agent「这一次具体要什么」。
+可选的 `--instruction` 用来补充本次任务的范围、受众、语言、侧重点或日期。
 
-剩下的交给 OpenViking。Compile 依赖 [VikingBot](../concepts/15-vikingbot.md)：任务被接受后，VikingBot 会加载你指定的 Skill，以你的身份读取来源，在一个独立的 **Agent Loop** 里自主地阅读、归纳、组织、写页面——就像你雇了一个人，把一堆资料整理成一份干净的知识库，然后把成品交回给你。整个过程是异步的，你可以等它跑完，也可以拿到 `task_id` 之后去做别的事。
-
-换句话说：**你负责给材料和目标，Agent 负责真正把知识整理出来。** 
+编译由服务端配置的 [Agent Runtime](../api/23-agent-runtime.md) 执行，本地部署可使用内置 [VikingBot](../concepts/15-vikingbot.md)。它以请求用户的身份读取来源和 Skill，在独立的 Agent Loop 中整理并写入内容。任务异步运行，返回 `task_id` 后可查询进度和结果。
 
 ## 一条命令跑起来
+
+先按 [LLM Wiki 示例](02-llm-wiki.md) 导入来源、安装 Skill，再执行：
 
 ```bash
 ov compile \
@@ -30,7 +30,7 @@ ov compile \
 
 ## 换个 Skill，就换一种产物
 
-Compile 本身不规定「编译成什么」——那由 Skill 决定。同一批来源，配不同的 Skill，就能得到形态完全不同的知识产物。下面是我们提供的示例 Skill，前两个还各自配了一个可视化脚本，可以直接照着跑：
+Skill 决定输出内容和结构。仓库提供以下示例，其中 LLM Wiki 和 Knowledge Graph 还包含可视化脚本：
 
 | Skill | 产物形态 | 适合 | 示例 |
 |-------|---------|------|------|
@@ -47,12 +47,13 @@ Compile 本身不规定「编译成什么」——那由 Skill 决定。同一�
 
 ## 前置条件
 
-- 一个正在运行、且启用了 Bot（`--with-bot`）的 OpenViking 服务。默认端点是 `http://localhost:1933`；远程使用需要 API Key，参见 [鉴权](../guides/04-authentication.md)。没有服务先看 [快速开始](../getting-started/02-quickstart.md)。
-- `ov` CLI 已配置好连接（`~/.openviking/ovcli.conf` 或 `OPENVIKING_*` 环境变量）。
-- 可视化脚本需要 Python 3；LLM Wiki 的脚本还会用到 `openviking` Python 包来直接读取服务里的 Wiki 页面。
+- 一个已配置 Compile Runtime 的 OpenViking 服务；本地示例可通过 `--with-bot` 启用内置 VikingBot。默认端点是 `http://localhost:1933`；远程使用需要 API Key，参见 [鉴权](../guides/04-authentication.md)。没有服务先看 [快速开始](../getting-started/02-quickstart.md)。
+- `ov` CLI 已配置好连接（`~/.openviking/ovcli.conf`，或由 `OPENVIKING_CLI_CONFIG_FILE` 指定的文件）。
+- 示例中的 `examples/...` 是仓库相对路径。先下载 [OpenViking 仓库](https://github.com/volcengine/OpenViking)，在仓库根目录运行命令。
+- 可视化脚本需要 Python 3。LLM Wiki 的 Python 依赖见[脚本说明](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)。
 
 ## 相关文档
 
-- [VikingBot 概念](../concepts/15-vikingbot.md) — Compile 背后的执行体
+- [VikingBot 概念](../concepts/15-vikingbot.md) — 内置 Compile 执行端
 - [Agent Runtime API](../api/23-agent-runtime.md) — 创建、查询和取消 Compile 任务的完整参考
 - [Skills API](../api/04-skills.md) — 如何管理和自定义 Skill

@@ -1,6 +1,6 @@
 # 示例：Knowledge Graph
 
-把一批来源编译成一个**证据可溯、可直接可视化**的知识图谱：语义分类的实体节点、语句级出处、带类型的有向关系边。产物是这样一棵工件树：
+将来源中的实体及其关系整理成知识图谱：实体带语义类型，关系是带类型的有向边，每条陈述和边都保留出处。输出包含实体文件和关系表：
 
 ```text
 entities/
@@ -18,17 +18,19 @@ relations.jsonl       # 每行一条有向边
 
 Skill 源码：[examples/compile/ov-compile-skills/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-graph) · 可视化脚本：[examples/compile/graph-show/knowledge-graph](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/knowledge-graph)
 
+先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
+
 ## 第一步：准备来源
 
 ```bash
-ov add-resource ./journal-to-the-west --to viking://resources/journal
+ov add-resource ./journal-to-the-west --to viking://resources/journal --wait
 ov ls -r viking://resources/journal
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-graph
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```
@@ -50,7 +52,7 @@ ov task status cmp_01abc      # 查看进度与最终结果
 ov task cancel cmp_01abc      # 协作式取消
 ```
 
-## 第四步：看看产物
+## 第四步：查看产物
 
 ```bash
 ov tree viking://resources/journal-kg
@@ -62,7 +64,7 @@ ov read viking://resources/journal-kg/entities/孙悟空.md
 
 与 LLM Wiki 的脚本不同，`knowledge_graph.py` 读取的是**本地目录**（需要 `entities/` 和 `relations.jsonl` 都在本地）。所以先把产物拉到本地，再生成 HTML。
 
-先把整棵工件树下载下来。`ov get` 一次下载一个文件，配合 `ov ls -r -s` 列出全部路径即可批量拉取：
+`ov get` 一次下载一个文件。下面的脚本只下载实体 Markdown 和关系表：
 
 ```bash
 SRC="viking://resources/journal-kg"
@@ -71,7 +73,8 @@ mkdir -p "$DST"
 ov ls -r -s "$SRC" | while read -r uri; do
   # 只下载文件（entities/*.md 和 relations.jsonl），跳过目录
   case "$uri" in
-    */entities|"$SRC") continue ;;
+    "$SRC"/entities/*.md|"$SRC"/relations.jsonl) ;;
+    *) continue ;;
   esac
   rel="${uri#$SRC/}"
   mkdir -p "$DST/$(dirname "$rel")"
@@ -79,7 +82,7 @@ ov ls -r -s "$SRC" | while read -r uri; do
 done
 ```
 
-> `ov get` 要求本地目标路径尚不存在，所以重新下载前先清掉旧目录（`rm -rf ./journal-kg`）。
+> `ov get` 要求本地目标文件尚不存在。重复下载时，将 `DST` 换为一个新目录，保留上次结果。
 
 确认本地目录结构正确：
 

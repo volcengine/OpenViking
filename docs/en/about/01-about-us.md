@@ -2,46 +2,29 @@
 
 ## Project Overview
 
-OpenViking is an open-source context database initiated and maintained by ByteDance’s Volcano Engine Viking team, dedicated to building robust context engineering infrastructure for the AI Agent ecosystem. As a new-generation context database, OpenViking provides a unified data abstraction layer, an intelligent semantic parsing engine, and a high-performance hybrid retrieval system to deliver reliable backend support for all kinds of AI applications.
+OpenViking is an open-source context database for AI agents, initiated and maintained by the Viking team at ByteDance's Volcengine. It organizes resources, memories, and skills as files that agents can browse, search, and read on demand.
 
 ## Team Introduction
 
 ### Viking Team Background
 
-The Viking team belongs to ByteDance’s Volcano Engine and focuses on unstructured information processing and intelligent retrieval. The team brings together dozens of seasoned experts across distributed systems, machine learning, data engineering, and AI algorithms, with extensive commercial experience in context engineering.
+The Viking team develops vector retrieval, knowledge base, and memory management products. Its dozens of engineers work across distributed systems, machine learning, data engineering, and AI algorithms, and have run context engineering in commercial production. OpenViking applies that engineering experience to a context database developed with the open-source community.
 
-#### Core Technical Capabilities
-
-**Large-Scale Vector Retrieval System**
-- Supports real-time retrieval and similarity computation over hundreds of millions of vectors
-- Delivers millisecond-level latency to meet high-concurrency business scenarios
-- Supports hybrid retrieval strategies combining semantic similarity and keyword matching
-
-**Multimodal Content Understanding Engine**
-- Supports intelligent parsing for text, images, audio, video, and more
-- Achieves cross-modal semantic association and content understanding
-- Provides unified content abstraction and semantic representation
-
-**Distributed System Architecture Design**
-- Extensive experience building highly available, scalable distributed systems
-- Supports elastic scaling and automatic failure recovery
-- Balances data consistency and system performance
+This work involves three related problems: extracting searchable information from unstructured content, finding relevant context among many candidates, and retaining interaction experience for later tasks. OpenViking addresses these through [resource parsing and extraction](../concepts/06-extraction.md), [context retrieval](../concepts/07-retrieval.md), and [session and memory management](../concepts/08-session.md). These pages explain the implementation and conditions for use.
 
 ### Development History and Technical Evolution
 
-The Viking team’s exploration in context engineering reflects our commitment to continuous innovation and industry impact. As AI Agent applications rapidly evolve, we plan to use OpenViking as a public verification platform for new concepts and approaches, building in the open together with the community to create a responsible AI application stack.
-
-| Time Period | Milestone | Technical Breakthroughs and Industry Impact |
-|-------------|-----------|---------------------------------------------|
-| **2019–2023** | VikingDB vector database widely adopted inside ByteDance | Powered multiple core products’ unstructured information retrieval; accumulated engineering experience in large-scale vector retrieval; validated the technical value of vector databases in real-world business scenarios |
-| **2024** | Released developer-facing product matrix: VikingDB, Viking Knowledge Base, Viking Memory Base | Officially provided on Volcano Engine public cloud; successfully supported thousands of enterprise customers building AI-native applications; marked the successful transition from internal tooling to commercial products |
-| **2025** | Expanded to upper-layer applications such as AI Search and Knowledge Assistants | Built a complete product matrix from infrastructure to application layer; further validated business value across scenarios; formed a full loop from technology to product |
-| **Late 2025** | Open-sourced [MineContext](https://github.com/volcengine/MineContext) project | Explored proactive AI application patterns; validated personal context engineering ideas; accumulated community operation experience for OpenViking |
-| **Early 2026** | Open-sourced OpenViking project | Released a newly designed context database architecture for the global AI Agent ecosystem; marked the strategic shift from commercial product provider to open-source contributor |
+| Period | Work |
+| --- | --- |
+| 2019–2023 | VikingDB used for vector retrieval within ByteDance |
+| 2024 | VikingDB, Viking Knowledge Base, and Viking Memory Base offered on Volcengine, used by thousands of enterprise customers to build AI applications |
+| 2025 | Expanded into AI search and knowledge assistants |
+| Late 2025 | Open-sourced [MineContext](https://github.com/volcengine/MineContext) to explore proactive context applications |
+| Early 2026 | Open-sourced OpenViking |
 
 ### Academic Collaboration and Industry–Academia Integration
 
-Since its inception, OpenViking has established deep academic collaborations with top universities and research institutes worldwide to jointly explore context database design paradigms and best engineering practices for the AI era. This industry–academia collaboration ensures technological advancement while staying closely aligned with real application needs.
+Since its launch, OpenViking has worked with universities and research institutes to explore context database design and engineering practice for AI agents, keeping research work tied to real application needs.
 
 We sincerely thank the following scholars for their contributions and guidance in launching OpenViking:
 
@@ -50,157 +33,71 @@ We sincerely thank the following scholars for their contributions and guidance i
 - Associate Professor Dai Guohao, School of Artificial Intelligence, Shanghai Jiao Tong University; Co‑founder and Chief Scientist of Wuwen Xinqiong
 
 Our collaboration models include:
-- **Joint research projects**: conduct frontier research in context engineering
-- **Technical workshops**: organize regular academic exchanges and technical reviews
-- **Talent cultivation**: provide practice platforms and research topics for graduate students
-- **Technology transfer**: transform academic findings into engineering best practices
+
+- **Joint research projects**: frontier research in context engineering
+- **Technical workshops**: regular academic exchanges and technical reviews
+- **Talent cultivation**: practice platforms and research topics for graduate students
+- **Technology transfer**: turning research results into engineering practice
+
+### Research Papers
+
+The following papers come from this collaboration. Parts of their core mechanisms are integrated into OpenViking.
+
+- **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
+  Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao. arXiv:2605.29640, 2026. Presented at VLDB 2026.<br>
+  Event-driven extraction, update, and consolidation of long-term memory for stateful agents. [arXiv](https://arxiv.org/abs/2605.29640) · [PDF](https://arxiv.org/pdf/2605.29640)
+- **Directory-Aware Query and Maintenance in Vector Databases**<br>
+  Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu. arXiv:2606.16903, 2026. Accepted by ICDE.<br>
+  Formal foundations and index design (TrieHI) for directory-scoped retrieval, which OpenViking uses to resolve directory scopes before vector ranking. [arXiv](https://arxiv.org/abs/2606.16903) · [PDF](https://arxiv.org/pdf/2606.16903)
+- **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
+  Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu. arXiv:2609.11390, 2026. Submitted.<br>
+  Combines semantic search with document structure, expanding relevant directory segments as evidence gaps arise. [arXiv](https://arxiv.org/abs/2609.11390) · [PDF](https://arxiv.org/pdf/2609.11390)
 
 ## Open-Source Organization
 
 ### Project Development Stages
 
-OpenViking is currently in its early development stage. We divide development into three key phases:
-
-- Phase 1: Foundation building
-Focus on constructing solid technical foundations after open-sourcing, including core protocols, interfaces, AI Agent facilities, and providing a reliable minimal implementation.
-
-- Phase 2: Ecosystem expansion
-Build a plugin ecosystem, support third-party feature extensions, drive deep integration with mainstream AI frameworks and tools, and extend enterprise-grade capabilities to meet large-scale deployment needs.
-
-- Phase 3: Industry adoption
-Establish industry technical standards and best practices, build certification systems and partner ecosystems, and promote broader real-world adoption of context engineering.
+Development covers context storage and retrieval, agent integrations, and deployment. See the [roadmap](03-roadmap.md) for implemented capabilities and future directions, and the [changelog](02-changelog.md) for released changes.
 
 ### Governance Structure and Decision-Making
 
-Based on the project’s long-term roadmap, we are establishing a layered governance structure:
+The governance committee oversees technical direction, release and feature priorities, architecture and compatibility reviews, engineering standards, contributor collaboration, and integrations with related projects. Members include Maojia Sheng ([@MaojiaSheng](https://github.com/MaojiaSheng)), Haojie Qin ([@qin-ctx](https://github.com/qin-ctx)), Jiahui Zhou ([@zhoujh01](https://github.com/zhoujh01)), and Zhiheng Liu ([@ZaynJarvis](https://github.com/ZaynJarvis)). Eligible community contributors can join the committee through future nomination and election procedures.
 
-#### Open-Source Governance Committee
-OpenViking is guided by a professional governance committee responsible for overall strategic planning and technical decisions. The committee consists of core contributors and domain experts, with responsibilities including:
+See the [contribution guide](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md) for module contacts and recently active reviewers.
 
-**Strategic Planning**
-- Define the long-term technical roadmap and vision
-- Set release plans and feature priorities
-- Evaluate the long-term impact of technical decisions on the ecosystem
-
-**Technical Governance**
-- Establish and maintain code quality standards and engineering norms
-- Review core architecture changes and major feature implementations
-- Ensure sustainability and backward compatibility
-
-**Community Development**
-- Define community development strategy and contributor growth paths
-- Organize technical exchange activities and developer conferences
-- Build incentive mechanisms and recognition systems
-
-**Ecosystem Collaboration**
-- Establish technical cooperation with related open-source projects
-- Promote integration and certification with commercial products
-- Manage intellectual property and license compliance
-
-#### Committee Core Members
-Current core members of the governance committee:
-Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, Yaohui Sun
-
-To ensure openness and diversity, we welcome eligible community contributors to join the committee through future nomination and election procedures.
+Feature proposals and problems are discussed in [GitHub Issues](https://github.com/volcengine/OpenViking/issues). Code and documentation changes are reviewed through pull requests. Before implementing changes to public interfaces, persistence, permission boundaries, or architecture across modules, describe the current and intended behavior, request or configuration examples, and compatibility impact.
 
 ## Community Participation
 
 ### Join the Community
 
-We warmly invite developers worldwide to join the OpenViking community and co-build next-generation context engineering infrastructure. You can participate in the following ways:
+#### Lark Group
 
-#### Instant Messaging
-
-##### Lark Group
-
-Scan the QR code below to join the Lark group and communicate with the core development team in real time:
+Scan the QR code to discuss usage questions and development plans:
 
 ![Join via Lark QR](../../images/lark-group-qrcode.png)
 
-*Note: Please ensure you have installed the [Lark client](https://www.feishu.cn/) before joining.*
+Install the [Lark client](https://www.feishu.cn/) first.
 
-##### WeChat Group
+#### WeChat Group
 
-Scan the QR code below to add the assistant on WeChat, mention "OpenViking" and you will be invited to the WeChat group:
+Scan the QR code to add the assistant and mention "OpenViking" to request an invitation:
 
 ![Join via WeChat QR](../../images/wechat-group-qrcode.png)
 
-**Discord**
-
-[Join our Discord Server](https://discord.com/invite/eHvx8E9XF3)
-
-**X**
-
-[Follow us on X](https://x.com/openvikingai)
+You can also join [Discord](https://discord.com/invite/eHvx8E9XF3) or follow project updates on [X](https://x.com/openvikingai).
 
 ### Ways to Participate
 
-We provide multiple participation channels to meet different collaboration needs:
+- **Report a problem or suggest a feature:** include the use case, version, and reproduction steps in an [issue](https://github.com/volcengine/OpenViking/issues).
+- **Improve code or documentation:** read the [contribution guide](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md), then submit code, tests, documentation, or translations.
+- **Build an integration:** add a plugin for an agent tool or framework using the [plugin development guide](../agent-integrations/18-plugin-development.md).
+- **Share experience:** post usage examples and troubleshooting notes, or help other users in the community.
 
-#### 1. Code Contributions
-- **Submit Issues**: report bugs, propose features, or discuss technical solutions
-- **Submit Pull Requests**: contribute code improvements, documentation updates, or test cases
-- **Code Review**: participate in reviews to improve code quality
-
-#### 2. Documentation Contributions
-- **Improve documentation**: enhance user guides, API docs, or tutorials
-- **Translation support**: help translate documentation into other languages
-- **Example code**: provide usage examples and best practices
-
-#### 3. Community Support
-- **Technical sharing**: share experiences and technical insights
-- **Q&A**: help other developers solve usage problems
-- **Ecosystem building**: promote integration of OpenViking with other open-source projects
-
-#### 4. Ecosystem Expansion
-- **Plugin development**: develop third-party plugins or feature extensions
-- **Integration adaptation**: drive deep integration with mainstream frameworks
-- **Application cases**: share real-world adoption experiences
+For what to include in issues and pull requests, see the [contribution guide](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md).
 
 ## Discussion and Collaboration
 
-### Official Channels
+The [GitHub repository](https://github.com/volcengine/OpenViking) holds code, documentation, and review records. Use [GitHub Discussions](https://github.com/volcengine/OpenViking/discussions) for design discussions and community exchange, chat for immediate discussion, and an issue or pull request for work that needs tracking.
 
-#### GitHub Platform
-- **Issues**: feature suggestions, bug reports, and technical discussions
-- **Pull Requests**: code contributions and documentation updates
-- **Discussions**: design discussions and community exchange
-
-#### Repository
-- **Main repository**: `https://github.com/volcengine/openviking`
-- **Issue tracking**: `https://github.com/volcengine/openviking/issues`
-
-### Real-Time Communication
-
-#### Lark Group
-- **Technical discussion**: real-time technical exchange and Q&A
-- **Code review**: fast feedback and collaborative development
-- **Event notice**: community activities and technical sharing
-
-### Social Media
-
-We follow major technical communities and social media platforms and respond promptly to user feedback:
-- **Technical blog**: regular technical articles and project updates
-- **Social media**: share project news and usage cases
-- **Technical conferences**: participate in industry events to share engineering practice
-
-### Community Goals
-
-We aim to achieve the following goals through the open-source community:
-
-1. **Technology democratization**: enable more developers to use advanced context engineering technologies
-2. **Innovation acceleration**: accelerate innovation and product iteration through collaboration
-3. **Standards building**: promote technical standards and best practices in context engineering
-4. **Talent development**: cultivate more talent in the context engineering field
-
-### Open Collaboration
-
-OpenViking welcomes collaboration from developers, research institutions, and companies. We look forward to:
-
-- **Technical collaboration**: deep technical cooperation with academia and industry
-- **Ecosystem integration**: establish integrations with related open-source projects and commercial products
-- **Application promotion**: jointly promote the application of context engineering technologies across more scenarios
-
----
-
-**Join us to build the context infrastructure for the AI Agent era!**
+Research institutions and companies interested in technical collaboration or integrations can start a thread in GitHub Discussions or contact the team through the Lark group.
