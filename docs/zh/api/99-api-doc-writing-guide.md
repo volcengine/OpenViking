@@ -157,7 +157,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 示例切换由加粗标签自动生成。调用方式标签必须单独成段，并使用以下固定基础写法：
 `**Python SDK**`、`**TypeScript SDK**`、`**Go SDK**`、`**HTTP API**`、`**CLI**`。
 需要区分调用形态时，可以在同一个加粗标签内追加半角括号限定词，例如
-`**Python HTTP SDK**`；不要把限定词写在加粗标签外，也不要使用全角括号。
+`**Python SDK (HTTP)**`；不要把限定词写在加粗标签外，也不要使用全角括号。
 只展示实现中真实存在的调用方式；某个 SDK 或 CLI 没有对应能力时应省略该 Tab，并简短说明
 可用的替代入口。不要把手写 HTTP 请求包装成不存在的 SDK 方法。
 
@@ -244,7 +244,7 @@ print(client.get_task(result["task_id"]))
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+ov add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 **响应示例**

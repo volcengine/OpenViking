@@ -41,7 +41,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、关
 3. 按分数阈值筛选，返回匹配的上下文列表；不执行 Rerank
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.find()` - Python SDK 入口（HTTP）
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:find()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:find()` - Rust CLI 命令
@@ -294,37 +294,37 @@ for _, item := range result.Resources {
 
 ```bash
 # 基础搜索
-openviking find "how to authenticate users"
+ov find "how to authenticate users"
 
 # 指定 URI 范围
-openviking find "how to authenticate users" --uri "viking://resources"
+ov find "how to authenticate users" --uri "viking://resources"
 
 # 限定上下文类型
-openviking find "authentication" --context-type memory,resource
+ov find "authentication" --context-type memory,resource
 
 # 带时间过滤
-openviking find "invoice" --after 7d
+ov find "invoice" --after 7d
 
 # 带限制数量
-openviking find "how to authenticate users" --limit 20
+ov find "how to authenticate users" --limit 20
 
 # 限定层级范围 (仅 L0)
-openviking find "how to authenticate users" --level 0
+ov find "how to authenticate users" --level 0
 
 # 限定层级范围 (L1 和 L2)，使用短选项
-openviking find "how to authenticate users" -L 1,2
+ov find "how to authenticate users" -L 1,2
 
 # 图片查询统一使用 --image；可传本地路径、viking://、http(s):// 或 data:image URI
-openviking find --image ./query.png --uri "viking://resources/images" --limit 5
+ov find --image ./query.png --uri "viking://resources/images" --limit 5
 
 # 使用已入库图片搜索
-openviking find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
+ov find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
 
 # 使用公网图片 URL 搜索
-openviking find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
+ov find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
 
 # 图文联合检索
-openviking find "红色海报风格" --image ./poster.png --uri "viking://resources/images"
+ov find "红色海报风格" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **响应示例**
@@ -380,7 +380,7 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 5. 返回带查询计划的搜索结果
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:search()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:search()` - Rust CLI 命令
@@ -565,32 +565,32 @@ fmt.Println(result.Total)
 
 ```bash
 # 带会话 ID 的搜索
-openviking search "best practices" --session-id abc123
+ov search "best practices" --session-id abc123
 
 # 限定上下文类型
-openviking search "best practices" --context-type skill
+ov search "best practices" --context-type skill
 
 # 带时间过滤的搜索
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
+ov search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
 # 对 user 和 peer 的事件记忆启用时间衰减排序
-openviking search "recent decisions" --context-type memory --level 2 \
+ov search "recent decisions" --context-type memory --level 2 \
     --events-time-decay-protection 1d
 
 # 不带会话的搜索（仍进行意图分析）
-openviking search "how to implement OAuth 2.0 authorization code flow"
+ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 关键词检索
-openviking search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
 
 # 限定层级范围（仅 L0）
-openviking search "best practices" --level 0
+ov search "best practices" --level 0
 
 # 限定层级范围（L1 和 L2），使用短选项
-openviking search "how to implement OAuth" -L 1,2
+ov search "how to implement OAuth" -L 1,2
 
 # 图片查询同样使用 --image；会直接检索并跳过 session planning
-openviking search "similar poster" --image ./poster.png --uri "viking://resources/images"
+ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **响应示例**
@@ -826,7 +826,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 4. 返回匹配结果列表
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.grep()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.grep()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:grep()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:grep()` - Rust CLI 命令
 
@@ -922,22 +922,22 @@ fmt.Println(result["count"])
 
 ```bash
 # 基础搜索
-openviking grep "authentication" --uri viking://resources
+ov grep "authentication" --uri viking://resources
 
 # 忽略大小写
-openviking grep "authentication" --uri viking://resources --ignore-case
+ov grep "authentication" --uri viking://resources --ignore-case
 
 # 指定深度限制
-openviking grep "TODO" --uri viking://resources --level-limit 3
+ov grep "TODO" --uri viking://resources --level-limit 3
 
 # 返回匹配行前后各 2 行上下文
-openviking grep "authentication" --uri viking://resources -b 2 -a 2
+ov grep "authentication" --uri viking://resources -b 2 -a 2
 
 # 只搜索同时匹配所有 tags 的文件
-openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
+ov grep "TODO" --uri viking://resources --tags team=search,env=prod
 
 # 不过滤、但在人类可读结果中显示 tags
-openviking grep "TODO" --uri viking://resources --fields tags
+ov grep "TODO" --uri viking://resources --fields tags
 ```
 
 HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` 返回 tags；传入 `tags` 过滤时会始终返回命中文件的 tags。
@@ -1072,14 +1072,14 @@ fmt.Println(result["count"])
 
 ```bash
 # 查找所有 markdown 文件
-openviking glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources
 
 # 查找所有 Python 文件
-openviking glob "**/*.py"
+ov glob "**/*.py"
 
 # 按全部 tags 过滤，或只返回 tags
-openviking glob "**/*.md" --tags team=search,env=prod
-openviking glob "**/*.md" -f tags
+ov glob "**/*.md" --tags team=search,env=prod
+ov glob "**/*.md" -f tags
 ```
 
 **响应示例**

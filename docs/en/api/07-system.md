@@ -19,7 +19,7 @@ Anonymous health probes return basic liveness information.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:health_check` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.health` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -188,7 +188,7 @@ Get system status including initialization state and authenticated user info. `r
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:system_status` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.get_status` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -258,7 +258,7 @@ records; `missing_records_truncated` is `true` when more missing records exist.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.check_consistency` - SDK entry
 - `crates/ov_cli/src/commands/system.rs:consistency` - CLI command
 
 #### 2. Interface and Parameters
@@ -345,7 +345,7 @@ Wait for all asynchronous processing (embedding, semantic generation) to complet
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.wait_processed` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters

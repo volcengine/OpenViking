@@ -860,7 +860,7 @@ Create a new workspace with its first admin user.
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:create_account` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.create_account` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_create_account` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1073,7 +1073,7 @@ List all workspaces (ROOT only).
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_accounts` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1185,7 +1185,7 @@ Account and user cleanup share one queue with a single consumer. Account tasks c
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:delete_account` - HTTP route
 - `openviking/service/deletion.py:DeletionService.delete` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_delete_account` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1286,7 +1286,7 @@ Register a new user in a workspace.
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:register_user` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.register_user` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_register_user` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1423,7 +1423,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:list_users` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.get_users` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_users` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1548,7 +1548,7 @@ Remove a user from a workspace. The user's API key is revoked immediately, and o
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:remove_user` - HTTP route
 - `openviking/service/deletion.py:DeletionService.delete` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_remove_user` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1647,7 +1647,7 @@ Promote an account user to ADMIN. ROOT may operate on any account; ADMIN is limi
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.set_role` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_set_role` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. Interface and Parameters
 
@@ -1744,7 +1744,7 @@ Regenerate a user's API key. The old key is immediately invalidated.
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP route
 - `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - Core implementation
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. Interface and Parameters
 

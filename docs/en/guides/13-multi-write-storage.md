@@ -372,10 +372,10 @@ openviking-server doctor
 After startup, verify with ordinary file APIs:
 
 ```bash
-openviking write viking://resources/multiwrite-check.txt \
+ov write viking://resources/multiwrite-check.txt \
   --content "multi-write check"
 
-openviking read viking://resources/multiwrite-check.txt
+ov read viking://resources/multiwrite-check.txt
 ```
 
 If you use a local backup, you can also inspect the backup directory directly. In production, system health checks and sync-status commands are preferable.

@@ -145,7 +145,7 @@ When you use a user key or admin key, the server derives `account` and `user` fr
 **CLI override flags**
 
 ```bash
-openviking ls viking://
+ov ls viking://
 ```
 
 ### Using --sudo with Root API Key

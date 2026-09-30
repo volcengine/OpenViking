@@ -65,7 +65,7 @@ Partial commits preserve the previous snapshot outside the requested scope. Afte
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 result = client.snapshot.commit(
@@ -150,7 +150,7 @@ Filtering happens before the result limit is applied, so `limit=10` with `paths=
 
 To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
@@ -240,7 +240,7 @@ View a commit's metadata; if `path` is given, return that file's content from th
 | target_ref | str | Yes | - | Commit OID (abbreviated prefix allowed), branch name, or tag |
 | path | str | No | null | `viking://` URI of a single file; omitting it returns commit metadata only in local ROOT mode |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 # View commit metadata (local ROOT mode only)
@@ -322,7 +322,7 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
 
 Compare one UTF-8 file between two snapshot refs and return a unified diff. `to_ref` is required. When `from_ref` is omitted, the older side is treated as an empty file, which is useful for displaying the initial version.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 result = client.snapshot.diff(
@@ -403,7 +403,7 @@ This is a **forward-commit restore**: it computes the diff between `source_commi
 | author_name | str | No | null | Override the default author name |
 | author_email | str | No | null | Override the default author email |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 result = client.snapshot.restore(
@@ -531,7 +531,7 @@ Three methods are provided: `get_gitignore` (read, empty string when absent), `s
 
 Reads the account `.ovgitignore` content; returns an empty string when the file is absent.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 content = client.snapshot.get_gitignore()
@@ -581,7 +581,7 @@ Writes the account `.ovgitignore` content (overwrites). The size limit (64 KiB) 
 |-----------|------|----------|---------|-------------|
 | content | str | Yes | - | The `.ovgitignore` content (UTF-8) |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.snapshot.set_gitignore(content="*.log\n")
@@ -627,7 +627,7 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 Deletes the account `.ovgitignore`. Missing is success (idempotent).
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.snapshot.delete_gitignore()

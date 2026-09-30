@@ -372,10 +372,10 @@ openviking-server doctor
 启动后可以用普通文件 API 验证：
 
 ```bash
-openviking write viking://resources/multiwrite-check.txt \
+ov write viking://resources/multiwrite-check.txt \
   --content "multi-write check"
 
-openviking read viking://resources/multiwrite-check.txt
+ov read viking://resources/multiwrite-check.txt
 ```
 
 如果使用本地 backup，可以直接检查 backup 目录中是否出现对应文件。生产环境更推荐使用系统健康检查和同步状态命令。

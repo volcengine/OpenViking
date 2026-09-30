@@ -41,7 +41,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 3. Apply the score threshold and return matched contexts without reranking
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.find()` - Python SDK entry (HTTP)
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - Core retrieval implementation
 - `openviking/server/routers/search.py:find()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:find()` - Rust CLI command
@@ -293,37 +293,37 @@ for _, item := range result.Resources {
 
 ```bash
 # Basic search
-openviking find "how to authenticate users"
+ov find "how to authenticate users"
 
 # Specify URI scope
-openviking find "how to authenticate users" --uri "viking://resources"
+ov find "how to authenticate users" --uri "viking://resources"
 
 # Limit to context types
-openviking find "authentication" --context-type memory,resource
+ov find "authentication" --context-type memory,resource
 
 # With time filter
-openviking find "invoice" --after 7d
+ov find "invoice" --after 7d
 
 # With limit
-openviking find "how to authenticate users" --limit 20
+ov find "how to authenticate users" --limit 20
 
 # Limit to specific level(s) (L0 only)
-openviking find "how to authenticate users" --level 0
+ov find "how to authenticate users" --level 0
 
 # Limit to specific level(s) (L1 and L2) using short option
-openviking find "how to authenticate users" -L 1,2
+ov find "how to authenticate users" -L 1,2
 
 # Image queries use only --image; pass a local path, viking://, http(s)://, or data:image URI
-openviking find --image ./query.png --uri "viking://resources/images" --limit 5
+ov find --image ./query.png --uri "viking://resources/images" --limit 5
 
 # Search by an image already stored in VikingFS
-openviking find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
+ov find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
 
 # Search by a public image URL
-openviking find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
+ov find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
 
 # Combine text and image
-openviking find "red poster style" --image ./poster.png --uri "viking://resources/images"
+ov find "red poster style" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **Response Example**
@@ -379,7 +379,7 @@ The `search()` method adds session context understanding and intent analysis cap
 5. Return search results with query plan
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.search()` - Python SDK entry (HTTP)
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - Core retrieval implementation
 - `openviking/server/routers/search.py:search()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:search()` - Rust CLI command
@@ -563,32 +563,32 @@ fmt.Println(result.Total)
 
 ```bash
 # Search with session ID
-openviking search "best practices" --session-id abc123
+ov search "best practices" --session-id abc123
 
 # Limit to a context type
-openviking search "best practices" --context-type skill
+ov search "best practices" --context-type skill
 
 # Search with time filter
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
+ov search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
 # Rank user and peer event memories with time decay
-openviking search "recent decisions" --context-type memory --level 2 \
+ov search "recent decisions" --context-type memory --level 2 \
     --events-time-decay-protection 1d
 
 # Search without session (still performs intent analysis)
-openviking search "how to implement OAuth 2.0 authorization code flow"
+ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 keyword retrieval
-openviking search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
 
 # Limit to specific level(s) (L0 only)
-openviking search "best practices" --level 0
+ov search "best practices" --level 0
 
 # Limit to specific level(s) (L1 and L2) using short option
-openviking search "how to implement OAuth" -L 1,2
+ov search "how to implement OAuth" -L 1,2
 
 # Image queries also use --image; they use direct retrieval and skip session planning
-openviking search "similar poster" --image ./poster.png --uri "viking://resources/images"
+ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **Response Example**
@@ -825,7 +825,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 4. Return matching results list
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.grep()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.grep()` - Python SDK entry (HTTP)
 - `openviking/server/routers/search.py:grep()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:grep()` - Rust CLI command
 
@@ -921,22 +921,22 @@ fmt.Println(result["count"])
 
 ```bash
 # Basic search
-openviking grep "authentication" --uri viking://resources
+ov grep "authentication" --uri viking://resources
 
 # Ignore case
-openviking grep "authentication" --uri viking://resources --ignore-case
+ov grep "authentication" --uri viking://resources --ignore-case
 
 # Specify depth limit
-openviking grep "TODO" --uri viking://resources --level-limit 3
+ov grep "TODO" --uri viking://resources --level-limit 3
 
 # Return two context lines before and after each match
-openviking grep "authentication" --uri viking://resources -b 2 -a 2
+ov grep "authentication" --uri viking://resources -b 2 -a 2
 
 # Search only files carrying every tag
-openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
+ov grep "TODO" --uri viking://resources --tags team=search,env=prod
 
 # Include tags in human-readable results without filtering
-openviking grep "TODO" --uri viking://resources --fields tags
+ov grep "TODO" --uri viking://resources --fields tags
 ```
 
 For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags without filtering. A request with `tags` always returns tags for the matched files.
@@ -1073,20 +1073,20 @@ fmt.Println(result["count"])
 
 ```bash
 # Find all markdown files
-openviking glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources
 
 # Find all Python files
-openviking glob "**/*.py"
+ov glob "**/*.py"
 
 # Filter by all tags, or project tags without filtering
-openviking glob "**/*.md" --tags team=search,env=prod
-openviking glob "**/*.md" -f tags
+ov glob "**/*.md" --tags team=search,env=prod
+ov glob "**/*.md" -f tags
 
 # Table output with extra fields (ps -o style -f)
-openviking glob "**/*.py" -f name,size,mtime,mode
+ov glob "**/*.py" -f name,size,mtime,mode
 
 # Script-friendly simple output with selected fields (comma-separated, no header)
-openviking glob "**/*.py" --simple -f name,size
+ov glob "**/*.py" --simple -f name,size
 ```
 
 **Response Example**

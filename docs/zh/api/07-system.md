@@ -17,7 +17,7 @@ Trusted 模式下，完整的 `X-OpenViking-Account` 和 `X-OpenViking-User` 请
 
 **代码入口**:
 - `openviking/server/routers/system.py:health_check` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.health` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -186,7 +186,7 @@ curl -X GET http://localhost:1933/ready
 
 **代码入口**:
 - `openviking/server/routers/system.py:system_status` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.get_status` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -250,7 +250,7 @@ ov system status
 
 **代码入口**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.check_consistency` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs:consistency` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -337,7 +337,7 @@ ov system consistency viking://resources/my-project
 
 **代码入口**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.wait_processed` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明

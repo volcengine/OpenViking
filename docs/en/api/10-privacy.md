@@ -361,25 +361,25 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 
 ```bash
 # Categories and targets
-openviking privacy categories
-openviking privacy list skill
+ov privacy categories
+ov privacy list skill
 
 # Active config (shortcut supported)
-openviking privacy get skill byted-viking-search-knowledgebase
-openviking privacy skill byted-viking-search-knowledgebase
+ov privacy get skill byted-viking-search-knowledgebase
+ov privacy skill byted-viking-search-knowledgebase
 
 # Upsert with full JSON snapshot
-openviking privacy upsert skill byted-viking-search-knowledgebase \
+ov privacy upsert skill byted-viking-search-knowledgebase \
   --values-json '{"api_key":"secret-2","base_url":"https://example.com"}'
 
 # Partial key update (CLI merges with current first)
-openviking privacy upsert skill byted-viking-search-knowledgebase \
+ov privacy upsert skill byted-viking-search-knowledgebase \
   --key-api_key secret-3
 
 # Version query and activation
-openviking privacy versions skill byted-viking-search-knowledgebase
-openviking privacy version skill byted-viking-search-knowledgebase 2
-openviking privacy activate skill byted-viking-search-knowledgebase 2
+ov privacy versions skill byted-viking-search-knowledgebase
+ov privacy version skill byted-viking-search-knowledgebase 2
+ov privacy activate skill byted-viking-search-knowledgebase 2
 ```
 
 ---

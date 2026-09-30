@@ -159,7 +159,7 @@ Example tabs are generated from bold labels. Put each invocation label in its ow
 paragraph and use one of these fixed base forms: `**Python SDK**`, `**TypeScript SDK**`,
 `**Go SDK**`, `**HTTP API**`, or `**CLI**`. When a transport qualifier is useful,
 put it inside the same bold label with ASCII parentheses, for example
-`**Python HTTP SDK**`. Do not put the qualifier after the bold label
+`**Python SDK (HTTP)**`. Do not put the qualifier after the bold label
 or use full-width parentheses. Show only surfaces that are actually
 implemented. If an SDK or CLI does not expose the capability, omit that tab and
 briefly identify the available alternative. Do not wrap a handwritten HTTP request
@@ -250,7 +250,7 @@ print(client.get_task(result["task_id"]))
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+ov add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 **Response Example**

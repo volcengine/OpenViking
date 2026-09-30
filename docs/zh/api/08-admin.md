@@ -741,7 +741,7 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 **代码入口：**
 - `openviking/server/routers/admin.py:create_account` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.create_account` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_create_account` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_create_account` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -952,7 +952,7 @@ ov --sudo admin create-account acme-private --admin alice \
 **代码入口：**
 - `openviking/server/routers/admin.py:list_accounts` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.get_accounts` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_accounts` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_accounts` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1064,7 +1064,7 @@ ov --sudo admin list-accounts --limit 50 --page 2
 **代码入口：**
 - `openviking/server/routers/admin.py:delete_account` - HTTP 路由
 - `openviking/service/deletion.py:DeletionService.delete` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_delete_account` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1165,7 +1165,7 @@ ov --sudo task status <task_id>
 **代码入口：**
 - `openviking/server/routers/admin.py:register_user` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.register_user` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_register_user` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_register_user` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1302,7 +1302,7 @@ ov admin register-user acme bob-private --role user \
 **代码入口：**
 - `openviking/server/routers/admin.py:list_users` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.get_users` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_list_users` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_list_users` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1426,7 +1426,7 @@ ov admin list-users acme --limit 50 --page 2
 **代码入口：**
 - `openviking/server/routers/admin.py:remove_user` - HTTP 路由
 - `openviking/service/deletion.py:DeletionService.delete` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_remove_user` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1525,7 +1525,7 @@ ov --sudo admin remove-user acme bob
 **代码入口：**
 - `openviking/server/routers/admin.py:set_user_role` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.set_role` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_set_role` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_set_role` - Python SDK
 
 #### 2. 接口和参数说明
 
@@ -1622,7 +1622,7 @@ ov --sudo admin set-role acme bob admin
 **代码入口：**
 - `openviking/server/routers/admin.py:regenerate_key` - HTTP 路由
 - `openviking/server/api_keys/new.py:APIKeyManager.regenerate_key` - 核心实现
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.admin_regenerate_key` - Python SDK
 
 #### 2. 接口和参数说明
 

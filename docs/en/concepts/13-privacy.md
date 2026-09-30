@@ -128,12 +128,12 @@ Current matching is suffix-based: `/skills/{name}/SKILL.md`, so it supports user
 Common commands:
 
 ```bash
-openviking privacy categories
-openviking privacy list skill
-openviking privacy skill <target_key>
-openviking privacy upsert skill <target_key> --values-json '{"api_key":"..."}'
-openviking privacy activate skill <target_key> <version>
-openviking read viking://user/default/skills/<target_key>/SKILL.md
+ov privacy categories
+ov privacy list skill
+ov privacy skill <target_key>
+ov privacy upsert skill <target_key> --values-json '{"api_key":"..."}'
+ov privacy activate skill <target_key> <version>
+ov read viking://user/default/skills/<target_key>/SKILL.md
 ```
 
 ---
