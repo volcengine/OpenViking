@@ -495,6 +495,94 @@ class TestObserverService:
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
 
+    @patch("openviking.models.rerank.RerankClient.from_config")
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_account_models_passes_rerank_instance(self, mock_observer_cls, mock_from_config):
+        """Account-scope model status must observe rerank, like the cluster scope does."""
+        mock_config = MagicMock()
+        mock_config.rerank.is_available.return_value = True
+        mock_rerank_client = MagicMock()
+        mock_from_config.return_value = mock_rerank_client
+        mock_observer = MagicMock()
+        mock_observer.get_status_json.return_value = {"vlm": [], "embedding": [], "rerank": []}
+        mock_observer_cls.return_value = mock_observer
+
+        embedding_status = AsyncMock(return_value=MagicMock(dimension=1024))
+        embedding_provider = MagicMock()
+        embedding_provider.get_status = embedding_status
+        vlm = AsyncMock(return_value=MagicMock())
+        vlm_resolver = MagicMock()
+        vlm_resolver.get_vlm = vlm
+
+        service = ObserverService(
+            config=mock_config,
+            embedding_provider=embedding_provider,
+            vlm_resolver=vlm_resolver,
+        )
+
+        ctx = MagicMock(account_id="acct-1")
+        status = asyncio.run(service.account_models(ctx, format="json"))
+
+        assert status.is_healthy is True
+        mock_from_config.assert_called_once_with(mock_config.rerank)
+        mock_observer_cls.assert_called_once_with(
+            vlm_instance=vlm.return_value,
+            embedding_instance=embedding_provider.bind.return_value,
+            rerank_instance=mock_rerank_client,
+        )
+
+    @patch("openviking.models.rerank.RerankClient.from_config")
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_account_models_omits_rerank_when_unavailable(
+        self, mock_observer_cls, mock_from_config
+    ):
+        """Rerank stays None (and no client is built) when rerank is not configured."""
+        mock_config = MagicMock()
+        mock_config.rerank.is_available.return_value = False
+        mock_observer = MagicMock()
+        mock_observer.get_status_json.return_value = {"vlm": [], "embedding": [], "rerank": []}
+        mock_observer_cls.return_value = mock_observer
+
+        embedding_provider = MagicMock()
+        embedding_provider.get_status = AsyncMock(return_value=MagicMock(dimension=768))
+        vlm_resolver = MagicMock()
+        vlm_resolver.get_vlm = AsyncMock(return_value=MagicMock())
+
+        service = ObserverService(
+            config=mock_config,
+            embedding_provider=embedding_provider,
+            vlm_resolver=vlm_resolver,
+        )
+
+        ctx = MagicMock(account_id="acct-1")
+        asyncio.run(service.account_models(ctx, format="json"))
+
+        mock_from_config.assert_not_called()
+        assert mock_observer_cls.call_args.kwargs["rerank_instance"] is None
+
+    @patch("openviking.service.debug_service.ModelsObserver")
+    def test_account_models_survives_missing_config(self, mock_observer_cls):
+        """Account-scope status still renders when no config is wired (rerank skipped)."""
+        mock_observer = MagicMock()
+        mock_observer.get_status_json.return_value = {"vlm": [], "embedding": [], "rerank": []}
+        mock_observer_cls.return_value = mock_observer
+
+        embedding_provider = MagicMock()
+        embedding_provider.get_status = AsyncMock(return_value=MagicMock(dimension=512))
+        vlm_resolver = MagicMock()
+        vlm_resolver.get_vlm = AsyncMock(return_value=MagicMock())
+
+        service = ObserverService(
+            embedding_provider=embedding_provider,
+            vlm_resolver=vlm_resolver,
+        )
+
+        ctx = MagicMock(account_id="acct-1")
+        status = asyncio.run(service.account_models(ctx, format="json"))
+
+        assert status.is_healthy is True
+        assert mock_observer_cls.call_args.kwargs["rerank_instance"] is None
+
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
