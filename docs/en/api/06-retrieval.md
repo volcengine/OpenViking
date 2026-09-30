@@ -6,10 +6,11 @@ OpenViking provides multiple retrieval methods, including simple vector similari
 
 | Aspect | find | search |
 |--------|------|--------|
-| Intent Analysis | No | Yes |
-| Session Context | No | Yes |
-| Query Expansion | No | Yes |
-| Default Limit | 10 | 10 |
+| Intent Analysis | No | Requires session content and `retrieval.enable_intent=true` |
+| Session Context | No | Optional |
+| Query Expansion | No | When session content exists and intent analysis is enabled |
+| Reranking | No | Used for text queries when a reranker is configured |
+| Default Limit | 10 | 10 per planned query |
 | Use Case | Simple queries | Conversational search |
 
 ## Retrieval Pipeline
@@ -29,7 +30,7 @@ Query → Intent Analysis (search only, optional) → Global Vector Search → R
 
 ### find()
 
-Basic vector similarity search without session context.
+Semantic retrieval without session context.
 
 #### 1. API Implementation Introduction
 
@@ -52,19 +53,20 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | No | "" | Search query string. Required unless `image_url` is provided |
+| query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
 | image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
+| limit | int | No | 10 | Maximum returned results |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
-| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
+| level | int \| str \| List[int] | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
@@ -183,7 +185,6 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 
 ```python
 import openviking_sdk as ov
-from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -365,11 +366,11 @@ ov find "red poster style" --image ./poster.png --uri "viking://resources/images
 
 ### search()
 
-Intelligent retrieval with session context and intent analysis.
+Semantic retrieval with optional session-aware query planning.
 
 #### 1. API Implementation Introduction
 
-The `search()` method adds session context understanding and intent analysis capability on top of `find()`. It better understands user query intent based on conversation history, performs query expansion, and provides more relevant search results.
+`search()` can plan queries from session context. It calls the LLM only when `retrieval.enable_intent=true` and the session has a summary or messages. Without a session, with an empty session, or with intent analysis disabled, it uses the original query. Image queries skip session planning.
 
 **Processing Pipeline**:
 1. Load session context (if session_id is provided)
@@ -399,13 +400,14 @@ The `search()` method adds session context understanding and intent analysis cap
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
+| limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
-| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
+| level | int \| str \| List[int] | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
@@ -486,6 +488,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking_sdk as ov
+from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -507,7 +510,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": "skill",
+        "context_type": "resource",
         "since": "2h",
     },
 )
@@ -550,7 +553,7 @@ console.log(await client.search("authentication", { targetUri: "viking://resourc
 ```go
 result, err := client.Search(ctx, "best practices", &openviking.SearchOptions{
     SessionID:   "abc123",
-    ContextType: "skill",
+    ContextType: "resource",
     Limit:       10,
 })
 if err != nil {
@@ -575,7 +578,7 @@ ov search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 ov search "recent decisions" --context-type memory --level 2 \
     --events-time-decay-protection 1d
 
-# Search without session (still performs intent analysis)
+# Search without session (uses the original query)
 ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 keyword retrieval
@@ -601,7 +604,7 @@ ov search "similar poster" --image ./poster.png --uri "viking://resources/images
         "resources": [
             {
                 "context_type": "resource",
-                "uri": "viking://resources/docs/oauth-best-practices",
+                "uri": "viking://resources/docs/oauth-best-practices/.overview.md",
                 "level": 1,
                 "score": 0.95,
                 "category": "",
@@ -637,7 +640,7 @@ ov search "similar poster" --image ./poster.png --uri "viking://resources/images
 
 ### search(mode="context")
 
-Assemble retrieval results into an injection-ready context block. `mode="list"` (the default) returns the ranked hit list and behaves exactly like the previous `search()`; `mode="context"` opens the assembly face: budgeting, tier degradation, cross-turn dedup and the optional LLM digest all happen server-side in one request.
+Assemble retrieval results into an injection-ready context block. `mode="list"` (the default) returns the ranked hit list and behaves exactly like the previous `search()`; `mode="context"` applies the token budget, selects detail levels, deduplicates across turns, and optionally produces an LLM digest in one server request.
 
 #### 1. Implementation Overview
 
@@ -690,7 +693,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 **Tier rules**
 
 - **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. These are absolute per-category ceilings, not weights. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
-- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Only `events` reads a file; every other category costs no read
+- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Among file entries, only `events` needs a body read at its default tier. Directory hits read `.overview.md`
 
   | Category | Default tier | Leftover budget may reach | Why |
   |----------|--------------|---------------------------|-----|
@@ -698,7 +701,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
   | `entities` / `preferences` / `experiences` | abstract | abstract | Short bodies, and the writer stores the whole body in the abstract scalar, so abstract already is the complete file |
   | `resources` / `skills` | abstract | abstract | A resource shows the 256-char abstract from semantic processing, a skill the name/description generated from its `SKILL.md` frontmatter; bodies can be large or carry credentials, so deepening is opt-in |
   | `memories` | abstract | abstract | Built-in memory types outside the four named ones — `cases`, `patterns`, `tools`, `trajectories`, skill-usage memories. Only quota-free retrieval reaches them; they own no bucket, so `quotas` cannot name them, but `detail` and `other_peer_penalty` can |
-  | Directory hits | overview | overview | A directory has no abstract, so it reads the `.overview.md` sidecar; a full tier is meaningless for a subtree. Skill package hits are the exception: they normalize onto `<package root>/SKILL.md` and follow the file rules above |
+  | Directory hits | overview | overview | Directory entries use the `.overview.md` sidecar and do not expand the entire subtree. Skill package hits are the exception: they normalize onto `<package root>/SKILL.md` and follow the file rules above |
 
 - **Skill packages**: a package stores one vector per file and per directory level, and they all collapse into a single entry before the quotas apply — one entry per package, one quota slot, whichever file inside it matched. That entry's `uri` is `<package root>/SKILL.md`, the same path `/skills/find` reports as `skill_md_uri`, and its text is the package's own abstract; a package whose abstract has not been generated yet degrades to a bare `uri` rather than borrowing the summary of the file that matched. `dedup_turns` therefore cools a whole package: once one is served at `abstract` or deeper, a hit on any file inside it is skipped for the rest of the window
 - **Floor**: every result carries at least its `uri`. When a memory abstract is unavailable or busts the per-entry cap, the entry falls back to overview: the memory writer stores the whole body in that scalar, so for memory categories overview sits *below* abstract on the content ladder and the substitute discloses less. A `resources` or `skills` abstract is the short generated summary instead, so the same substitution would read a body the caller never asked for — those two degrade to a bare `uri` rather than deepen
@@ -738,7 +741,9 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -d '{"query":"tier design","mode":"context","max_tokens":3000,"rewrite":true}'
 ```
 
-**Response**
+**Response excerpt**
+
+`entries`, text, and `rendered` are shortened below; the statistics describe the full 13-entry response.
 
 ```json
 {
@@ -945,24 +950,33 @@ For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags wi
 
 ```json
 {
-    "status": "ok",
-    "result": {
-        "matches": [
-            {
-                "uri": "viking://resources/docs/auth.md",
-                "line": 15,
-                "content": "User authentication is handled by...",
-                "before_context": [
-                    {"line": 14, "content": "## Authentication"}
-                ],
-                "after_context": [
-                    {"line": 16, "content": "Configure an API key before sending requests."}
-                ],
-                "tags": ["team=search", "env=prod"]
-            }
+  "status": "ok",
+  "result": {
+    "matches": [
+      {
+        "uri": "viking://resources/docs/auth.md",
+        "line": 15,
+        "content": "User authentication is handled by...",
+        "before_context": [
+          {
+            "line": 14,
+            "content": "## Authentication"
+          }
         ],
-        "count": 1
-    }
+        "after_context": [
+          {
+            "line": 16,
+            "content": "Configure an API key before sending requests."
+          }
+        ],
+        "tags": [
+          "team=search",
+          "env=prod"
+        ]
+      }
+    ],
+    "count": 1
+  }
 }
 ```
 
@@ -1036,7 +1050,7 @@ print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files with extra stat fields
+# Find Markdown files matching all supplied tags
 results = client.glob(
     pattern="**/*.md",
     uri="viking://resources",
@@ -1094,14 +1108,14 @@ Default (URI strings):
 
 ```json
 {
-    "status": "ok",
-    "result": {
-        "matches": [
-            "viking://resources/docs/api.md",
-            "viking://resources/docs/guide.md"
-        ],
-        "count": 2
-    }
+  "status": "ok",
+  "result": {
+    "matches": [
+      "viking://resources/docs/api.md",
+      "viking://resources/docs/guide.md"
+    ],
+    "count": 2
+  }
 }
 ```
 
@@ -1109,14 +1123,24 @@ With `extra_fields=["name","size","mtime"]`:
 
 ```json
 {
-    "status": "ok",
-    "result": {
-        "matches": [
-            {"name": "api.md", "uri": "viking://resources/docs/api.md", "size": 12345, "mtime": 1720000000},
-            {"name": "guide.md", "uri": "viking://resources/docs/guide.md", "size": 8234, "mtime": 1720000001}
-        ],
-        "count": 2
-    }
+  "status": "ok",
+  "result": {
+    "matches": [
+      {
+        "name": "api.md",
+        "uri": "viking://resources/docs/api.md",
+        "size": 12345,
+        "mtime": 1720000000
+      },
+      {
+        "name": "guide.md",
+        "uri": "viking://resources/docs/guide.md",
+        "size": 8234,
+        "mtime": 1720000001
+      }
+    ],
+    "count": 2
+  }
 }
 ```
 
@@ -1126,7 +1150,7 @@ With `extra_fields=["name","size","mtime"]`:
 
 ### Read Content Progressively
 
-Retrieval results usually only contain L0 summaries, you can progressively load more detailed content as needed.
+Results include an abstract and the matched URI. Semantic L0/L1 hits point to `.abstract.md` or `.overview.md`; use their parent directory with `overview()`. L2 hits point to files that `read()` can return directly.
 
 **Python SDK**
 
@@ -1144,7 +1168,8 @@ for context in results.get("resources", []):
 
     if context.get("level", 0) < 2:
         # Get L1 (overview) for directories
-        overview = client.overview(uri=context["uri"])
+        directory_uri = context["uri"].rsplit("/", 1)[0]
+        overview = client.overview(uri=directory_uri)
         print(f"Overview: {overview[:500]}...")
     else:
         # Load L2 (content) for files

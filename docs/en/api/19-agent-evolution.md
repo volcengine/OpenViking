@@ -1,6 +1,6 @@
 # Agent Evolution
 
-The Agent Evolution API reports trajectories that consumed a specific Experience and their outcome distribution. These operations are currently available through HTTP only.
+The Agent Evolution API reports trajectories linked to a successful read of a specific Experience and their outcome distribution. These operations are currently available through HTTP only. A read establishes the link; it does not prove that the Agent followed the Experience or that the Experience caused an outcome.
 
 ## API Reference
 
@@ -64,7 +64,7 @@ Each item contains only the indexed fields that are present among `uri`, `name`,
 
 ### Get Experience outcome distribution
 
-Count trajectories that consumed the specified Experience across the five supported outcomes. The query uses exact scalar-tag aggregation and does not load every trajectory file.
+Count trajectories linked to reads of the specified Experience across the five supported outcomes. The query uses exact scalar-tag aggregation and does not load every trajectory file.
 
 **Code Entry Points**:
 

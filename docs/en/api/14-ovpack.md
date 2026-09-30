@@ -73,8 +73,15 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
 
-# Export to local file (HTTP SDK automatically handles download)
-# Note: Export functionality is primarily used via CLI
+try:
+    output_path = client.export_ovpack(
+        "viking://resources/my-project/",
+        "./exports/my-project.ovpack",
+        include_vectors=False,
+    )
+    print(output_path)
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -116,7 +123,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 
 **Response Example**
 
-This endpoint directly returns a file stream (`Content-Type: application/zip`), does not return a JSON envelope.
+This endpoint returns a file stream (`Content-Type: application/zip`) without a JSON envelope.
 
 ---
 
@@ -133,7 +140,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 2. Parse uploaded `.ovpack` file
 3. Validate manifest metadata, paths, file and directory sets, file sizes, and checksums
 4. Apply `on_conflict`
-5. Import resources to target location and rebuild vectors
+5. Import resources to target location and restore compatible vectors or enqueue recomputation, according to `vector_mode`
 
 **Code Entry Points**:
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP router
@@ -194,7 +201,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
+    \"on_conflict\": \"fail\",
     \"vector_mode\": \"auto\"
   }"
 ```
@@ -207,8 +214,16 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
 
-# Import .ovpack file (HTTP SDK automatically handles upload)
-# Note: Import functionality is primarily used via CLI
+try:
+    uri = client.import_ovpack(
+        "./exports/my-project.ovpack",
+        "viking://resources/imported/",
+        on_conflict="fail",
+        vector_mode="auto",
+    )
+    print(uri)
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -218,7 +233,7 @@ const uri = await client.importOVPack(
   "./exports/docs.ovpack",
   "viking://resources/",
   {
-    onConflict: "overwrite",
+    onConflict: "fail",
     vectorMode: "auto",
   },
 );
@@ -233,7 +248,7 @@ uri, err := client.ImportOVPack(
     "./exports/my-project.ovpack",
     "viking://resources/imported/",
     &openviking.ImportPackOptions{
-        OnConflict: "overwrite",
+        OnConflict: "fail",
         VectorMode: "auto",
     },
 )
@@ -294,9 +309,11 @@ Back up public scope roots as a restore-only `.ovpack` file. The backup includes
 `resources` and all `user/{user_id}` content in the current account; sessions
 are included through the user namespace under `user/{user_id}/sessions`. It
 excludes internal runtime data such as `temp` and `queue`, as well as user
-accounts and API keys. Only ROOT or ADMIN can call this endpoint. Set
+accounts and the keys used to authenticate to OpenViking. Files under user privacy-config directories are included and can contain external-service secrets. Only ROOT or ADMIN can call this endpoint. Set
 `include_vectors=true` to include compatible
 pure-dense vector snapshots; hybrid index types reject vector snapshot export.
+
+Here, “public scope” names the exportable URI roots; it does not mean that user files are public. The ZIP contains exported file contents and is not an encrypted backup format.
 
 Backup reads live files and does not provide an atomic point-in-time snapshot.
 Callers that require strict consistency should pause writes during the backup window.

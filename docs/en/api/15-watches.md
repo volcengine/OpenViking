@@ -6,16 +6,16 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 ### Watch Management
 
-List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
+List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. Use REST (`/api/v1/watches`) or `ov task watch` for the full set of operations. MCP provides `list_watches` and `cancel_watch` for listing and removal.
 
 #### 1. API Implementation Overview
 
-This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
+Locate a task by `task_id`, or use `to_uri` when exactly one accessible task matches. Multiple Connector Watches can share a target; URI lookup then returns `409 Conflict` and requires a `task_id`. If both keys are supplied, they must identify the same task or the request returns `400`.
 
 **Operations**:
 - **List** (`GET /api/v1/watches`) — returns `{tasks, total}`; pass `?active_only=true` to filter; pass `?to_uri=...` to collapse to a single-task lookup
 - **Show** (`GET /api/v1/watches/{task_id}`) — inspect one task; optional `?to_uri=` performs a cross-key sanity check
-- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is orthogonal to `watch_interval`: flip `is_active` to pause/resume without losing the configured cadence.
+- **Update** (`PATCH /api/v1/watches/{task_id}` or `PATCH /api/v1/watches?to_uri=...`) — partial update of `watch_interval`, `is_active`, `reason`, `instruction`. `is_active` is independent of `watch_interval`: change `is_active` to pause/resume without losing the configured cadence.
 - **Delete** (`DELETE /api/v1/watches/{task_id}` or `DELETE /api/v1/watches?to_uri=...`)
 - **Trigger** (`POST /api/v1/watches/{task_id}/trigger` or `POST /api/v1/watches/trigger?to_uri=...`) — fire-and-forget refresh; returns immediately while the underlying re-ingest runs in the background
 
@@ -64,6 +64,8 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
 ```
 
 **Python SDK**
+
+The following uses `SyncHTTPClient`; await each call with `AsyncHTTPClient`.
 
 ```python
 watches = client.list_watches(active_only=True)
@@ -204,14 +206,14 @@ Getting one task and a successful update return the same task object directly in
 re-ingestion has completed; read the task again until `last_execution_time` changes, then inspect
 `last_status` and `last_error`.
 
-**MCP** (agent control plane — minimum closure only)
+**MCP**
 
 ```text
 list_watches()                                            # one line per task; URIs only, no task_ids surfaced
 cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
 ```
 
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](02-resources.md#add-resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
+Removing a Watch removes its schedule, not the imported resource. MCP exposes listing and removal. To create a Watch, use [`add_resource`](02-resources.md#add-resource) with `watch_interval`. Use the CLI or REST API to pause, resume, trigger, or change the cadence of an existing Watch. Re-importing does not update an existing Watch.
 
 ---
 

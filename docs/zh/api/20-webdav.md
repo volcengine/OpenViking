@@ -4,7 +4,9 @@ WebDAV 为 `resources` 命名空间提供文件协议访问。
 
 **代码入口**：`openviking/server/routers/webdav.py`
 
-## WebDAV（Phase 1）
+<a id="webdav-phase-1"></a>
+
+## 支持范围
 
 OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：
 
@@ -12,7 +14,7 @@ OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层
 /webdav/resources
 ```
 
-Phase 1 有意把范围控制得比较小：
+当前支持以下范围：
 
 - 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
 - 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
@@ -43,7 +45,7 @@ Phase 1 有意把范围控制得比较小：
 
 | 请求头 | 使用方法 | 必填 | 说明 |
 |--------|----------|------|------|
-| `X-API-Key` | 除 `OPTIONS` 外 | 是 | OpenViking API Key |
+| `X-API-Key` | 除 `OPTIONS` 外 | 取决于鉴权模式 | OpenViking API Key；trusted 模式还可能需要身份头 |
 | `Depth` | `PROPFIND` | 否 | `0` 仅返回目标；其他值按一级深度处理 |
 | `Destination` | `MOVE` | 是 | `/webdav/resources` 下的目标路径 |
 | `Overwrite` | `MOVE` | 否 | 默认 `T`；设为 `F` 时不覆盖已有目标 |

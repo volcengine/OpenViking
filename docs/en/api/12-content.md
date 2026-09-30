@@ -144,13 +144,13 @@ Read the complete text of an L0, L1, or L2 file.
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-| raw | bool | No | false | Return raw stored content without memory-field cleanup. HTTP API only (Python SDK does not expose it yet). |
+| raw | bool | No | false | Return raw stored content without memory-field cleanup. In Python, use `client.read_raw(uri)` to read this form. |
 
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
-- Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
+- Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the backward-compatible `viking://session/{session_id}/messages.jsonl` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 
 **Python SDK**
@@ -296,13 +296,13 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 
 ```bash
 ov write viking://resources/docs/api.md \
-  --content "# Updated API\n\nFresh content." \
+  --content $'# Updated API\n\nFresh content.' \
   --tags team=search,env=prod \
   --tag-mode replace
 ```
 
 
-**Response**
+**Response when `wait=true` and refresh completes**
 
 ```json
 {
@@ -386,8 +386,34 @@ result = client.batch_write(
             "mode": "upsert",
         },
     ],
-    wait=False,
+    wait=True,
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.batchWrite("viking://resources/wiki", [
+  {
+    uri: "viking://resources/wiki/new.md",
+    content: "# New page\n",
+    mode: "upsert",
+  },
+]);
+console.log(result);
+```
+
+**Go SDK**
+
+```go
+content := "# New page\n"
+result, err := client.BatchWrite(ctx, "viking://resources/wiki", []openviking.BatchWriteOperation{
+    {URI: "viking://resources/wiki/new.md", Content: &content, Mode: "upsert"},
+}, nil)
+if err != nil {
+    return err
+}
+fmt.Println(result)
 ```
 
 **HTTP API**
@@ -409,11 +435,11 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
         "mode": "upsert"
       }
     ],
-    "wait": false
+    "wait": true
   }'
 ```
 
-**Response**
+**Response when `wait=true` and refresh completes**
 
 ```json
 {
@@ -436,7 +462,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
 }
 ```
 
-The TypeScript and Go SDKs and the CLI do not currently expose batch write directly.
+The CLI does not currently expose batch write directly.
 
 ---
 
@@ -447,6 +473,38 @@ Download a file as raw bytes. This is intended for images, PDFs, and other non-t
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `uri` | string | Yes | File URI to download |
+
+**Python SDK**
+
+```python
+from pathlib import Path
+
+Path("logo.png").write_bytes(
+    client.download_bytes("viking://resources/images/logo.png")
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+import { writeFile } from "node:fs/promises";
+
+const bytes = await client.downloadBytes("viking://resources/images/logo.png");
+await writeFile("logo.png", bytes);
+```
+
+**Go SDK**
+
+```go
+// Requires the os package.
+data, err := client.DownloadBytes(ctx, "viking://resources/images/logo.png")
+if err != nil {
+    return err
+}
+if err := os.WriteFile("logo.png", data, 0600); err != nil {
+    return err
+}
+```
 
 **HTTP API**
 
@@ -479,7 +537,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-`ov get <uri> <local-path>` downloads through the HTTP API above and writes the file to a local path. The Python, TypeScript, and Go SDKs do not currently expose a dedicated raw-byte download method.
+`ov get <uri> <local-path>` downloads through the HTTP API above and writes the file to a local path.
 
 ---
 
@@ -699,8 +757,7 @@ There is no `/api/v1/maintenance/reindex` endpoint. Use `/api/v1/content/reindex
 ```bash
 curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
+  -H "X-API-Key: your-admin-key" \
   -d '{
     "uri": "viking://resources",
     "mode": "vectors_only",
@@ -747,8 +804,7 @@ Poll the returned task through the task API:
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default"
+  -H "X-API-Key: your-admin-key"
 ```
 
 Reindex background tasks use `task_type="admin_reindex"` and `resource_id` equal to the requested `uri`, so they can also be listed with:
