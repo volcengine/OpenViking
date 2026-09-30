@@ -546,6 +546,10 @@ class TestMemoryUpdater:
 
         assert set(operation.uris) == {alice_uri, bob_uri}
         assert set(result.written_uris) == {alice_uri, bob_uri}
+        assert updater._vectorize_memories.await_args.kwargs["search_tags_by_uri"] == {
+            alice_uri: ["memory_type=entities"],
+            bob_uri: ["memory_type=entities"],
+        }
         isolation_handler.calculate_memory_uris.assert_not_called()
 
     @pytest.mark.asyncio

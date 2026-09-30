@@ -35,11 +35,11 @@ For TraeCode CLI 2.0:
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness trae-cli
 ```
 
-Claude Code and Codex share this installer (drop `--harness codex` to pick interactively). It asks for your language (English/中文), the download source (GitHub, or a TOS mirror for GitHub-blocked regions — pass `--dist tos`; Codex on TOS installs from a TOS-hosted git repo and keeps remote updates), and your OpenViking credentials. It:
+Claude Code and Codex share this installer (drop `--harness codex` to pick interactively). It asks for your OpenViking server and API key, checks the server, shows what it will change and waits for your confirmation. It:
 
 1. Checks `codex` and Node.js 18+ (the plugin itself wants Codex's bundled Node 22+ at runtime)
 2. Sets up `~/.openviking/ovcli.conf` interactively
-3. Registers the `openviking` marketplace — remote git by default (`codex plugin marketplace add https://github.com/volcengine/OpenViking.git`), or this checkout / a TOS archive in dev/archive mode — and enables `openviking-memory@openviking` with `features.plugin_hooks = true`
+3. Registers the `openviking` marketplace — a git repository on the OpenViking release, which Codex upgrades when it starts; the release's plugin bundle if that fails, or this checkout when run from one — and enables `openviking-memory@openviking` with `features.plugin_hooks = true`
 4. Keeps the checked-in stdio `.mcp.json` intact; `servers/mcp-proxy.mjs` reads your active `ovcli.conf` at runtime
 5. Runs plugin-list and stdio MCP validation
 

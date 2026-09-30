@@ -7,6 +7,7 @@
 // the twenty-two modules the installer assembles and four of the thirty-eight
 // copies the sync generates.
 
+import { realpathSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -214,7 +215,16 @@ async function main(stage, expected) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   const [stage, ...expected] = process.argv.slice(2);
   // The expected directories are the caller's list, not the stage's own: a name
   // dropped from it would otherwise leave both this check and the staging script

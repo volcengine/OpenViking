@@ -17,6 +17,7 @@ import (
 type responseEnvelope struct {
 	Status    string          `json:"status"`
 	Result    json.RawMessage `json:"result,omitempty"`
+	HasMore   bool            `json:"has_more,omitempty"`
 	Error     *ErrorInfo      `json:"error,omitempty"`
 	Telemetry json.RawMessage `json:"telemetry,omitempty"`
 	Profile   []string        `json:"profile,omitempty"`
@@ -64,49 +65,57 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, payload any, out any) error {
+	_, err := c.doJSONEnvelope(ctx, method, path, query, payload, out)
+	return err
+}
+
+func (c *Client) doJSONEnvelope(ctx context.Context, method, path string, query url.Values, payload any, out any) (*responseEnvelope, error) {
 	var body io.Reader
 	if payload != nil {
 		buf, err := json.Marshal(payload)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(buf)
 	}
 	req, err := c.newRequest(ctx, method, path, query, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	env, err := decodeEnvelope(resp.StatusCode, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if env.Error != nil {
-		return apiError(resp.StatusCode, env.Error)
+		return nil, apiError(resp.StatusCode, env.Error)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &Error{
+		return nil, &Error{
 			Code:       "UNKNOWN",
 			Message:    envelopeDetail(env, resp.StatusCode, data),
 			StatusCode: resp.StatusCode,
 		}
 	}
 	if out == nil || len(env.Result) == 0 || string(env.Result) == "null" {
-		return nil
+		return env, nil
 	}
-	return json.Unmarshal(env.Result, out)
+	if err := json.Unmarshal(env.Result, out); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 func decodeEnvelope(statusCode int, data []byte) (*responseEnvelope, error) {

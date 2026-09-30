@@ -256,6 +256,9 @@ class FSService:
         simple: bool = False,
         output: str = "original",
         abs_limit: int = 256,
+        include_abstract: Optional[bool] = None,
+        include_overview: Optional[bool] = None,
+        overview_limit: int = 4000,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         level_limit: int = 3,
@@ -273,7 +276,10 @@ class FSService:
             recursive: List all subdirectories recursively
             simple: Return only relative path list
             output: str = "original" or "agent"
-            abs_limit: int = 256 if output == "agent" else ignore
+            abs_limit: Maximum returned abstract length
+            include_abstract: Include directory L0 abstracts; defaults to the output format
+            include_overview: Include directory L1 overviews
+            overview_limit: Maximum returned overview length
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
             sort_by: Optional sort field for non-recursive listings
@@ -290,27 +296,33 @@ class FSService:
                 return await viking_fs.tree(
                     uri,
                     ctx=ctx,
-                    output="original" if tags or use_simple_paths else output,
+                    output="original",
                     abs_limit=abs_limit,
+                    include_abstract=None,
+                    include_overview=False,
+                    overview_limit=overview_limit,
                     show_all_hidden=show_all_hidden,
                     node_limit=page_limit,
                     level_limit=level_limit,
                     offset=page_offset,
                     sort_by=sort_by,
                     sort_order=sort_order,
-                    extra_fields=None if tags or use_simple_paths else extra_fields,
+                    extra_fields=None,
                 )
             return await viking_fs.ls(
                 uri,
                 ctx=ctx,
-                output="original" if tags or use_simple_paths else output,
+                output="original",
                 abs_limit=abs_limit,
+                include_abstract=None,
+                include_overview=False,
+                overview_limit=overview_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=page_limit,
                 offset=page_offset,
                 sort_by=sort_by,
                 sort_order=sort_order,
-                extra_fields=None if tags or use_simple_paths else extra_fields,
+                extra_fields=None,
             )
 
         if tags:
@@ -337,7 +349,12 @@ class FSService:
                 entries=[entry.get("uri", "") for entry in page.entries],
                 has_more=page.has_more,
             )
-        if tags and (output != "original" or extra_fields):
+        if (
+            output != "original"
+            or extra_fields
+            or include_abstract is True
+            or include_overview is True
+        ):
             return ListingPage(
                 entries=await viking_fs._finalize_listing_entries(
                     page.entries,
@@ -346,6 +363,9 @@ class FSService:
                     extra_fields,
                     recursive,
                     ctx=ctx,
+                    include_abstract=include_abstract,
+                    include_overview=include_overview is True,
+                    overview_limit=overview_limit,
                 ),
                 has_more=page.has_more,
             )

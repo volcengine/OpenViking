@@ -1438,6 +1438,19 @@ def test_search_sql_uses_stable_id_tiebreaker():
     collection.search_by_vector("default", dense_vector=[1.0, 0.0])
     assert "ORDER BY _distance, id" in cursor.execute.call_args.args[0]
 
+    # Shared decay options pass through without changing openGauss scoring or pagination.
+    cursor.fetchall.return_value = [("event", [1.0, 0.0], 0.2)]
+    adapter = _adapter_without_connect()
+    adapter.get_collection = Mock(return_value=collection)
+    advance = {"time_decay": {"protection": "0", "origin": "2026-01-08T00:00:00Z"}}
+    with patch.object(collection, "search_by_vector", wraps=collection.search_by_vector) as search:
+        result = adapter.query(query_vector=[1.0, 0.0], limit=10, offset=2, advance=advance)
+    assert search.call_args.kwargs["advance"] is advance
+    sql, params = cursor.execute.call_args.args
+    assert "ORDER BY _distance, id" in sql
+    assert params[-2:] == [10, 2]
+    assert result == [{"id": "event", "vector": [1.0, 0.0], "_score": pytest.approx(0.8)}]
+
     cursor.description = [("id",), ("level",), ("_scalar_val",)]
     cursor.fetchall.return_value = []
     collection.search_by_scalar("default", field="level", order="desc")

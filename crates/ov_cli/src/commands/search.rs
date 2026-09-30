@@ -130,6 +130,7 @@ pub async fn find(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    events_time_decay_protection: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -147,6 +148,7 @@ pub async fn find(
             context_type,
             tags,
             read_content,
+            events_time_decay_protection,
         )
         .await?;
     output_search_results(
@@ -173,6 +175,7 @@ pub async fn search(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    events_time_decay_protection: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -191,6 +194,7 @@ pub async fn search(
             context_type,
             tags,
             read_content,
+            events_time_decay_protection,
         )
         .await?;
     output_search_results(
@@ -425,7 +429,7 @@ fn render_search_result_card(
             metadata.push(theme::value(level).bold().to_string());
         }
 
-        if let Some(score) = search_result_score(object) {
+        for score in search_result_scores(object) {
             metadata.push(theme::warning(score).bold().to_string());
         }
     }
@@ -598,13 +602,40 @@ fn normalize_level_value(level: &str) -> &str {
 }
 
 fn search_result_score(object: Option<&serde_json::Map<String, Value>>) -> Option<String> {
-    let value = object?.get("score")?;
+    parse_score(object?.get("score")?).map(|score| format!("score {score:.3}"))
+}
+
+fn search_result_scores(object: Option<&serde_json::Map<String, Value>>) -> Vec<String> {
+    let Some(object) = object else {
+        return Vec::new();
+    };
+    if !object.contains_key("origin_score") && !object.contains_key("time_score") {
+        return search_result_score(Some(object)).into_iter().collect();
+    }
+
+    [
+        ("semantic", object.get("origin_score")),
+        ("time", object.get("time_score")),
+        ("final", object.get("score")),
+    ]
+    .into_iter()
+    .map(|(label, value)| {
+        let value = value
+            .and_then(parse_score)
+            .map(|score| format!("{score:.3}"))
+            .unwrap_or_else(|| "not provided".to_string());
+        format!("{label} {value}")
+    })
+    .collect()
+}
+
+fn parse_score(value: &Value) -> Option<f64> {
     let score = value.as_f64().or_else(|| {
         value
             .as_str()
             .and_then(|value| value.trim().parse::<f64>().ok())
     })?;
-    Some(format!("score {score:.3}"))
+    Some(score)
 }
 
 fn search_result_uri(object: Option<&serde_json::Map<String, Value>>) -> Option<&str> {
@@ -907,6 +938,8 @@ mod tests {
                 "uri": "viking://user/default/memories/entities/.overview.md",
                 "level": 1,
                 "score": 0.3805481195449829,
+                "origin_score": 0.8,
+                "time_score": 0.5,
                 "abstract": "Entity memories from user's world. Each entity has its own subdirectory including projects, people, concepts, etc."
             }
         ]);
@@ -914,7 +947,7 @@ mod tests {
         let rendered = strip_ansi(&render_search_results_for_table(&results).expect("cards"));
 
         assert!(rendered.starts_with("1 result\nRanked by relevance\n\n"));
-        assert!(rendered.contains("1. memory · Level 1 · score 0.381"));
+        assert!(rendered.contains("1. memory · Level 1 · semantic 0.800 · time 0.500 · final 0.381"));
         assert!(rendered.contains("viking://user/default/memories/entities/.overview.md"));
         assert!(rendered.contains("Entity memories from user's world."));
         assert!(!rendered.contains("peop\n   le"));

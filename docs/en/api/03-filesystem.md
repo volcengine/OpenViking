@@ -20,7 +20,10 @@ List directory contents.
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| abs_limit | int | No | 256 | Maximum returned abstract length |
+| include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
+| include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
+| overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | offset | int | No | 0 | Number of visible results to skip |
@@ -30,7 +33,7 @@ List directory contents.
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -70,36 +73,54 @@ existing hiding rules.
 **Python HTTP SDK**
 
 ```python
-entries = client.ls(
+page = client.ls_page(
     uri="viking://resources/",
     offset=100,
     limit=100,
     sort_by="mtime",
     sort_order="desc",
+    include_abstract=True,
+    include_overview=True,
 )
-for entry in entries:
+for entry in page["result"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
+print("has more nodes:", page["has_more"])
 ```
 
 **TypeScript SDK**
 
 ```typescript
-const entries = await client.list("viking://resources/docs/", { simple: true });
-console.log(entries);
+const page = await client.listPage("viking://resources/docs/", {
+  includeAbstract: true,
+  includeOverview: true,
+});
+console.log(page.result);
+console.log("has more nodes:", page.hasMore);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.List(ctx, "viking://resources/", nil)
+page, err := client.ListPage(ctx, "viking://resources/", &openviking.ListOptions{
+    IncludeAbstract: openviking.Bool(true),
+    AbsLimit:        512,
+    IncludeOverview: openviking.Bool(true),
+    OverviewLimit:   4000,
+})
 if err != nil {
     return err
 }
-for _, entry := range entries {
+for _, entry := range page.Result {
     fmt.Println(entry)
 }
+fmt.Println("has more nodes:", page.HasMore)
 ```
+
+When only the entry array is needed, use the compatibility methods `ls` in
+Python, `list` in TypeScript, and `List` in Go. To detect whether `limit` or
+`node_limit` truncated the result, use `ls_page`, `listPage`, and `ListPage`,
+respectively.
 
 **HTTP API**
 
@@ -124,12 +145,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
+openviking ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|false]] [--include-overview[=true|false]] [--tags team=search,env=prod] [-f FIELDS]
 openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
 openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ```
 
-`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `overview`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
 The HTTP `result` remains an entry array. `has_more=true` means more matching nodes remain after visibility, tags, offset, and limit are applied. The Python, TypeScript, and Go SDKs continue to return the `result` array. When more nodes are available, the CLI appends a pagination hint to its output.
 
@@ -184,23 +205,36 @@ Directory filtering and `tags` are applied before `offset` and `limit`. Abstract
 **Python HTTP SDK**
 
 ```python
-entries = client.tree(uri="viking://resources/", offset=100, limit=100)
-for entry in entries:
+page = client.tree_page(
+    uri="viking://resources/",
+    offset=100,
+    limit=100,
+    include_abstract=True,
+    include_overview=True,
+    directories_only=True,
+)
+for entry in page["result"]:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
+print("has more nodes:", page["has_more"])
 ```
 
 **TypeScript SDK**
 
 ```typescript
-const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
-console.log(tree);
+const page = await client.treePage("viking://resources/docs/", {
+  nodeLimit: 100,
+  includeAbstract: true,
+  includeOverview: true,
+});
+console.log(page.result);
+console.log("has more nodes:", page.hasMore);
 ```
 
 **Go SDK**
 
 ```go
-entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
+page, err := client.TreePage(ctx, "viking://resources/", &openviking.TreeOptions{
     DirectoriesOnly: true,
     IncludeAbstract: openviking.Bool(true),
     IncludeOverview: openviking.Bool(true),
@@ -208,10 +242,16 @@ entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
 if err != nil {
     return err
 }
-for _, entry := range entries {
+for _, entry := range page.Result {
     fmt.Println(entry["rel_path"], entry["isDir"])
 }
+fmt.Println("has more nodes:", page.HasMore)
 ```
+
+When only the node array is needed, use the compatibility method `tree` in
+Python and TypeScript or `Tree` in Go. To detect whether `limit` or
+`node_limit` truncated the result, use `tree_page`, `treePage`, and `TreePage`,
+respectively.
 
 **HTTP API**
 

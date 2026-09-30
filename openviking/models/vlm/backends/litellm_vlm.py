@@ -14,6 +14,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
+from litellm.types.utils import all_litellm_params
 
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
@@ -309,7 +310,28 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
         if self.extra_request_body:
-            kwargs["extra_body"] = dict(self.extra_request_body)
+            if model.startswith("anthropic/"):
+                # LiteLLM serializes extra_body literally on its Anthropic route.
+                # Native body options must be kwargs, but must not become SDK controls.
+                reserved = set(all_litellm_params) | {
+                    "model",
+                    "messages",
+                    "tools",
+                    "tool_choice",
+                    "stream",
+                    "timeout",
+                    "extra_headers",
+                    "extra_body",
+                }
+                conflicts = reserved.intersection(self.extra_request_body)
+                if conflicts:
+                    raise ValueError(
+                        "Anthropic extra_request_body cannot set LiteLLM controls: "
+                        + ", ".join(sorted(conflicts))
+                    )
+                kwargs.update(self.extra_request_body)
+            else:
+                kwargs["extra_body"] = dict(self.extra_request_body)
 
         # Ollama-specific request options. Without an explicit num_ctx the server
         # truncates long prompts to its 4096-token default; thinking models left

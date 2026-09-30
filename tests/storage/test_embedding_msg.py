@@ -138,7 +138,7 @@ def test_embedding_update_fields_rejects_vector_fields():
 
 def test_field_patch_roundtrip_and_resolution():
     patch = FieldPatch(
-        values={"search_tags": ["scope=new"], "md5": "new-md5"},
+        values={"search_tags": ["scope=new", "memory_type=preferences"], "md5": "new-md5"},
         modes={"search_tags": "append"},
         seed_fields={
             "uri": "viking://resources/demo/a.py",
@@ -150,11 +150,21 @@ def test_field_patch_roundtrip_and_resolution():
 
     restored = FieldPatch.from_dict(patch.to_dict())
 
-    assert restored.resolve({"search_tags": ["env=old"], "md5": "old-md5"}) == {
-        "search_tags": ["env=old", "scope=new"],
+    existing = {
+        "context_type": "memory",
+        "search_tags": ["env=old", "memory_type=events"],
+        "md5": "old-md5",
+    }
+    assert restored.resolve(existing) == {
+        "search_tags": ["memory_type=events", "env=old", "scope=new"],
         "md5": "new-md5",
     }
     assert restored.seed_fields["vector"] == [0.1, 0.2]
+    # Ordinary replacement can clear user tags, but cannot create or overwrite a type.
+    restored.modes["search_tags"] = "replace"
+    restored.values["search_tags"] = ["memory_type=preferences"]
+    assert restored.resolve(existing)["search_tags"] == ["memory_type=events"]
+    assert restored.resolve({"context_type": "memory", "search_tags": []})["search_tags"] == []
 
 
 @pytest.mark.parametrize(

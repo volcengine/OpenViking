@@ -83,9 +83,7 @@ class SkillPackageRetriever(HierarchicalRetriever):
                 previous = candidates.get(key)
                 if previous is None or score > previous["_final_score"]:
                     candidates[key] = {**item, "_score": score, "_final_score": score}
-            converted = await self._convert_to_matched_contexts(
-                list(candidates.values()), ctx=ctx, apply_hotness=False
-            )
+            converted = await self._convert_to_matched_contexts(list(candidates.values()), ctx=ctx)
             matches = await skill_resolver.resolve(converted)
             if len(matches) >= limit or len(page) < page_size:
                 break

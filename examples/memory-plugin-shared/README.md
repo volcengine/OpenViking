@@ -12,6 +12,33 @@ When the copies are made follows how the plugin is delivered. Claude Code, Codex
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
 > `viking://user/memories` shorthand is rejected by newer servers.
 
+## Installer
+
+`install.sh` installs the memory plugin into Claude Code, Codex, Cursor, TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and DeepSeek Harness (dsh), and writes the server connection to `~/.openviking/ovcli.conf`. Its header comment lists the hosts it contacts and the files it writes for each harness; `--help` lists every option and environment variable.
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+
+# Without prompts:
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
+  --yes --harness claude,codex --url <server-url> --api-key <api-key>
+```
+
+A run asks for the harnesses and the server, checks the server (`/health`, then `/api/v1/system/status` with the key), prints what it will change and waits for confirmation. Nothing is written before that. With `--yes`, or when no terminal is available, it asks nothing and proceeds.
+
+Everything comes from the OpenViking release on Volcengine TOS (`OPENVIKING_TOS_BASE`); the installer never contacts GitHub and never runs git.
+
+- Claude Code 2.1.224 and newer registers a URL marketplace and updates the plugin on its own. Older 2.x builds, custom Claude-format CLIs, and a URL marketplace that cannot be registered fall back to a local directory marketplace from the plugin bundle. Claude Code without `claude plugin` (older than 2.0) is skipped with a hint to upgrade.
+- Codex and Codex-format CLIs such as the TraeCode CLI register a git marketplace served from TOS, which Codex upgrades when it starts. When that fails they fall back to the directory marketplace from the bundle.
+- Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode and pi install files from the plugin bundle `memory-plugin-marketplace.zip`, downloaded at most once per run into `~/.openviking/memory-plugin-marketplace`. They update when the installer runs again.
+- dsh installs `@openviking/dsh-memory-plugin` from npm through `dsh plugin add`.
+
+After the confirmation the installer runs a version check: it asks `https://openviking.net/install/v1/<harness>.json` which release to install, once per selected harness. `OPENVIKING_SKIP_VERSION_CHECK=1` skips the check and installs the latest release, which is also what happens when the check fails. When the answer names a checksum, the bundle is verified against it.
+
+Run from a repository checkout, the installer uses that checkout's plugins (`--source dev`) and downloads nothing from the release; `--source archive` or `--dist tos` installs the release instead. `--dist github`, `--source remote` and `OPENVIKING_REPO_URL` / `OPENVIKING_REPO_REF` / `OPENVIKING_REPO_BRANCH` are accepted and ignored with a notice; to install a branch, run `install.sh` from a checkout of it.
+
+`--uninstall --harness <list>` removes the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations. Claude Code, Codex, OpenCode, pi and dsh are removed with their own commands, which the installer prints at the end of an install.
+
 ## Workspace Peers
 
 `lib/workspace-peer.mjs` decides which peer a workspace writes its memories under; `lib/workspace-identity.mjs` derives the values it substitutes.

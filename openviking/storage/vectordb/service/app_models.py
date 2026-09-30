@@ -99,6 +99,8 @@ class IndexDropRequest(BaseModel):
 
 
 class SearchByVectorRequest(BaseModel):
+    advance: Optional[dict[str, Any]] = None
+    return_detail_info: bool = False
     collection_name: str = Field(..., description="Collection name")
     index_name: str = Field(..., description="Index name")
     project: Optional[str] = Field("default", description="Project name")

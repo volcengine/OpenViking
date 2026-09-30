@@ -65,7 +65,7 @@ fn resolve_fields(fields: &[String], is_tree: bool) -> Vec<&'static FieldDef> {
     }
     for name in fields {
         let trimmed = name.trim();
-        if trimmed.is_empty() || (trimmed == "overview" && !is_tree) {
+        if trimmed.is_empty() {
             continue;
         }
         if let Some(def) = ALL_FIELDS.iter().find(|f| f.name == trimmed) {
@@ -180,6 +180,9 @@ pub async fn ls(
     recursive: bool,
     output: &str,
     abs_limit: i32,
+    include_abstract: Option<bool>,
+    include_overview: Option<bool>,
+    overview_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
     offset: i32,
@@ -201,6 +204,9 @@ pub async fn ls(
             recursive,
             output,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             show_all_hidden,
             node_limit,
             offset,
@@ -1323,10 +1329,14 @@ mod tests {
 
     #[test]
     fn resolve_fields_prepends_name_when_no_identifier_given_ls() {
-        let fields = vec!["size".to_string(), "mtime".to_string()];
+        let fields = vec![
+            "size".to_string(),
+            "mtime".to_string(),
+            "overview".to_string(),
+        ];
         let defs = super::resolve_fields(&fields, false);
         let names: Vec<&str> = defs.iter().map(|d| d.name).collect();
-        assert_eq!(names, vec!["name", "size", "mtime"]);
+        assert_eq!(names, vec!["name", "size", "mtime", "overview"]);
     }
 
     #[test]

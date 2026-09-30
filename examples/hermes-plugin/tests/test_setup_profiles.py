@@ -16,7 +16,7 @@ def patch_menu(monkeypatch, select):
     monkeypatch.setattr(curses_ui, "curses_radiolist", radio)
 
 
-def setup_state(external_provider, monkeypatch, *, route="local"):
+def setup_state(external_provider, monkeypatch, *, route="local", line_ending=b"\n"):
     import hermes_cli.memory_setup as setup
 
     home, provider, module, _ = external_provider("setup-profile")
@@ -26,7 +26,9 @@ def setup_state(external_provider, monkeypatch, *, route="local"):
         "memory": {"provider": "openviking", "openviking": {"recall_limit": 9}},
     }
     (home / "config.yaml").write_text(yaml.safe_dump(config))
-    (home / ".env").write_text("UNRELATED=keep\nOPENVIKING_RECALL_SCOPE=shared\n")
+    (home / ".env").write_bytes(
+        b"UNRELATED=keep" + line_ending + b"OPENVIKING_RECALL_SCOPE=shared" + line_ending
+    )
     monkeypatch.setenv("OPENVIKING_RECALL_SCOPE", "shared")
     values = {"endpoint": "http://127.0.0.1:1933", "user": "example"}
     saved = module._default_ovcli_config_path().with_name("ovcli.conf.existing")
@@ -66,8 +68,9 @@ def select_profile(profile, route, menus, setup):
 
 @pytest.mark.parametrize("route", ["local", "linked", "mirror"])
 @pytest.mark.parametrize("profile", ["personal", "shared"])
+@pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 def test_setup_persists_preset_and_real_gateway_session_boundaries(
-    external_provider, monkeypatch, capsys, route, profile
+    external_provider, monkeypatch, capsys, route, profile, line_ending
 ):
     from gateway.config import Platform
     from gateway.session import build_session_key
@@ -77,7 +80,9 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
         set_hermes_home_override,
     )
 
-    home, provider, module, config, setup = setup_state(external_provider, monkeypatch, route=route)
+    home, provider, module, config, setup = setup_state(
+        external_provider, monkeypatch, route=route, line_ending=line_ending
+    )
     other_home, _, _, _ = external_provider("other-profile")
     other_before = (other_home / "config.yaml").read_bytes()
     menus = []
@@ -105,6 +110,9 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     assert saved["thread_sessions_per_user"] is False
     assert "UNRELATED=keep" in (home / ".env").read_text()
     assert "OPENVIKING_RECALL_SCOPE=" not in (home / ".env").read_text()
+    env_bytes = (home / ".env").read_bytes()
+    assert env_bytes.startswith(b"UNRELATED=keep" + line_ending)
+    assert env_bytes == line_ending.join(env_bytes.splitlines()) + line_ending
     assert (
         module.OpenVikingMemoryProvider._setting("recall_scope", settings)
         == settings["recall_scope"]

@@ -15,7 +15,7 @@ skills/openviking-memory/SKILL.md    # teaches the model the recall + persist lo
 skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
 skills/ov-experience-memory/         # retrieve and apply prior task Experience
 skills/openviking-skills/            # find, use, create, and share OpenViking skills
-skills/ov-tasks/                     # task board: pick, execute, hand off tasks stored as OV markdown files
+skills/ov-kanban/                    # kanban board: pick, execute, hand off tasks stored as OV markdown files
 plugin.test.mjs                      # node --test conformance checks
 ```
 
@@ -25,7 +25,7 @@ Use `ov-memory-troubleshoot` to trace backward from a memory file to its archive
 
 `openviking-skills` covers the skills stored in OpenViking itself: how to find one with `find(context_type="skill")`, read and follow its `SKILL.md`, create or replace one with the `add_skill` MCP tool, install one from Git or a local folder, share one with the account, and move local skill folders into OpenViking when you ask. This package has no session-start hook, so there is no `<available-skills>` catalog here and the skill has the model search for a skill instead.
 
-Use `ov-tasks` to run long or multi-agent work through a task board in OpenViking: each task is one markdown file (`viking://agent/tasks/<scope>/<id>.md`, falling back to `viking://resources/tasks` on servers that reject writes under `viking://agent`) whose header and body are the handoff, so any agent with the `ov` CLI can claim, continue, and write it back. `references/loop.sh` drives unattended ticks; see [docs/design/ov-tasks.md](../docs/design/ov-tasks.md).
+Use `ov-kanban` to run long or multi-agent work through a kanban board in OpenViking. A board holds many tasks; each task is one markdown file (`viking://agent/kanban/<board>/<id>.md`, falling back to `viking://resources/kanban` on servers that reject writes under `viking://agent`) whose header and body are the handoff, so any agent with the `ov` CLI can claim, continue, and write it back. Process detail is folded into `archive/<id>.md` instead of being summarized away, and agents read in layers: board view, task, archive. `references/loop.sh` drives unattended ticks; see the skill's [README](skills/ov-kanban/README.md) for the idea and roadmap, and [docs/design/ov-kanban.md](../docs/design/ov-kanban.md) for design notes.
 
 Zero npm dependencies; the proxy and tests run on the Node.js standard library (Node 18+ for global `fetch`).
 
@@ -34,7 +34,7 @@ Zero npm dependencies; the proxy and tests run on the Node.js standard library (
 1. Have an OpenViking server reachable (see the [quickstart](../docs/en/getting-started/02-quickstart.md)); default local endpoint is `http://127.0.0.1:1933`.
 2. Point your Agent-Plugins-conforming client at this directory (each client has its own install command or plugin directory; consult its docs). The client will:
    - register the `openviking` MCP server from `mcp.json` — it runs `node <plugin>/servers/mcp-proxy.mjs` over stdio;
-   - discover the `openviking-memory`, `ov-memory-troubleshoot`, `ov-experience-memory`, `openviking-skills`, and `ov-tasks` skills from `skills/`.
+   - discover the `openviking-memory`, `ov-memory-troubleshoot`, `ov-experience-memory`, `openviking-skills`, and `ov-kanban` skills from `skills/`.
 3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` / `add_skill` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
 
 ## Why a stdio proxy instead of a `streamable-http` entry

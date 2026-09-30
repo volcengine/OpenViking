@@ -524,7 +524,14 @@ async def test_embedding_handler_merge_action_reads_and_merges_before_full_upser
 
         async def get_strict(self, ids, *, ctx):
             captured["read"] = (list(ids), ctx.account_id)
-            return [{"id": ids[0], "search_tags": ["env=old"], "created_at": "old"}]
+            return [
+                {
+                    "id": ids[0],
+                    "context_type": "memory",
+                    "search_tags": ["env=old", "memory_type=preferences"],
+                    "created_at": "old",
+                }
+            ]
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             captured["data"] = dict(data)
@@ -538,8 +545,10 @@ async def test_embedding_handler_merge_action_reads_and_merges_before_full_upser
         context_data={
             "id": "generated-id",
             "_upsert_record_id": "generated-id",
-            "uri": "viking://resources/repo/a.py",
+            "_upsert_options": {"extracted_memory_type": "events"},
+            "uri": "viking://user/alice/peers/memories/memories/events/event.md",
             "account_id": "acct",
+            "context_type": "memory",
             "abstract": "summary",
         },
         update_fields={"search_tags": ["scope=new"]},
@@ -550,7 +559,7 @@ async def test_embedding_handler_merge_action_reads_and_merges_before_full_upser
 
     assert result.outcome is ProcessOutcome.SUCCESS
     assert captured["read"] == (["generated-id"], "acct")
-    assert captured["data"]["search_tags"] == ["env=old", "scope=new"]
+    assert set(captured["data"]["search_tags"]) == {"env=old", "memory_type=events", "scope=new"}
     assert captured["data"]["created_at"] == "old"
     assert captured["options"].partial_update is False
 

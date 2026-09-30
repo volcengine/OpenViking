@@ -175,7 +175,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 | harness | 集成形态 | 安装通道 | 会话 id 前缀/格式 | 配置来源 | 独立 setup 向导 |
 |---|---|---|---|---|---|
-| claude-code | CC 插件（marketplace）：包含 9 hook + MCP 代理 + slash + statusline + skill | 一键 `install.sh --harness claude`（支持现代 plugin 路径与 legacy `claude mcp add` 兼容路径）/ 手动 marketplace / TOS 镜像 | `cc-<CC session_id 原文>`；subagent 格式为 `…__subagent-<agent_id>` | env + ovcli.conf `plugin.claude_code` + ov.conf `claude_code` | ✅ `scripts/setup.mjs` |
+| claude-code | CC 插件（marketplace）：包含 9 hook + MCP 代理 + slash + statusline + skill | 一键 `install.sh --harness claude`（Claude Code 2.0+）/ 手动 marketplace / TOS 镜像 | `cc-<CC session_id 原文>`；subagent 格式为 `…__subagent-<agent_id>` | env + ovcli.conf `plugin.claude_code` + ov.conf `claude_code` | ✅ `scripts/setup.mjs` |
 | codex | Codex 插件（marketplace）：包含 6 hook + MCP 代理 + skill | 一键 `--harness codex` / `codex plugin marketplace add`（TOS 走 dumb-HTTP git 以保留远程更新能力） | `cx-<safeId>`（确定性推导，不读取 state） | env + ovcli.conf `plugin.codex` + ov.conf `codex` | ✅ |
 | trae-cli | **codex 插件别名安装**（TraeCode CLI 2.0，仅支持 2.0；Codex 系：binary `traecli`、配置 `~/.trae/traecli.toml`；能力面与 codex 一致） | 一键 `--harness trae-cli`（复用 codex 安装流程；marketplace 命令会随指向的 binary 执行，如 `traecli plugin marketplace add`） | 与 codex 的派生规则一致 | 与 codex 一致（env + ovcli.conf `plugin.codex` + ov.conf） | ✅（同 codex） |
 | cursor | 配置驱动（写入 `~/.cursor/hooks.json`+`mcp.json`）+ rule + skill | 一键 `--harness cursor` | `cu-<conversation_id>` | env + ovcli.conf `plugin.cursor` | ❌（共用安装器 TUI） |
@@ -193,7 +193,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 统一安装脚本 `examples/memory-plugin-shared/install.sh` 覆盖 11 个 harness id：`claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh`（其中 openclaw 走自有渠道；`trae-cli` 则复用 codex 安装流程，[§3.1.1](#_3-1-1-判定矩阵)）。要点如下：
 
-- 双分发：`--dist github|tos`；三源：`--source remote|archive|dev`。以 `bash <(curl …)` 方式执行时会从 `/dev/tty` 读取输入，从而保留交互。
+- 安装源与交互：全部从火山引擎 TOS 上的 OpenViking 发布包安装；在仓库 checkout 中运行时改用该 checkout（`--source archive|dev`）。以 `bash <(curl …)` 方式执行时会从 `/dev/tty` 读取输入，从而保留交互。
 - 官方 docs 的规范一键命令是不带 `--harness` 的裸命令（执行后进入 TUI 多选）；而各插件自带的 setup-helper 转发脚本在调用时会自动补 `--harness`。
 - 幂等合并：hooks/mcp 条目按 `OPENVIKING_INTEGRATION_ID` 标记识别自有条目，做到剔旧追新的同时不动第三方；写入采用原子操作——先备份 `.bak`，写 tmp 后 rename 覆盖，权限 0600。
 - 凭据向导写 `~/.openviking/ovcli.conf`：三选一（本地 `http://127.0.0.1:1933` / 火山云 `https://api.vikingdb.cn-beijing.volces.com/openviking` / 自定义），已有配置先展示当前值再问"沿用/重配"，API key 掩码。

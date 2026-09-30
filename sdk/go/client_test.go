@@ -130,6 +130,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if got := body["time_field"]; got != "created_at" {
 			t.Fatalf("time_field = %#v", got)
 		}
+		if got := body["events_time_decay_protection"]; got != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", got)
+		}
 		levels, ok := body["level"].([]any)
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
@@ -147,14 +150,15 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "resources/docs",
-		Limit:       5,
-		ContextType: []string{"resource"},
-		Since:       "2026-06-01",
-		Until:       "2026-06-18",
-		TimeField:   "created_at",
-		Level:       []int{0, 2},
-		Tags:        []string{"topic=docs", "kind=api"},
+		TargetURI:                 "resources/docs",
+		Limit:                     5,
+		ContextType:               []string{"resource"},
+		Since:                     "2026-06-01",
+		Until:                     "2026-06-18",
+		TimeField:                 "created_at",
+		Level:                     []int{0, 2},
+		Tags:                      []string{"topic=docs", "kind=api"},
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -232,29 +236,59 @@ func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 	}
 }
 
-func TestListAndTreeSendQueryOptions(t *testing.T) {
+func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
+	entries := []any{map[string]any{"name": "docs"}}
+	listCalls := 0
 	treeCalls := 0
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/fs/ls":
-			if got := r.URL.Query().Get("node_limit"); got != "200" {
-				t.Fatalf("node_limit = %q", got)
+			if listCalls == 0 {
+				if got := r.URL.Query().Get("node_limit"); got != "200" {
+					t.Fatalf("node_limit = %q", got)
+				}
+				if got := r.URL.Query().Get("offset"); got != "4" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "5" {
+					t.Fatalf("limit = %q", got)
+				}
+				if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+					t.Fatalf("sort_by = %q", got)
+				}
+				if got := r.URL.Query().Get("sort_order"); got != "desc" {
+					t.Fatalf("sort_order = %q", got)
+				}
+				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod", "team=search"}) {
+					t.Fatalf("tags = %#v", got)
+				}
+				if got := r.URL.Query()["extra_fields"]; !reflect.DeepEqual(got, []string{"locked", "id"}) {
+					t.Fatalf("extra_fields = %#v", got)
+				}
+				if got := r.URL.Query().Get("include_abstract"); got != "false" {
+					t.Fatalf("include_abstract = %q", got)
+				}
+				if got := r.URL.Query().Get("include_overview"); got != "true" {
+					t.Fatalf("include_overview = %q", got)
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "512" {
+					t.Fatalf("overview_limit = %q", got)
+				}
+				if got := r.URL.Query().Get("abs_limit"); got != "128" {
+					t.Fatalf("abs_limit = %q", got)
+				}
+			} else {
+				if _, ok := r.URL.Query()["include_abstract"]; ok {
+					t.Fatal("default list request should omit include_abstract")
+				}
+				if _, ok := r.URL.Query()["include_overview"]; ok {
+					t.Fatal("default list request should omit include_overview")
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "4000" {
+					t.Fatalf("overview_limit = %q", got)
+				}
 			}
-			if got := r.URL.Query().Get("offset"); got != "4" {
-				t.Fatalf("offset = %q", got)
-			}
-			if got := r.URL.Query().Get("limit"); got != "5" {
-				t.Fatalf("limit = %q", got)
-			}
-			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
-				t.Fatalf("sort_by = %q", got)
-			}
-			if got := r.URL.Query().Get("sort_order"); got != "desc" {
-				t.Fatalf("sort_order = %q", got)
-			}
-			if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod", "team=search"}) {
-				t.Fatalf("tags = %#v", got)
-			}
+			listCalls++
 		case "/api/v1/fs/tree":
 			if treeCalls == 0 {
 				if got := r.URL.Query().Get("level_limit"); got != "0" {
@@ -268,6 +302,9 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 				}
 				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
 					t.Fatalf("tags = %#v", got)
+				}
+				if got := r.URL.Query()["extra_fields"]; !reflect.DeepEqual(got, []string{"count"}) {
+					t.Fatalf("extra_fields = %#v", got)
 				}
 				if got := r.URL.Query().Get("include_abstract"); got != "false" {
 					t.Fatalf("include_abstract = %q", got)
@@ -305,35 +342,59 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		writeOK(t, w, []any{})
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok", "result": entries, "has_more": r.URL.Path == "/api/v1/fs/ls",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer closeServer()
 
-	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
-		NodeLimit: 200,
-		Offset:    4,
-		Limit:     5,
-		SortBy:    "mtime",
-		SortOrder: "desc",
-		Tags:      []string{"env=prod", "team=search"},
-	}); err != nil {
+	listPage, err := client.ListPage(context.Background(), "viking://session", &ListOptions{
+		NodeLimit:       200,
+		Offset:          4,
+		Limit:           5,
+		SortBy:          "mtime",
+		SortOrder:       "desc",
+		ExtraFields:     []string{"locked", "id"},
+		Tags:            []string{"env=prod", "team=search"},
+		AbsLimit:        128,
+		IncludeAbstract: Bool(false),
+		IncludeOverview: Bool(true),
+		OverviewLimit:   512,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{
+	if !listPage.HasMore || !reflect.DeepEqual(listPage.Result, entries) {
+		t.Fatalf("list page = %#v", listPage)
+	}
+	legacyList, err := client.List(context.Background(), "viking://session", nil)
+	if err != nil || !reflect.DeepEqual(legacyList, entries) {
+		t.Fatalf("list = %#v, err = %v", legacyList, err)
+	}
+	treePage, err := client.TreePage(context.Background(), "viking://resources/docs", &TreeOptions{
 		NodeLimit:       200,
 		LevelLimit:      Int(0),
 		Offset:          6,
 		Limit:           7,
+		ExtraFields:     []string{"count"},
 		Tags:            []string{"env=prod"},
 		IncludeAbstract: Bool(false),
 		IncludeOverview: Bool(true),
 		OverviewLimit:   512,
 		DirectoriesOnly: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
-		t.Fatal(err)
+	if treePage.HasMore || !reflect.DeepEqual(treePage.Result, []map[string]any{{"name": "docs"}}) {
+		t.Fatalf("tree page = %#v", treePage)
+	}
+	legacyTree, err := client.Tree(context.Background(), "viking://resources/docs", nil)
+	if err != nil || !reflect.DeepEqual(legacyTree, treePage.Result) {
+		t.Fatalf("tree = %#v, err = %v", legacyTree, err)
 	}
 }
 
@@ -669,6 +730,9 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 		if body["max_tokens"] != float64(3000) || body["dedup_turns"] != float64(5) {
 			t.Fatalf("budget fields = %#v", body)
 		}
+		if body["events_time_decay_protection"] != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", body["events_time_decay_protection"])
+		}
 		writeOK(t, w, map[string]any{
 			"rendered": "<memory />",
 			"entries":  []any{},
@@ -678,10 +742,11 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.SearchContext(context.Background(), "continue refactor", &SearchContextOptions{
-		SessionID:  "session-1",
-		Purpose:    "coding",
-		MaxTokens:  Int(3000),
-		DedupTurns: Int(5),
+		SessionID:                 "session-1",
+		Purpose:                   "coding",
+		MaxTokens:                 Int(3000),
+		DedupTurns:                Int(5),
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)

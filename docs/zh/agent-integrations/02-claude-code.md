@@ -18,7 +18,7 @@ GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装�
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-> **Claude Code 走 TOS 的注意事项**：TOS 渠道注册的是本地目录 marketplace，**无法自动更新**——更新请重跑安装脚本。（Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力。）
+> **Claude Code 走 TOS 时的更新**：Claude Code 2.1.224 及以上版本，TOS 渠道注册的是 TOS 托管的 marketplace 并开启自动更新，新版插件在后台下载，重启 Claude Code 后生效。更早的 Claude Code 注册的是本地目录 marketplace，**无法自动更新**——更新请重跑安装脚本。（Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力。）
 
 现在不再需要任何 shell wrapper：插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。
 
@@ -46,7 +46,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 >
 > 使用纯本地模式（`http://127.0.0.1:1933`，无鉴权）？您可以跳过第 1 步，插件将直接使用本地默认值。
 >
-> 使用 Claude Code < 2.0 版本？安装脚本会自动识别并回退到 `claude mcp add` + hooks 合并；详见 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
+> 使用 Claude Code < 2.0 版本？安装脚本会跳过它并提示升级。如需用 `claude mcp add` + hooks 合并手动接入，见 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
 
 </details>
 

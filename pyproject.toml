@@ -123,10 +123,10 @@ eval = [
     "pandas>=2.0.0",
 ]
 gemini = [
-    "google-genai>=1.0.0",
+    "google-genai>=1.39.0",
 ]
 gemini-async = [
-    "google-genai>=1.0.0",
+    "google-genai>=1.39.0",
     "anyio>=4.0.0",
 ]
 ocr = [

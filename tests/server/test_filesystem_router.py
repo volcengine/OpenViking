@@ -395,6 +395,9 @@ async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch)
         tags=["team=search", "env=prod"],
         offset=4,
         limit=9,
+        include_abstract=False,
+        include_overview=True,
+        overview_limit=512,
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
     tree_response = await filesystem.tree(
@@ -407,6 +410,9 @@ async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch)
     assert seen["ls"]["tags"] == ["team=search", "env=prod"]
     assert seen["ls"]["offset"] == 4
     assert seen["ls"]["node_limit"] == 9
+    assert seen["ls"]["include_abstract"] is False
+    assert seen["ls"]["include_overview"] is True
+    assert seen["ls"]["overview_limit"] == 512
     assert seen["tree"]["offset"] == 3
     assert seen["tree"]["node_limit"] == 5
     assert ls_response.result == [{"name": "a.md"}]

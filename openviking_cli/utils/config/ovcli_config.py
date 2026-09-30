@@ -56,6 +56,8 @@ class OVCLIConfig(BaseModel):
     # LDAP credentials
     ldap_username: Optional[str] = None
     ldap_password: Optional[str] = None
+    # OIDC bearer token
+    oidc_token: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 

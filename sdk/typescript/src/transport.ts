@@ -64,6 +64,16 @@ export class OpenVikingTransport {
     );
   }
 
+  requestEnvelope<T>(
+    method: string,
+    path: string,
+    options: TransportOptions = {},
+  ): Promise<ResponseEnvelope<T>> {
+    return this.consume(method, path, options, (response) =>
+      this.parseResponseEnvelope<T>(response),
+    );
+  }
+
   async consume<T>(
     method: string,
     path: string,
@@ -132,6 +142,13 @@ export class OpenVikingTransport {
   }
 
   async parseResponse<T>(response: Response): Promise<T> {
+    const envelope = await this.parseResponseEnvelope<T>(response);
+    return envelope.result as T;
+  }
+
+  async parseResponseEnvelope<T>(
+    response: Response,
+  ): Promise<ResponseEnvelope<T>> {
     const text = await response.text();
     let envelope: ResponseEnvelope<T> = {};
     if (text) {
@@ -155,6 +172,6 @@ export class OpenVikingTransport {
         }) as { code?: string; details?: JsonObject; statusCode?: number },
       );
     }
-    return envelope.result as T;
+    return envelope;
   }
 }

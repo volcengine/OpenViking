@@ -13,7 +13,7 @@ on:
         description: 'Also overwrite the stable/latest paths'
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -80,10 +80,15 @@ jobs:
           # Slim archive with the memory integrations and marketplace manifests
           # required by clients that support native marketplace installation.
           # The shared installer registers the unzipped directory as a local
-          # marketplace for both Claude Code and Codex (GitHub-free path).
+          # marketplace when the client has no remote TOS channel.
           STAGE=/tmp/memory-plugin-marketplace
           bash .github/scripts/stage-memory-plugin-marketplace.sh "${STAGE}"
-          (cd /tmp && zip -rq "memory-plugin-marketplace-${RELEASE_TAG}.zip" memory-plugin-marketplace)
+          bash .github/scripts/reproducible-zip.sh "/tmp/memory-plugin-marketplace-${RELEASE_TAG}.zip" /tmp memory-plugin-marketplace
+          # Claude Code (>= 2.1.224) installs and auto-updates from a URL
+          # marketplace whose entry downloads this zip of the plugin alone.
+          bash .github/scripts/reproducible-zip.sh "/tmp/openviking-memory-claude-${RELEASE_TAG}.zip" "${STAGE}" claude-code-memory-plugin
+          bash .github/scripts/generate-claude-marketplace-json.sh "${RELEASE_TAG}" "https://ovrelease.tos-cn-beijing.volces.com" \
+            "/tmp/openviking-memory-claude-${RELEASE_TAG}.zip" "${STAGE}" /tmp/claude-marketplace.json
 
       - name: Build marketplace git repo (dumb HTTP)
         if: steps.tos_config.outputs.configured == 'true'
@@ -92,7 +97,7 @@ jobs:
           # from TOS static hosting. Codex clones it directly and keeps remote
           # update support (`codex plugin marketplace upgrade`). Claude Code
           # cannot consume it (its shallow clones are rejected by dumb HTTP)
-          # and uses the zip archive above instead.
+          # and uses the URL marketplace above instead.
           SRC=/tmp/memory-plugins-src
           rm -rf "${SRC}" /tmp/memory-plugins.git
           cp -R /tmp/memory-plugin-marketplace "${SRC}"
@@ -104,6 +109,12 @@ jobs:
           git -C /tmp/memory-plugins.git repack -adq
           git -C /tmp/memory-plugins.git update-server-info
           du -sh /tmp/memory-plugins.git
+
+      - name: Stamp shared installer version
+        if: steps.tos_config.outputs.configured == 'true'
+        run: |
+          bash .github/scripts/stamp-installer-version.sh examples/memory-plugin-shared/install.sh \
+            "${RELEASE_TAG#v}" /tmp/memory-plugin-shared-install.sh
 
       - name: Upload release artifacts to TOS
         if: steps.tos_config.outputs.configured == 'true'
@@ -157,22 +168,11 @@ jobs:
             UPLOADED_KEYS="${UPLOADED_KEYS}- \`${key}\`"$'\n'
           }
 
-          upload_dir() { # upload_dir <src-dir> <key-prefix>
-            # Everything no-cache: the repo is tiny and git refs/packed-refs
-            # must never be served stale after a release. --delete drops packs
-            # from previous releases.
-            aws s3 sync "${1}" "s3://${TOS_BUCKET}/${2}" \
-              --endpoint-url "https://${TOS_S3_ENDPOINT}" \
-              --delete \
-              --cache-control "${NO_CACHE_CONTROL}" \
-              --only-show-errors
-            echo "Uploaded ${2}/"
-            UPLOADED_KEYS="${UPLOADED_KEYS}- \`${2}/\`"$'\n'
-          }
-
           SOURCE_ZIP="/tmp/openviking-${RELEASE_TAG}-source.zip"
           MARKETPLACE_ZIP="/tmp/memory-plugin-marketplace-${RELEASE_TAG}.zip"
-          SHARED_INSTALL="examples/memory-plugin-shared/install.sh"
+          CLAUDE_PLUGIN_ZIP="/tmp/openviking-memory-claude-${RELEASE_TAG}.zip"
+          SHARED_INSTALL="/tmp/memory-plugin-shared-install.sh"
+          SHARED_BOOTSTRAP="examples/memory-plugin-shared/bootstrap.sh"
           CLAUDE_INSTALL="examples/claude-code-memory-plugin/setup-helper/install.sh"
           CODEX_INSTALL="examples/codex-memory-plugin/setup-helper/install.sh"
           CLAUDE_TOS_INSTALL="examples/claude-code-memory-plugin/setup-helper/tos-install.sh"
@@ -181,8 +181,10 @@ jobs:
           # Versioned, immutable copies
           upload "${SOURCE_ZIP}" "releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${MARKETPLACE_ZIP}" "releases/${RELEASE_TAG}/memory-plugin-marketplace.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
-          upload_dir "/tmp/memory-plugins.git" "releases/${RELEASE_TAG}/memory-plugins.git"
+          upload "${CLAUDE_PLUGIN_ZIP}" "releases/${RELEASE_TAG}/openviking-memory-claude.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload /tmp/claude-marketplace.json "releases/${RELEASE_TAG}/claude-marketplace.json" "application/json" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${SHARED_INSTALL}" "releases/${RELEASE_TAG}/memory-plugin-shared/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
+          upload "${SHARED_BOOTSTRAP}" "releases/${RELEASE_TAG}/memory-plugin-shared/bootstrap.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CLAUDE_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CODEX_INSTALL}" "releases/${RELEASE_TAG}/codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
           upload "${CLAUDE_TOS_INSTALL}" "releases/${RELEASE_TAG}/claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"
@@ -196,8 +198,13 @@ jobs:
           if [ "${UPDATE_LATEST}" = "true" ]; then
             upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "releases/latest/openviking-source.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/memory-plugin-marketplace.zip" "releases/latest/memory-plugin-marketplace.zip" "${ZIP_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
-            upload_dir "/tmp/memory-plugins.git" "plugins/memory-plugins.git"
+            bash .github/scripts/publish-dumb-git-repo.sh /tmp/memory-plugins.git \
+              "s3://${TOS_BUCKET}/plugins/memory-plugins.git" --endpoint-url "https://${TOS_S3_ENDPOINT}"
+            echo "Uploaded plugins/memory-plugins.git/"
+            UPLOADED_KEYS="${UPLOADED_KEYS}- \`plugins/memory-plugins.git/\`"$'\n'
+            upload "s3://${TOS_BUCKET}/releases/${RELEASE_TAG}/claude-marketplace.json" "plugins/claude/marketplace.json" "application/json" "${NO_CACHE_CONTROL}"
             upload "${SHARED_INSTALL}" "memory-plugin-shared/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
+            upload "${SHARED_BOOTSTRAP}" "memory-plugin-shared/bootstrap.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CLAUDE_INSTALL}" "claude-code-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CODEX_INSTALL}" "codex-memory-plugin/install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"
             upload "${CLAUDE_TOS_INSTALL}" "claude-code-memory-plugin/tos-install.sh" "${SHELL_CONTENT_TYPE}" "${NO_CACHE_CONTROL}"

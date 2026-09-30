@@ -10,6 +10,7 @@ from openviking.models.embedder import JinaDenseEmbedder
 from openviking.models.embedder.jina_embedders import (
     JINA_MODEL_DIMENSIONS,
 )
+from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
 
 
 class TestJinaDenseEmbedder:
@@ -346,3 +347,10 @@ class TestJinaDenseEmbedder:
             api_key="test-key",
         )
         assert embedder_0_5b.get_dimension() == 768
+
+    @pytest.mark.parametrize("model", sorted(JINA_MODEL_DIMENSIONS))
+    def test_config_default_dimension_matches_embedder(self, model):
+        """Without an explicit dimension, the schema must match the vectors Jina returns."""
+        config = EmbeddingModelConfig(provider="jina", api_key="test-key", model=model)
+        embedder = JinaDenseEmbedder(model_name=model, api_key="test-key")
+        assert config.get_effective_dimension() == embedder.get_dimension()

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -376,10 +377,19 @@ async function main() {
   }
 }
 
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
 // Guard the sync behind the entrypoint check so sync.test.mjs can import the
 // target lists as the single source of truth instead of keeping its own copy —
 // the duplicated lists had drifted, and a drifted vendored file passed CI.
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {
+if (isDirectRun()) {
   main().catch((err) => {
     process.stderr.write(`${err?.stack || err}\n`);
     process.exit(1);

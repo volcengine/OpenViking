@@ -125,6 +125,20 @@ test("an empty config is filled in, and a second run changes nothing", () => {
   assert.equal(updateOpencodeConfig(first, { pluginSpec: SPEC, mcpProxy: PROXY }), first);
 });
 
+test("an npm registration of the plugin is dropped when the file plugin is written", () => {
+  const next = updateOpencodeConfig([
+    "{",
+    "  // keep this user note",
+    '  "plugin": ["@openviking/opencode-plugin@0.3.1", "some-other-plugin"]',
+    "}",
+    "",
+  ].join("\n"), { pluginSpec: "", mcpProxy: PROXY });
+
+  assert.match(next, /\/\/ keep this user note/);
+  assert.deepEqual(parse(next).plugin, ["some-other-plugin"]);
+  assert.equal(parse(next).mcp.openviking.command[1], PROXY);
+});
+
 test("a server the user disabled stays disabled", () => {
   const raw = [
     "{",
@@ -157,7 +171,7 @@ function runInstaller(args, options, script = installer) {
 // The cases above are the editor; this is the wiring. It is the only thing that
 // proves install.sh still finds the module and hands it the right three
 // arguments now that the editor no longer lives inside the script.
-for (const sourceMode of ["dev", "archive", "remote"]) {
+for (const sourceMode of ["dev", "archive"]) {
   test(`the OpenCode ${sourceMode} install loads its entries from clean sources`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "ov-opencode-jsonc-"));
     try {
@@ -171,28 +185,30 @@ for (const sourceMode of ["dev", "archive", "remote"]) {
       await writeFile(opencode, "#!/usr/bin/env sh\nprintf 'opencode 0.0.0-test\\n'\n");
       await chmod(opencode, 0o755);
 
+      // An earlier installer registered the npm package; the file plugin
+      // replaces it rather than loading beside it.
       const configPath = join(configDir, "opencode.jsonc");
-      await writeFile(configPath, '{\n  // keep this user note\n  "theme": "system"\n}\n');
+      await writeFile(configPath, `{\n  // keep this user note\n  "theme": "system",\n  "plugin": ["${SPEC}"]\n}\n`);
 
       // Copy only tracked paths from the working tree: no ignored generated
       // runtime or node_modules may hide a missing installation step.
       const source = join(dir, "source");
-      const files = execFileSync("git", ["ls-files", "-z", "--", "examples", "agent-plugins"], { cwd: repoRoot, encoding: "utf8" }).split("\0").filter(Boolean);
+      const files = execFileSync("git", ["ls-files", "-z", "--", "examples", "agent-plugins", ".github/scripts"], { cwd: repoRoot, encoding: "utf8" }).split("\0").filter(Boolean);
       for (const file of files) {
         mkdirSync(dirname(join(source, file)), { recursive: true });
         copyFileSync(join(repoRoot, file), join(source, file));
       }
       await mkdir(join(source, ".git"));
       if (sourceMode === "archive") {
-        execFileSync("zip", ["-rq", join(dir, "source.zip"), "source"], { cwd: dir });
+        execFileSync("bash", [join(source, ".github/scripts/stage-memory-plugin-marketplace.sh"), join(dir, "memory-plugin-marketplace")]);
+        execFileSync("zip", ["-rq", join(dir, "memory-plugin-marketplace.zip"), "memory-plugin-marketplace"], { cwd: dir });
       }
 
       await runInstaller([
         "--harness", "opencode",
         "--source", sourceMode,
-        "--dist", "github",
         "--lang", "en",
-        "--url", "http://127.0.0.1:1933",
+        "--url", "http://127.0.0.1:9",
         "--api-key", "",
         "--yes",
       ], {
@@ -201,8 +217,8 @@ for (const sourceMode of ["dev", "archive", "remote"]) {
           ...process.env,
           HOME: home,
           OPENVIKING_HOME: join(home, ".openviking"),
-          OPENVIKING_MARKETPLACE_ARCHIVE_URL: "",
-          OPENVIKING_REPO_ARCHIVE_URL: `file://${join(dir, "source.zip")}`,
+          OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(dir, "memory-plugin-marketplace.zip")}`,
+          OPENVIKING_SKIP_VERSION_CHECK: "1",
           PATH: `${bin}:${process.env.PATH}`,
         },
       }, join(source, "examples/memory-plugin-shared/install.sh"));
@@ -213,12 +229,9 @@ for (const sourceMode of ["dev", "archive", "remote"]) {
       assert.match(parse(raw).mcp.openviking.command[1], /servers\/mcp-proxy\.mjs$/);
       const installedRoot = join(configDir, "plugins/openviking");
       const env = { HOME: home, OPENVIKING_HOME: join(home, ".openviking") };
+      assert.deepEqual(parse(raw).plugin, []);
       expectExit(await runHookScript(parse(raw).mcp.openviking.command[1], { cwd: home, env }));
-      if (sourceMode !== "remote") {
-        expectExit(await runHookScript(join(installedRoot, "index.mjs"), { cwd: home, env }));
-      } else {
-        assert.deepEqual(parse(raw).plugin, [SPEC]);
-      }
+      expectExit(await runHookScript(join(installedRoot, "index.mjs"), { cwd: home, env }));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -124,6 +124,7 @@ class AssembleParams:
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    events_time_decay_protection: Optional[str] = None
 
     session_id: Optional[str] = None
     query_expansion: Literal["off", "auto"] = "auto"

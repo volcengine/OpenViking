@@ -560,6 +560,9 @@ impl HttpClient {
         recursive: bool,
         output: &str,
         abs_limit: i32,
+        include_abstract: Option<bool>,
+        include_overview: Option<bool>,
+        overview_limit: i32,
         show_all_hidden: bool,
         node_limit: i32,
         offset: i32,
@@ -576,9 +579,16 @@ impl HttpClient {
             ("recursive".to_string(), recursive.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
+            ("overview_limit".to_string(), overview_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
         ];
+        if let Some(value) = include_abstract {
+            params.push(("include_abstract".to_string(), value.to_string()));
+        }
+        if let Some(value) = include_overview {
+            params.push(("include_overview".to_string(), value.to_string()));
+        }
         if offset != 0 {
             params.push(("offset".to_string(), offset.to_string()));
         }
@@ -739,6 +749,7 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         read_content: bool,
+        events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -754,6 +765,7 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
             "read_content": read_content.then_some(true),
+            "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -774,6 +786,7 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         read_content: bool,
+        events_time_decay_protection: Option<String>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -790,6 +803,7 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
             "read_content": read_content.then_some(true),
+            "events_time_decay_protection": events_time_decay_protection,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -2299,6 +2313,9 @@ mod tests {
                 false,
                 "agent",
                 256,
+                Some(false),
+                Some(true),
+                512,
                 false,
                 20,
                 4,
@@ -2319,6 +2336,9 @@ mod tests {
         assert!(request.contains("limit=5"));
         assert!(request.contains("sort_by=mtime"));
         assert!(request.contains("sort_order=desc"));
+        assert!(request.contains("include_abstract=false"));
+        assert!(request.contains("include_overview=true"));
+        assert!(request.contains("overview_limit=512"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
 
@@ -2331,6 +2351,9 @@ mod tests {
                 false,
                 "agent",
                 256,
+                None,
+                None,
+                4000,
                 false,
                 20,
                 0,
@@ -2347,6 +2370,9 @@ mod tests {
             .await
             .expect("default request should be captured");
         assert!(!default_request.contains("offset="));
+        assert!(!default_request.contains("include_abstract="));
+        assert!(!default_request.contains("include_overview="));
+        assert!(default_request.contains("overview_limit=4000"));
         assert!(!default_request.contains("&limit="));
         assert!(!default_request.contains("sort_by="));
         assert!(!default_request.contains("sort_order="));

@@ -243,7 +243,6 @@
         "threshold": 0.1,
     },
     "retrieval": {
-        "hotness_alpha": 0.0,
         "recall_intent_timeout_s": 5.0,
         "recall_rewrite_timeout_s": 30.0,
     },

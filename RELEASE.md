@@ -88,9 +88,23 @@ The TOS release flow creates a source archive and uploads these assets:
 - Codex memory plugin install script
 - Matching TOS install scripts
 
-Formal GitHub Releases trigger the TOS upload automatically. Manual republishing can specify a tag and use `update_latest` to decide whether to overwrite stable paths.
+Formal GitHub Releases trigger the TOS upload automatically and overwrite the stable paths. A manual run takes a tag and uploads its versioned paths; it overwrites the stable paths only with `update_latest=true` (default `false`), so repairing an older release's assets does not move users back to that release.
 
 If TOS secrets are not fully configured, the workflow skips uploading and reports it in the step summary without failing the whole workflow.
+
+### Memory Plugin Hotfix and Rollback
+
+The memory plugins are installed and updated from the stable paths: `plugins/claude/marketplace.json` (Claude Code), `plugins/memory-plugins.git` (Codex and TraeCode CLI), `releases/latest/memory-plugin-marketplace.zip` (every other host), `releases/latest/channels.json` (install version resolution), and `memory-plugin-shared/install.sh` and `bootstrap.sh`. One run of the workflow builds all of them from the commit of the tag it is given.
+
+To publish a plugin hotfix without a product release:
+
+1. Merge the fix with the plugin version bumps that `.github/scripts/check-plugin-version-bumps.sh` requires. Claude Code only updates an installed plugin when its version string changes.
+2. Tag a commit that holds the last release plus the fix, for example on a branch cut from the last `vX.Y.Z` tag with the fix cherry-picked. Use a tag that does not start with `v`, such as `memory-plugins-YYYY.M.D`, and do not publish a GitHub Release for it: `v*.*.*` tag pushes trigger the Docker workflow, published Releases trigger the main release workflows, and the main package version is resolved from `v*` tags.
+3. Push the tag and run `gh workflow run release-tos.yml -f tag=<tag> -f update_latest=true`.
+
+To roll back, run `gh workflow run release-tos.yml -f tag=<last good tag> -f update_latest=true`. The workflow definition comes from the default branch, but the scripts it calls come from the tag's checkout, so only tags that already contain the current release scripts can be republished; to go back further, publish the older plugin code as a hotfix.
+
+After either run, Claude Code (URL marketplace) picks up the change at its next update check, and a lower version counts as an update. Codex picks it up at its next start, TraeCode CLI on `trae-cli plugin marketplace upgrade`. Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, pi, and Claude Code installs on a local directory marketplace change only when the installer is re-run. dsh installs from npm and is not affected.
 
 ## Python SDK Release Flow
 

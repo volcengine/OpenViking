@@ -99,6 +99,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
     ) -> Any:
         """Complex search with session context.
 
@@ -133,6 +134,7 @@ class SearchService:
             filter=filter,
             level=level,
             image_url=resolved_image_url,
+            events_time_decay_protection=events_time_decay_protection,
         )
         return result
 
@@ -146,6 +148,7 @@ class SearchService:
         filter: Optional[Dict] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context.
 
@@ -172,6 +175,7 @@ class SearchService:
             filter=filter,
             level=level,
             image_url=resolved_image_url,
+            events_time_decay_protection=events_time_decay_protection,
         )
         return result
 
@@ -205,7 +209,6 @@ class SearchService:
             storage=storage,
             embedder=embedder,
             rerank_config=fs.rerank_config,
-            retrieval_config=fs.retrieval_config,
         )
         result = await retriever.retrieve_skills(
             TypedQuery(query, ContextType.SKILL, "", target_directories=targets),

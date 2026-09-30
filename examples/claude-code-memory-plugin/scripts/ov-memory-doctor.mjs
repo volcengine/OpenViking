@@ -129,14 +129,22 @@ function checkInstall(report, { cliOnPath }) {
     const entry = known.data[MARKETPLACE];
     if (!entry) {
       report.fail(`marketplace '${MARKETPLACE}' is not registered`, `known: ${Object.keys(known.data).join(", ") || "(none)"}`,
-        "re-run the installer, or: claude plugin marketplace add ~/.openviking/marketplaces/openviking-claude");
+        "re-run the installer: bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude");
     } else {
       const source = entry.source || {};
       const location = entry.installLocation || source.path || "";
-      const desc = source.source === "directory" ? `directory ${homeShort(source.path || "")}` : source.source === "github" ? `github ${source.repo || ""}` : JSON.stringify(source);
+      const desc = source.source === "directory" ? `directory ${homeShort(source.path || "")}` : source.source === "github" ? `github ${source.repo || ""}` : source.source === "url" ? `url ${source.url || ""}` : JSON.stringify(source);
       if (/\.json$/i.test(String(source.path || ""))) {
         report.warn(`marketplace '${MARKETPLACE}' is registered as a file (${homeShort(source.path)})`, "file-type marketplaces mis-derive installLocation and `claude plugin marketplace update` fails with EISDIR",
           "claude plugin marketplace remove openviking && re-run the installer (it registers a directory)");
+      } else if (source.source === "url") {
+        // Claude Code caches a URL marketplace as a bare manifest file, so there
+        // is no directory at installLocation to check.
+        report.ok(`marketplace '${MARKETPLACE}' → ${desc}`);
+        // The user-settings declaration wins; known_marketplaces.json only
+        // catches up with it on Claude Code's next startup.
+        const declared = tryJson(join(CLAUDE_DIR, "settings.json"))?.extraKnownMarketplaces?.[MARKETPLACE]?.autoUpdate;
+        report.info((declared ?? entry.autoUpdate) ?"auto-update is on (Claude Code checks in the background during interactive sessions; a new version loads after restart)" : "auto-update is off: update with claude plugin update openviking-memory@openviking, or enable it for this marketplace in /plugin");
       } else if (location && !existsPath(join(location, ".claude-plugin", "marketplace.json"))) {
         report.fail(`marketplace '${MARKETPLACE}' points at a missing directory`, `${desc}\nexpected ${homeShort(join(location, ".claude-plugin", "marketplace.json"))}`,
           "the checkout/archive was moved or deleted; re-run the installer");
@@ -178,7 +186,10 @@ function checkInstall(report, { cliOnPath }) {
         "remove the openviking entries from .hooks in ~/.claude/settings.json (back it up first)");
     }
     const statusCmd = String(settings.data.statusLine?.command || "");
-    if (statusCmd.includes("statusline.mjs")) {
+    if (statusCmd.includes("installed_plugins.json")) {
+      // The installer's command resolves the current plugin install on each run.
+      report.ok("statusline registered (runs the installed plugin)");
+    } else if (statusCmd.includes("statusline.mjs")) {
       const m = /node\s+"?([^"]+statusline\.mjs)"?/.exec(statusCmd);
       const path = m ? expandHome(m[1]) : "";
       if (path && !existsPath(path)) report.warn("statusLine points at a missing statusline.mjs", homeShort(path), "re-run the installer or fix .statusLine.command in ~/.claude/settings.json");

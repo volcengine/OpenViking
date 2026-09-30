@@ -222,7 +222,7 @@ class OpenVikingConfig(BaseModel):
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
-        description="Retrieval ranking configuration",
+        description="Retrieval behavior configuration",
     )
 
     grep: GrepConfig = Field(

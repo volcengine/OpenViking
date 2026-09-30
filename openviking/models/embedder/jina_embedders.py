@@ -30,6 +30,11 @@ DEFAULT_JINA_CODE_DOCUMENT_TASK = "nl2code.passage"
 _UNSET = object()
 
 
+def get_jina_model_default_dimension(model_name: Optional[str]) -> int:
+    """Get the default (maximum) output dimension for a Jina embedding model."""
+    return JINA_MODEL_DIMENSIONS.get(model_name or "", 1024)
+
+
 def _get_default_task_params(model_name: str) -> tuple[str, str]:
     """Return the default Jina task names for the selected model."""
     if model_name.startswith("jina-code-embeddings-"):
@@ -125,7 +130,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Determine dimension
-        max_dim = JINA_MODEL_DIMENSIONS.get(model_name, 1024)
+        max_dim = get_jina_model_default_dimension(model_name)
         if dimension is not None and dimension > max_dim:
             raise ValueError(
                 f"Requested dimension {dimension} exceeds maximum {max_dim} for model '{model_name}'. "

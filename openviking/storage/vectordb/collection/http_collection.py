@@ -14,6 +14,7 @@ from openviking.storage.vectordb.collection.result import (
     FetchDataInCollectionResult,
     SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 
 # Default request timeout (seconds)
@@ -393,6 +394,8 @@ class HttpCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/vector"
         response = requests.post(
@@ -408,6 +411,8 @@ class HttpCollection(ICollection):
                 "output_fields": json.dumps(output_fields) if output_fields else None,
                 "limit": limit,
                 "offset": offset,
+                **({"advance": advance} if advance is not None else {}),
+                **({"return_detail_info": True} if return_detail_info else {}),
             },
             timeout=DEFAULT_TIMEOUT,
         )
@@ -416,17 +421,7 @@ class HttpCollection(ICollection):
             return SearchResult()
 
         data = json.loads(response.text).get("data", {})
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data.get("data", [])
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def search_by_id(
         self,

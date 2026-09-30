@@ -1,5 +1,5 @@
 // GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -234,6 +234,15 @@ function main() {
   process.exitCode = 2;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   main();
 }

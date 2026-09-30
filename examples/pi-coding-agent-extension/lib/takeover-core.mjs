@@ -311,6 +311,23 @@ export function commitOutcome(committed) {
   };
 }
 
+function archiveName(archiveUri) {
+  const parts = String(archiveUri || "").replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || "the archive";
+}
+
+/** A user-facing reading of a `skipped` commit. */
+export function describeSkip(reason, keepRecentCount = 0) {
+  if (reason === "all_within_keep_window") {
+    return (
+      `nothing new to archive: the server session holds at most the ${keepRecentCount} most recent ` +
+      "messages this commit keeps, and anything older was already archived (all_within_keep_window)"
+    );
+  }
+  if (reason === "no_messages") return "nothing to archive: the server session has no live messages (no_messages)";
+  return `the server skipped the archive (${reason || "unknown"})`;
+}
+
 export class TakeoverCore {
   constructor({ config = {}, io = {} } = {}) {
     this.config = takeoverConfig(config);
@@ -338,6 +355,9 @@ export class TakeoverCore {
       availableTools: io.availableTools || (() => []),
       sleep: io.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
       now: io.now || (() => Date.now()),
+      // Why the last commit request returned no result (HTTP status and the
+      // server's message), so a manual commit can say more than "failed".
+      lastCommitError: io.lastCommitError || (() => ""),
       log: io.log || (() => {}),
     };
     // The covered prefix ends at this pi entry, inclusive. Entry ids survive
@@ -370,6 +390,9 @@ export class TakeoverCore {
     // Whether the last context actually carried the boundary, so leaving and
     // re-entering the covered branch is logged once, not on every request.
     this.boundaryApplied = false;
+    // Why the last commitAndAdvance() returned false, for `/viking commit` to
+    // show; empty after a success. Not persisted.
+    this.lastFailure = "";
   }
 
   get enabled() {
@@ -595,15 +618,17 @@ export class TakeoverCore {
    * the commit only get what is left of `deadline`.
    */
   async commitAndAdvance(branch = [], { deadline } = {}) {
-    if (!this.enabled || this.committing) return false;
+    if (!this.enabled) return this.fail("takeover is disabled");
+    if (this.committing) return this.fail("another commit is still running");
     const until = this.deadlineFrom(deadline);
     this.committing = true;
+    this.lastFailure = "";
     try {
       if (this.pendingArchive) return await this.resolvePendingArchive(branch);
       return await this.beginArchive(branch, until);
     } catch (error) {
       this.log(`takeover: archive preparation failed (${errorMessage(error)}); boundary held`);
-      return false;
+      return this.fail(`archive preparation failed: ${errorMessage(error)}`);
     } finally {
       this.committing = false;
     }
@@ -613,7 +638,7 @@ export class TakeoverCore {
   async beginArchive(branch, until) {
     if (this.captureGap) {
       this.log("takeover: capture gap present; boundary held, native compaction stays with pi");
-      return false;
+      return this.fail("some messages never reached OpenViking (capture gap); takeover is off for this session");
     }
 
     // One snapshot is frozen, synced and counted, so the archive and
@@ -623,16 +648,25 @@ export class TakeoverCore {
     const frozen = this.freezeBoundary(snapshot);
     if (!frozen) {
       this.log("takeover: no advanceable boundary; commit skipped");
-      return false;
+      return this.fail(
+        `nothing new to archive: the context needs more than ${this.config.takeoverKeepRecentTurns} ` +
+          "user turns beyond the last archive",
+      );
     }
 
     const delivered = await this.confirmDelivery(snapshot, until);
-    if (!delivered) return false;
+    if (!delivered) {
+      return this.fail(
+        this.captureGap
+          ? "some messages never reached OpenViking (capture gap); takeover is off for this session"
+          : "queued messages are not delivered yet; retry once the server is reachable",
+      );
+    }
 
     const left = this.remaining(until);
     if (left < COMMIT_RESERVE_MS) {
       this.log("takeover: handler budget spent before commit; commit postponed");
-      return false;
+      return this.fail("ran out of time delivering messages; retry");
     }
     const committed = await this.io.commit({
       queueOnFailure: false,
@@ -645,12 +679,16 @@ export class TakeoverCore {
       // the next threshold crossing retries, and never fall back to /context.
       if (outcome.reason === "no_result") {
         this.log("takeover: commit failed; boundary held");
-      } else if (outcome.reason.startsWith("skipped:")) {
-        this.log(`takeover: archive skipped (${outcome.reason.slice(8)}); boundary held`);
-      } else {
-        this.log(`takeover: commit returned no usable archive (${outcome.reason}); boundary held`);
+        const detail = String(this.io.lastCommitError() || "").trim();
+        return this.fail(`the server rejected the commit${detail ? ` (${detail})` : ""}`);
       }
-      return false;
+      if (outcome.reason.startsWith("skipped:")) {
+        const reason = outcome.reason.slice(8);
+        this.log(`takeover: archive skipped (${reason}); boundary held`);
+        return this.fail(describeSkip(reason, frozen.keepRecentCount));
+      }
+      this.log(`takeover: commit returned no usable archive (${outcome.reason}); boundary held`);
+      return this.fail(`the server returned no archive (${outcome.reason})`);
     }
 
     const archive = {
@@ -727,7 +765,7 @@ export class TakeoverCore {
       this.pendingArchive = null;
       this.persist();
       this.log("takeover: frozen boundary no longer in history; advance abandoned");
-      return false;
+      return this.fail("the archived turns left the active context (branch switch or compaction); advance abandoned");
     }
 
     let overview = await this.readOverviewOnce(pending.archiveUri);
@@ -743,7 +781,10 @@ export class TakeoverCore {
         this.pendingTokens = Math.max(0, this.pendingTokens - (Number(pending.frozenTokens) || 0));
         this.persist();
         this.log(`takeover: ${pending.archiveUri} ${state} without Working Memory; boundary held`);
-        return false;
+        return this.fail(
+          `${archiveName(pending.archiveUri)} ${state} on the server without a Working Memory summary ` +
+            "(check the server log for the Phase 2 error)",
+        );
       }
     }
 
@@ -756,7 +797,7 @@ export class TakeoverCore {
       this.pendingTokens = Math.max(0, this.pendingTokens - (Number(pending.frozenTokens) || 0));
       this.persist();
       this.log(`takeover: native-compaction archive completed at ${pending.archiveUri}`);
-      return false;
+      return this.fail(`${archiveName(pending.archiveUri)} completed after pi compacted natively; nothing to trim`);
     }
     return this.advanceTo(branch, pending, overview);
   }
@@ -767,7 +808,7 @@ export class TakeoverCore {
       this.pendingArchive = null;
       this.persist();
       this.log("takeover: frozen boundary no longer in history; advance abandoned");
-      return false;
+      return this.fail("the archived turns left the active context (branch switch or compaction); advance abandoned");
     }
 
     this.coveredThroughEntryId = frozen.coveredThroughEntryId;
@@ -787,6 +828,12 @@ export class TakeoverCore {
         `(through ${this.coveredThroughEntryId}) via ${frozen.archiveUri}`,
     );
     return true;
+  }
+
+  /** Record why a commit did not advance, for `/viking commit` to show. */
+  fail(reason) {
+    this.lastFailure = String(reason || "");
+    return false;
   }
 
   inActiveContext(branch, entryId) {

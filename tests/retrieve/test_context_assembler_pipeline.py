@@ -178,6 +178,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
 
     async def fake_find(**kwargs):
         queries_seen.append(kwargs["query"])
+        assert kwargs["events_time_decay_protection"] == "2d"
         return _FakeFindResult()
 
     async def fake_get(session_id, ctx, *, auto_create=False):
@@ -200,6 +201,7 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
         ctx=_ctx(),
         params=AssembleParams(
             query="short",
+            events_time_decay_protection="2d",
             session_id="s1",
             query_expansion="auto",
             peer_scope="actor",

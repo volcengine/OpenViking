@@ -491,17 +491,26 @@ def test_sync_http_client_reindex_forwards_to_async_client():
 
 def test_sync_http_client_forwards_tags_to_filesystem_methods():
     client = SyncHTTPClient(url="http://localhost:1933")
+    entries = [{"name": "docs"}]
+    page = {"result": entries, "has_more": True}
 
-    with patch.object(client._async_client, "ls", return_value=[]) as mock_ls:
-        with patch.object(client._async_client, "tree", return_value=[]) as mock_tree:
+    with patch.object(client._async_client, "ls_page", return_value=page) as mock_ls:
+        with patch.object(client._async_client, "tree_page", return_value=page) as mock_tree:
             with patch.object(client._async_client, "grep", return_value={}) as mock_grep:
-                with patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]):
-                    client.ls("viking://resources", tags=["env=prod"])
-                    client.tree("viking://resources", tags=["env=prod"])
-                    client.grep("viking://resources", "Sample", tags=["env=prod"])
+                assert client.ls("viking://resources", tags=["env=prod"]) == entries
+                assert (
+                    client.tree(
+                        "viking://resources",
+                        tags=["env=prod"],
+                        directories_only=True,
+                    )
+                    == entries
+                )
+                client.grep("viking://resources", "Sample", tags=["env=prod"])
 
     assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
     assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]
+    assert mock_tree.call_args.kwargs["directories_only"] is True
     assert mock_grep.call_args.kwargs["tags"] == ["env=prod"]
 
 
@@ -893,11 +902,14 @@ async def test_search_forwards_level_zero_and_omits_unset_time_filters():
     client._handle_response_data = lambda _response: {"result": {}}
 
     # level=0 is a valid level and must survive compaction (is-None check, not falsy).
-    await client.search("hello", session_id="s1", options={"level": 0})
+    await client.search(
+        "hello", session_id="s1", options={"level": 0, "events_time_decay_protection": "0"}
+    )
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["level"] == 0
     assert payload["session_id"] == "s1"
+    assert payload["events_time_decay_protection"] == "0"
     for key in ("since", "until", "time_field"):
         assert key not in payload
 
@@ -1458,13 +1470,21 @@ def test_not_found_reason_is_preserved_by_sdk_error_mapping():
 
 
 @pytest.mark.asyncio
-async def test_ls_and_tree_pass_query_params():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(get=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: []
+async def test_ls_and_tree_preserve_query_options_and_pagination():
+    import httpx
 
-    await client.ls(
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    entries = [{"name": "docs"}]
+    fake_http = SimpleNamespace(
+        get=AsyncMock(
+            return_value=httpx.Response(
+                200, json={"status": "ok", "result": entries, "has_more": True}
+            )
+        )
+    )
+    client._http = fake_http
+
+    page = await client.ls_page(
         "/resources/",
         simple=True,
         recursive=True,
@@ -1476,10 +1496,22 @@ async def test_ls_and_tree_pass_query_params():
         limit=7,
         sort_by="mtime",
         sort_order="desc",
+        include_abstract=False,
+        include_overview=True,
+        overview_limit=512,
     )
-    await client.tree("viking://resources/", level_limit=2, offset=4, limit=6)
-    await client.tree("viking://resources/", level_limit=0)
-    await client.tree("viking://resources/")
+    assert page == {"result": entries, "has_more": True}
+    fake_http.get.return_value = httpx.Response(200, json={"status": "ok", "result": entries})
+    page = await client.tree_page(
+        "viking://resources/",
+        level_limit=2,
+        offset=4,
+        limit=6,
+        directories_only=True,
+    )
+    assert page == {"result": entries, "has_more": False}
+    assert await client.tree("viking://resources/", level_limit=0) == entries
+    assert await client.tree("viking://resources/") == entries
 
     ls_call = fake_http.get.await_args_list[0]
     assert ls_call.args == ("/api/v1/fs/ls",)
@@ -1490,6 +1522,9 @@ async def test_ls_and_tree_pass_query_params():
             "recursive": True,
             "output": "agent",
             "abs_limit": 32,
+            "include_abstract": False,
+            "include_overview": True,
+            "overview_limit": 512,
             "show_all_hidden": True,
             "node_limit": 44,
             "offset": 5,
@@ -1503,6 +1538,10 @@ async def test_ls_and_tree_pass_query_params():
     assert [
         tree_call.kwargs["params"]["level_limit"] for tree_call in fake_http.get.await_args_list[1:]
     ] == [2, 0, 3]
+    assert "include_abstract" not in fake_http.get.await_args_list[1].kwargs["params"]
+    assert "include_overview" not in fake_http.get.await_args_list[1].kwargs["params"]
+    assert fake_http.get.await_args_list[1].kwargs["params"]["overview_limit"] == 4000
+    assert fake_http.get.await_args_list[1].kwargs["params"]["directories_only"] is True
 
 
 @pytest.mark.asyncio

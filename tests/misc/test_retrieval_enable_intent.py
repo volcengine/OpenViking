@@ -54,7 +54,7 @@ async def test_search_skips_intent_and_uses_raw_query_when_disabled(monkeypatch)
             raise AssertionError("intent analysis must not run when disabled")
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             pass
 
         async def retrieve(self, typed_query, **kwargs):

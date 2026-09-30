@@ -210,6 +210,7 @@ async def gather_candidates(
     score_threshold: Optional[float],
     filter: Optional[Dict[str, Any]] = None,
     image_url: Optional[str] = None,
+    events_time_decay_protection: Optional[str] = None,
     peer_scope: str = "all",
     penalties: Optional[Mapping[str, float]] = None,
     excluded: Optional[Set[str]] = None,
@@ -301,6 +302,7 @@ async def gather_candidates(
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
+            events_time_decay_protection=events_time_decay_protection,
         )
 
     async def gather_bucket(bucket: str, quota: int) -> List[Candidate]:

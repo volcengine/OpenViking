@@ -9,6 +9,7 @@
  * protocol-clean.
  */
 
+import { realpathSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../scripts/config.mjs";
@@ -20,6 +21,15 @@ export function readProxyConfig(env = process.env) {
   return toMcpProxyConfig(loadConfig(undefined, { env }), { env });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return resolvePath(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isDirectRun()) {
   createOpenVikingMcpProxy({ readConfig: readProxyConfig, loggerFactory: createLogger }).start();
 }

@@ -454,6 +454,13 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_cohere_model_default_dimension(model)
 
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(model)
+
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
@@ -476,7 +483,7 @@ class EmbeddingModelConfig(BaseModel):
             except ImportError:
                 return 1024
 
-        # Providers without a known dimension lookup (volcengine, jina,
+        # Providers without a known dimension lookup (volcengine,
         # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
         # here without an explicit dimension. Return None so validation skips
         # them; same-provider credentials are typically dimension-compatible
@@ -539,6 +546,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_cohere_model_default_dimension(effective_model)
+
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder

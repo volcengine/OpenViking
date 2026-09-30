@@ -1061,7 +1061,10 @@ class OpenGaussCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
+        # Accept shared search options; openGauss does not apply time decay.
         # Sparse support is checked before the dense emptiness short-circuit:
         # a pure sparse query must fail loudly instead of returning an empty
         # result set that looks like "no recall".

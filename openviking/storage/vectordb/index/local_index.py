@@ -141,7 +141,12 @@ class IndexEngineProxy:
         filters: Optional[Dict[str, Any]] = None,
         sparse_raw_terms: Optional[List[str]] = None,
         sparse_values: Optional[List[float]] = None,
-    ) -> Tuple[List[int], List[float]]:
+        *,
+        time_decay: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        Tuple[List[int], List[float]],
+        Tuple[List[int], List[float], Dict[str, Any]],
+    ]:
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
 
@@ -152,6 +157,8 @@ class IndexEngineProxy:
                 query_vector = normalize_vector(query_vector)
             req.query = query_vector
         req.topk = limit
+        if time_decay is not None:
+            req.time_decay = json.dumps(time_decay)
 
         if filters is None:
             filters = {}
@@ -164,6 +171,8 @@ class IndexEngineProxy:
         search_result = self.index_engine.search(req)
         labels = search_result.labels
         scores = search_result.scores
+        if time_decay is not None:
+            return labels, scores, json.loads(search_result.extra_json or "{}")
         return labels, scores
 
     def search_with_filter_token(
@@ -841,6 +850,18 @@ class LocalIndex(IIndex):
                 return False
             self._raise_dense_rebuild_failure()
         return self.dense_search is not None
+
+    def search_with_time_decay(
+        self, query_vector, limit, filters, sparse_raw_terms, sparse_values, time_decay
+    ):
+        """Use the native scalar/vector index, including for cuVS-backed collections."""
+        if not self.engine_proxy:
+            raise RuntimeError("Index engine not initialized")
+        if self.field_type_converter and filters is not None:
+            filters = self.field_type_converter.convert_filter_for_index(filters)
+        return self.engine_proxy.search(
+            query_vector, limit, filters, sparse_raw_terms, sparse_values, time_decay=time_decay
+        )
 
     def search(
         self,

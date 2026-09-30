@@ -48,7 +48,11 @@ describe("OpenVikingClient", () => {
       actorPeerId: "peer",
       fetch: fetcher,
     });
-    await client.find("hello", { targetUri: "viking://resources", limit: 5 });
+    await client.find("hello", {
+      targetUri: "viking://resources",
+      limit: 5,
+      eventsTimeDecayProtection: "2d",
+    });
     const [url, init] = fetcher.mock.calls[0]!;
     expect(String(url)).toBe("https://example.com/api/v1/search/find");
     expect(new Headers(init?.headers).get("X-OpenViking-Actor-Peer")).toBe(
@@ -58,6 +62,7 @@ describe("OpenVikingClient", () => {
       query: "hello",
       target_uri: "viking://resources",
       limit: 5,
+      events_time_decay_protection: "2d",
     });
   });
 
@@ -107,6 +112,7 @@ describe("OpenVikingClient", () => {
         purpose: "coding",
         maxTokens: 3000,
         dedupTurns: 5,
+        eventsTimeDecayProtection: "2d",
       }),
     ).resolves.toMatchObject({ rendered: "<memory />" });
 
@@ -117,6 +123,7 @@ describe("OpenVikingClient", () => {
       purpose: "coding",
       max_tokens: 3000,
       dedup_turns: 5,
+      events_time_decay_protection: "2d",
     });
     await expect(
       client.searchContext("query", { extra: { mode: "list" } }),
@@ -594,23 +601,39 @@ describe("OpenVikingClient", () => {
     );
   });
 
-  it("passes directory list ordering and tree depth to the server", async () => {
+  it("preserves listing options, pagination metadata, and legacy results", async () => {
+    const entries = [{ name: "docs" }];
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockImplementation(async () => ok([]));
+      .mockImplementation(async () => ok(entries))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            result: entries,
+            has_more: true,
+          }),
+        ),
+      );
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
     });
 
-    await client.list("viking://session", {
+    const listPage = await client.listPage("viking://session", {
       nodeLimit: 200,
       offset: 4,
       limit: 5,
       sortBy: "mtime",
       sortOrder: "desc",
+      includeAbstract: false,
+      includeOverview: true,
+      overviewLimit: 512,
+      extraFields: ["locked", "id"],
     });
-    await client.tree("viking://resources/docs", {
+    expect(listPage).toEqual({ result: entries, hasMore: true });
+    await expect(client.list("viking://session")).resolves.toEqual(entries);
+    const treePage = await client.treePage("viking://resources/docs", {
       levelLimit: 2,
       offset: 6,
       limit: 7,
@@ -618,8 +641,12 @@ describe("OpenVikingClient", () => {
       includeAbstract: false,
       includeOverview: true,
       overviewLimit: 512,
+      extraFields: ["count"],
     });
-    await client.tree("viking://resources/docs", { levelLimit: 0 });
+    expect(treePage).toEqual({ result: entries, hasMore: false });
+    await expect(
+      client.tree("viking://resources/docs", { levelLimit: 0 }),
+    ).resolves.toEqual(entries);
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
@@ -628,8 +655,19 @@ describe("OpenVikingClient", () => {
     expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
     expect(listUrl.searchParams.get("sort_order")).toBe("desc");
+    expect(listUrl.searchParams.get("include_abstract")).toBe("false");
+    expect(listUrl.searchParams.get("include_overview")).toBe("true");
+    expect(listUrl.searchParams.get("overview_limit")).toBe("512");
+    expect(listUrl.searchParams.getAll("extra_fields")).toEqual([
+      "locked",
+      "id",
+    ]);
+    const defaultListUrl = new URL(String(fetcher.mock.calls[1]![0]));
+    expect(defaultListUrl.searchParams.has("include_abstract")).toBe(false);
+    expect(defaultListUrl.searchParams.has("include_overview")).toBe(false);
+    expect(defaultListUrl.searchParams.get("overview_limit")).toBe("4000");
     const treeUrls = fetcher.mock.calls
-      .slice(1)
+      .slice(2)
       .map((call) => new URL(String(call[0])));
     const treeLimits = treeUrls.map((url) =>
       url.searchParams.get("level_limit"),
@@ -640,6 +678,7 @@ describe("OpenVikingClient", () => {
     expect(treeUrls[0]!.searchParams.get("include_abstract")).toBe("false");
     expect(treeUrls[0]!.searchParams.get("include_overview")).toBe("true");
     expect(treeUrls[0]!.searchParams.get("overview_limit")).toBe("512");
+    expect(treeUrls[0]!.searchParams.getAll("extra_fields")).toEqual(["count"]);
     expect(treeUrls[2]!.searchParams.has("include_abstract")).toBe(false);
     expect(treeUrls[2]!.searchParams.has("include_overview")).toBe(false);
     expect(treeUrls[2]!.searchParams.get("overview_limit")).toBe("4000");

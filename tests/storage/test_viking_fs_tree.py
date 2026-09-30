@@ -733,7 +733,7 @@ async def test_tree_agent_normalizes_modtime_to_utc(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
+async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch, fs):
     async def fake_ls_entries(_path, **_kwargs):
         return [
             {
@@ -750,6 +750,7 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
                 "modTime": "2026-06-11T00:30:18+08:00",
                 "isDir": True,
             },
+            {"name": "docs", "size": 4096, "mode": 0o755, "modTime": "", "isDir": True},
         ]
 
     monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/resources")
@@ -763,13 +764,18 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
 
     fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
-    async def fake_can_access_many(uris, _ctx):
+    async def fake_can_access_many(uris, _ctx, **_kwargs):
         return {uri: not uri.endswith("/restricted") for uri in uris}
 
     monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    abstract = AsyncMock(return_value="L0 summary")
+    overview = AsyncMock(return_value="L1 overview")
+    monkeypatch.setattr(fs, "_read_abstract_for_known_dir", abstract)
+    monkeypatch.setattr(fs, "overview", overview)
 
-    result = await fs._ls_agent(
+    result = await fs.ls(
         "viking://resources",
+        output="agent",
         abs_limit=256,
         show_all_hidden=False,
         ctx=_default_ctx(),
@@ -783,6 +789,25 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
         "isDir": True,
         "access": "denied",
     }
+    assert result[2]["abstract"] == "L0 summary"
+    abstract.assert_awaited_once_with("viking://resources/docs", ctx=_default_ctx())
+    overview.assert_not_awaited()
+    abstract.reset_mock()
+
+    result = await fs.ls(
+        "viking://resources",
+        output="agent",
+        include_abstract=False,
+        include_overview=True,
+        ctx=_default_ctx(),
+    )
+    assert all("abstract" not in entry for entry in result)
+    assert result[0]["overview"] == ""
+    assert "overview" not in result[1]
+    assert result[2]["overview"] == "L1 overview"
+    abstract.assert_not_awaited()
+    overview.assert_awaited_once_with("viking://resources/docs", ctx=_default_ctx())
+
     tied = [
         ({"name": name, "isDir": False, "modTime": "2026-01-01T00:00:00Z"}, name)
         for name in ["b.md", "a.md"]

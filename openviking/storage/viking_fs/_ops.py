@@ -2167,6 +2167,9 @@ class _OpsMixin:
         uri: str,
         output: str = "original",
         abs_limit: int = 256,
+        include_abstract: Optional[bool] = None,
+        include_overview: bool = False,
+        overview_limit: int = 4000,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
         sort_by: Optional[str] = None,
@@ -2181,7 +2184,10 @@ class _OpsMixin:
         Args:
             uri: Viking URI
             output: str = "original"
-            abs_limit: int = 256
+            abs_limit: Maximum returned abstract length
+            include_abstract: Include directory L0 abstracts; defaults to the output format
+            include_overview: Include directory L1 overviews
+            overview_limit: Maximum returned overview length
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
             sort_by: Optional sort field, "name" or "mtime"
@@ -2200,32 +2206,28 @@ class _OpsMixin:
             raise ValueError("sort_by must be 'name' or 'mtime'")
         if sort_order not in {"asc", "desc"}:
             raise ValueError("sort_order must be 'asc' or 'desc'")
-        if output == "original":
-            entries = await self._ls_original(
-                uri,
-                show_all_hidden,
-                node_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            )
-        elif output == "agent":
-            entries = await self._ls_agent(
-                uri,
-                abs_limit,
-                show_all_hidden,
-                node_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            )
-        else:
+        if output not in {"original", "agent"}:
             raise ValueError(f"Invalid output format: {output}")
-        if extra_fields and output == "original":
-            await self._augment_entries_extra_fields(entries, extra_fields, ctx=ctx)
-        return entries
+        entries = await self._ls_original(
+            uri,
+            show_all_hidden,
+            node_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            ctx=ctx,
+        )
+        return await self._finalize_listing_entries(
+            entries,
+            output,
+            abs_limit,
+            extra_fields,
+            False,
+            ctx=ctx,
+            include_abstract=include_abstract,
+            include_overview=include_overview,
+            overview_limit=overview_limit,
+        )
 
     @staticmethod
     def _ls_entry_mtime(entry: Dict[str, Any]) -> Optional[float]:
@@ -2287,36 +2289,6 @@ class _OpsMixin:
             return [item for _, item in timestamped] + missing
 
         return sort_by_mtime(directories) + sort_by_mtime(files)
-
-    async def _ls_agent(
-        self,
-        uri: str,
-        abs_limit: int,
-        show_all_hidden: bool,
-        node_limit: int = 1000,
-        offset: int = 0,
-        sort_by: Optional[str] = None,
-        sort_order: str = "asc",
-        ctx: Optional[RequestContext] = None,
-    ) -> List[Dict[str, Any]]:
-        """List directory contents (URI version)."""
-        entries = await self._ls_original(
-            uri,
-            show_all_hidden=show_all_hidden,
-            offset=offset,
-            node_limit=node_limit,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            ctx=ctx,
-        )
-        return await self._finalize_listing_entries(
-            entries,
-            "agent",
-            abs_limit,
-            None,
-            False,
-            ctx=ctx,
-        )
 
     async def _ls_original(
         self,

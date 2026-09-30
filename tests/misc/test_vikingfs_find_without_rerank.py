@@ -41,11 +41,10 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             captured["storage"] = storage
             captured["embedder"] = embedder
             captured["rerank_config"] = rerank_config
-            captured["retrieval_config"] = retrieval_config
 
         async def retrieve(
             self,
@@ -56,6 +55,8 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            events_time_decay_protection=None,
+            request_now=None,
         ):
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
@@ -95,7 +96,6 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["storage"] is fs.vector_store
     assert captured["embedder"] is fs.query_embedder
     assert captured["rerank_config"] is None
-    assert captured["retrieval_config"] is None
     assert captured["typed_query"].query == "guide"
     assert captured["typed_query"].context_type is None
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
@@ -114,7 +114,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             pass
 
         async def retrieve(
@@ -126,6 +126,8 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            events_time_decay_protection=None,
+            request_now=None,
         ):
             captured["typed_query"] = typed_query
             captured["mode"] = mode
@@ -170,7 +172,7 @@ async def test_find_uses_quick_mode_with_rerank_config(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             captured["rerank_config"] = rerank_config
 
         async def retrieve(self, typed_query, **kwargs):

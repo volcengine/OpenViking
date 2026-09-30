@@ -3,7 +3,7 @@ id: 2026-09-18-short-slug
 title: One-line task title
 status: open
 owner:
-scope: demo
+board: demo
 updated: 2026-09-18T12:00:00+0800
 ---
 
@@ -19,7 +19,7 @@ cwd / repo / branch, key files or viking:// URIs, constraints, docs that have au
 - 2026-09-18: decision — why. User answers to Questions are recorded here too.
 
 ## Progress
-Verified progress only, each line with its evidence (command + result, commit, PR, file path).
+Verified progress only, one line each with its evidence (command + result, commit, PR, file path). Longer evidence is folded into the archive.
 
 ## Next
 - [ ] ordered steps; the first unchecked box is what the next agent does
@@ -28,4 +28,5 @@ Verified progress only, each line with its evidence (command + result, commit, P
 Concrete questions the user must answer. Non-empty means `status: needs_user`.
 
 ## Log
+Last 10 turns. Older lines and full evidence: `archive/2026-09-18-short-slug.md`.
 - 2026-09-18T12:00 agent-id: created

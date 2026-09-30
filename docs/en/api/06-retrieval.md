@@ -55,6 +55,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | query | str | No | "" | Search query string. Required unless `image_url` is provided |
 | image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
+| events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
@@ -392,6 +393,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
+| events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
@@ -406,6 +408,16 @@ The `search()` method adds session context understanding and intent analysis cap
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning.
+
+Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode uses that final score while assembling its candidates. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
+
+New and updated memories produced by memory extraction automatically receive a `memory_type=<type>` search tag. With decay enabled, both local and cloud backends recall records tagged `memory_type=events` separately and merge them with the complementary untagged/non-event branch; both branches preserve the original scope, permission and level filters, without requiring a peer ID. Existing data is not backfilled; untagged memories keep their original scores. Direct content refreshes and ordinary tag updates preserve the existing memory type without inferring it from the URI.
+
+The local vector engine expands the requested event window by at most 3x internally (capped at 100,000), computes decay and sorts in C++, then returns top-k before any abstract or payload fields are fetched. This is a bounded candidate approximation, so events outside that semantic window are not guaranteed to be promoted. The HTTP vector service forwards the same native rule. Cloud adapters use VikingDB score fusion and request only the required limit plus offset, without a fixed 100,000-input override. cuVS collections use their native scalar/vector index for decay requests. openGauss accepts the forwarded parameters but does not apply time decay; it retains ordinary vector scoring.
+
+When model rerank is enabled, each recall branch requests `2 × limit` results. Event decay is already applied inside VikingDB for cloud backends, or inside the local C++ engine, before the two branches merge. The best `2 × limit` merged candidates go through one model rerank; model scores determine the final ranking and score threshold. There is no additional decay after the model. If rerank fails, retrieval keeps the already-decayed recall scores. `origin_score` and `time_score` remain recall-stage details, so their product need not equal a successful model rerank score. Parent-directory scores and hotness are not mixed into the result.
+
+The local engine's 3x expansion applies to the requested event window independently of the model's 2x window. For a final `limit=10`, each branch returns at most 20 results, the local event engine considers at most 60 vector candidates internally, and at most 20 merged results reach the model.
 
 #### 3. Usage Examples
 
@@ -422,9 +434,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
-        "context_type": "skill",
+        "context_type": "memory",
         "since": "2h",
         "time_field": "updated_at",
+        "events_time_decay_protection": "1d",
         "limit": 10
     }'
 ```
@@ -542,6 +555,10 @@ openviking search "best practices" --context-type skill
 # Search with time filter
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
+# Rank user and peer event memories with time decay
+openviking search "recent decisions" --context-type memory --level 2 \
+    --events-time-decay-protection 1d
+
 # Search without session (still performs intent analysis)
 openviking search "how to implement OAuth 2.0 authorization code flow"
 
@@ -621,7 +638,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 #### 2. Parameters
 
-**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the per-category quotas are the only candidate ceilings. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the per-category quotas are the only candidate ceilings. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
 
 **L1 query understanding**
 
