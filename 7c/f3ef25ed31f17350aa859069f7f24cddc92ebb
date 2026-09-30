@@ -1,0 +1,41 @@
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 336,389,522-524,530
+  h_b34c679d17e2ac 420-423,531
+bot/vikingbot/compile/ops/map.py
+  h_b34c679d17e2ac 86,115-117,119
+  h_b34c679d17e2ac 17-63
+bot/vikingbot/compile/file_ops.py
+  h_b34c679d17e2ac 17-18,21-23
+  h_b34c679d17e2ac 19-20,24,218-286
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 25,34-35
+  h_b34c679d17e2ac 12,38-46
+bot/vikingbot/compile/ops/common.py
+  h_b34c679d17e2ac 132-135,139-140,143
+  h_b34c679d17e2ac 136-138
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 4,214,216,280,287-289,294,316-318
+  h_b34c679d17e2ac 34-61,210-213,215
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 76,154
+bot/vikingbot/compile/resume.py
+  h_b34c679d17e2ac 156
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 1034,1041
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 136-137,228-229,236,297,306
+  h_b34c679d17e2ac 231-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7cf3ef25ed31f17350aa859069f7f24cddc92ebb",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
