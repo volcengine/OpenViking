@@ -33,13 +33,13 @@ If your application only needs similarity queries over existing vectors, evaluat
 
 An agent can use summaries to locate relevant material before reading full content, reducing unrelated content in its context.
 
-| Layer | Content | Default body limit | Purpose |
+| Layer | Content | Default body target | Purpose |
 | --- | --- | --- | --- |
 | L0 | Directory abstract, `.abstract.md` | 256 characters | Retrieval and quick filtering |
 | L1 | Directory overview, `.overview.md` | 4,000 characters | Navigation and reranking |
 | L2 | Original or parsed content | No shared limit | Reading details on demand |
 
-L0/L1 are directory sidecars. Their availability depends on processing state and configuration. Limits are measured in characters and configured through `semantic.abstract_max_chars` and `semantic.overview_max_chars`. See [Context Layers](../concepts/03-context-layers.md).
+L0/L1 are directory sidecars. Their availability depends on processing state and configuration. Generated resource summaries use character targets configured through `semantic.abstract_max_chars` and `semantic.overview_max_chars`. Truncation preserves complete sentences, so the first sentence can exceed the target; these are not hard limits on stored sidecars. See [Context Layers](../concepts/03-context-layers.md).
 
 ### What is Viking URI? What's its purpose?
 
@@ -114,9 +114,9 @@ Create `~/.openviking/ov.conf` under your home directory. Replace the example mo
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
+    "provider": "vikingdb",
+    "ak": "your-access-key",
+    "sk": "your-secret-key"
   },
   "storage": {
     "workspace": "./data",
@@ -189,10 +189,10 @@ await client.wait_processed()
 |  | `to` | `parent` |
 |---|---|---|
 | What you pass | The exact final URI, **including the leaf name** | An **existing directory**; the leaf name comes from the source |
-| On a name collision | No renaming. An existing target is synced to the new source, so visible entries the source does not contain are deleted | Never overwrites. Falls back to `name_1`, `name_2`, … and returns a warning |
+| On a name collision | No renaming. An existing target directory is synced to the new source, so visible entries the source does not contain are deleted | Never overwrites. Falls back to `name_1`, `name_2`, … and returns a warning |
 | When to use it | The final name is known and must be honored verbatim, or you want to update an existing resource in place | The leaf name is derived server-side (URL / repository imports, split documents), or nothing already at the destination may be touched |
 
-Leaving both empty derives the directory and the leaf name from the source, with the same collision handling as `parent`.
+Leaving both empty derives the directory and the leaf name from the source, with the same collision handling as `parent`. As an exception to exact-target behavior, `to` set to a resource namespace root such as `viking://resources` acts as a parent. Resource roots are created when needed; for other missing parents, pass `options={"create_parent": True}`.
 
 `to` and `parent` cannot be combined; passing both is an error.
 
@@ -211,9 +211,9 @@ Note: `processing_mode="vectors_only"` skips semantic processing, so the survivi
 
 | Feature | `find()` | `search()` |
 |---------|----------|------------|
-| **Session Context** | Not used | Optional; used when `session_id` is supplied |
+| **Session Context** | Not used | Optional; used when `session_id` is supplied and intent analysis is enabled |
 | **Intent Analysis** | Not used | Uses an LLM when session content exists and intent analysis is enabled |
-| **Latency** | Low | Higher |
+| **Latency** | Depends on embedding, retrieval, and reranking | Intent analysis adds an LLM call when used |
 | **Use Case** | Simple semantic search | Complex tasks requiring context understanding |
 
 ```python
@@ -333,7 +333,7 @@ Each query runs one global vector search within its directory scope, permission 
    # Check if resources exist
    items = await client.ls(uri="viking://resources/")
    task = await client.get_task("<task_id returned by the import>")
-   print(task["status"])
+   print(task["status"] if task is not None else "Task not found or expired")
    ```
 
 2. **Check `target_uri` filter condition**

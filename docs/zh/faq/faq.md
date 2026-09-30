@@ -33,13 +33,13 @@ OpenViking 用文件系统组织 Agent 的资源、记忆和技能，支持按�
 
 Agent 可以先读摘要定位内容，再按需读全文，减少不相关内容进入上下文。
 
-| 层级 | 内容 | 默认正文上限 | 用途 |
+| 层级 | 内容 | 默认正文目标 | 用途 |
 | --- | --- | --- | --- |
 | L0 | 目录摘要 `.abstract.md` | 256 字符 | 检索与快速筛选 |
 | L1 | 目录概览 `.overview.md` | 4,000 字符 | 导航与精排 |
 | L2 | 原始文件或解析后的内容 | 无统一上限 | 按需读取详情 |
 
-L0/L1 是目录级附属文件，是否可用取决于处理状态和配置。上限按字符计算，可通过 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 调整，详见[上下文层级](../concepts/03-context-layers.md)。
+L0/L1 是目录级附属文件，是否可用取决于处理状态和配置。资源摘要的生成目标按字符计算，可通过 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 调整。截断会保留完整句子，因此首句可能超过目标；这不是已存储附属文件的硬上限，详见[上下文层级](../concepts/03-context-layers.md)。
 
 ### Viking URI 是什么？有什么作用？
 
@@ -112,9 +112,9 @@ pip install openviking --upgrade --force-reinstall
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
+    "provider": "vikingdb",
+    "ak": "your-access-key",
+    "sk": "your-secret-key"
   },
   "storage": {
     "workspace": "./data",
@@ -187,10 +187,10 @@ await client.wait_processed()
 |  | `to` | `parent` |
 |---|---|---|
 | 传什么 | 完整最终 URI，**含叶子名** | 一个**已存在的目录**，叶子名由来源决定 |
-| 撞名怎么办 | 不改名。目标已存在时按新来源同步，来源里没有的可见条目会被删除 | 不覆盖。退到 `name_1`、`name_2`……并返回一条 warning |
+| 撞名怎么办 | 不改名。目标目录已存在时按新来源同步，来源里没有的可见条目会被删除 | 不覆盖。退到 `name_1`、`name_2`……并返回一条 warning |
 | 什么时候用 | 名字已知且必须逐字生效；或者要原地更新一个已有资源 | 叶子名由服务端派生（URL / 仓库导入、大文件切分），或者目标下已有的内容一点都不能动 |
 
-两个都留空 = 目录和叶子名都从来源推导，撞名行为同 `parent`。
+两个都留空 = 目录和叶子名都从来源推导，撞名行为同 `parent`。资源命名空间根目录是例外：`to` 为 `viking://resources` 等资源根目录时，会按父目录处理。资源根目录不存在时会自动创建；其他父目录不存在时，可传入 `options={"create_parent": True}`。
 
 `to` 和 `parent` 不能同时传，会直接报错。
 
@@ -209,9 +209,9 @@ await client.wait_processed()
 
 | 特性 | `find()` | `search()` |
 |------|----------|------------|
-| **会话上下文** | 不使用 | 可选，传入 `session_id` 时使用 |
+| **会话上下文** | 不使用 | 可选，传入 `session_id` 且启用意图分析时使用 |
 | **意图分析** | 不使用 | 有会话内容且启用意图分析时使用 LLM |
-| **延迟** | 低 | 较高 |
+| **延迟** | 取决于 Embedding、检索和 Rerank | 使用意图分析时增加一次 LLM 调用 |
 | **适用场景** | 简单语义搜索 | 复杂任务、需要理解上下文 |
 
 ```python
@@ -331,7 +331,7 @@ overview = await client.overview(uri="viking://resources")
    # 检查资源是否存在
    items = await client.ls(uri="viking://resources/")
    task = await client.get_task("<导入时返回的 task_id>")
-   print(task["status"])
+   print(task["status"] if task is not None else "任务不存在或已过期")
    ```
 
 2. **检查 `target_uri` 过滤条件**

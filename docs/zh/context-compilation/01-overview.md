@@ -4,7 +4,7 @@
 
 ## 它是怎么工作的
 
-每次编译需要指定：
+使用已安装 Skill 编译时，需要指定：
 
 - `--from`：一个或多个来源目录或文件。
 - `--to`：输出目录。
@@ -47,10 +47,10 @@ Skill 决定输出内容和结构。仓库提供以下示例，其中 LLM Wiki �
 
 ## 前置条件
 
-- 一个已配置 Compile Runtime 的 OpenViking 服务；本地示例可通过 `--with-bot` 启用内置 VikingBot。默认端点是 `http://localhost:1933`；远程使用需要 API Key，参见 [鉴权](../guides/04-authentication.md)。没有服务先看 [快速开始](../getting-started/02-quickstart.md)。
+- 使用 Skill 的示例需要一个已配置 Compile Runtime 的 OpenViking 服务；本地使用需安装 `openviking[bot]` 依赖，并通过 `--with-bot` 启用内置 VikingBot。`--skill memory` 模式在进程内运行，不需要 Compile Runtime，也不传 `--from`。默认端点是 `http://localhost:1933`；远程使用需要 API Key，参见 [鉴权](../guides/04-authentication.md)。没有服务先看 [快速开始](../getting-started/02-quickstart.md)。
 - `ov` CLI 已配置好连接（`~/.openviking/ovcli.conf`，或由 `OPENVIKING_CLI_CONFIG_FILE` 指定的文件）。
 - 示例中的 `examples/...` 是仓库相对路径。先下载 [OpenViking 仓库](https://github.com/volcengine/OpenViking)，在仓库根目录运行命令。
-- 可视化脚本需要 Python 3。LLM Wiki 的 Python 依赖见[脚本说明](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)。
+- 可视化脚本需要 Python 3。[LLM Wiki 脚本](https://github.com/volcengine/OpenViking/blob/main/examples/compile/graph-show/llm-wiki/wiki_graph.py)还需要 `openviking` Python 包。
 
 ## 相关文档
 

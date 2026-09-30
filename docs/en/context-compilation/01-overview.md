@@ -4,7 +4,7 @@
 
 ## How it works
 
-Each run needs:
+Compilation with an installed Skill needs:
 
 - `--from`: one or more source directories or files.
 - `--to`: the output directory.
@@ -47,10 +47,10 @@ Besides compiling source material into new knowledge artifacts with a Skill, `ov
 
 ## Prerequisites
 
-- A running OpenViking service with a Compile Runtime configured. For the local examples, enable the built-in VikingBot with `--with-bot`. The default endpoint is `http://localhost:1933`; remote use needs an API Key — see [Authentication](../guides/04-authentication.md). No service yet? Start with the [Quick Start](../getting-started/02-quickstart.md).
+- For the Skill-based examples, a running OpenViking service with a Compile Runtime configured. For local use, install the `openviking[bot]` dependencies and enable the built-in VikingBot with `--with-bot`. The `--skill memory` mode runs in-process without a Compile Runtime and takes no `--from`. The default endpoint is `http://localhost:1933`; remote use needs an API Key — see [Authentication](../guides/04-authentication.md). No service yet? Start with the [Quick Start](../getting-started/02-quickstart.md).
 - The `ov` CLI configured with a connection (`~/.openviking/ovcli.conf`, or a file selected by `OPENVIKING_CLI_CONFIG_FILE`).
 - Paths beginning with `examples/...` are relative to the repository. Download the [OpenViking repository](https://github.com/volcengine/OpenViking) and run the commands from its root.
-- Python 3 for the visualization scripts. See the [LLM Wiki script instructions](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki) for Python dependencies.
+- Python 3 for the visualization scripts. The [LLM Wiki script](https://github.com/volcengine/OpenViking/blob/main/examples/compile/graph-show/llm-wiki/wiki_graph.py) also requires the `openviking` Python package.
 
 ## Related docs
 
