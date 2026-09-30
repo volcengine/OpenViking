@@ -96,14 +96,15 @@ volumes:
   caddy_config:
 ```
 
+For a proxy-only public entrypoint, remove the OpenViking host port mapping, or bind it to `127.0.0.1`. Also remove the legacy `1934:1934` mapping or bind it to localhost. Caddy can still reach `openviking:1933` through the Compose network.
+
 ### 4. Launch
 
 ```bash
 docker compose up -d
 ```
 
-The first HTTPS request triggers ACME certificate issuance. Subsequent
-requests use the cached cert. Caddy handles renewal automatically.
+Caddy obtains and renews certificates for the configured domain. Check its logs if issuance fails; on-demand issuance is a separate configuration. See [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https).
 
 ### 5. Verify
 
@@ -125,9 +126,12 @@ point the upstream straight at OV's 1933.
 
 ### nginx
 
+This example assumes nginx and OpenViking share a host. The upstream timeout is an example; size it for your longest request. Disabling response buffering lets streamed MCP responses reach the client promptly; see [nginx proxy buffering](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffering).
+
 ```nginx
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;  # nginx < 1.25.1: remove this line and use `listen 443 ssl http2;`
     server_name ov.your-domain.com;
 
     ssl_certificate     /etc/letsencrypt/live/ov.your-domain.com/fullchain.pem;
@@ -135,6 +139,9 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:1933;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
         proxy_set_header Host              $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
@@ -158,28 +165,26 @@ ov.your-domain.com {
 
 ### Cloudflare / CDN
 
-Point the CDN origin at `http://your-server-ip:1933`. Set
-`OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com` so the server knows
-its public address. Make sure the CDN forwards `Host`, `X-Forwarded-Proto`,
-and `X-Forwarded-Host`.
+Configure an HTTPS origin with certificate validation, or a private origin tunnel. Keep direct origin access restricted to the proxy. Set `OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com`, forward the public host/protocol headers, and check that the proxy preserves streaming and allows your request duration and upload sizes.
 
 ## Telling the server its public URL
 
-OAuth metadata, `WWW-Authenticate` headers, and resource URLs need to embed
-the public origin. Resolution order (**highest to lowest**):
+OAuth metadata and `WWW-Authenticate` headers need the public origin. The OAuth origin helper resolves it in this order (**highest to lowest**):
 
 1. `OPENVIKING_PUBLIC_BASE_URL` environment variable
 2. `oauth.issuer` in `ov.conf`
 3. `X-Forwarded-Proto` + `X-Forwarded-Host` request headers
 4. The request's `Host` header
 
-Behind any reverse proxy, set option 1 explicitly:
+For MCP upload URLs, `server.public_base_url` is the configuration fallback instead of `oauth.issuer`. Setting the environment variable keeps both aligned; if you also set `oauth.issuer`, use the same origin.
+
+Behind a reverse proxy, set option 1 in the server process environment:
 
 ```bash
 export OPENVIKING_PUBLIC_BASE_URL="https://ov.your-domain.com"
 ```
 
-or in `ov.conf`:
+For Compose, set it in `.env` and run `docker compose up -d`; an `export` in an unrelated shell does not update an existing container. If configuring the OAuth issuer in `ov.conf` instead:
 
 ```jsonc
 {
@@ -195,7 +200,7 @@ or in `ov.conf`:
 `docker compose up` also ships a Caddy reverse proxy on port 1934, simply
 `reverse_proxy openviking:{$OPENVIKING_SERVER_PORT:1933}` — **kept only for compatibility with
 deployments that already bookmarked 1934**. New deployments can connect to
-1933 directly; there is no routing value here. Remove the caddy service and
+1933 on the private network; public clients should use the HTTPS entrypoint above. Remove the caddy service and
 the 1934 port mapping in `docker-compose.yml` if you don't need it.
 
 ## Related

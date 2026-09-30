@@ -1,6 +1,6 @@
 # OVPack 导入导出
 
-OVPack 是 OpenViking 的可恢复内容包格式，用来迁移或备份 `viking://` 下的公开内容树。
+OVPack 是 OpenViking 的可恢复内容包格式，用来迁移或备份 `viking://` 下受支持的内容树。
 它保存文件内容、语义侧边文件、可迁移的索引标量，以及可选的 dense 向量快照。
 
 OVPack 不是裸 ZIP 拷贝，也不是可信发布格式。导入会校验 manifest、文件列表、目录列表和
@@ -16,13 +16,13 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 - `viking://resources/...`
 - `viking://user/...`
 
-全量迁移使用单独的 `backup/restore`，它会把公开 scope root 一起打进备份包：
+全量迁移使用单独的 `backup/restore`，它会把支持的 scope root 一起打进备份包。这里指命名空间根，不表示内容对所有人公开：
 
 - `viking://resources`
 - 当前账号下所有 `viking://user/{user_id}` 内容
 
 `backup/restore` 仅允许 ROOT 或 ADMIN 调用，并以账号为边界访问所有用户内容。备份包不包含
-用户账号、API Key 或其他鉴权数据。
+用户账号和服务端 API Key 注册表。用户文件仍属于内容树，包括可能存放外部凭证的 privacy 配置，因此需要保护归档。
 
 Session 通过 user 命名空间一起迁移，路径为
 `viking://user/{user_id}/sessions/{session_id}`。`viking://session/...`
@@ -67,7 +67,7 @@ ov import ./exports/my-project.ovpack viking://resources/imported/
 viking://resources/imported/my-project
 ```
 
-覆盖已有 root：
+需要替换已有 root 时，先备份目标，并确认允许删除其整个子树：
 
 ```bash
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
@@ -145,7 +145,6 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 
 ```bash
 ov backup ./backups/openviking.ovpack
-ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
 备份包只能通过 `restore` 恢复，不能通过普通 `import` 导入到任意父目录。
@@ -184,6 +183,8 @@ OPENVIKING_CLI_CONFIG_FILE=./restore.ovcli.conf \
 
 ## Python SDK
 
+跨部署迁移时，导出和备份使用源端身份，导入和恢复使用单独配置的目标客户端。下方全量恢复示例以已完成上述目标 account 初始化和覆盖检查为前提。队列结束不证明索引重建成功，仍需检查错误和一致性结果。
+
 ```python
 from openviking_sdk import AsyncHTTPClient
 
@@ -201,11 +202,12 @@ async def migrate_project():
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite",
+            on_conflict="fail",
             vector_mode="auto",
         )
         print(imported_uri)
-        await client.wait_processed()
+        print(await client.wait_processed(timeout=120))
+        print(await client.check_consistency(uri=imported_uri))
     finally:
         await client.close()
 ```
@@ -242,7 +244,7 @@ importedURI, err := client.ImportOVPack(
     outPath,
     "viking://resources/imported/",
     &openviking.ImportPackOptions{
-        OnConflict: "overwrite",
+        OnConflict: "fail",
         VectorMode: "auto",
     },
 )
@@ -286,7 +288,7 @@ HTTP 导出接口直接返回文件流；HTTP 导入和恢复必须先上传本�
 导出：
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
+curl -f -X POST http://localhost:1933/api/v1/pack/export \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"uri":"viking://resources/my-project","include_vectors":false}' \
@@ -297,19 +299,19 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
 
 ```bash
 TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  curl -fsS -X POST http://localhost:1933/api/v1/resources/temp_upload \
     -H "X-API-Key: your-admin-key" \
     -F "file=@./exports/my-project.ovpack" \
-  | jq -r ".result.temp_file_id"
+  | jq -er ".result.temp_file_id"
 )
 
-curl -X POST http://localhost:1933/api/v1/pack/import \
+curl -f -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
+    \"on_conflict\": \"fail\",
     \"vector_mode\": \"auto\"
   }"
 ```
@@ -317,7 +319,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 全量备份：
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/pack/backup \
+curl -f -X POST http://localhost:1933/api/v1/pack/backup \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"include_vectors":true}' \
@@ -365,7 +367,7 @@ my-project/_ovpack/manifest.json
 `files/` 下保存用户内容，路径与 OpenViking 中的相对路径完全一致，不再对点文件做 `_._` 转义。
 `_ovpack/` 下保存 OVPack 内部文件，不参与用户内容导入。
 
-manifest 只保存包结构、文件 checksum 和内部索引文件的 checksum，不直接内嵌每个文件的索引记录：
+下方 manifest 仅示意格式，含占位 checksum，不能作为有效包导入。manifest 保存包结构、文件 checksum 和内部索引文件的 checksum，不直接内嵌每个文件的索引记录：
 
 ```json
 {
@@ -561,7 +563,7 @@ OVPack v2 包也会被当前 OpenViking 拒绝。导入旧包前，需要先用�
 | `source path is incompatible with target path` | 结构化 scope 的 root 层级会改变 | 导入到正确系统父目录。 |
 | `Top-level scope ovpack packages must be imported to viking://` | 将顶级 scope 包导入了非根父目录 | 改为导入 `viking://`。 |
 | `Backup ovpack packages must be restored` | 用普通 import 导入 backup 包 | 使用 `ov restore`。 |
-| `Resource already exists` | 目标 root 已存在 | 使用 `--on-conflict overwrite` 或 `--on-conflict skip`。 |
+| `Resource already exists` | 目标 root 已存在 | 换用新的目标父目录；用 `--on-conflict skip` 保留已有 root；或备份目标后用 `--on-conflict overwrite` 替换。 |
 | `incomplete OpenViking vector index snapshot` | 使用 `--include-vectors` 时，导出范围内应索引内容缺少索引记录 | 先执行 `ov system consistency <uri>` 定位问题，再等待处理完成或重新 reindex。 |
 | `dense vector snapshot is incompatible` | 包内 embedding 元数据和当前配置不一致 | 用 `--vector-mode recompute`，或换到兼容配置。 |
 
@@ -579,5 +581,5 @@ manifest 校验；如果同时修改 manifest 和内容，则需要依赖外部�
 
 **大包导入很慢怎么办？**
 
-默认导入会重建目标环境的语义和向量。大包迁移可以使用 `--include-vectors` 减少重算，或按目录
+导入保留包内语义侧边文件；未恢复兼容 dense 快照时，会提交向量重算。大包迁移可以使用 `--include-vectors` 减少重算，或按目录
 拆成多个 OVPack 分批导入。

@@ -4,12 +4,12 @@ This guide describes how to enable and use at-rest data encryption in OpenViking
 
 ## Overview
 
-OpenViking provides transparent at-rest data encryption to ensure data security and isolation in multi-tenant environments:
+OpenViking can encrypt newly written files with account-specific keys. The storage layer handles encryption and decryption through the existing APIs:
 
-- ✅ **Transparent encryption**: No API changes, application layer unaware
-- ✅ **Multi-tenant isolation**: Different accounts use independent keys
-- ✅ **Three key providers**: Local, Vault, Volcengine KMS
-- ✅ **Backward compatible**: Unencrypted old files still readable
+- **Transparent encryption**: No API changes, application layer unaware
+- **Multi-tenant isolation**: Different accounts use independent keys
+- **Three key providers**: Local, Vault, Volcengine KMS
+- **Backward compatible**: Unencrypted old files still readable
 
 See [Data Encryption](../concepts/10-encryption.md) for conceptual explanations.
 
@@ -36,7 +36,7 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 2. Configure Encryption
 
-Edit `~/.openviking/ov.conf`:
+Merge the following encryption settings into `~/.openviking/ov.conf`; retain your model and server settings:
 
 ```json
 {
@@ -90,23 +90,23 @@ It waits for import processing and checks retrieval; successful retrieval alone 
 
 ## API Key Hashing Configuration
 
-OpenViking provides two layers of encryption protection:
+File encryption and API key hashing are independent controls:
 
 | Encryption Layer | Config | Algorithm | Reversible | Description |
 |------------------|--------|-----------|------------|-------------|
-| **File Layer** | `encryption.enabled` | AES-GCM | ✅ Yes | Protects entire storage files |
-| **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ No | Protects API keys themselves |
+| **File Layer** | `encryption.enabled` | AES-GCM | Yes | Protects entire storage files |
+| **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | No | Protects API keys themselves |
 
-### ⚠️ Breaking Change Notice
+### Upgrading from implicit API key hashing
 
-**Version Change**: OpenViking v0.3.12 → later versions
+Applies when upgrading from v0.3.12 or earlier to v0.3.13 or later.
 
 **Behavior Change**:
 - **Before**: `encryption.enabled = true` implicitly enabled API key Argon2id hashing
 - **Now**: You must explicitly configure `encryption.api_key_hashing.enabled`
 
 **Impact**:
-- After upgrade, if `encryption.enabled = true` but `encryption.api_key_hashing.enabled` is not explicitly set to `true`, you will see the following warning log on startup:
+- After upgrade, if `encryption.enabled = true` but `encryption.api_key_hashing.enabled` is not explicitly set to `true`, you will see the following informational log excerpt on startup:
   ```
   API key hashing is disabled while file encryption is enabled.
   Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
@@ -119,7 +119,7 @@ OpenViking provides two layers of encryption protection:
 | Option | Config | Behavior |
 |--------|--------|----------|
 | **Maintain Previous Behavior** | `api_key_hashing.enabled = true` | API keys stored using Argon2id hashing |
-| **Recommended New Behavior** | `api_key_hashing.enabled = false` (default) | API keys stored in plaintext (file layer still encrypted) |
+| **Recoverable key storage (default)** | `api_key_hashing.enabled = false` (default) | API keys stored in plaintext (file layer still encrypted) |
 
 ### Default Behavior
 
@@ -130,7 +130,7 @@ OpenViking provides two layers of encryption protection:
 
 ### Enabling Argon2id Hashing
 
-For maximum API key protection, you can enable Argon2id one-way hashing:
+Enable Argon2id one-way hashing to stop storing recoverable API key values:
 
 ```json
 {
@@ -170,7 +170,7 @@ For maximum API key protection, you can enable Argon2id one-way hashing:
 
 | Provider | Use Case | Pros | Cons |
 |----------|----------|------|------|
-| **Local** | Dev environments, single-node | Simple, no external services | Key stored locally, less secure |
+| **Local** | Dev environments, single-node | Simple, no external services | Requires local file permissions and separate key backups |
 | **Vault** | Production, multi-cloud | Enterprise-grade KMS, version control | Requires deploying and maintaining Vault |
 | **Volcengine KMS** | Volcengine cloud | Cloud-native KMS service | Volcengine-only |
 
@@ -221,7 +221,7 @@ ov system crypto init-key -f ~/.openviking/master.key
 
 ### Prerequisites
 
-1. HashiCorp Vault service deployed
+1. HashiCorp Vault service deployed; install the Python `hvac` dependency in the server environment
 2. Transit engine enabled
 3. Vault Token with sufficient permissions
 
@@ -237,10 +237,16 @@ vault secrets enable transit
 
 ```bash
 # KV v2 (recommended)
-vault secrets enable -version=2 kv
+vault secrets enable -path=secret -version=2 kv
 
 # Or KV v1
-vault secrets enable kv
+vault secrets enable -path=secret -version=1 kv
+```
+
+Use one KV command matching your deployment, not both. The example below uses the `secret` mount with KV v2. Pre-create the Transit key with an administrative token:
+
+```bash
+vault write -f transit/keys/openviking-root-key type=aes256-gcm96
 ```
 
 3. Configure OpenViking:
@@ -255,7 +261,7 @@ vault secrets enable kv
       "token": "hvs.xxxxxxxxxxxxxxxxxxxxx",
       "mount_point": "transit",
       "kv_mount_point": "secret",
-      "kv_version": 1,
+      "kv_version": 2,
       "root_key_name": "openviking-root-key",
       "encrypted_root_key_key": "openviking-encrypted-root-key"
     }
@@ -277,14 +283,22 @@ vault secrets enable kv
 
 ### Vault Permission Recommendations
 
-Configure minimal permissions for the Token:
+For the configuration above, the service token needs Transit key metadata access, encrypt/decrypt access, and KV access to store the wrapped root key. With the engines and Transit key pre-created, a policy example is:
 
 ```hcl
-path "transit/encrypt/openviking-root" {
+path "transit/keys/openviking-root-key" {
+  capabilities = ["read"]
+}
+
+path "secret/data/openviking-encrypted-root-key" {
+  capabilities = ["read", "create", "update"]
+}
+
+path "transit/encrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 
-path "transit/decrypt/openviking-root" {
+path "transit/decrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 ```
@@ -363,7 +377,7 @@ Configure minimal permissions for the Access Key:
 
 ### Method 1: Check File Content
 
-Encrypted files start with magic number `OVE1`:
+Inspect the physical backend file, not the API response, which is decrypted. Substitute its actual path below. Encrypted files start with magic number `OVE1`:
 
 ```bash
 # View first 4 bytes
@@ -381,21 +395,11 @@ hexdump -C ./data/agfs/your-file | head -1
 00000000  7b 22 63 6f 6e 74 65 6e  74 73 22 3a 5b 7b 22 70  |{"contents":[{"p|
 ```
 
-### Method 2: Cross-Provider Verification
+### Method 2: Restart and Read Back
 
-Try decrypting with different providers — it should fail (this is normal security behavior):
+Read the same imported file through the API before and after restarting the server. Verify its content matches and inspect the physical backend file header as above. This checks that the deployment reloads the expected key and can read its ciphertext.
 
-```python
-# Encrypt with Provider A
-encrypted = await provider_a.encrypt_file_key(plaintext, "test-account")
-
-# Try decrypting with Provider B (should fail)
-try:
-    await provider_b.decrypt_file_key(encrypted, "test-account")
-    print("❌ Security vulnerability: Cross-provider decryption succeeded!")
-except Exception as e:
-    print("✓ Secure: Cross-provider decryption failed as expected")
-```
+Do not treat an arbitrary exception in an internal provider call as an encryption test: argument errors, missing dependencies, and network errors can all fail before decryption.
 
 ---
 
@@ -426,12 +430,7 @@ See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for support
 
 ### Switching Key Providers
 
-1. Back up existing data and keys
-2. Decrypt all data with old provider
-3. Configure new provider
-4. Re-encrypt all data
-
-**Note**: This is a destructive operation, recommend testing first in a staging environment.
+Keep the original provider and key available while exporting a logical OVPack backup. Restore it into a separate empty deployment configured with the new provider, following the migration steps above. Verify contents, access permissions, and rebuilt indexes before switching traffic. Changing the provider setting in place does not re-encrypt existing files.
 
 ---
 
@@ -471,19 +470,11 @@ Error: Invalid credentials
 2. Confirm key has sufficient permissions
 3. Verify region configuration is correct
 
-### Cross-Provider Decryption Failed (This is Normal)
+### Existing ciphertext cannot be read
 
-```
-Error: KeyMismatchError
-```
+Check that the deployment still has the original root key, provider settings, account identity, and intact ciphertext. For Vault, retain both the Transit key and the KV entry containing the wrapped root key; for KMS, retain the KMS key and local wrapped-key file. Do not generate a replacement root key to repair access to existing ciphertext.
 
-**Explanation**: This is expected security behavior. Different providers use different root keys and cannot decrypt each other's data.
-
-### Partial Read Returns Ciphertext
-
-If using encrypted files created with an older OpenViking version, partial reads may return ciphertext.
-
-**Solution**: Upgrade to the latest OpenViking version.
+If a partial read returns ciphertext, record the server version and compare full and partial reads on a copied test file. Check the storage encryption configuration and relevant fixes before upgrading, and keep the original data and keys available for rollback.
 
 ---
 
@@ -492,3 +483,5 @@ If using encrypted files created with an older OpenViking version, partial reads
 - [Data Encryption](../concepts/10-encryption.md) - Encryption concepts
 - [Configuration Guide](./01-configuration.md) - Complete configuration reference
 - [Multi-Tenant](../concepts/11-multi-tenant.md) - Account, user, and agent isolation model
+
+Vault references: [KV v2](https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2), [Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit).

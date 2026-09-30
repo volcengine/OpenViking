@@ -1,12 +1,10 @@
 # OAuth 2.1 接入指南
 
-OpenViking 服务端原生实现 OAuth 2.1。任何需要 OAuth 的客户端 — 包括 MCP
-客户端（Claude.ai / Claude Desktop / ChatGPT / Cursor）以及其他浏览器应用
-— 都可以直接对服务器授权，无需任何第三方代理。协议层（DCR、authorize、
-token、metadata）由官方 `mcp.server.auth` SDK 提供，整体遵循 OAuth 2.1
-规范，非 MCP 的 OAuth 客户端也能正常工作。
+OpenViking 提供原生 OAuth 授权，供支持其发现、动态注册和 PKCE 流程的客户端接入，包括 Claude.ai、Claude Desktop、ChatGPT、Cursor 等 MCP 客户端。协议端点（注册、authorize、token、metadata）由官方 `mcp.server.auth` SDK 提供，非 MCP 的 OAuth 客户端也可以走同一流程。用户在 Studio 确认身份和授权，客户端取得 access token 和 refresh token。API Key 认证仍可使用。
 
 ## 推荐配置
+
+先按[认证指南](04-authentication.md)配置 API Key 模式，创建 account 和 user/admin key。OAuth consent 需要这个已注册身份，开启 OAuth 不会自动创建。下面的片段应合并到已有配置。
 
 > **前提**：公网 HTTPS。OAuth 2.1（以及 MCP SDK）对非 localhost 的 issuer
 > **强制要求 HTTPS**。请参阅[公网访问指南](12-public-access.md)了解如何配置
@@ -29,22 +27,13 @@ token、metadata）由官方 `mcp.server.auth` SDK 提供，整体遵循 OAuth 2
    先在弹出的"连接与身份"对话框里粘入 API Key；然后在 consent 卡片上点
    **Authorize**。浏览器自动跳回 Claude.ai，连接器就位。
 
-线上路径就这四步。后续章节解释每一块为什么这样设计、本地怎么不走 HTTPS 做
-联调、出问题时怎么用 curl 排查。
+连接后，确认客户端能发现工具并读取有权限的 URI。后续章节介绍本地联调、token 行为和故障排查。
 
 ---
 
 ## 为什么需要原生 OAuth
 
-部分 MCP 客户端只接受 OAuth 2.1，不接受 API Key。在此之前唯一的方案是部署社区的
-[MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker
-代理，把 OAuth 翻译成 API Key bearer。原生支持解决了：
-
-- 额外部署单元（CF Worker + 2 个 KV namespace）
-- 第三方信任面（代理运营方有解密上游 API Key 的能力）
-- 用户在浏览器里手动粘贴 API Key 的体验
-
-API Key 认证仍按原方式工作，OAuth 只是叠加层。
+客户端需要浏览器授权和 token 刷新时，使用 OAuth。在原生支持之前，这类客户端需要部署社区的 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理，把 OAuth 翻译成 API Key bearer。原生流程省去了这个额外部署，代理运营方也不再能接触上游 API Key。首次登录 Studio 仍需已注册的 user/admin API Key，后续授权可以复用 Studio 身份。
 
 ---
 
@@ -90,6 +79,8 @@ Studio 侧边栏底部的"**OAuth 验证**"入口会直接打开这个跨设备�
 ---
 
 ## 快速验证（HTTP，仅本地）
+
+沿用上面的 API Key 模式和已注册 user/admin key，不要用无认证 Dev 身份完成 consent。
 
 最快确认 OAuth 装配正确的方式是在 `127.0.0.1` 跑一遍。MCP SDK 接受
 `http://127.0.0.1` 与 `http://localhost` 作为 issuer URL 而无需 HTTPS — 但
@@ -139,11 +130,10 @@ OAuth 2.1 对非 localhost 的 issuer **强制要求 HTTPS**。
 CDN 的配置方法。简要步骤：
 
 1. 按[公网访问指南 § 添加 HTTPS](12-public-access.md#添加-https公网访问)
-   配置好 `https://your-domain.com`，使 1934 端口走 TLS。
+   让 `https://your-domain.com` 通过 443 提供 HTTPS，代理转发到 OpenViking 端口（默认 1933）。
 2. 启用 OAuth：`ov.conf` 里 `{ "oauth": { "enabled": true } }`。
-3. 重启：`docker compose restart openviking`。
-4. 在 `.env` 设置 `OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com`
-   （服务端用它作为 OAuth 元数据和 `WWW-Authenticate` 的 issuer）。
+3. 在 Compose 的 `.env` 设置 `OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com`。
+4. 运行 `docker compose up -d` 应用容器环境变量变化。仅执行 `restart` 不会加载 `.env` 的修改。
 
 HTTPS + OAuth 就绪后，按下面的方式接入客户端。
 
@@ -178,10 +168,11 @@ claude mcp add --transport http openviking https://my.ov/mcp \
 
 如果你想让 Claude Code 走 OAuth，体验和 Claude.ai 一致。
 
-### ChatGPT (Codex / Plus / Enterprise)
+<a id="chatgpt-codex-plus-enterprise"></a>
 
-Settings → Beta features → Custom Connectors。输入 MCP URL，ChatGPT 通过
-`/.well-known/...` 文档自动发现 OAuth 端点，走相同的 authorize → token 流程。
+### ChatGPT
+
+在 ChatGPT 中通过开发者模式创建自定义 App，填入服务的 MCP URL，并完成浏览器中的 OAuth 授权。可用入口和管理权限因套餐与工作区设置而异，按 [OpenAI 官方接入说明](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)操作。Codex 的插件与 MCP 配置见 [Codex 集成](../agent-integrations/04-codex.md)。
 
 ### Cursor
 
@@ -194,39 +185,53 @@ Cursor 看到 401 + `WWW-Authenticate: Bearer resource_metadata=...` 后会自�
 
 不需要真实 MCP 客户端：
 
+将 `OV_OAUTH_ORIGIN` 设为服务 HTTPS origin，`API_KEY` 设为已注册用户的 user/admin key。示例需要 `curl`、`jq`、OpenSSL 和 Python 3；按注释从浏览器复制 pending ID 和授权码。
+
 ```bash
-# 1. 注册客户端
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"redirect_uris":["http://127.0.0.1:9999/cb"],"client_name":"test","token_endpoint_auth_method":"none"}' \
-     https://my.ov/register
-# → {"client_id":"...", ...}
+OV_OAUTH_ORIGIN=https://my.ov
+CID=$(curl -fsS "$OV_OAUTH_ORIGIN/register" \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uris":["http://127.0.0.1:9999/cb"],"client_name":"test","token_endpoint_auth_method":"none"}' \
+  | jq -er '.client_id')
 
-# 2. PKCE 对
-VERIFIER=$(openssl rand -base64 64 | tr -d '=+/' | head -c 64)
-CHALLENGE=$(printf "%s" "$VERIFIER" | openssl dgst -sha256 -binary | basenc --base64url | tr -d '=')
+VERIFIER=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')
+CHALLENGE=$(printf "%s" "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+STATE=$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')
+printf '%s\n' "$OV_OAUTH_ORIGIN/authorize?response_type=code&client_id=$CID&redirect_uri=http://127.0.0.1:9999/cb&code_challenge=$CHALLENGE&code_challenge_method=S256&state=$STATE"
 
-# 3. 浏览器访问 authorize URL，页面会显示 6 字符码
-echo "https://my.ov/authorize?response_type=code&client_id=$CID&redirect_uri=http://127.0.0.1:9999/cb&code_challenge=$CHALLENGE&code_challenge_method=S256&state=xyz"
+# Open the URL in a browser; approve in Studio or supply its pending ID here.
+curl -fsS "$OV_OAUTH_ORIGIN/api/v1/auth/oauth-verify" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"pending_id":"<pending-id>","decision":"approve"}'
 
-# 4. 在 Studio consent 页确认（或直接 curl）
-#    - Studio 路径用 pending_id（authorize 页的 ?pending=... 参数）
-#    - 跨设备路径用 6 字符 display_code
-curl -X POST -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-     -d '{"pending_id":"<pending-id-from-authorize-url>","decision":"approve"}' \
-     https://my.ov/api/v1/auth/oauth-verify
+# From the redirect URL, verify state matches $STATE and copy the code.
+# The callback page need not load for this manual test.
+AUTH_CODE='<code-from-callback-url>'
+TOKEN_RESPONSE=$(curl -fsS "$OV_OAUTH_ORIGIN/token" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$AUTH_CODE" \
+  --data-urlencode "client_id=$CID" \
+  --data-urlencode "code_verifier=$VERIFIER" \
+  --data-urlencode "redirect_uri=http://127.0.0.1:9999/cb")
+ACCESS_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | jq -er '.access_token')
 
-# 5. 浏览器自动 302 到 /cb?code=ovac_...&state=xyz，记下 code
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"manual-test","version":"1"}}}'
 
-# 6. 用 auth code 换 token
-curl -X POST \
-     -d "grant_type=authorization_code&code=ovac_...&client_id=$CID&code_verifier=$VERIFIER&redirect_uri=http://127.0.0.1:9999/cb" \
-     https://my.ov/token
-# → {"access_token":"ovat_...","refresh_token":"ovrt_...","expires_in":3600}
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
-# 7. 用 access token 调 MCP
-curl -X POST -H "Authorization: Bearer ovat_..." \
-     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' \
-     https://my.ov/mcp
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":2}'
 ```
 
 ---
@@ -266,13 +271,12 @@ curl -X POST -H "Authorization: Bearer ovat_..." \
 | Authorization code | `secrets.token_urlsafe(40)` | `ovac_` | 5 分钟 | SQLite (SHA-256 索引) |
 | Display code（页面） | 6 字符（去 O/0/I/1） | — | 10 分钟 | SQLite (`oauth_pending_authorizations`) |
 
-所有 token 都是 opaque（不签发 JWT），服务端**没有任何加密密钥需要管理**。
+所有 token 都是 opaque（不签发 JWT），OAuth 不需要 JWT 签名密钥。部署仍需管理 API 凭证、保护 token 数据库，以及保留已配置的存储加密密钥。
 每次请求按 SHA-256 哈希查 SQLite，撤销 token 是一次 `UPDATE`。
 
 ### Token 与身份
 
-每个 token 在签发时绑定一个 `(account_id, user_id, role)` 三元组。OAuth
-token 拥有的权限 = 颁发它时所用 API Key 的权限，**不更多也不更少**。
+每个 token 在签发时绑定一个 `(account_id, user_id, role)` 三元组。token 使用该身份，访问时仍受当前资源 ACL 和 key 有效性约束。用户后续提升角色不会升级已签发 token，降权检查可能拒绝旧 token。OAuth token 不能用于批准新的 OAuth 客户端。
 
 ### OAuth 生命周期 ≤ 授权 Key 生命周期
 
@@ -318,8 +322,7 @@ MCP SDK 拒绝非 `127.0.0.1` / `localhost` 的 `http://` issuer。三选一：
 ### 跨设备 fallback 页有码，但 `/studio/oauth/verify` 报 "Invalid code"
 
 码是 6 字符**全大写**，传输时区分大小写。`/studio/oauth/verify` 的输入框会
-自动转大写。如果手
-动输入，注意字母与数字的混淆字符（字母表已经排除了 `O`、`0`、`I`、`1`）。
+自动转大写。如果手动输入，注意字母与数字的混淆字符（字母表已经排除了 `O`、`0`、`I`、`1`）。
 
 ### Refresh 一次后再用旧 token 被拒
 
@@ -347,3 +350,5 @@ curl -i https://my.ov/mcp -d '{}' -H 'Content-Type: application/json' | grep -i 
 - [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
 - [RFC 7636 — PKCE](https://datatracker.ietf.org/doc/html/rfc7636)
 - [OpenViking MCP 集成指南](06-mcp-integration.md)
+
+[Compose restart 的配置加载行为](https://docs.docker.com/reference/cli/docker/compose/restart/)。

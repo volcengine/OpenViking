@@ -1,7 +1,7 @@
 # OVPack Import and Export
 
 OVPack is OpenViking's recoverable content package format for migrating or
-backing up public content trees under `viking://`. It stores file content,
+backing up supported content trees under `viking://`. It stores file content,
 semantic sidecar files, portable index scalar fields, and optional dense vector
 snapshots.
 
@@ -20,14 +20,14 @@ Regular `export/import` handles one package root:
 - `viking://user/...`
 
 Full migration uses the separate `backup/restore` flow. It packages public
-scope roots together:
+scope roots together (these are namespace roots, not a statement that their content is publicly readable):
 
 - `viking://resources`
 - all `viking://user/{user_id}` content in the current account
 
 Only ROOT or ADMIN can call `backup/restore`, and these operations traverse all
 user content within the current account. Backup packages do not contain user
-accounts, API keys, or other authentication data.
+accounts or the server API-key registry. User files, including privacy configuration containing external credentials, are still part of the content tree; treat the archive accordingly.
 
 Sessions are included through the user namespace at
 `viking://user/{user_id}/sessions/{session_id}`. The
@@ -77,7 +77,7 @@ root is `my-project`, the imported URI is:
 viking://resources/imported/my-project
 ```
 
-Overwrite an existing root:
+To replace an existing root, first back up that target and confirm its entire subtree may be removed:
 
 ```bash
 ov import ./exports/my-project.ovpack viking://resources/imported/ --on-conflict overwrite
@@ -163,7 +163,6 @@ Do not use `export viking://` for full migration. Use a backup package:
 
 ```bash
 ov backup ./backups/openviking.ovpack
-ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
 Backup packages can only be restored with `restore`; regular `import` rejects
@@ -204,6 +203,8 @@ After restoring content, register the remaining users with the same `user_id` va
 
 ## Python SDK
 
+Use source credentials for export/backup and a separately configured target client for import/restore across deployments. The full restore examples below assume you have completed the target-account and overwrite checks above. Queue completion alone does not prove a successful index rebuild; inspect errors and run a consistency check.
+
 ```python
 from openviking_sdk import AsyncHTTPClient
 
@@ -221,11 +222,12 @@ async def migrate_project():
         imported_uri = await client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
-            on_conflict="overwrite",
+            on_conflict="fail",
             vector_mode="auto",
         )
         print(imported_uri)
-        await client.wait_processed()
+        print(await client.wait_processed(timeout=120))
+        print(await client.check_consistency(uri=imported_uri))
     finally:
         await client.close()
 ```
@@ -262,7 +264,7 @@ importedURI, err := client.ImportOVPack(
     outPath,
     "viking://resources/imported/",
     &openviking.ImportPackOptions{
-        OnConflict: "overwrite",
+        OnConflict: "fail",
         VectorMode: "auto",
     },
 )
@@ -306,7 +308,7 @@ the local `.ovpack`, then call the pack endpoint with `temp_file_id`.
 Export:
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
+curl -f -X POST http://localhost:1933/api/v1/pack/export \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"uri":"viking://resources/my-project","include_vectors":false}' \
@@ -317,19 +319,19 @@ Import:
 
 ```bash
 TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  curl -fsS -X POST http://localhost:1933/api/v1/resources/temp_upload \
     -H "X-API-Key: your-admin-key" \
     -F "file=@./exports/my-project.ovpack" \
-  | jq -r ".result.temp_file_id"
+  | jq -er ".result.temp_file_id"
 )
 
-curl -X POST http://localhost:1933/api/v1/pack/import \
+curl -f -X POST http://localhost:1933/api/v1/pack/import \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
+    \"on_conflict\": \"fail\",
     \"vector_mode\": \"auto\"
   }"
 ```
@@ -337,7 +339,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 Full backup:
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/pack/backup \
+curl -f -X POST http://localhost:1933/api/v1/pack/backup \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"include_vectors":true}' \
@@ -388,7 +390,7 @@ my-project/_ovpack/manifest.json
 Dotfiles are no longer escaped with `_._`. `_ovpack/` stores OVPack internal
 metadata and is not imported as user content.
 
-The manifest stores package structure, file checksums, and checksums for
+The following manifest is illustrative (placeholder checksums do not form a valid package). It stores package structure, file checksums, and checksums for
 internal index files. It does not inline per-file index records:
 
 ```json
@@ -597,7 +599,7 @@ re-export from an environment that can read that version.
 | `source path is incompatible with target path` | Structured scope root depth would change | Import into the correct system parent directory. |
 | `Top-level scope ovpack packages must be imported to viking://` | A top-level scope package was imported to a non-root parent | Import to `viking://`. |
 | `Backup ovpack packages must be restored` | A backup package was imported with regular import | Use `ov restore`. |
-| `Resource already exists` | Target root already exists | Use `--on-conflict overwrite` or `--on-conflict skip`. |
+| `Resource already exists` | Target root already exists | Choose a new target parent, use `--on-conflict skip` to keep the existing root, or back it up and use `--on-conflict overwrite` to replace it. |
 | `incomplete OpenViking vector index snapshot` | `--include-vectors` found missing index records in the export range | Run `ov system consistency <uri>` to locate the issue, then wait for processing or reindex. |
 | `dense vector snapshot is incompatible` | Package embedding metadata does not match current config | Use `--vector-mode recompute`, or switch to a compatible config. |
 
@@ -619,6 +621,6 @@ migration and know the environments are compatible.
 
 **What if large package imports are slow?**
 
-Default import rebuilds target semantic and vector state. For large migrations,
+Import preserves packaged semantic sidecars and enqueues vector recomputation when a compatible dense snapshot is not restored. For large migrations,
 use `--include-vectors` to reduce recomputation, or split content into smaller
 OVPack files and import them in batches.

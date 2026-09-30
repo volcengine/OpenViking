@@ -60,6 +60,11 @@ Start Redis and OpenViking:
 
 ```bash
 redis-server
+```
+
+In a second terminal, start OpenViking:
+
+```bash
 openviking-server --config ~/.openviking/ov.conf
 ```
 
@@ -83,7 +88,7 @@ Available Providers:
 Set `storage.agfs.pathlock.provider` to `cache` to coordinate path locks
 between OpenViking processes through the shared Redis CacheRuntime.
 `pathlock.namespace` is required and must be the same for every process in
-one OpenViking deployment. Cache-backed PathLock only supports the built-in
+one OpenViking deployment; use distinct namespaces for independent deployments. Distributed path locking does not remove the single-writer requirement of CachedFileSystem. Cache-backed PathLock only supports the built-in
 Redis Provider.
 
 Redis HASH keys are partitioned by logical path scope:
@@ -160,7 +165,7 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
-| `namespace` | str or null | `null` | Required OpenViking instance name when `provider=cache` |
+| `namespace` | str or null | `null` | Required deployment namespace shared by collaborating processes when `provider=cache` |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:
@@ -328,4 +333,6 @@ Recommended signals to watch:
 4. Cache summary files and raw `read_dir` first, then expand to more regular small files.
 5. Add lock, control-plane, and permission-sensitive paths to `bypass_prefixes`.
 
-In short: RAGFS cache is responsible for correct invalidation according to filesystem semantics, while the Provider is responsible for where cache objects live. As long as the backend remains the source of truth, every cache hit must pass envelope and generation validation before it is returned.
+RAGFS cache handles invalidation according to filesystem semantics; the Provider decides where cache objects live. The backend remains the source of truth, and every cache hit must pass envelope and generation validation before it is returned.
+
+After enabling the cache, compare repeated reads and invalidation after a file update against the baseline. A higher hit rate is useful only if the returned contents remain current.
