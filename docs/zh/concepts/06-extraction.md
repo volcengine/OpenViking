@@ -43,7 +43,7 @@ Parser 负责文档格式转换和结构化，在临时目录创建文件结构�
 
 ### 文档分节
 
-Markdown 解析器按标题和大小组织章节，合并较短小节，拆分过长内容。默认 `max_section_size` 为 2048 tokens，`max_section_chars` 为 6000 字符；`section_size_flexibility` 默认为 0.3，允许为保持内容连贯而适度超出 token 目标。过长的单个表格行可以保持完整。这些值是分节目标，不能当作每个输出文件的绝对上限。
+Markdown 解析器按标题和大小组织章节，合并较短小节，拆分过长内容。默认 `max_section_size` 为 2048 tokens，`max_section_chars` 为 6000 字符。配置还定义了 `section_size_flexibility=0.3`，但当前 Markdown 分节代码未使用该值。过长的单个表格行可以保持完整。这些值是分节目标，不能当作每个输出文件的绝对上限。
 
 不同解析器和 `parse_mode` 的行为不同。需要保持单文件时，可在支持的导入中使用 `parse_mode="no_split"`，详见[资源管理](../api/02-resources.md)。
 

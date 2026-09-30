@@ -13,7 +13,7 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 1. **Write-exclusive**: Different owners participating in the protocol cannot hold conflicting path locks simultaneously
 2. **On by default**: Protected writes acquire locks by default; ordinary reads and low-level mkdir do not automatically acquire locks
 3. **Concurrency protection**: Runtime leases do not provide cross-store undo/journal/commit semantics
-4. **Persistent task recovery**: the `session_commit` queue resumes session Phase 2; the corresponding persistent queues recover derived resource processing
+4. **Persistent task recovery**: the `SessionCommit` queue resumes session Phase 2; the corresponding persistent queues recover derived resource processing
 5. **Locks and queues work together**: A business path may enqueue while holding a lock and hand off its lease; retries and deduplication depend on each task protocol, not a universal enqueue guarantee
 
 ## Architecture
@@ -36,7 +36,9 @@ Rust RAGFS `PathLockManager` and its Provider own runtime locks. Python services
 - **Lease**: Records the owner, covered paths, token locations, and refresh state. Background tasks can receive an explicit lease handoff.
 - **Failure handling**: Release validates ownership, and later acquisitions detect stale tokens. Releasing a lock does not undo persisted changes.
 
-### Component 2: Persistent `session_commit` Queue (Crash Recovery)
+### Component 2: Persistent `SessionCommit` Queue (Crash Recovery)
+
+The queue name is `SessionCommit`; the task type is `session_commit`.
 
 `session.commit` Phase 2 no longer uses a standalone redo log. Phase 1 persists archive metadata first,
 then enqueues a durable `SessionCommitMsg`; after restart, QueueManager resumes any leftover
@@ -77,7 +79,7 @@ retry is also safe.
 |---------|----------|
 | File moved to new path but index points to old path -> search returns old path (doesn't exist) | Copy first then update index; clean up copy on failure |
 
-**Locking strategy** (handled automatically via `lock_mode="mv"`):
+**Locking strategy** (acquired by the public `VikingFS.mv` implementation):
 - Moving a **directory**: TreeLock on both source and destination subtrees
 - Moving a **file**: EXACT lock on both source path and destination path
 
@@ -153,7 +155,7 @@ hold separate ExactPathLocks for the two source files. Refreshing `preferences/.
 
 ### session.commit()
 
-Phase 1 holds an EXACT lock on the session root to establish the commit boundary. Summary generation and memory extraction run in the background, outside that boundary lock, because model calls have unpredictable latency (5s~60s+):
+Phase 1 holds an EXACT lock on the session root to establish the commit boundary. Summary generation and memory extraction run in the background, outside that boundary lock, because model calls have unpredictable latency:
 
 ```text
 Phase 1: prepare and publish the archive under lock
@@ -377,9 +379,9 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 |-----------------|--------|-----------------|
 | Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
 | Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
-| Crash during session.commit Phase 2 | Persistent `session_commit` queue + resumed consumption | On restart |
+| Crash during session.commit Phase 2 | Persistent `SessionCommit` queue + resumed consumption | On restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
-| Orphan index | L2 on-demand load cleanup | When user accesses |
+| Orphan index | `rm` attempts related vector cleanup even if the target is missing | When `rm` is requested |
 
 ## Configuration
 

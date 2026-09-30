@@ -116,7 +116,7 @@ The following excerpts show server-internal types. For HTTP/SDK response fields,
 class MatchedContext:
     uri: str                # Resource URI
     context_type: ContextType
-    is_leaf: bool           # Whether file
+    level: int              # 0=abstract, 1=overview, 2=detail
     abstract: str           # L0 abstract
     score: float            # Final score
 ```

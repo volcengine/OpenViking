@@ -13,7 +13,7 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 1. **写互斥**：参与锁协议的不同 owner 不能同时取得冲突路径的锁
 2. **默认生效**：受保护的写操作默认加锁；普通读取和底层 mkdir 不自动加锁
 3. **锁只保护并发**：运行时申请和释放 lease，不提供跨存储的 undo/journal/commit 语义
-4. **持久化任务恢复**：`session_commit` 队列恢复会话 Phase 2；资源派生处理由相应的持久化队列恢复
+4. **持久化任务恢复**：`SessionCommit` 队列恢复会话 Phase 2；资源派生处理由相应的持久化队列恢复
 5. **锁与队列配合**：业务路径可在持锁时入队并交接 lease；重试和去重取决于具体任务协议，不能把所有 enqueue 视为天然幂等
 
 ## 架构
@@ -36,7 +36,9 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 - **lease**：记录 owner、覆盖路径、token 位置和续期状态。后台任务可以接收显式交接的 lease。
 - **失败处理**：释放前校验 owner，过期锁由后续获取时的 stale 检查清理；锁释放不会撤销已写入的数据。
 
-### 组件 2：持久化 `session_commit` 队列（崩溃恢复）
+### 组件 2：持久化 `SessionCommit` 队列（崩溃恢复）
+
+队列名为 `SessionCommit`，任务类型为 `session_commit`。
 
 `session.commit` 的 Phase 2 不再使用独立 RedoLog。Phase 1 会先把 archive 元数据持久化，再把
 `SessionCommitMsg` 写入持久化队列；进程重启后，QueueManager 会继续消费遗留的 `session_commit`
@@ -76,7 +78,7 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 |------|------|
 | 文件移到新路径但索引指向旧路径 -> 搜索返回旧路径（不存在） | 先 copy 再更新索引，失败时清理副本 |
 
-**加锁策略**（通过 `lock_mode="mv"` 自动处理）：
+**加锁策略**（由公开的 `VikingFS.mv` 实现申请）：
 - 移动**目录**：源路径加 TreeLock，目标路径加 TreeLock
 - 移动**文件**：源路径和目标路径各加 EXACT 锁
 
@@ -150,7 +152,7 @@ viking://user/default/memories/preferences/editor.md
 
 ### session.commit()
 
-Phase 1 使用会话根目录的 EXACT 锁划定提交边界。模型调用耗时不可控（5s~60s+），因此摘要生成和记忆提取放在后台，不在这个边界锁内等待：
+Phase 1 使用会话根目录的 EXACT 锁划定提交边界。模型调用耗时不可控，因此摘要生成和记忆提取放在后台，不在这个边界锁内等待：
 
 ```text
 Phase 1：持锁准备并发布归档
@@ -388,9 +390,9 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 |---------|------|---------|
 | 操作中途崩溃 | 锁自动过期 + stale 检测 | 下次获取同路径锁时 |
 | add_resource 语义处理中途崩溃 | 生命周期锁过期 + SemanticProcessor 重启时重新获取 | worker 重启后 |
-| session.commit Phase 2 崩溃 | 持久化 `session_commit` 队列 + 重试消费 | 重启时 |
+| session.commit Phase 2 崩溃 | 持久化 `SessionCommit` 队列 + 重试消费 | 重启时 |
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后 |
-| 孤儿索引 | L2 按需加载时清理 | 用户访问时 |
+| 孤儿索引 | `rm` 对不存在的目标也会尝试清理相关向量记录 | 调用 `rm` 时 |
 
 ## 配置
 

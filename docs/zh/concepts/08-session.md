@@ -161,7 +161,7 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 ### 如何检查更新结果
 
-先等待 commit 对应任务完成，再查看 `memory_diff.json`。其中新增、修改、删除是实际文件变更；`skipped_operations` 表示提取提出了操作，但校验或策略使其跳过。内容未变化的更新不会作为有效变更计入 diff。
+先等待 commit 对应任务完成，再查看 `memory_diff.json`。其中新增、修改、删除是实际文件变更；`skipped_operations` 表示提取提出了操作，但校验或策略使其跳过。无实际变化的更新不会计入 diff；正文未变但元数据发生变化时，仍可能记录为更新。
 
 ## 记忆变更记录
 

@@ -161,7 +161,7 @@ Existing memories inform extraction. An update can merge or edit existing files,
 
 ### Checking Update Results
 
-Wait for the commit task, then inspect `memory_diff.json`. Additions, updates, and deletions describe actual file changes. `skipped_operations` records proposed operations skipped by validation or policy. Updates that leave content unchanged are excluded from effective changes in the diff.
+Wait for the commit task, then inspect `memory_diff.json`. Additions, updates, and deletions describe actual file changes. `skipped_operations` records proposed operations skipped by validation or policy. No-op updates are excluded from effective changes in the diff; metadata changes can still produce an update when the body is unchanged.
 
 ## Memory Diff
 

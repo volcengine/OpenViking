@@ -116,7 +116,7 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 class MatchedContext:
     uri: str                # 资源 URI
     context_type: ContextType
-    is_leaf: bool           # 是否文件
+    level: int              # 0=摘要，1=概览，2=详情
     abstract: str           # L0 摘要
     score: float            # 最终分数
 ```
