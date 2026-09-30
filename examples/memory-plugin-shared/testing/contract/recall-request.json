@@ -1,0 +1,157 @@
+{
+  "description": "Common subset of the context-mode recall request body (the body built by lib/recall-core.mjs buildContextSearchBody, sent to /api/v1/search/search with a session and /api/v1/search/find without). Inputs use neutral snake_case names; a key that is absent means the user did not configure it. Only fields listed in `common_fields` are compared; see README.md for what is excluded and why.",
+  "common_fields": [
+    "mode",
+    "purpose",
+    "score_threshold",
+    "quotas",
+    "max_tokens",
+    "peer_scope",
+    "session_id",
+    "dedup_turns",
+    "exclude_uris"
+  ],
+  "field_notes": {
+    "query": "Always present and filled by the caller per turn; its value is not part of the contract.",
+    "mode": "Always \"context\".",
+    "purpose": "Always \"coding\".",
+    "score_threshold": "Always present. Defaults to 0.35 when unset or not a number.",
+    "quotas": "Sent only when the recall limit is configured. Per-type slots that sum to the limit, weighted events 1, entities 2, preferences 1, experiences 1, resources 3, skills 2, each at least 1 (a limit below 6 gives every type 1).",
+    "max_tokens": "Sent only when configured; floored at 64.",
+    "peer_scope": "Sent as \"actor\" only when isolation is requested; the default broad scope sends nothing.",
+    "session_id": "Sent only when a session id is known.",
+    "dedup_turns": "Only with a session id. Defaults to 5; 0 disables and is omitted.",
+    "exclude_uris": "Sent only when non-empty."
+  },
+  "defaults": { "limit": 10 },
+  "cases": [
+    {
+      "name": "bare defaults: nothing configured, no session",
+      "input": {},
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35 }
+    },
+    {
+      "name": "session id turns on cross-turn dedup with the default window",
+      "input": { "session_id": "sess-1" },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "session_id": "sess-1", "dedup_turns": 5 }
+    },
+    {
+      "name": "blank session id counts as no session",
+      "input": { "session_id": "   ", "dedup_turns": 3 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35 }
+    },
+    {
+      "name": "dedup window is configurable",
+      "input": { "session_id": "sess-1", "dedup_turns": 3 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "session_id": "sess-1", "dedup_turns": 3 }
+    },
+    {
+      "name": "dedup window of zero is omitted",
+      "input": { "session_id": "sess-1", "dedup_turns": 0 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "session_id": "sess-1" }
+    },
+    {
+      "name": "dedup window without a session is ignored",
+      "input": { "dedup_turns": 3 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35 }
+    },
+    {
+      "name": "configured limit of 10 yields weighted quotas",
+      "input": { "recall_limit": 10 },
+      "expected": {
+        "mode": "context",
+        "purpose": "coding",
+        "score_threshold": 0.35,
+        "quotas": { "events": 1, "entities": 2, "preferences": 1, "experiences": 1, "resources": 3, "skills": 2 }
+      }
+    },
+    {
+      "name": "configured limit of 20 doubles the weights",
+      "input": { "recall_limit": 20 },
+      "expected": {
+        "mode": "context",
+        "purpose": "coding",
+        "score_threshold": 0.35,
+        "quotas": { "events": 2, "entities": 4, "preferences": 2, "experiences": 2, "resources": 6, "skills": 4 }
+      }
+    },
+    {
+      "name": "a limit below the number of types gives each type one slot",
+      "input": { "recall_limit": 3 },
+      "expected": {
+        "mode": "context",
+        "purpose": "coding",
+        "score_threshold": 0.35,
+        "quotas": { "events": 1, "entities": 1, "preferences": 1, "experiences": 1, "resources": 1, "skills": 1 }
+      }
+    },
+    {
+      "name": "configured token budget is sent",
+      "input": { "recall_max_tokens": 2000 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "max_tokens": 2000 }
+    },
+    {
+      "name": "token budget is floored at 64",
+      "input": { "recall_max_tokens": 10 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "max_tokens": 64 }
+    },
+    {
+      "name": "score threshold override",
+      "input": { "score_threshold": 0.6 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.6 }
+    },
+    {
+      "name": "score threshold of zero is honoured, not replaced by the default",
+      "input": { "score_threshold": 0 },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0 }
+    },
+    {
+      "name": "actor peer scope isolates recall",
+      "input": { "peer_scope": "actor" },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35, "peer_scope": "actor" }
+    },
+    {
+      "name": "broad peer scope sends nothing",
+      "input": { "peer_scope": "all" },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35 }
+    },
+    {
+      "name": "exclude uris are passed through",
+      "input": { "exclude_uris": ["viking://user/u/memories/a.md", "viking://user/u/memories/b.md"] },
+      "expected": {
+        "mode": "context",
+        "purpose": "coding",
+        "score_threshold": 0.35,
+        "exclude_uris": ["viking://user/u/memories/a.md", "viking://user/u/memories/b.md"]
+      }
+    },
+    {
+      "name": "empty exclude list is omitted",
+      "input": { "exclude_uris": [] },
+      "expected": { "mode": "context", "purpose": "coding", "score_threshold": 0.35 }
+    },
+    {
+      "name": "everything configured at once",
+      "input": {
+        "session_id": "sess-9",
+        "recall_limit": 10,
+        "recall_max_tokens": 1600,
+        "score_threshold": 0.5,
+        "peer_scope": "actor",
+        "dedup_turns": 2,
+        "exclude_uris": ["viking://user/u/memories/a.md"]
+      },
+      "expected": {
+        "mode": "context",
+        "purpose": "coding",
+        "score_threshold": 0.5,
+        "quotas": { "events": 1, "entities": 2, "preferences": 1, "experiences": 1, "resources": 3, "skills": 2 },
+        "max_tokens": 1600,
+        "peer_scope": "actor",
+        "session_id": "sess-9",
+        "dedup_turns": 2,
+        "exclude_uris": ["viking://user/u/memories/a.md"]
+      }
+    }
+  ]
+}

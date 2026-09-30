@@ -2,8 +2,8 @@
 
 Pure UI flow: prompts, menus, and persistence of the chosen connection (Hermes
 ``.env`` only, or mirrored to an ``ovcli.conf.<name>`` profile that Hermes then
-links). Network validation and file writers live in the package ``__init__`` and
-are looked up there at call time so tests can monkeypatch them on the plugin module.
+links). Profile discovery and network validation come from the provider's
+``Deps``; the other helpers and file writers live in the package ``__init__``.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _SHARED_PROFILE = "shared"
 
 
 def _ov():
-    """The plugin module — resolved lazily so monkeypatched validators are honored."""
+    """The plugin module, resolved lazily because ``__init__`` imports this module part-way."""
     return sys.modules[__package__]
 
 
@@ -86,7 +86,8 @@ def _retry_or_cancel_manual_setup(select, title: str, message: str, cancelled):
     return True if choice == 0 else _SETUP_CANCELLED
 
 
-def _handle_unreachable_endpoint(endpoint: str, message: str, select, cancelled, *, allow_local_autostart: bool = True):
+def _handle_unreachable_endpoint(endpoint: str, message: str, select, cancelled, *, deps,
+                                 allow_local_autostart: bool = True):
     """-> True (reachable now) / False (re-prompt URL) / _SETUP_CANCELLED."""
     ov = _ov()
     is_local = ov._is_local_openviking_url(endpoint)
@@ -106,7 +107,7 @@ def _handle_unreachable_endpoint(endpoint: str, message: str, select, cancelled,
     if start_state != ov._LOCAL_SERVER_STARTED:
         return False
     _say("Waiting for OpenViking server to become reachable...")
-    if ov._wait_for_openviking_health(endpoint, timeout_seconds=ov._LOCAL_OPENVIKING_AUTOSTART_TIMEOUT):
+    if ov._wait_for_openviking_health(endpoint, timeout_seconds=ov._LOCAL_OPENVIKING_AUTOSTART_TIMEOUT, deps=deps):
         _say("OpenViking server is reachable.")
         return True
     _say("OpenViking server did not become reachable.")
@@ -143,7 +144,7 @@ def _confirm_replace_existing_profile(path: Path, values: dict, select, cancelle
     return {1: True, 0: False}.get(choice, _SETUP_CANCELLED)
 
 
-def _prompt_endpoint(prompt, select, cancelled) -> str | object:
+def _prompt_endpoint(prompt, select, cancelled, *, deps) -> str | object:
     """Ask for a custom server URL until it normalizes and answers /health."""
     ov = _ov()
     while True:
@@ -154,11 +155,11 @@ def _prompt_endpoint(prompt, select, cancelled) -> str | object:
                 return _SETUP_CANCELLED
             continue
         _say("Checking OpenViking server...")
-        reachable, message = ov._validate_openviking_reachability(endpoint)
+        reachable, message = deps.validate_reachability(endpoint)
         if reachable:
             _say("OpenViking server is reachable.")
             return endpoint
-        retry = _handle_unreachable_endpoint(endpoint, message, select, cancelled,
+        retry = _handle_unreachable_endpoint(endpoint, message, select, cancelled, deps=deps,
                                              allow_local_autostart=not (message or "").startswith(ov._OPENVIKING_RESPONDED_FAILURE_PREFIX))
         if retry is True:
             return endpoint
@@ -179,7 +180,7 @@ class _Cancelled(Exception):
     """Internal unwind for the manual-connection loop (converted to _SETUP_CANCELLED at the boundary)."""
 
 
-def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool = False):
+def _prompt_manual_connection_values(prompt, select, cancelled, *, deps, service: bool = False):
     """Loop until a validated connection dict is built, or _SETUP_CANCELLED.
     ``continue`` re-enters the loop with ``api_key_type`` / ``prefilled_api_key`` carried over."""
     ov = _ov()
@@ -187,7 +188,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
         endpoint = ov._OPENVIKING_SERVICE_ENDPOINT
         _say(f"OpenViking Service endpoint: {endpoint}")
     else:
-        endpoint = _prompt_endpoint(prompt, select, cancelled)
+        endpoint = _prompt_endpoint(prompt, select, cancelled, deps=deps)
         if endpoint is _SETUP_CANCELLED:
             return _SETUP_CANCELLED
 
@@ -227,7 +228,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     raise _Cancelled
                 if is_local and credential_choice == 2:
                     _say("Validating OpenViking local dev access...")
-                    valid, message, _role = ov._validate_openviking_setup_values(values)
+                    valid, message, _role = deps.validate_setup_values(values)
                     if valid:
                         _say("OpenViking local dev access validated.")
                         return values
@@ -247,7 +248,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
 
             if api_key_type == "root":
                 _say("Validating OpenViking root API key...")
-                valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=True)
+                valid, message, role = deps.validate_setup_values(values, require_api_key=True)
                 if valid and role == "user":
                     reroute("root")
                     continue
@@ -267,7 +268,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     continue
 
             _say("Validating OpenViking API access...")
-            valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=service or not is_local)
+            valid, message, role = deps.validate_setup_values(values, require_api_key=service or not is_local)
             if not valid:
                 retry("  OpenViking API access failed", message)
                 continue
@@ -330,7 +331,8 @@ def _print_openviking_ready(message: str, path: Optional[Path] = None) -> None:
     print("  Start a new Hermes session to activate.\n")
 
 
-def _run_existing_profile_setup(*, profiles: list, select, cancelled, config: dict, provider_config: dict, env_path: Path) -> bool | object:
+def _run_existing_profile_setup(*, profiles: list, select, cancelled, config: dict, provider_config: dict, env_path: Path,
+                                deps) -> bool | object:
     ov = _ov()
     while True:
         choice = select(
@@ -345,7 +347,7 @@ def _run_existing_profile_setup(*, profiles: list, select, cancelled, config: di
         for attempt in (0, 1):
             _say("Validating OpenViking profile...")
             require_api_key = not ov._is_local_openviking_url(profile.values.get("endpoint", ""))
-            ok, message, _role = ov._validate_openviking_setup_values(profile.values, require_api_key=require_api_key)
+            ok, message, _role = deps.validate_setup_values(profile.values, require_api_key=require_api_key)
             if ok:
                 _link_ovcli_profile(config=config, provider_config=provider_config, env_path=env_path, ovcli_path=profile.path)
                 _print_openviking_ready(f"Linked profile: {_profile_display_name(profile)}", profile.path)
@@ -382,7 +384,8 @@ def _mirror_manual_config_to_openviking_store(*, prompt, select, cancelled, valu
         return path
 
 
-def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provider_config: dict, env_path: Path) -> bool | object:
+def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provider_config: dict, env_path: Path,
+                              deps) -> bool | object:
     source_choice = select("  OpenViking connection",
                            [("OpenViking Service (VolcEngine Cloud)", "use the managed OpenViking endpoint"),
                             ("Custom", "use a local, VPS, or self-hosted OpenViking server")],
@@ -390,7 +393,7 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
     if source_choice == cancelled:
         return _SETUP_CANCELLED
 
-    values = _prompt_manual_connection_values(prompt, select, cancelled, service=(source_choice == 0))
+    values = _prompt_manual_connection_values(prompt, select, cancelled, deps=deps, service=(source_choice == 0))
     if values is _SETUP_CANCELLED:
         return _SETUP_CANCELLED
     if values is None:
@@ -416,11 +419,12 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
     return True
 
 
-def run_setup(hermes_home: str, config: dict) -> None:
-    """Entry point for ``OpenVikingMemoryProvider.post_setup``."""
+def run_setup(hermes_home: str, config: dict, deps=None) -> None:
+    """Entry point for ``OpenVikingMemoryProvider.post_setup``, which passes its ``Deps``."""
     from hermes_cli.config import save_config
     from hermes_cli.memory_setup import _CANCELLED, _curses_select, _print_cancelled_setup, _prompt
 
+    deps = deps if deps is not None else _ov().default_deps()
     env_path = Path(hermes_home) / ".env"
     memory_config = config.get("memory")
     provider_config = memory_config.get("openviking", {}) if isinstance(memory_config, dict) else {}
@@ -432,9 +436,10 @@ def run_setup(hermes_home: str, config: dict) -> None:
         return
     if not isinstance(config.get("memory"), dict):
         config["memory"] = {}
-    common = dict(select=_curses_select, cancelled=_CANCELLED, config=config, provider_config=provider_config, env_path=env_path)
+    common = dict(select=_curses_select, cancelled=_CANCELLED, config=config, provider_config=provider_config, env_path=env_path,
+                  deps=deps)
 
-    profiles = _ov()._discover_ovcli_profiles()
+    profiles = deps.discover_profiles()
     if profiles:
         choice = _curses_select("  OpenViking config source",
                                 [("Use existing OpenViking profile", "choose from detected ovcli.conf profiles"),
@@ -458,6 +463,10 @@ def run_setup(hermes_home: str, config: dict) -> None:
         _ov()._write_env_vars(env_path, {}, remove_keys=("OPENVIKING_RECALL_SCOPE",))
         os.environ.pop("OPENVIKING_RECALL_SCOPE", None)
         save_config(config)
+        # The first session's tool list is fixed before initialize(); a primed cache avoids a live call.
+        from .core.tools import prime_tool_cache
+
+        prime_tool_cache(hermes_home, deps)
         if usage_profile == _SHARED_PROFILE:
             _say("Restart the Hermes gateway to apply the shared session settings.")
         else:

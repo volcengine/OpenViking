@@ -5,7 +5,10 @@
 # rather than by the commit the marketplace ref points at, so a frozen version
 # string means users keep running the build they already have no matter how
 # many fixes land on main. Other entries use their package or installer manifest;
-# pi is copied wholesale and reports its manifest version on the wire.
+# pi is copied wholesale and reports its manifest version on the wire. Hermes
+# installs the plugin at a pinned commit, but resolves dependencies from
+# pyproject.toml and reports plugin.yaml's version in its User-Agent, so the two
+# files must agree and move together.
 #
 # Usage: check-plugin-version-bumps.sh <base-ref>
 set -euo pipefail
@@ -27,6 +30,7 @@ PLUGINS=(
   "examples/opencode-plugin:examples/opencode-plugin/package.json"
   "examples/dsh-memory-plugin:examples/dsh-memory-plugin/package.json"
   "examples/pi-coding-agent-extension:examples/pi-coding-agent-extension/package.json"
+  "examples/hermes-plugin:examples/hermes-plugin/plugin.yaml"
 )
 
 # A change to the shared library reaches every plugin, and it no longer reaches
@@ -34,15 +38,44 @@ PLUGINS=(
 # hosts have the runtime assembled at install time, and the packaged plugins
 # build their copies at pack time. So the library counts as a change to all.
 SHARED_LIB="examples/memory-plugin-shared/lib"
+# Plugins that do not consume the shared JS library: a change there is not a
+# change to them. Hermes is a Python in-process provider.
+NO_SHARED_LIB=(
+  "examples/hermes-plugin"
+)
+
+uses_shared_lib() { # uses_shared_lib <plugin directory>
+  local dir
+  for dir in "${NO_SHARED_LIB[@]}"; do
+    [ "$dir" = "$1" ] && return 1
+  done
+  return 0
+}
 
 read_version() { # read_version <ref-or-empty> <path>
-  local ref="$1" path="$2" json
+  local ref="$1" path="$2" text
   if [ -n "$ref" ]; then
-    json="$(git show "$ref:$path" 2>/dev/null)" || return 1
+    text="$(git show "$ref:$path" 2>/dev/null)" || return 1
   else
-    json="$(cat "$path")"
+    text="$(cat "$path")"
   fi
-  printf '%s' "$json" | node -e '
+  case "$path" in
+    *.yaml | *.yml)
+      # Top-level `version:` key, optionally quoted.
+      printf '%s\n' "$text" | sed -nE 's/^version:[[:space:]]*["'"'"']?([^"'"'"'[:space:]#]+).*/\1/p' | head -n 1
+      return
+      ;;
+    *.toml)
+      # `version` in the [project] table.
+      printf '%s\n' "$text" | awk '
+        /^\[/ { in_project = ($0 ~ /^\[project\][[:space:]]*$/) }
+        in_project && /^version[[:space:]]*=/ {
+          sub(/^version[[:space:]]*=[[:space:]]*/, ""); gsub(/["'"'"'[:space:]]/, ""); print; exit
+        }'
+      return
+      ;;
+  esac
+  printf '%s' "$text" | node -e '
 let raw = "";
 process.stdin.on("data", (c) => { raw += c; });
 process.stdin.on("end", () => {
@@ -54,13 +87,15 @@ process.stdin.on("end", () => {
 
 # Each host-facing manifest must report the distributed agent-hook version.
 # Kimi also exposes kimi.plugin.json to the host and its marketplace, so keep
-# that version aligned with the integration and root manifests.
+# that version aligned with the integration and root manifests. Hermes keeps
+# its version in both plugin.yaml and pyproject.toml.
 PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
+  "examples/hermes-plugin/plugin.yaml:examples/hermes-plugin/pyproject.toml"
 )
 
 failed=0
@@ -80,7 +115,9 @@ for entry in "${PLUGINS[@]}"; do
   dir="${entry%%:*}"
   manifest="${entry#*:}"
 
-  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" | grep -v '/node_modules/' || true)"
+  paths=("$dir")
+  uses_shared_lib "$dir" && paths+=("$SHARED_LIB")
+  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "${paths[@]}" | grep -v '/node_modules/' || true)"
   [ -n "$changed" ] || continue
 
   # A plugin added in this branch has no baseline version to compare against.

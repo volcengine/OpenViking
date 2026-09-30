@@ -1,0 +1,98 @@
+{
+  "description": "Headers every plugin puts on every OpenViking request. Inputs use neutral snake_case names; each language maps them onto its own config shape. Expected values are the exact header map (names are case-sensitive as written).",
+  "never_present": ["X-API-Key"],
+  "cases": [
+    {
+      "name": "anonymous: no key, no identity",
+      "input": {},
+      "expected": { "Content-Type": "application/json" }
+    },
+    {
+      "name": "bearer only: api key goes out as Authorization: Bearer and nowhere else",
+      "input": { "api_key": "secret" },
+      "expected": { "Content-Type": "application/json", "Authorization": "Bearer secret" }
+    },
+    {
+      "name": "untrusted server: account and user are configured but withheld",
+      "input": { "api_key": "secret", "account": "acct-a", "user": "user-a", "trusted_identity": false },
+      "expected": { "Content-Type": "application/json", "Authorization": "Bearer secret" }
+    },
+    {
+      "name": "trusted server: account and user headers are sent",
+      "input": { "api_key": "secret", "account": "acct-a", "user": "user-a", "trusted_identity": true },
+      "expected": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret",
+        "X-OpenViking-Account": "acct-a",
+        "X-OpenViking-User": "user-a"
+      }
+    },
+    {
+      "name": "trusted server without a user sends only the account",
+      "input": { "account": "acct-a", "trusted_identity": true },
+      "expected": { "Content-Type": "application/json", "X-OpenViking-Account": "acct-a" }
+    },
+    {
+      "name": "trusted server with empty identity values sends neither header",
+      "input": { "account": "", "user": "", "trusted_identity": true },
+      "expected": { "Content-Type": "application/json" }
+    },
+    {
+      "name": "per-request override can turn identity headers on for an untrusted config",
+      "input": { "account": "acct-a", "user": "user-a", "trusted_identity": false, "identity_override": true },
+      "expected": {
+        "Content-Type": "application/json",
+        "X-OpenViking-Account": "acct-a",
+        "X-OpenViking-User": "user-a"
+      }
+    },
+    {
+      "name": "per-request override can turn identity headers off for a trusted config",
+      "input": { "account": "acct-a", "user": "user-a", "trusted_identity": true, "identity_override": false },
+      "expected": { "Content-Type": "application/json" }
+    },
+    {
+      "name": "actor peer header is sent with or without trust, and is not an identity header",
+      "input": { "api_key": "secret", "trusted_identity": false, "actor_peer_id": "github.com-org-repo" },
+      "expected": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret",
+        "X-OpenViking-Actor-Peer": "github.com-org-repo"
+      }
+    },
+    {
+      "name": "empty actor peer is omitted",
+      "input": { "api_key": "secret", "actor_peer_id": "" },
+      "expected": { "Content-Type": "application/json", "Authorization": "Bearer secret" }
+    },
+    {
+      "name": "full set: every header at once",
+      "input": {
+        "api_key": "secret",
+        "account": "acct-a",
+        "user": "user-a",
+        "trusted_identity": true,
+        "actor_peer_id": "peer-1",
+        "user_agent": "openviking-memory-{plugin}/{version}"
+      },
+      "expected": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer secret",
+        "X-OpenViking-Account": "acct-a",
+        "X-OpenViking-User": "user-a",
+        "X-OpenViking-Actor-Peer": "peer-1",
+        "User-Agent": "openviking-memory-{plugin}/{version}"
+      },
+      "placeholders": { "plugin": "hermes", "version": "1.2.3" }
+    }
+  ],
+  "user_agent": {
+    "description": "One token of the shape name/semver so stats layers can parse it. An empty or missing version falls back to 0.0.0.",
+    "template": "openviking-memory-{plugin}/{version}",
+    "cases": [
+      { "plugin": "hermes", "version": "1.2.3", "expected": "openviking-memory-hermes/1.2.3" },
+      { "plugin": "codex", "version": "0.4.0", "expected": "openviking-memory-codex/0.4.0" },
+      { "plugin": "hermes", "version": "", "expected": "openviking-memory-hermes/0.0.0" }
+    ]
+  }
+}

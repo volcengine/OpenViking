@@ -1,8 +1,10 @@
 name: openviking
-version: 2.0.1
+version: 3.0.0
 description: "OpenViking context database — session-managed memory with automatic extraction, tiered retrieval, and filesystem-style knowledge browsing."
+# Shown by the dashboard only; Hermes installs pyproject.toml's [project].dependencies.
+# Keep this list identical to that one.
 pip_dependencies:
-  - httpx
+  - "httpx>=0.27,<1"
+  - "mcp>=2.0.0,<3"
+  - "psutil>=5.9,<9"
 requires_env: []
-hooks:
-  - on_session_end

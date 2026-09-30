@@ -1,0 +1,151 @@
+[
+  {
+    "key": "endpoint",
+    "description": "OpenViking server URL",
+    "required": true,
+    "default": "http://127.0.0.1:1933",
+    "env_var": "OPENVIKING_ENDPOINT"
+  },
+  {
+    "key": "api_key",
+    "description": "OpenViking API key (recommended; only leave blank for an explicitly unauthenticated local development server)",
+    "secret": true,
+    "env_var": "OPENVIKING_API_KEY"
+  },
+  {
+    "key": "account",
+    "description": "Advanced local identity override (leave blank for user API keys)",
+    "env_var": "OPENVIKING_ACCOUNT"
+  },
+  {
+    "key": "user",
+    "description": "Advanced local user override (leave blank for user API keys)",
+    "env_var": "OPENVIKING_USER"
+  },
+  {
+    "key": "agent",
+    "description": "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.",
+    "default": "",
+    "env_var": "OPENVIKING_AGENT"
+  },
+  {
+    "key": "recall_scope",
+    "description": "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
+    "type": "string",
+    "choices": [
+      "shared",
+      "peer"
+    ],
+    "default": null,
+    "env_var": "OPENVIKING_RECALL_SCOPE"
+  },
+  {
+    "key": "recall_compress",
+    "description": "Cloud recall compression: off, server or auto (no local compressor)",
+    "type": "string",
+    "default": "off",
+    "env_var": "OPENVIKING_RECALL_COMPRESS"
+  },
+  {
+    "key": "commit_token_threshold",
+    "description": "Pending session tokens that trigger a background memory commit",
+    "type": "integer",
+    "minimum": 1000,
+    "maximum": 1000000,
+    "default": 20000,
+    "env_var": "OPENVIKING_COMMIT_TOKEN_THRESHOLD"
+  },
+  {
+    "key": "recall_limit",
+    "description": "Maximum memories injected by automatic recall",
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 100,
+    "default": 6,
+    "env_var": "OPENVIKING_RECALL_LIMIT"
+  },
+  {
+    "key": "recall_score_threshold",
+    "description": "Minimum relevance score for automatic recall",
+    "type": "number",
+    "minimum": 0.0,
+    "maximum": 1.0,
+    "step": 0.01,
+    "default": 0.15,
+    "env_var": "OPENVIKING_RECALL_SCORE_THRESHOLD"
+  },
+  {
+    "key": "recall_max_injected_chars",
+    "description": "Maximum total characters injected by recall",
+    "type": "integer",
+    "minimum": 100,
+    "maximum": 50000,
+    "default": 4000,
+    "env_var": "OPENVIKING_RECALL_MAX_INJECTED_CHARS"
+  },
+  {
+    "key": "profile_token_budget",
+    "description": "Maximum session-start memory tokens injected",
+    "type": "integer",
+    "minimum": 500,
+    "maximum": 50000,
+    "default": 6000,
+    "env_var": "OPENVIKING_PROFILE_TOKEN_BUDGET"
+  },
+  {
+    "key": "recall_timeout_seconds",
+    "description": "Total timeout for recall (seconds)",
+    "type": "number",
+    "minimum": 0.25,
+    "maximum": 60.0,
+    "step": 0.25,
+    "default": 4.0,
+    "env_var": "OPENVIKING_RECALL_TIMEOUT_SECONDS"
+  },
+  {
+    "key": "recall_request_timeout_seconds",
+    "description": "Per-request timeout for recall (seconds)",
+    "type": "number",
+    "minimum": 0.25,
+    "maximum": 60.0,
+    "step": 0.25,
+    "default": 3.0,
+    "env_var": "OPENVIKING_RECALL_REQUEST_TIMEOUT_SECONDS"
+  },
+  {
+    "key": "recall_full_read_limit",
+    "description": "Max full L2 content reads per recall",
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 100,
+    "default": 2,
+    "env_var": "OPENVIKING_RECALL_FULL_READ_LIMIT"
+  },
+  {
+    "key": "recall_prefer_abstract",
+    "description": "Use abstracts instead of full L2 reads",
+    "type": "boolean",
+    "default": false,
+    "env_var": "OPENVIKING_RECALL_PREFER_ABSTRACT"
+  },
+  {
+    "key": "recall_resources",
+    "description": "Include resources in recall",
+    "type": "boolean",
+    "default": false,
+    "env_var": "OPENVIKING_RECALL_RESOURCES"
+  },
+  {
+    "key": "recall_context_mode",
+    "description": "Use server context mode for shared and sender-scoped recall (false: list search)",
+    "type": "boolean",
+    "default": true,
+    "env_var": "OPENVIKING_RECALL_CONTEXT_MODE"
+  },
+  {
+    "key": "extra_tools",
+    "description": "Optional OpenViking tools to expose besides the defaults, comma-separated (write, edit, add_skill, list_watches, cancel_watch)",
+    "default": "",
+    "env_var": "OPENVIKING_EXTRA_TOOLS"
+  }
+]

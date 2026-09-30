@@ -1,8 +1,10 @@
 """Load the plugin through Hermes discovery in isolated profile homes."""
 
+import importlib
 import os
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -53,3 +55,81 @@ def external_provider(tmp_path, monkeypatch):
     yield load
     for provider in providers:
         provider.shutdown()
+
+
+def core_submodule(plugin, name):
+    """``<plugin package>.core.<name>`` for a plugin module Hermes loaded.
+
+    Hermes imports the plugin under a namespace of its own (for an installed copy
+    ``_hermes_user_memory.<name>``), not under its directory name, so a test finds
+    a core module through the loaded package. ``plugin`` is the package or any of
+    its modules.
+    """
+    package = plugin.__name__ if hasattr(plugin, "__path__") else plugin.__name__.rpartition(".")[0]
+    return importlib.import_module(f"{package}.core.{name}")
+
+
+@pytest.fixture
+def core_module():
+    """``core_module(module, "deps")``: see :func:`core_submodule`."""
+    return core_submodule
+
+
+@pytest.fixture
+def inject_deps():
+    """Swap plugin dependencies through ``Deps`` instead of patching module globals.
+
+    ``inject(module, *providers, **fields)`` replaces ``fields`` in each given
+    provider's Deps and in the default of the plugin's ``core.deps``, which later
+    providers and helpers called without a provider read. Defaults are restored
+    at teardown.
+    """
+    previous = []
+
+    def inject(module, *providers, **fields):
+        deps = core_submodule(module, "deps")
+        previous.append((deps, deps.set_default_deps(replace(deps.default_deps(), **fields))))
+        for provider in providers:
+            provider._deps = replace(provider._deps, **fields)
+
+    yield inject
+    for deps, default in reversed(previous):
+        deps.set_default_deps(default)
+
+
+class FakeMcp:
+    """Scripted OpenViking /mcp behind ``Deps.mcp_session``; records every session and call."""
+
+    def __init__(self):
+        self.sessions = []
+        self.calls = []
+        self.tools = []
+        self.reply = lambda name, arguments: {"content": [{"type": "text", "text": f"{name} ok"}]}
+
+    def factory(self, url, headers, on_http_status, timeout):
+        from contextlib import asynccontextmanager
+
+        fake = self
+
+        class Session:
+            async def initialize(self):
+                return None
+
+            async def list_tools(self, cursor):
+                return list(fake.tools), None
+
+            async def call_tool(self, name, arguments):
+                fake.calls.append((name, dict(arguments)))
+                return fake.reply(name, arguments)
+
+        @asynccontextmanager
+        async def open_session():
+            self.sessions.append({"url": url, "headers": dict(headers)})
+            yield Session()
+
+        return open_session()
+
+
+@pytest.fixture
+def fake_mcp():
+    return FakeMcp()

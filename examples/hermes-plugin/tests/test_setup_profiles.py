@@ -16,7 +16,7 @@ def patch_menu(monkeypatch, select):
     monkeypatch.setattr(curses_ui, "curses_radiolist", radio)
 
 
-def setup_state(external_provider, monkeypatch, *, route="local", line_ending=b"\n"):
+def setup_state(external_provider, monkeypatch, inject_deps, *, route="local", line_ending=b"\n"):
     import hermes_cli.memory_setup as setup
 
     home, provider, module, _ = external_provider("setup-profile")
@@ -37,10 +37,14 @@ def setup_state(external_provider, monkeypatch, *, route="local", line_ending=b"
     profiles = (
         [module._OvcliProfile("saved", "existing", saved, values)] if route == "linked" else []
     )
-    monkeypatch.setattr(module, "_discover_ovcli_profiles", lambda: profiles)
-    monkeypatch.setattr(module, "_validate_openviking_reachability", lambda *_: (True, "ok"))
-    monkeypatch.setattr(
-        module, "_validate_openviking_setup_values", lambda *_, **__: (True, "ok", None)
+    inject_deps(
+        module,
+        provider,
+        discover_profiles=lambda: profiles,
+        validate_reachability=lambda *_: (True, "ok"),
+        validate_setup_values=lambda *_, **__: (True, "ok", None),
+        # Tool cache priming after setup must not reach a real server.
+        mcp_session=lambda *_: (_ for _ in ()).throw(ConnectionError("no MCP in setup tests")),
     )
     monkeypatch.setattr(
         setup,
@@ -70,7 +74,7 @@ def select_profile(profile, route, menus, setup):
 @pytest.mark.parametrize("profile", ["personal", "shared"])
 @pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 def test_setup_persists_preset_and_real_gateway_session_boundaries(
-    external_provider, monkeypatch, capsys, route, profile, line_ending
+    external_provider, monkeypatch, inject_deps, capsys, route, profile, line_ending
 ):
     from gateway.config import Platform
     from gateway.session import build_session_key
@@ -81,7 +85,7 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
     )
 
     home, provider, module, config, setup = setup_state(
-        external_provider, monkeypatch, route=route, line_ending=line_ending
+        external_provider, monkeypatch, inject_deps, route=route, line_ending=line_ending
     )
     other_home, _, _, _ = external_provider("other-profile")
     other_before = (other_home / "config.yaml").read_bytes()
@@ -148,10 +152,10 @@ def test_setup_persists_preset_and_real_gateway_session_boundaries(
 
 @pytest.mark.parametrize("stage", ["usage", "confirm", "connection", "save", "validation"])
 def test_cancelled_or_failed_setup_does_not_apply_preset(
-    external_provider, monkeypatch, capsys, stage
+    external_provider, monkeypatch, inject_deps, capsys, stage
 ):
     home, provider, module, config, setup = setup_state(
-        external_provider, monkeypatch, route="linked" if stage == "validation" else "local"
+        external_provider, monkeypatch, inject_deps, route="linked" if stage == "validation" else "local"
     )
     before = copy.deepcopy(config)
     paths = [
@@ -170,10 +174,8 @@ def test_cancelled_or_failed_setup_does_not_apply_preset(
     selections = iter(selectors[stage])
     patch_menu(monkeypatch, lambda *_, **__: next(selections))
     if stage == "validation":
-        monkeypatch.setattr(
-            module,
-            "_validate_openviking_setup_values",
-            lambda *_, **__: (False, "unavailable", None),
+        inject_deps(
+            module, provider, validate_setup_values=lambda *_, **__: (False, "unavailable", None)
         )
     provider.post_setup(str(home), config)
     output = capsys.readouterr().out
@@ -185,9 +187,9 @@ def test_cancelled_or_failed_setup_does_not_apply_preset(
 
 
 def test_saved_selection_and_back_from_shared_keep_personal_session_policy(
-    external_provider, monkeypatch
+    external_provider, monkeypatch, inject_deps
 ):
-    home, provider, _, config, setup = setup_state(external_provider, monkeypatch)
+    home, provider, _, config, setup = setup_state(external_provider, monkeypatch, inject_deps)
     config["memory"]["openviking"]["recall_scope"] = "shared"
     config["group_sessions_per_user"] = False
     config["thread_sessions_per_user"] = True

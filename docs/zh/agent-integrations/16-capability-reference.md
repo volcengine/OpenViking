@@ -1,9 +1,9 @@
 # 集成能力参考
 
-**Hermes 范围**：表中的 Hermes 描述其[内置 provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)，
-核对版本为 Hermes main `989798cd5e`。[OpenViking 维护的外部插件](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
-另有提交、召回和镜像改进。内置副本仍在时优先加载；正常使用请按
-[配置指南](./05-hermes.md)操作。
+**Hermes 范围**：表中的 Hermes 描述 [OpenViking 维护的外部插件](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) 3.0.0。
+仍随包发布[内置 provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)（核对版本为 Hermes main `989798cd5e`）的 Hermes 版本会加载内置副本：
+它提供 6 个 `viking_*` 工具，不保留上传失败的消息，原生记忆镜像只同步新增。
+配置方法见[配置指南](./05-hermes.md)。
 
 ## 导读
 
@@ -42,7 +42,7 @@
 | dsh | MCP 透传 | 16 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
 | pi | MCP 镜像（官方客户端；扩展加 `openviking_` 前缀） | 16，即 `tools/list` 返回什么就是什么（注册有前置条件³） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
 | openclaw | 原生注册（15 个 `memory_*`/`ov_*` 等） | 15（默认开 14⁴） | ✅ `memory_recall` | ✅ `ov_search`（默认双 scope） | ✅ `ov_search` | ✅ `memory_store` | 默认关⁴ | ✅ `add_skill` | memory-only 白名单 + 单候选 score≥0.85 才自动删 |
-| hermes | 原生注册（6 个 `viking_*`） | 6（provider 激活即全开） | ✅ | ✅ | ✅ | ✅ `viking_remember`（独立会话提交，异步抽取） | ✅ 多协议摄取（HTTP/Git/SSH/本地文件/目录 zip） | ❌ | memory-only + `.md` 叶子校验 |
+| hermes | MCP 镜像（进程内官方客户端；provider 加 `openviking_` 前缀） | 服务端 16 个中的 11 个（`extra_tools` 可加 `write`、`edit`、`add_skill`、`list_watches`、`cancel_watch`） | ✅ | ✅ | ✅ | ✅ `openviking_remember` | ✅ `openviking_add_resource`（本地文件和目录先上传） | 默认关（`add_skill` 经 `extra_tools` 打开） | memory-only + `.md` 叶子校验 + 归属校验（本地 `openviking_forget` 包装，`recursive=false`） |
 | ov CLI | CLI 命令 | ~40 命令组 | ✅ `ov find` | ✅ `ov find` | ✅ `ov find` | ✅ `ov add-memory` | ✅ `ov add-resource` | ✅ `ov add-skill` | `ov rm` 直接执行（TUI 删除有确认 + root/scope 禁删） |
 
 ¹ MCP `write` 拒绝写用户自己的 `skills/` 子树；写 `viking://agent/skills` 时会生成一个绕过 skill 安装流程的普通文件（没有 frontmatter abstract，也不做 privacy 抽取），所以共享 skill 同样要走 `add_skill`。skill 的新建、安装和替换走 MCP `add_skill` 工具（内联 SKILL.md 文本、Git URL，或本地目录/zip 的签名上传），它和 REST `POST /api/v1/skills` 共用同一套安装实现。
@@ -66,14 +66,14 @@
 | dsh | Cordis 原生插件（同进程）+ MCP 代理 + skill | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），每 session 一次 | ❌ | ✅ | ❌ |
 | pi | 原生扩展（9 事件） | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），进 systemPrompt 每轮重拼 | ✅ **takeover**（默认开） | ✅ | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`） | ✅ | ❌（走 `/find`，该接口无 session_id 字段） | ❌ | ❌ | ✅ **ContextEngine 全接管** | ❌ 失败轮次不重放 | ❌ |
-| hermes | MemoryProvider 原生插件 | ✅ | 部分（仅 `search/search` 首选路径；降级 `/find` 不带） | ❌ | ✅（会话开场记忆预算默认 6000 token） | ❌ | ✅ 进程内上传；待提交标记落盘 | ❌ |
+| hermes | MemoryProvider 原生插件 + 进程内 MCP 桥接 | ✅ | ✅ `hermes-`（primary 上下文；降级 `search/find` 无该字段） | ❌（经 `recall_compress` 使用服务端 `rewrite`） | ✅（会话开场记忆预算默认 6000 token） | ❌ | 部分：上传失败的消息在内存中积压；待提交标记落盘 | ✅ 宿主召回提示行（`recall_status`） |
 | ov CLI | 一次性命令 | ❌（`ov find/search` 是显式命令） | —（`ov search --session-id` 为显式参数） | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 \* 此列指客户端是否内建了针对召回结果的本地压缩；服务端则在 context 检索面上，统一为所有调用方提供 digest 能力（`rewrite` 参数，[§3.2.5](#_3-2-5-召回再摘要)）。
 
 profile 注入列里，第一个数字是 `profileTokenBudget` 的默认值，`<available-skills>` 后面的数字是它单独的 `skillCatalogTokenBudget` 默认值（[§3.2.3](#_3-2-3-profile-开场注入)）。
 
-**session_id 携带现状**：除 openclaw（其调用的 `/find` 接口无该字段）与 hermes 的降级路径外，其余所有 harness 的自动召回均显式携带 session_id，并有跨插件回归测试钉死（`examples/memory-plugin-shared/recall-session-wiring.test.mjs:16-39`）。
+**session_id 携带现状**：除 openclaw（其调用的 `/find` 接口无该字段）与 hermes 的 `search/find` 降级路径外，其余所有 harness 的自动召回均显式携带 session_id，并有跨插件回归测试钉死（`examples/memory-plugin-shared/recall-session-wiring.test.mjs:16-39`）。
 
 ## 1.3 形态分组
 
@@ -186,7 +186,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | dsh | Cordis 同进程插件（`cordis.patch.yml` 条目） | 统一安装器（会询问 profile，默认 `web`），或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id 原样>`；subagent 各自独立会话 | env + ovcli.conf `plugin.dsh` + cordis patch config（行为旋钮的最低层；凭据仍以 patch 优先） | ❌ |
 | pi | pi 原生扩展（目录装载，jiti 直译 TS） | 一键 `--harness pi`（复制到自动发现目录，无需 `pi install`） | `pi-<piSessionId>` | env + ovcli.conf `plugin.pi`（凭据字段由凭据链统一解析） | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`）+ 15 工具 + 5 slash + 4 hook + HTTP 路由 | ClawHub 执行 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 搭配 `openclaw openviking setup` / npm 安装器 / TOS 离线包 | UUID 原样小写，否则 `sha256(sessionKey)`；`memory_store` 临时会话 `memory-store-<ts>-<rand>` | `openclaw.json` 的 `plugins.entries.openviking.config`（严格校验：存在未知键/非法值时插件进入 setup-only 模式）+ 少量 env | ✅ `openclaw openviking setup`（交互/非交互 + key 角色探测 + 版本兼容检查） |
-| hermes | Hermes bundled MemoryProvider（随 Hermes 发布，无需装插件） | 执行 `hermes memory setup openviking`（curses 向导）或手动 `hermes config set memory.provider openviking` + `.env` | 由 Hermes 生成，插件原样使用 | `.env`（`OPENVIKING_*`）或 ovcli.conf 联动（`use_ovcli_config` 模式会清空 .env 里的 5 个对应变量）+ config.yaml | ✅（多层菜单） |
+| hermes | 本仓库维护的外部 MemoryProvider 插件（`examples/hermes-plugin`）；仍内置副本的 Hermes 版本加载内置副本 | 用 `hermes plugins install` 安装仓库子目录，再执行 `hermes memory setup openviking`（curses 向导），或手动 `hermes config set memory.provider openviking` + `.env` | `hermes-<Hermes session id>` | `.env`（`OPENVIKING_*`）或 ovcli.conf 联动（`use_ovcli_config` 模式会清空 .env 里的 5 个对应变量）+ config.yaml | ✅（多层菜单；预热工具缓存） |
 | ov CLI | Rust 原生二进制 | npm `@openviking/cli` / `uv tool install openviking` / cargo / GitHub Releases | 无自有会话（`ov chat` 默认使用 machine-uid） | `ovcli.conf`（多 profile）+ 少量 env | ✅ `ov config`（TUI 向导） |
 
 ### 3.1.2 统一安装器
@@ -209,7 +209,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 |---|---|---|---|---|---|
 | **A. JS 共享核**（`credentials.mjs`） | claude-code / codex（含 trae-cli）/ cursor / trae×2 / zcode / opencode / pi / dsh / agent-plugins | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_PEER_ID` | 只发 `Authorization: Bearer`；本家族任何 harness 都不发 `X-API-Key` |
 | **B. openclaw**（自有 `config.ts`） | openclaw | `OPENVIKING_BASE_URL` → `OPENVIKING_URL` | `OPENVIKING_API_KEY`（支持 SecretRef env/file） | `OPENVIKING_ACCOUNT_ID` / `OPENVIKING_USER_ID`（注意此处带 `_ID`） | `X-API-Key`（指向 OV Cloud 时注意其实际采用 Bearer 认证） |
-| **C. hermes**（Python） | hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT`（=actor peer） | `X-API-Key` + `Bearer` 双发；有 key 时默认不发租户头（被服务端以 trusted 报错拒绝时会自动补头重试一次） |
+| **C. hermes**（Python） | hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT`（=actor peer） | REST 和 MCP 都只发 `Authorization: Bearer`；有 key 时默认不发租户头（REST 请求被服务端以 trusted 报错拒绝时自动补头重试一次），无 key 时发租户头。`/mcp` 拒绝 root key |
 | **D. ov CLI**（Rust） | ov | conf 文件为主 | conf | `--account/--user/--actor-peer-id` | `X-API-Key`；LDAP Basic / OIDC Bearer 按 `auth_mode` 切换；api_key 含 ≥2 个 `.` 时自动附加 Bearer（JWT 兜底） |
 
 家族 A 的解析链如下（其余家族见档案卡）：
@@ -277,7 +277,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 服务端在处理 session_id 时，分为两条截然不同的执行路径：
 
 - **路径 A：`mode="context"`**（适用于 context face 与 `/recall` preset）。此路径负责 query expansion 与跨轮去重台账。expansion 设有三重闸门：`retrieval.enable_intent` 需开启（默认 true） → 会话必须已物化（即 `messages.jsonl` 文件存在） → `latest_archive_overview` 或 `current_messages` 不能为空。扩写后原 query 永远排第一，追加的 planned queries 上限为 3。台账（`.recall_log.json`）按 `dedup_turns` 冷却已发正文的 URI；若"当轮只发了 URI 没发正文"，该记录则不参与冷却；digest 判定 no_relevant 时亦不记账。
-- **路径 B：`mode="list"`**（不写 mode 时的默认行为）。此路径下，IntentAnalyzer 会整体替换 typed_queries（原 query 不保证保留），无台账、无原-query 保底。实际落在这条路径上的调用方包括：codex 的第二级降级 `searchScope`、hermes 的 `viking_search(mode="deep")` 以及 prefetch 的首选路径。尽管它们带了 session_id，但拿不到 context 面的 expansion 与去重机制。
+- **路径 B：`mode="list"`**（不写 mode 时的默认行为）。此路径下，IntentAnalyzer 会整体替换 typed_queries（原 query 不保证保留），无台账、无原-query 保底。实际落在这条路径上的调用方包括：codex 的第二级降级 `searchScope`、以及 hermes 的列表模式召回（无发送者的 `peer` 路由、未设置 `recall_scope`，或 `recall_context_mode=false`）。尽管它们带了 session_id，但拿不到 context 面的 expansion 与去重机制。
 
 **`dedup_turns` 的三点说明**：① 服务端 context 面的默认值是 **0**，常见的"5"实则源自客户端 `recall-core.mjs` 兜底与 `/recall` preset（后者仅当带 session_id）——不经共享库直接打 API 的第三方即使带了 session_id，也要显式发 `dedup_turns` 才有跨轮去重；② "turn"的计数单位是消息条数而非对话轮（`_resolve_turn` 用 `total_message_count`），对同时推 user+assistant 的 harness，默认 5 ≈ 1-2 个真实对话轮；③ 注意：`autoCapture=0` 且 `autoRecall=1` 时消息数恒 0 → 台账时钟不走 → 已发过正文的 URI 在本会话内持续冷却；可用 `OPENVIKING_RECALL_DEDUP_TURNS=0` 关闭去重。
 
@@ -294,7 +294,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | dsh | `agent/pre-step` waterfall（先 await next 再 append） | claimed batch 全部消息（过滤自身注入的内容） | ✅ `dsh-` | A | 借由 `createUserMessage` append 到 `decision.messages` 尾部（source: plugin/openviking-memory） | ❌ |
 | pi | `before_agent_start` 阶段排队；在 `context` 事件内检索（当前轮 prompt 拿当前轮记忆） | prompt 原文 | ✅ `pi-`（会话未建立时不带） | A | 前置到最后一条真实 user 消息（通过 `<openviking-context` 幂等检测） | ❌ |
 | openclaw | context-engine transformContext assemble（设有 7 道 passthrough 门） | 最后一条 user 消息纯 text，清洗后截 4000 字符 | ❌（`/find` 无该字段） | `/find` | 以 `<relevant-memories>` + `Source: openviking-auto-recall` 格式前置进最后一条 user 消息 | ❌ |
-| hermes | 每轮 API 调用前同步执行 `prefetch` | 原始用户输入，双层剥 skill 脚手架；<5 字符跳过 | 部分携带（仅 `search/search` 首选路径，落 B；降级 `/find` 时不带） | B / find | `<memory-context>` fenced 块追加到当轮 user 消息（只进 API 请求体，不写回持久化） | ❌ |
+| hermes | 每轮开始前执行 `prefetch`（宿主最多等 8s，插件自身预算 7.5s） | 原始用户输入，双层剥 skill 脚手架；<5 字符跳过 | ✅ primary 上下文带 `hermes-`（降级 `search/find` 时不带） | `shared` 和按发送者限定的 `peer` 走 A；其余走 B，再降级 find | `<memory-context>` fenced 块追加到当轮 user 消息（只进 API 请求体，不写回持久化） | ❌ |
 
 \* 同 [§1.2](#_1-2-自动-hook-面-通过-harness-自动实现)：此列的"再摘要"特指客户端本地压缩，而服务端 digest 对所有调用方均可用（[§3.2.5](#_3-2-5-召回再摘要)）。ov CLI 无自动召回，不在本表。
 
@@ -326,8 +326,8 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 ### 3.2.4 超时与预算链
 
 - 家族 A 客户端推导：带 rewrite → `max(timeoutMs, 45000)`；带 expansion → `max(timeoutMs, 15000)`；对应服务端熔断 5s（expansion）/30s（rewrite）——设计上让客户端预算覆盖服务端各阶段，防止客户端提前 abort 丢掉整个响应。
-- 实际值：cc 15s（hook 预算 60s）；codex 召回整 hook 120s 硬截止 + 压缩子进程 110s；cursor/trae×2/zcode 15s（宿主 hook 预算 20s）；opencode 30s；dsh 15s（阻塞 pre-step）；pi 15s；openclaw 整个召回流程外层 5s 硬超时（500ms health precheck；默认 `recallPreferAbstract=false` 时每条 leaf 记忆多一次 read，预算内最多 1 find + 6 read + 1 health）；hermes 总预算 4s / 单请求 3s（可配）。
-- 注入体预算：服务端 `max_tokens` 默认 1600（家族 A 默认不发、由服务端决定）；openclaw / hermes 用字符预算 4000（两家都是"装不下整条跳过"而非截断）。
+- 实际值：cc 15s（hook 预算 60s）；codex 召回整 hook 120s 硬截止 + 压缩子进程 110s；cursor/trae×2/zcode 15s（宿主 hook 预算 20s）；opencode 30s；dsh 15s（阻塞 pre-step）；pi 15s；openclaw 整个召回流程外层 5s 硬超时（500ms health precheck；默认 `recallPreferAbstract=false` 时每条 leaf 记忆多一次 read，预算内最多 1 find + 6 read + 1 health）；hermes 每次 `prefetch` 共用 7.5s 预算，召回默认总预算 4s / 单请求 3s（可配，上限 7.5s）。
+- 注入体预算：服务端 `max_tokens` 默认 1600（家族 A 默认不发、由服务端决定）；openclaw 和 hermes 的列表模式召回用字符预算 4000（都是"装不下整条跳过"而非截断）；hermes 的 context 模式路由发送 `max_tokens` = 字符预算 / 4（默认 1000）。
 
 ### 3.2.5 召回再摘要
 
@@ -341,7 +341,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 ### 3.2.6 注入回流防护
 
-为防止注入内容被二次捕获，注入时会加确定性包装（`<openviking-context>` 等），捕获时再机械剥离：capture-utils 的 `sanitizeCapturedText` 剥注入块、digest 块、元数据围栏与时间戳前缀。各端的特殊处理包括：trae/zcode 用各自的 clean 函数（其中 zcode 剥三类注入块）；openclaw 在 afterTurn 写回与下轮 query 构造时各剥一次 `<relevant-memories>`；hermes 则更彻底，直接把三个召回类工具的 tool_call/result 从 sync batch 里整条剔除（写类工具保留）。
+为防止注入内容被二次捕获，注入时会加确定性包装（`<openviking-context>` 等），捕获时再机械剥离：capture-utils 的 `sanitizeCapturedText` 剥注入块、digest 块、元数据围栏与时间戳前缀。各端的特殊处理包括：trae/zcode 用各自的 clean 函数（其中 zcode 剥三类注入块）；openclaw 在 afterTurn 写回与下轮 query 构造时各剥一次 `<relevant-memories>`；hermes 的召回只进宿主的请求体，无需剥离；工具调用和结果都会捕获，包括 `openviking_*` 召回类工具（内置 provider 会剔除召回类工具的 tool_call/result）。
 
 ## 3.3 会话与 commit 生命周期
 
@@ -366,7 +366,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000` 且 `lastSeenUserTurns > 3` 时，执行 commitAndAdvance（keep 3；overview 15×2s 轮询，拿不到则边界不推进，但 pendingTokens 会清零，重新累计后重试） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
 | pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 10 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
 | openclaw | afterTurn：`pending_tokens ≥ floor(tokenBudget × 0.5)`（ratio 默认 0.5，tokenBudget 缺省 128000，即阈值 ~64000），wait=false，keep 10 | `before_reset`（执行 `/new` `/reset`）：wait=true，keep 0；`memory_store` 工具：wait=true，keep 0 | `compact()`：wait=true，keep 0（Phase2 轮询上限 5 分钟） |
-| hermes | 无阈值 commit——触发面全是会话边界：`on_session_end`（drain 10s，drain 不净则本次不 commit）、`on_session_switch`（涉及 `/new`、`/resume`、`/branch` 或压缩 fork，异步 drain 预算 65s）、gateway 缓存驱逐；`/undo` 与原地压缩不 commit。用幂等集合防二次 commit；keep 0 | atexit 兜底 | fork 型压缩边界 commit；原地压缩不 commit |
+| hermes | 每次上传成功后：`pending_tokens ≥ 20000`（读服务端值；`commit_token_threshold` 可配）在后台 commit，keep 0 | `on_session_end`（drain 10s，drain 不净则本次不 commit）、`on_session_switch`（涉及 `/new`、`/resume`、`/branch` 或压缩 fork，异步 drain 预算 65s）、gateway 缓存驱逐、atexit 兜底（20s 预算）；`/undo` 不 commit。commit 会等该会话积压的消息补发完。用幂等集合防二次 commit | 压缩调用 `on_session_end` 完成 commit；fork 型边界随后轮换会话，原地压缩重新允许后续 commit |
 | ov CLI | 无 | `ov session commit`；`ov add-memory` 第三步固定 commit | — |
 | ingest | `pending ≥ 6000` 或 idle 5s，keep 0；backfill 在每个会话结束时执行 `commit_if_needed` | 退出时执行 `_flush_all()` | — |
 | LangChain | `CommitPolicy.mode` 默认 `never`；`pending_tokens` 模式阈值为 8000；`always` 模式每次 record 均触发 | 调用方自理 | — |
@@ -405,7 +405,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 |---|---|---|
 | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi | 磁盘队列 `~/.openviking/pending`（0700/0600） | 仅可重试的失败入队（4xx 含 401/403 判为不可重试，不入队，debug 日志可见）；重放在会话启动时执行：≤50 条/次、≤3 次/条、TTL 7 天；`.processing` 原子认领，10min 陈旧回收；addMessage 失败即 break 保序 |
 | openclaw | 无本地队列 | addSessionMessage 失败被 catch，该轮消息不重放 |
-| hermes | 进程内上传线程；`$HERMES_HOME/openviking/pending_sessions/` 保存待提交标记 | POSIX 上启动时可提交已退出进程遗留的待提交会话；未上传消息不会从磁盘重放。 |
+| hermes | 按会话和连接在内存中积压（≤2000 条 / 8 MiB）；`$HERMES_HOME/openviking/pending_sessions/` 保存待提交标记 | 网络错误、408、429、5xx 和可重试的 409 在下一次上传或 commit 前补发；401/403 只在连接不变时保留；其他 4xx 丢弃。积压在进程退出时丢失。POSIX 上启动时可提交已退出进程遗留的待提交会话。 |
 | LangChain | 进程内 `_pending_commit_sessions` 集合 | commit 失败下次 record 自动重试；不落盘。部分成功时抛 `OpenVikingPartialWriteError`（携带 `messages_written`、`input_messages_consumed`、`context_attached`，调用方可按位置切片重试后缀）——全部集成里唯一的部分成功上报协议 |
 | ingest | SQLite 游标库 + 单实例锁 | append 前持久化意图，崩溃后 reconcile 按服务端消息数判定该批是否落地——可恢复部分落地的批次 |
 
@@ -434,7 +434,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | dsh | 不感知（不监听 compaction 事件；注入走 pre-step user 消息，随宿主压缩一起收缩，profile 不重投） | — | — |
 | pi | **takeover 双层接管**（默认开，[§3.4.2](#_3-4-2-pi-takeover)） | `session_before_compact`：flush → commit → pollOverview。成功则返回自定义 compaction 摘要覆盖 pi 的；失败则 fail-open 回退到 pi 默认压缩 | 成功后 resetBoundary |
 | openclaw | **全接管**：`ownsCompaction: true`，宿主不再跑自己的摘要（[§3.4.3](#_3-4-3-openclaw-contextengine)） | `compact()` = commit(wait=true, keep 0) → 读回 overview 当 summary | 主 assemble 用 `[Session History Summary]` 重建上下文 |
-| hermes | 不接管（`on_pre_compress` 接口预留，当前不参与压缩摘要） | fork 型压缩边界会触发旧会话 commit；原地压缩不动 | — |
+| hermes | 不接管（`on_pre_compress` 接口预留，当前不参与压缩摘要） | 压缩经 `on_session_end` commit；fork 型边界随后轮换到新会话 | — |
 
 ### 3.4.2 pi takeover
 
@@ -477,11 +477,11 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 **第三档：memory-only 的两个删除面**。
 
 - openclaw `memory_forget`：三条白名单正则只放行 `viking://user/[…/]memories`、`viking://user/<u>/peers/<p>/memories`、`viking://agent/[…/]memories`；显式 uri 不匹配直接拒绝；搜索路径候选先过同一 guard，且只有在候选唯一且 score≥0.85 时才自动删，否则列出候选让 agent 指名；底层 URL 固定 `recursive=false`。
-- Hermes `viking_forget` 拒绝空输入、非 `viking://` URI、query/fragment、目录、非 `.md` 文件及 `.abstract.md`/`.overview.md` 摘要。内置校验器允许用户记忆路径，包括直接位于 `memories/` 下的 `profile.md`。请使用服务端返回的、带明确用户 ID 的 URI。外部插件还支持 `viking://~/...`，拒绝已废弃的无用户 ID 路径，并在删除明确用户路径前验证归属。
+- Hermes `openviking_forget` 是 MCP `forget` 的本地包装，固定以 `recursive=false` 发送。它拒绝空输入、非 `viking://` URI、query/fragment、目录、非 `.md` 文件、`.abstract.md`/`.overview.md` 摘要以及已废弃的无用户 ID 路径；允许用户记忆路径（包括直接位于 `memories/` 下的 `profile.md`）和 `viking://~/...`，并在删除明确用户路径前验证归属。内置 provider 的 `viking_forget` 做同样的文件校验，但不支持 `viking://~/...`，也不验证归属。
 
 **第四档：默认不提供删除（LangChain / Open WebUI）**。LangChain `viking_forget` 需配置 `profile="admin"` 或 `allow_forget=True` 才加入工具面；Open WebUI 则完全不提供删除工具。
 
-**skill 的增删边界**：新增入口是 MCP `add_skill`、openclaw `add_skill`（默认开）、`ov add-skill` 与 REST；`add_resource` 拒绝 skill URI，MCP `write` 拒绝用户自己的 `skills/` 子树（`_USER_MANAGED_SUBTREES`）；`viking://agent/skills` 下的 `write` 目前没有拦截，但会绕过 skill 安装流程。对 skill 完全只读（不增不删）的删除面是 openclaw `memory_forget` 与 hermes `viking_forget`。MCP `forget`、dsh、pi、`ov rm` 能删掉 skill 目录，因为删除路径不检查该集合，但只有 `ov skills remove` 和 REST `DELETE /api/v1/skills/{name}` 会同时清理该 skill 的 privacy 配置。
+**skill 的增删边界**：新增入口是 MCP `add_skill`、openclaw `add_skill`（默认开）、`ov add-skill` 与 REST；`add_resource` 拒绝 skill URI，MCP `write` 拒绝用户自己的 `skills/` 子树（`_USER_MANAGED_SUBTREES`）；`viking://agent/skills` 下的 `write` 目前没有拦截，但会绕过 skill 安装流程。对 skill 完全只读（不增不删）的删除面是 openclaw `memory_forget` 与 hermes `openviking_forget`。MCP `forget`、dsh、pi、`ov rm` 能删掉 skill 目录，因为删除路径不检查该集合，但只有 `ov skills remove` 和 REST `DELETE /api/v1/skills/{name}` 会同时清理该 skill 的 privacy 配置。
 
 ## 3.6 降级与容错
 
@@ -496,7 +496,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 | dsh | client 全吞异常；`ensureState` 失败不缓存（服务端不可达时每 pre-step 两次 health 各 5s） | context-face 6h + user-space 缓存进程内不过期 | 无；pending 跨进程重放 3 次 | 是（pre-step 串行 profile+recall；session/flush 阻塞） |
 | pi | health 失败时 start() 提前返回，本轮也不注册工具，此后每 prompt 静默重试连接；`/mcp` 握手单独失败（401/403、超时、server 无 `/mcp`）不影响启动：召回、同步、takeover 照常，状态栏显示 `tools ✗`，`/viking` 打印完整错误 | context-face 6h；握手没有负缓存，一直失败就每轮重试一次，最多占满 5s 握手预算才轮到排队召回 | hook 侧无，只有 pending queue；传输失败后丢弃当前 MCP 连接，下次调用重新连接；失败的工具调用不会自动重放 | 部分（session_shutdown 被 await：takeover 近 0、非 takeover 最坏 30s，外加关闭 MCP 客户端；turn_end 网络异常时逐条各等 10s） |
 | openclaw | client 构造永不失败；health 吞异常；召回 500ms precheck 失败跳过 | 无负缓存（每轮一次 500ms health 预检） | 无（单次 fetch）；commit/afterTurn 的 Phase2 轮询 | 否（`memory_store` 重抛例外；`compact()` 最长阻塞 5 分钟） |
-| hermes | 未变化的失败连接配置冷却 30s；配置变化触发新探测 | `_failed_refresh` 记录失败配置 | trusted 身份补发及 sync client 重试；启动时恢复已退出进程的待提交会话（POSIX） | 否 |
+| hermes | 未变化的失败连接配置冷却 30s；配置变化触发新探测 | `_failed_refresh` 记录失败配置；工具列表缓存在进程内和 `$HERMES_HOME/openviking/tools_cache.json` | REST trusted 身份补发重试；上传重试一次，之后进内存积压；只读 MCP 工具重试一次，写类工具不重放；启动时恢复已退出进程的待提交会话（POSIX） | 否（没有工具缓存时，构造 agent 最多等 3s 的 `tools/list`） |
 | ov CLI | 多数 exit 1；`ov status` 表格模式始终退 0；`ov health` 即使 unhealthy 也退 0 | 无 | 仅网关 401 挑战重试 1 次 | n/a（无宿主） |
 
 ### 3.6.2 通用超时
@@ -625,10 +625,10 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 ## hermes（Nous Research）
 
 - **集成文档**：[Hermes Agent](./05-hermes.md)
-- **形态**：通过 HTTP 连接的内置 `MemoryProvider`，提供 6 个 `viking_*` 工具。OpenViking 运行于独立服务端环境。外部插件独立维护；范围区别见本文开头。
-- **记忆写入**：`viking_remember` 将原始事实送入独立会话并提交，触发异步抽取；返回 `status: submitted`，最终可能新增、合并或跳过。内置 provider 只镜像原生记忆新增；外部插件还支持按 URI 映射替换和删除，详见其 README。
-- **召回**：同步 query 召回优先使用带 session_id 的 `search/search`，降级至 `/find`。`queue_prefetch` 不做预热。会话开场注入用户 profile 和 preferences/entities 清单，默认预算 6000 token。Query 召回默认 6 条、阈值 0.15、4000 字符、总超时 4s／单请求 3s，均可配置。
-- **生命周期**：commit 保留 0 条消息。上传线程不落盘，但待提交标记支持 POSIX 上的崩溃恢复。正常退出和信号会尝试 drain 与 commit，网络故障或强制终止仍可中断。`skip_memory=True` 的委派子代理不加载 provider；无 statusline 或 provider slash 命令。
+- **形态**：通过 HTTP 连接的外部 `MemoryProvider` 插件（`examples/hermes-plugin`，3.0.0），服务端的 MCP 工具经进程内桥接注册为 `openviking_*`。OpenViking 运行于独立服务端环境。仍内置副本的 Hermes 版本加载内置副本，范围区别见本文开头。
+- **记忆写入**：`openviking_remember` 转发到服务端的 `remember` 工具，把事实送去异步抽取，最终可能新增、合并或跳过。原生记忆的新增、替换和删除按精确 URI 的映射表镜像，详见插件 README。
+- **召回**：`shared` 和按发送者限定的 `peer` 召回走 context 面并带 `peer_scope`；没有发送者或未设置范围时，先用带 session_id 的 `search/search`，再降级至 `/find`。每轮共用 7.5s 预算。`queue_prefetch` 不做预热。会话开场注入用户 profile 和 preferences/entities 清单，默认预算 6000 token。Query 召回默认 6 条、阈值 0.15、4000 字符、总超时 4s／单请求 3s，均可配置。
+- **生命周期**：session id 为 `hermes-<Hermes session id>`。pending token 达到 20000 时阈值 commit，commit 保留 0 条消息。上传在插件线程上执行，失败的消息在内存中积压，待提交标记支持 POSIX 上的崩溃恢复。正常退出和信号会尝试 drain 与 commit，网络故障或强制终止仍可中断。`skip_memory=True` 的委派子代理不加载 provider。宿主显示召回提示行；无 provider slash 命令。
 - **路径与配置**：记忆写入 `viking://user/<uid>/memories/...`，设置 peer 时写入 `viking://user/<uid>/peers/<peer>/memories/...`。默认不设置助手 peer。连接读取 `OPENVIKING_ENDPOINT`、profile 凭据、关联的 `ovcli.conf` 和 Hermes YAML；关联 OpenViking profile 时会清除 Hermes `.env` 中的 5 个连接变量。
 - **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜删除 [§3.5](#_3-5-写入与删除的类型边界)。
 

@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Check real Hermes subdirectory installation and dependency admission on POSIX."""
+"""Check real Hermes subdirectory installation and dependency admission on POSIX.
+
+The installed plugin must equal the plugin directory at the checked-out commit,
+file for file, and the provider and every module of its core/ subpackage must
+import from the installed copy.
+"""
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import pty
@@ -56,6 +62,69 @@ def enable(command, *, host, env, log, timeout):
         log.write_bytes(output)
 
 
+PLUGIN_SUBDIR = "examples/hermes-plugin"
+# Written by Python or pytest, never by the installer; skipped on the installed side.
+CACHE_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+CACHE_SUFFIXES = (".pyc", ".pyo")
+
+
+def _git_object_id(path):
+    """The Git blob id of ``path``'s content (or of its link target for a symlink)."""
+    data = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def source_tree(repository, ref):
+    """``{relative path: blob id}`` of the plugin directory at ``ref``.
+
+    ``hermes plugins install <repo>#<subdir> --ref <sha>`` publishes a sparse
+    checkout of that subdirectory at that commit and skips nothing in it, so
+    the committed tree, not the working tree, is what the install must equal.
+    """
+    listing = subprocess.check_output(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", ref, "--", PLUGIN_SUBDIR],
+        cwd=repository,
+    )
+    tree = {}
+    for record in filter(None, listing.split(b"\0")):
+        meta, _, name = record.partition(b"\t")
+        _mode, kind, object_id = meta.decode().split()
+        if kind != "blob":
+            raise RuntimeError(f"Unexpected {kind} in the plugin tree: {name.decode()}")
+        tree[name.decode()[len(PLUGIN_SUBDIR) + 1 :]] = object_id
+    if "__init__.py" not in tree or not any(name.startswith("core/") for name in tree):
+        raise RuntimeError(f"No plugin package with a core/ subpackage at {ref}:{PLUGIN_SUBDIR}")
+    return tree
+
+
+def installed_tree(installed):
+    """``{relative path: blob id}`` of the installed plugin, without caches."""
+    tree = {}
+    for path in sorted(installed.rglob("*")):
+        relative = path.relative_to(installed)
+        if CACHE_PARTS.intersection(relative.parts) or path.name.endswith(CACHE_SUFFIXES):
+            continue
+        if path.is_symlink() or path.is_file():
+            tree[relative.as_posix()] = _git_object_id(path)
+    return tree
+
+
+def compare_trees(source, installed):
+    """Raise when the installed plugin is not the source tree, file for file."""
+    problems = [f"missing: {name}" for name in sorted(source.keys() - installed.keys())]
+    problems += [f"unexpected: {name}" for name in sorted(installed.keys() - source.keys())]
+    problems += [
+        f"differs: {name}"
+        for name in sorted(source.keys() & installed.keys())
+        if source[name] != installed[name]
+    ]
+    if problems:
+        shown = "\n  ".join(problems[:40])
+        more = f"\n  ... and {len(problems) - 40} more" if len(problems) > 40 else ""
+        raise RuntimeError(f"Installed plugin differs from the source tree:\n  {shown}{more}")
+    return len(source)
+
+
 def check(host, repository, root, timeout):
     home = root / "user" / ".hermes"
     home.mkdir(parents=True)
@@ -74,7 +143,8 @@ def check(host, repository, root, timeout):
     )
     command = [sys.executable, str(host / "hermes")]
     ref = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
-    identifier = repository.as_uri() + "#examples/hermes-plugin"
+    identifier = repository.as_uri() + "#" + PLUGIN_SUBDIR
+    source = source_tree(repository, ref)
     bundled = host / "plugins" / "memory" / "openviking"
     hidden = root / "bundled-openviking"
     if bundled.exists():
@@ -91,17 +161,7 @@ def check(host, repository, root, timeout):
                 check=True,
             )
         installed = home / "plugins" / "openviking"
-        for name in (
-            "__init__.py",
-            "_setup.py",
-            "native_memory_mirror.py",
-            "plugin.yaml",
-            "pyproject.toml",
-        ):
-            if (installed / name).read_bytes() != (
-                repository / "examples/hermes-plugin" / name
-            ).read_bytes():
-                raise RuntimeError("Installed plugin differs from the checked-out source: " + name)
+        installed_files = compare_trees(source, installed_tree(installed))
         enable(command, host=host, env=env, log=root / "enable.log", timeout=timeout)
         # PM can retire the original .venv after publishing. Read its selected
         # interpreter through the stdlib-only path module before the next command.
@@ -130,6 +190,7 @@ def check(host, repository, root, timeout):
             )
         probe = """
 import hermes_bootstrap
+import importlib
 import json
 from pathlib import Path
 import psutil
@@ -144,8 +205,16 @@ assert "openviking" not in config["plugins"].get("disabled", [])
 assert find_provider_dir("openviking") == home / "plugins/openviking"
 provider = load_memory_provider("openviking", register_skills=False)
 assert type(provider).__module__.startswith("_hermes_user_memory."), type(provider)
+installed = (home / "plugins/openviking").resolve()
+package = type(provider).__module__
+core = sorted(p.stem for p in (installed / "core").glob("*.py") if p.stem != "__init__")
+assert core, installed
+for name in [package, package + ".core"] + [package + ".core." + stem for stem in core]:
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve().is_relative_to(installed), (name, module.__file__)
 provider.shutdown()
 print(json.dumps({"installed": True, "enabled": True, "external_module": type(provider).__module__,
+                  "core_modules": len(core),
                   "psutil": psutil.__version__, "home": str(home),
                   "python": str(project_python(Path.cwd()))}))
 """
@@ -154,6 +223,7 @@ print(json.dumps({"installed": True, "enabled": True, "external_module": type(pr
         )
         evidence = json.loads(result.strip().splitlines()[-1])
         evidence["source_ref"] = ref
+        evidence["installed_files"] = installed_files
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
     finally:

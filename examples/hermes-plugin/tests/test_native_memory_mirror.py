@@ -73,7 +73,7 @@ class _FakeVikingClient:
 def mirror(external_provider):
     home, _, module, _ = external_provider("mirror")
     mirror_type = importlib.import_module(
-        module.__name__ + ".native_memory_mirror"
+        module.__name__ + ".core.mirror"
     ).NativeMemoryMirror
 
     def provider(client):
@@ -608,3 +608,72 @@ def test_explicitly_unwritten_content_does_not_advance_registry(mirror, caplog, 
         provider.shutdown()
     assert (path.read_bytes() if path.exists() else None) == before
     assert any("file was not updated" in record.message for record in caplog.records)
+
+
+def _mirror_threads():
+    return [t for t in threading.enumerate() if t.name == "openviking-memory-mirror"]
+
+
+def test_soft_eviction_leaves_no_mirror_thread_and_later_writes_stay_in_order(mirror):
+    """Gateway soft eviction calls on_session_end without shutdown(); the idle worker must still exit."""
+    client = _FakeVikingClient()
+    provider = mirror.provider(client)
+
+    provider.on_memory_write("add", "user", "Device owned: Tablet A")
+    _wait_for(lambda: len(client.snapshot()) == 1)
+    provider.on_session_end([])
+    _wait_for(lambda: not _mirror_threads())
+    assert provider._native_memory_mirror._worker is None
+
+    provider.on_memory_write(
+        "replace",
+        "user",
+        "Device owned: Tablet B",
+        metadata={"old_text": "Tablet A", "previous_content": "Device owned: Tablet A"},
+    )
+    provider.on_memory_write(
+        "remove",
+        "user",
+        "",
+        metadata={"old_text": "Tablet B", "previous_content": "Device owned: Tablet B"},
+    )
+    _wait_for(lambda: len(client.snapshot()) == 3)
+    calls = client.snapshot()
+    uri = calls[0][2]["uri"]
+    assert [(call[0], call[1], call[2] and call[2]["mode"]) for call in calls] == [
+        ("post", "/api/v1/content/write", "create"),
+        ("post", "/api/v1/content/write", "replace"),
+        ("delete", "/api/v1/fs", None),
+    ]
+    assert calls[1][2]["uri"] == uri
+    assert calls[2][3]["params"]["uri"] == uri
+    _wait_for(lambda: not _mirror_threads())
+    registry = json.loads(_registry_path(mirror.home).read_text(encoding="utf-8"))
+    assert registry == {"version": 2, "entries": []}
+
+
+def test_worker_restarts_lose_and_reorder_no_write(mirror, monkeypatch):
+    mirror_module = importlib.import_module(mirror.mirror_type.__module__)
+    monkeypatch.setattr(mirror_module, "_POLL_SECONDS", 0.001)
+    client = _FakeVikingClient()
+    provider = mirror.provider(client)
+    started = []
+    original_start = threading.Thread.start
+
+    def counting_start(thread):
+        if thread.name == "openviking-memory-mirror":
+            started.append(thread)
+        original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", counting_start)
+    facts = [f"Fact number {index}" for index in range(40)]
+    for index, fact in enumerate(facts):
+        provider.on_memory_write("add", "user", fact)
+        if index % 4 == 0:
+            time.sleep(0.005)  # let the worker go idle and exit between some writes
+    _wait_for(lambda: len(client.snapshot()) == len(facts))
+
+    assert [call[2]["content"] for call in client.snapshot()] == facts
+    assert len(started) > 1
+    _wait_for(lambda: not _mirror_threads())
+    provider.shutdown()

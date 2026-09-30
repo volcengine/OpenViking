@@ -54,6 +54,42 @@ Existing connection settings and server data are retained. Restart Hermes or
 the gateway after the upgrade. For catalog installations, use
 `hermes plugins update openviking`.
 
+### Upgrading to 3.0.0
+
+3.0.0 changes names that other configuration may refer to. Check these before
+you upgrade:
+
+- **Tools are renamed, with no aliases.** The six `viking_*` tools are gone.
+  The plugin now registers the server's MCP tools as `openviking_*` (see
+  [Tools](#tools)). Update any Hermes tool allow-lists, prompts, skills or
+  scripts that name `viking_search`, `viking_read`, `viking_browse`,
+  `viking_remember`, `viking_forget` or `viking_add_resource`. Roughly,
+  `viking_browse` maps to `openviking_list` and `openviking_tree`, and the
+  other five keep their suffix.
+- **New OpenViking session ids.** Turns are uploaded to
+  `hermes-<Hermes session id>` (see [Session ids](#session-ids)). This applies
+  to uploads from 3.0.0 on. Sessions already on the server keep their ids,
+  and pending commits left by 2.x are recovered under the id they recorded.
+- **Minimum server versions.** Recall and capture need OpenViking 0.4.13 or
+  newer, the tools need 0.4.14 or newer, and the full tool set needs 0.4.22
+  (see [Requirements](#requirements)).
+- **Capabilities no longer offered.** `viking_browse`'s `stat` action, the
+  batch limits of `viking_read`, and the `wait`, `timeout` and `instruction`
+  arguments of `viking_add_resource` have no counterpart. `openviking_read`
+  returns full content only; for cheaper views use `openviking_tree` with
+  abstracts, the summaries in search results, or read a directory's
+  `.overview.md`. `openviking_remember` no longer returns the one-shot session
+  id, task id or failed stage that `viking_remember` reported.
+- **Recall tool results are captured.** 2.x left the calls and results of its
+  search, read and browse tools out of the uploaded turn. 3.0.0 uploads them
+  like any other tool result.
+- **Root API keys cannot use the tools.** The server's `/mcp` endpoint rejects
+  the root key; configure a user or account admin key if you relied on one.
+
+Restart Hermes or the gateway after the upgrade. The first agent fetches the
+tool list from the server; rerunning `hermes memory setup openviking` also
+refreshes the cached list.
+
 ## Requirements
 
 - Python 3.11 or newer in the Hermes environment
@@ -64,11 +100,18 @@ The plugin connects over HTTP. Do not install the OpenViking server into the
 Hermes environment. For local server start from the setup wizard, make the
 `openviking-server` command available on `PATH`.
 
-OpenViking 0.2.14 or newer is required. Hermes can identify older servers that
-expose the legacy status-only health response, but those releases do not provide
-the authenticated-user identity contract required by this integration.
-The `viking://~` home alias requires OpenViking 0.4.16 or newer for user and
-admin credentials, and OpenViking 0.4.17 or newer for root or local development.
+Server versions:
+
+| OpenViking server | What works |
+|-------------------|------------|
+| 0.4.13 or newer | Automatic recall and turn capture (the minimum for this plugin) |
+| 0.4.14 or newer | The `openviking_*` tools, which the plugin reaches through the server's `/mcp` endpoint |
+| 0.4.22 or newer | The full tool set listed under [Tools](#tools) |
+
+With a server older than 0.4.14, recall and capture keep working, the session
+registers no OpenViking tools, and one warning is logged. The `viking://~` home
+alias requires OpenViking 0.4.16 or newer for user and admin credentials, and
+0.4.17 or newer for root or local development.
 
 ## Setup
 
@@ -155,11 +198,15 @@ Routed profiles never inherit the launch profile's process values.
 | `OPENVIKING_USER` | `default` | Tenant user for local/trusted mode |
 | `OPENVIKING_AGENT` | (none) | Optional peer ID for separate assistant context |
 
-User and admin API keys let OpenViking derive account/user identity from the key.
-In local or trusted deployments without an API key,
+The API key is sent only as `Authorization: Bearer <key>`, on REST and MCP
+requests alike. User and admin API keys let OpenViking derive account/user
+identity from the key. In local or trusted deployments without an API key,
 Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
-Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
-OpenViking requests. This standard harness identifier contains the Hermes
+The server's `/mcp` endpoint rejects the root API key, so the tools need a user
+or account admin key; recall and capture are not affected.
+
+Hermes also sends `User-Agent: openviking-memory-hermes/<plugin version>` on
+OpenViking requests. This standard harness identifier contains the plugin
 version, but no per-user identifier, and does not add a separate request.
 
 ### Optional peer identity
@@ -230,59 +277,139 @@ alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
 to valid peer IDs. Queued captures retain their own sender when another
 participant sends a turn.
 
-The scope applies to automatic query recall, including compression and search
-fallbacks. If an older server cannot confirm sender-scoped compression, the
-provider uses scoped list recall. Enabled resource recall includes common
-resources and, in `peer` mode, the sender's resources.
+The scope applies to automatic query recall on every route below, including its
+list-search fallback. If a server does not confirm sender-scoped context
+recall, the provider uses scoped list recall. Enabled resource recall includes
+common resources and, in `peer` mode, the sender's resources.
 
 This is a retrieval setting, not an access-control boundary. It does not filter
-shared conversation history or change explicit `viking_*` tools, native memory
-mirroring, or credentials. Setting `recall_scope` alone does not change gateway
-sessions; the confirmed Shared Agent setup preset applies those settings.
-Explicit tools retain
-the configured assistant view. Use separate OpenViking users and credentials
-when participants require separate access rights.
+shared conversation history or change the explicit `openviking_*` tools, native
+memory mirroring, or credentials. Setting `recall_scope` alone does not change
+gateway sessions; the confirmed Shared Agent setup preset applies those
+settings. Explicit tools retain the configured assistant view. Use separate
+OpenViking users and credentials when participants require separate access
+rights.
+
+### Recall routes
+
+Automatic recall picks its request from `recall_scope` and the current sender:
+
+| `recall_scope` | Sender known | Request |
+|----------------|--------------|---------|
+| `shared` | any | Server context mode (`mode: "context"`, `peer_scope: "all"`) |
+| `peer` | yes | Server context mode with `peer_scope: "actor"`; if the server does not confirm the actor scope, list search with explicit roots |
+| `peer` | no | List search with explicit roots that hold only common memory (and common resources). The CLI Personal Agent preset takes this route |
+| unset | any | The request shape of earlier releases: list search, or context mode when `recall_compress` is on |
+
+On the context-mode routes the injected block is the server's `rendered`
+context, and `recall_limit` becomes per-type `quotas`; `recall_full_read_limit`
+and `recall_prefer_abstract` apply only to list search. A 400 or 422 response,
+or a response without `rendered`, `digest` or `entries`, falls back to list
+search within the same deadline. List search tries the session-aware
+`search/search` first and then `search/find`.
+
+`recall_context_mode` (`OPENVIKING_RECALL_CONTEXT_MODE`, default `true`)
+switches the two context-mode routes back to list search when set to `false`.
+It is a transition switch and will be removed once context mode has been
+stable for a release. Non-primary contexts (see below) use list search on
+these routes unless `recall_compress` is on, and send no `session_id` with the
+context request.
+
+### Recall time budget
+
+Hermes waits at most 8 seconds for automatic recall and then drops the result,
+so each turn's recall has one deadline of at most 7.5 seconds. It covers the
+connection check, the once-per-session profile block and the query recall; the
+last two run concurrently. `recall_timeout_seconds` (default 4 s) sets that
+deadline and is capped at 7.5 s; `recall_request_timeout_seconds` (default 3 s)
+limits each request within it. A request that still has a fallback, such as
+the context request or the session-aware search, leaves 1 s of the deadline
+for that fallback. If one part
+misses the deadline, the turn gets the other part; a profile block that missed
+it is injected on a later turn.
+
+### Recall indicator
+
+When automatic recall injects OpenViking context, Hermes shows a status line
+such as `OpenViking — recalled 3 memories`. The count is the number of recalled
+entries. A turn that injects only the session-start profile block, or a
+compressed digest without an entry list, shows `recalled relevant memory`.
+Nothing is shown when recall finds nothing, times out, or cannot reach the
+server.
+
+If `openviking` is the selected provider but no endpoint is configured, the
+Hermes "reports unavailable" warning names the cause: no endpoint in the
+profile's `.env` or `config.yaml`, or a linked `ovcli.conf` that is missing,
+unreadable, or has no `url`.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `viking_search` | Semantic search with fast/deep/auto modes |
-| `viking_read` | Read content at a viking:// URI (abstract/overview/full) |
-| `viking_browse` | Filesystem-style navigation (list/tree/stat) |
-| `viking_remember` | Submit a fact through OpenViking session memory extraction |
-| `viking_forget` | Delete one exact `viking://` memory file URI |
-| `viking_add_resource` | Ingest URLs/docs into the knowledge base |
+The tools are the OpenViking server's own MCP tools, reached through the
+server's `/mcp` endpoint (OpenViking 0.4.14 or newer). Each is registered in
+Hermes as `openviking_<server tool name>`, with the description and input
+schema the server's `tools/list` returns. A tool the server does not list is
+not registered.
+
+Registered by default:
+
+| Tool | Plugin handling |
+|------|-----------------|
+| `openviking_find`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`, `openviking_health`, `openviking_remember` | Forwarded unchanged |
+| `openviking_search` | In a primary context, the plugin adds the current OpenViking session id (see [Session ids](#session-ids)), so the server can use the conversation for intent analysis |
+| `openviking_read` | Forwarded; the YAML front matter of a generated `.abstract.md` or `.overview.md` is removed from the result |
+| `openviking_forget` | Checked locally first (see below) and always sent with `recursive: false`; the `recursive` argument is not offered |
+| `openviking_add_resource` | Remote URLs are forwarded. A local file or directory is checked against Hermes's read blocklist, uploaded through the REST temp-upload endpoint (a directory as a zip named after it, skipping symlinks, paths that escape it and blocked files), and then passed to the server tool as `temp_file_id` |
+
+`write`, `edit`, `add_skill`, `list_watches` and `cancel_watch` are registered
+only when listed in `extra_tools` (comma-separated, with or without the
+`openviking_` prefix; `OPENVIKING_EXTRA_TOOLS` overrides it):
+
+```yaml
+memory:
+  openviking:
+    extra_tools: write, edit
+```
+
+`openviking_write` and `openviking_edit` change memory files directly and
+bypass the native memory mirror's registry (see below).
+
+Tool calls use the same endpoint, credentials, account, user and assistant peer
+as automatic recall and capture. Each call opens a short MCP session, with a
+3-second limit for the handshake and 15 seconds for the whole call. Text results
+longer than 50 KiB or 2000 lines are cut with a note; images and audio are
+replaced by a one-line placeholder. Server errors come back as Hermes tool
+errors with the HTTP status. After a transport failure a read-only tool is
+retried once; a write tool is not replayed, and its error says that the
+request may already have been applied.
+
+### Tool catalogue and the first session
+
+Hermes asks for the tool list before the provider is initialized and keeps the
+first answer for the whole agent. The plugin answers from, in order:
+
+1. the in-process cache for the current connection;
+2. `$HERMES_HOME/openviking/tools_cache.json`, the last successful list for the
+   same endpoint;
+3. a live `tools/list`, limited to 3 seconds;
+4. otherwise no tools for this agent, with one warning. Recall and capture are
+   not affected.
+
+A successful `initialize` refreshes both caches in the background, so a changed
+server tool list takes effect when Hermes builds the next agent. `hermes memory
+setup openviking` fills the disk cache after it validates the connection, so the
+first session after setup has its tools even if the server is slow to answer.
+
+The results of `openviking_find`, `openviking_search`, `openviking_read`,
+`openviking_list`, `openviking_tree`, `openviking_grep` and `openviking_glob` are
+captured with the turn like any other tool result, which lets the server
+attribute which memories were used.
 
 ## Memory Writes And Deletes
 
-`viking_remember` creates a one-shot `hermes-remember-<random>` OpenViking
-session, adds the fact as one message, and commits the session with no retained
-tail. The session remains available in OpenViking for audit. OpenViking then
-classifies the source and can add, merge, or skip a memory through its normal
-extraction pipeline. The tool returns the one-shot session ID and the
-extraction task ID when the server provides one. Extraction continues
-asynchronously after the tool returns.
-
-The tool returns `status: submitted` because extraction can add a memory, merge
-the fact into an existing memory, or produce no memory operation. It does not
-promise that OpenViking created a distinct memory file. The fact is submitted
-as an unchanged `user` message so OpenViking owns the final classification.
-The legacy `category` argument is still accepted from existing callers but is
-not advertised or used. The one-shot session is separate from the live Hermes
-conversation, so an explicit remember does not commit or rotate the active
-conversation session.
-
-If the message request or commit fails, the error includes the canonical
-session URI, the failed stage, the observed message status, and an `ov session
-commit <session-id>` recovery command. Inspect the session first. An archive
-means the commit completed. A non-empty live `messages.jsonl` with no archive
-means the message was accepted but still needs a commit. An empty live file
-without an archive is ambiguous and must not trigger an automatic resubmission.
-Use the same OpenViking profile and credentials as Hermes for manual recovery.
-OpenViking server auto-commit is disabled by default, so an accepted message
-whose explicit commit fails normally remains live and unextracted until it is
-manually committed.
+`openviking_remember` is the server's `remember` tool: it submits the fact to
+OpenViking's memory extraction, which can add, merge, or skip a memory. It
+does not commit or rotate the live Hermes conversation session. The server
+returns a short confirmation without a session or task id.
 
 Successful Hermes built-in `memory` mutations are mirrored to OpenViking in
 order. The active profile records each mirrored entry's exact URI in
@@ -295,7 +422,7 @@ order. The active profile records each mirrored entry's exact URI in
 | `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
 
 Replacing a mapped entry recreates its file if it was deleted directly in
-OpenViking, for example with `viking_forget`.
+OpenViking, for example with `openviking_forget`.
 
 The registry stores the current entry text and a connection fingerprint, not
 the raw API key. Endpoint, credentials, user, account, and peer changes isolate
@@ -309,8 +436,8 @@ the plugin skips those mirror operations with a warning; local memory still
 changes. It does not guess which remote entry to change.
 
 Only entries created by this mirror have mappings. Session-extracted memories,
-explicit `viking_remember` results, and copies created before this registry are
-outside its scope. Use `viking_forget` with an exact URI to remove those copies.
+explicit `openviking_remember` results, and copies created before this registry are
+outside its scope. Use `openviking_forget` with an exact URI to remove those copies.
 
 The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
 writes leave the registry unchanged and produce a warning. Additions do not wait
@@ -329,7 +456,7 @@ For an unsupported version, use a plugin version that supports it. Renaming a
 damaged registry starts a new registry but leaves earlier remote copies without
 mappings; those copies need manual cleanup by exact URI.
 
-`viking_forget` is intentionally narrow. It only accepts concrete user memory
+`openviking_forget` is intentionally narrow. It only accepts concrete user memory
 file URIs, such as
 `viking://user/default/peers/hermes/memories/preferences/mem_abc123.md`, or the
 `viking://~/...` self alias. Under `viking://user/...` the user id is required
@@ -338,7 +465,7 @@ and `viking://user/peers/...` shorthands are deprecated and rejected. Files
 directly under `memories/`, such as `viking://user/default/memories/profile.md`,
 are also allowed because OpenViking supports them. The tool rejects directories,
 resources, skills, sessions, generated summary files, and URIs with query
-strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
+strings or fragments. Use the `ov` CLI or OpenViking's admin APIs for broader
 resource and directory cleanup.
 
 
@@ -351,9 +478,22 @@ The server digest takes precedence over raw rendered context, and `no_relevant`
 suppresses injection. The default remains `off`; no local compressor is launched.
 
 The Hermes config equivalent is `memory.openviking.recall_compress: server`.
-When enabled, the default request and total recall deadlines become 55 seconds;
-explicit recall timeout settings still take precedence. Older servers fall back
-to the existing search path within that deadline.
+When enabled without explicit recall timeout settings, the request and total
+recall deadlines default to the whole 7.5-second recall budget. The rewrite
+request keeps 1 second of that budget for a fallback: if it times out, recall
+falls back to the search without rewrite. Older servers fall back to the
+existing search path within the same budget.
+
+### Session ids
+
+The OpenViking session for a Hermes session is named `hermes-<Hermes session id>`
+(an id that already starts with `hermes-` is kept as is). Recall, the search tool,
+turn uploads, commits and pending-commit markers all use this name. Before 3.0 the
+plugin used the bare Hermes id; markers left by 2.x are still recovered under the
+id they store, so sessions uploaded before the upgrade are committed where they are.
+Existing OpenViking sessions keep their ids; only turns uploaded by 3.0 or later
+go to the prefixed name, including later turns of a Hermes session that started
+before the upgrade.
 
 ### Active-session commits
 
@@ -383,12 +523,39 @@ The plugin retains the existing `keep_recent_count: 0` commit behavior.
 The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.
 
+### Turn uploads and failed uploads
+
+`sync_turn` returns at once; the turn is uploaded on a plugin writer thread
+with the connection and sender captured when the turn ended. Messages go to
+the batch endpoint in batches of at most 100, with one retry for a retryable
+failure and then one message at a time. A turn that yields no structured
+messages is sent as one user and one assistant text message, each cut to 4000
+characters.
+
+Messages that still fail are kept in memory, per OpenViking session and
+connection, and sent before that session's next upload or commit:
+
+| Failure | Handling |
+|---------|----------|
+| Network error, 408, 429, 5xx, or a 409 marked retryable | Kept and resent later |
+| 401 or 403 | Not retried at once; kept while the connection settings stay the same, dropped with a warning after they change |
+| Any other 4xx | Dropped with a warning |
+| 404 or 405 from the batch endpoint | Resent one message at a time |
+
+Each backlog holds at most 2000 messages and 8 MiB; beyond that the oldest are
+dropped with a warning. A commit never overtakes unsent messages of its
+session: while a backlog is left, the commit is skipped and the pending marker
+stays. A backlog of a session left behind by a switch is sent with the next
+upload on the same connection, and that session is then committed. The backlog
+lives only in memory, so messages still unsent when the process exits are
+lost; the pending marker lets a later run commit what reached the server.
+
 ### Non-primary contexts
 
 When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,
 or `flush`, recall and profile reads keep working. Automatic turn uploads,
 session-end/switch commits, and native memory mirroring are skipped for that
 context. Startup recovery can still commit pending messages from earlier sessions.
-Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
+Explicit `openviking_*` tools keep their normal behavior, including writes and deletes.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.

@@ -1,0 +1,49 @@
+{
+  "description": "Whether a failed OpenViking call is worth retrying. A result is { ok, status, error }; status 0 means the request never got an HTTP response (network error, timeout, closed port).",
+  "cases": [
+    { "name": "success is not a failure", "result": { "ok": true, "status": 200 }, "retryable": false },
+    { "name": "network error (status 0)", "result": { "ok": false, "status": 0, "error": { "message": "fetch failed" } }, "retryable": true },
+    { "name": "missing status behaves as a network error", "result": { "ok": false, "error": { "message": "timeout" } }, "retryable": true },
+    { "name": "408 request timeout", "result": { "ok": false, "status": 408 }, "retryable": true },
+    { "name": "429 rate limited", "result": { "ok": false, "status": 429 }, "retryable": true },
+    { "name": "500 internal error", "result": { "ok": false, "status": 500 }, "retryable": true },
+    { "name": "502 bad gateway", "result": { "ok": false, "status": 502 }, "retryable": true },
+    { "name": "503 unavailable", "result": { "ok": false, "status": 503 }, "retryable": true },
+    { "name": "599 upper edge of 5xx", "result": { "ok": false, "status": 599 }, "retryable": true },
+    {
+      "name": "409 marked retryable by the server",
+      "result": { "ok": false, "status": 409, "error": { "code": "CONFLICT", "details": { "retryable": true } } },
+      "retryable": true
+    },
+    {
+      "name": "409 explicitly not retryable",
+      "result": { "ok": false, "status": 409, "error": { "details": { "retryable": false } } },
+      "retryable": false
+    },
+    { "name": "409 without details", "result": { "ok": false, "status": 409, "error": { "code": "CONFLICT" } }, "retryable": false },
+    {
+      "name": "409 with a non-boolean retryable flag",
+      "result": { "ok": false, "status": 409, "error": { "details": { "retryable": "true" } } },
+      "retryable": false
+    },
+    {
+      "name": "retryable flag is only honoured on 409",
+      "result": { "ok": false, "status": 400, "error": { "details": { "retryable": true } } },
+      "retryable": false
+    },
+    { "name": "400 bad request", "result": { "ok": false, "status": 400 }, "retryable": false },
+    { "name": "401 unauthorized", "result": { "ok": false, "status": 401 }, "retryable": false },
+    { "name": "403 forbidden", "result": { "ok": false, "status": 403 }, "retryable": false },
+    { "name": "404 not found", "result": { "ok": false, "status": 404 }, "retryable": false },
+    { "name": "405 method not allowed", "result": { "ok": false, "status": 405 }, "retryable": false },
+    { "name": "422 validation error", "result": { "ok": false, "status": 422 }, "retryable": false }
+  ],
+  "batch_endpoint": {
+    "description": "Adding session messages tries the batch endpoint first. 404 or 405 means the server predates it: fall back to one request per message on the serial path. The fallback is not a retry, so these statuses stay non-retryable above. Any other failure stops the send and is classified by the cases above.",
+    "batch_path": "/api/v1/sessions/{session_id}/messages/batch",
+    "serial_path": "/api/v1/sessions/{session_id}/messages",
+    "batch_limit": 100,
+    "fallback_statuses": [404, 405],
+    "no_fallback_statuses": [0, 400, 401, 403, 409, 429, 500, 503]
+  }
+}
