@@ -2,7 +2,7 @@
 .dark { --vp-c-divider: #e9ece71c; }
 .VPHome { margin-bottom: 0 !important; }
 .VPNavBarTitle .title { font-size: 16px; letter-spacing: -.035em; }
-.VPNavBarTitle .logo { width: 27px; height: 27px; object-fit: contain; }
+.VPNavBarTitle .logo { width: 24px; height: 24px; object-fit: contain; }
 .VPNavBarTitle .title::after { content: ' / docs'; font-family: var(--vp-font-family-mono); font-size: 11px; color: var(--vp-c-text-2); margin-left: 10px; letter-spacing: 0; font-weight: 400; }
 .VPNavBarMenuLink { font-size: 12px !important; }
 .ov-docs-search-trigger { border-radius: 5px; height: 34px; min-width: 155px; background: transparent; font-size: 12px; }

@@ -9,6 +9,8 @@ const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
 const base = configuredBase === '//' ? '/' : configuredBase
+// Social cards need an absolute image URL; DOCS_SITE_URL overrides the default host for mirrors.
+const ogImageUrl = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}og-image.png`
 const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
 const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
 const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
@@ -232,9 +234,16 @@ export default defineConfig({
   // and historical design notes that are outside the VitePress page tree.
   ignoreDeadLinks: true,
   head: [
-    ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
+    // `sizes` on the ICO keeps Chromium from preferring it over the SVG favicon.
+    ['link', { rel: 'icon', type: 'image/x-icon', sizes: '32x32', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
     ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
+    ['meta', { property: 'og:image', content: ogImageUrl }],
+    ['meta', { property: 'og:image:width', content: '1200' }],
+    ['meta', { property: 'og:image:height', content: '630' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: ogImageUrl }],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
   ],
@@ -283,7 +292,7 @@ export default defineConfig({
     ]
   },
   themeConfig: {
-    logo: '/ov-logo.png',
+    logo: { light: '/nav-logo-light.svg', dark: '/nav-logo-dark.svg', alt: 'OpenViking' },
     logoLink: base,
     nav: enNav,
     socialLinks: [
