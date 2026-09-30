@@ -87,12 +87,12 @@ class RerankConfig(BaseModel):
         if 0 < self.max_input_tokens < 128:
             raise ValueError("Rerank max_input_tokens must be 0 or at least 128")
 
-        if self.mode is not None:
+        provider = self._effective_provider()
+        if provider == "jev" and self.mode is not None:
             self.mode = self.mode.strip().lower()
             if self.mode not in ("noul", "choice"):
                 raise ValueError("Jev rerank mode must be one of ['noul', 'choice']")
 
-        provider = self._effective_provider()
         if provider and provider not in [
             "vikingdb",
             "cohere",

@@ -286,6 +286,15 @@ class TestJevRerankConfig:
         with pytest.raises(ValueError, match="Jev rerank mode"):
             RerankConfig(provider="jev", api_key="key", mode="unknown")
 
+    def test_non_jev_provider_does_not_validate_jev_mode(self):
+        config = RerankConfig(
+            provider="openai",
+            api_key="key",
+            api_base="https://example.com/rerank",
+            mode="listwise",
+        )
+        assert config.mode == "listwise"
+
     def test_jev_auto_detected_from_api_base(self):
         config = RerankConfig(api_key="key", api_base="https://api.typesafe.ai")
         assert config._effective_provider() == "jev"
