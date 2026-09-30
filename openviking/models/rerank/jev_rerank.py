@@ -3,9 +3,8 @@
 """
 Jev (TypeSafe System One) Rerank API Client.
 
-TypeSafe has no native rerank endpoint; each document is evaluated by an
-independent Noul question against the query. The returned yes probability is
-used as the relevance score.
+Choice compares candidates in one question and returns relative probabilities.
+Noul evaluates each document independently and returns its yes probability.
 
 Speaks only the TypeSafe System One protocol. Vercel AI Gateway exposes a
 TypeSafe-compatible endpoint (https://ai-gateway.vercel.sh/typesafe), so routing
@@ -17,6 +16,7 @@ rerank_batch(query, documents) -> List[float]
 
 import json
 import time
+from string import ascii_uppercase
 from typing import Dict, List, Optional
 
 import httpx
@@ -25,6 +25,83 @@ from openviking.models.rerank.base import RerankBase
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+MODE_NOUL = "noul"
+MODE_CHOICE = "choice"
+
+
+def _validate_score(score: object) -> float:
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
+        raise ValueError(f"Invalid relevance score: {score!r}")
+    return float(score)
+
+
+class NoulRerankMode:
+    """One independent relevance question per document."""
+
+    def build_questions(self, documents: List[str]) -> Dict[str, dict]:
+        """Build one independent relevance question per document."""
+        return {
+            f"relevance_{index}": {
+                "type": MODE_NOUL,
+                "instructions": {
+                    "candidate_index": index,
+                    "question": (
+                        "Does candidate_documents[candidate_index] answer or match "
+                        "the retrieval intent of query?"
+                    ),
+                },
+                "criteria": {
+                    "true": "The candidate directly answers or is relevant to the query",
+                    "false": "The candidate does not answer and is not relevant to the query",
+                },
+            }
+            for index in range(len(documents))
+        }
+
+    def parse_scores(self, answers: dict, document_count: int) -> List[float]:
+        scores = []
+        for index in range(document_count):
+            answer = answers.get(f"relevance_{index}")
+            if not isinstance(answer, dict) or answer.get("type") != MODE_NOUL:
+                raise ValueError(f"Missing or malformed Noul answer for item {index}")
+            scores.append(_validate_score(answer.get("noul")))
+        return scores
+
+
+class ChoiceRerankMode:
+    """One choice question comparing 2–26 documents, with A–Z as candidate keys."""
+
+    def build_questions(self, documents: List[str]) -> Dict[str, dict]:
+        if not 2 <= len(documents) <= len(ascii_uppercase):
+            raise ValueError("Choice rerank requires 2–26 candidate documents")
+        return {
+            "relevance": {
+                "type": MODE_CHOICE,
+                "instructions": (
+                    "Which candidate document best answers or matches the retrieval intent of query?"
+                ),
+                "criteria": {
+                    ascii_uppercase[index]: (
+                        f"candidate_documents[{index}] directly answers or is relevant to the query"
+                    )
+                    for index in range(len(documents))
+                },
+            }
+        }
+
+    def parse_scores(self, answers: dict, document_count: int) -> List[float]:
+        answer = answers.get("relevance")
+        if not isinstance(answer, dict) or answer.get("type") != MODE_CHOICE:
+            raise ValueError("Missing or malformed Choice answer")
+        probabilities = answer.get("probabilities")
+        if not isinstance(probabilities, dict):
+            raise ValueError("Choice answer has no probabilities object")
+        # Use candidate keys, never response iteration order or winner confidence.
+        return [
+            _validate_score(probabilities.get(ascii_uppercase[index]))
+            for index in range(document_count)
+        ]
 
 
 class JevRerankClient(RerankBase):
@@ -37,8 +114,14 @@ class JevRerankClient(RerankBase):
         api_base: str = "https://api.typesafe.ai",
         timeout: float = 30.0,
         log_payloads: bool = False,
+        mode: str = MODE_CHOICE,
     ):
         super().__init__()
+        modes = {MODE_NOUL: NoulRerankMode, MODE_CHOICE: ChoiceRerankMode}
+        if mode not in modes:
+            raise ValueError(f"Unknown Jev rerank mode: {mode!r}")
+        self.mode = mode
+        self._strategy = modes[mode]()
         self.api_key = api_key
         self.model_name = model_name
         self.api_base = api_base.rstrip("/")
@@ -58,26 +141,6 @@ class JevRerankClient(RerankBase):
             timeout=timeout,
         )
 
-    def _build_questions(self, documents: List[str]) -> Dict[str, dict]:
-        """Build one independent relevance question per document."""
-        return {
-            f"relevance_{index}": {
-                "type": "noul",
-                "instructions": {
-                    "candidate_index": index,
-                    "question": (
-                        "Does candidate_documents[candidate_index] answer or match "
-                        "the retrieval intent of query?"
-                    ),
-                },
-                "criteria": {
-                    "true": "The candidate directly answers or is relevant to the query",
-                    "false": "The candidate does not answer and is not relevant to the query",
-                },
-            }
-            for index in range(len(documents))
-        }
-
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """Rerank documents against a query using the Jev System One API.
 
@@ -87,14 +150,12 @@ class JevRerankClient(RerankBase):
         if not documents:
             return []
 
-        questions = self._build_questions(documents)
-        body = {
-            "model": self.model_name,
-            "state": {"query": query, "candidate_documents": documents},
-            "questions": questions,
-        }
-
         try:
+            body = {
+                "model": self.model_name,
+                "state": {"query": query, "candidate_documents": documents},
+                "questions": self._strategy.build_questions(documents),
+            }
             if self.log_payloads:
                 logger.warning(
                     "[JevRerank] Request items=%s payload=%s",
@@ -119,17 +180,7 @@ class JevRerankClient(RerankBase):
                 logger.warning("[JevRerank] Response has no answers object")
                 return None
 
-            scores = []
-            for index in range(len(documents)):
-                answer = answers.get(f"relevance_{index}")
-                if not isinstance(answer, dict) or answer.get("type") != "noul":
-                    logger.warning("[JevRerank] Missing or malformed answer for item %s", index)
-                    return None
-                score = answer.get("noul")
-                if not isinstance(score, (int, float)) or not 0 <= score <= 1:
-                    logger.warning("[JevRerank] Invalid relevance score for item %s", index)
-                    return None
-                scores.append(float(score))
+            scores = self._strategy.parse_scores(answers, len(documents))
 
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
             input_tokens = usage.get("input_tokens", 0)

@@ -1072,10 +1072,24 @@ Notes for Vercel:
 - `api_base` must include the `/typesafe` suffix. `https://ai-gateway.vercel.sh/v1`
   is Vercel's own evaluate protocol and is not supported by the adapter.
 
-The Jev adapter sends the query and candidate documents as structured System One
-`state`, then asks one independent Noul relevance question per candidate. Each returned
-yes probability becomes that document's rerank score. All questions are evaluated in
-parallel in one request, and scores do not compete or have to sum to 1.
+The Jev adapter sends the query and candidate documents as shared System One `state`
+and supports two modes:
+
+- `choice` (default): one question compares 2–26 documents, with `A`–`Z` mapped to
+  input indices. Scores come from `probabilities` in document order, not `confidence`.
+  Unsupported candidate counts return failure so retrieval falls back to vector scores;
+  empty input returns an empty list.
+- `noul`: one independent relevance question per document, using its returned yes
+  probability as the score. All questions are sent in one HTTP request, and document
+  scores do not have to sum to 1.
+
+Modes are defined by `MODE_CHOICE` and `MODE_NOUL` in
+`openviking/models/rerank/jev_rerank.py`, with the constructor default `mode: str = MODE_CHOICE`.
+Change this default and restart the service to switch modes, or pass `mode=MODE_NOUL`
+when constructing a client directly. This is not an `ov.conf` setting.
+Choice scores are relative probabilities summing to 1 within the candidate pool,
+not absolute relevance. The existing `threshold` still applies and should be
+reassessed for the candidate count.
 
 **Parameters**
 
@@ -1099,7 +1113,7 @@ parallel in one request, and scores do not compete or have to sum to 1.
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI-compatible Rerank API
 - `litellm`: LiteLLM Rerank API
-- `jev`: Jev (TypeSafe System One) structured-decision API; each document receives an independent Noul relevance score
+- `jev`: Jev (TypeSafe System One) structured-decision API with Choice comparison and independent Noul scoring
 
 If rerank is not configured, search uses vector similarity only.
 

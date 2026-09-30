@@ -1036,9 +1036,19 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 - `api_base` 必须带 `/typesafe` 后缀；`https://ai-gateway.vercel.sh/v1` 是
   Vercel 自有的 evaluate 协议，适配器不支持。
 
-Jev 适配器将 query 和候选文档作为结构化 System One `state`，并为每个候选
-提出一个独立的 Noul 相关性问题。每个问题返回的 yes 概率就是该文档的 rerank
-分数。所有问题在一次请求中并行计算，各文档分数互不竞争，也不要求总和为 1。
+Jev 适配器将 query 和候选文档作为共享的 System One `state`，支持两种模式：
+
+- `choice`（默认）：用一个问题横向比较 2～26 篇文档，`A`～`Z` 对应输入下标。
+  按原文档顺序读取 `probabilities` 作为分数，不使用 `confidence`。
+  候选数量不在此范围时返回失败，由检索层回退到向量分数；空输入直接返回空列表。
+- `noul`：为每篇文档提出独立的相关性问题，返回的 yes 概率作为分数。
+  所有问题放在一次 HTTP 请求中，各文档分数不要求总和为 1。
+
+模式在 `openviking/models/rerank/jev_rerank.py` 中由 `MODE_CHOICE`、`MODE_NOUL`
+常量定义，构造函数默认参数为 `mode: str = MODE_CHOICE`。修改该默认值后重启服务即可切换；
+直接创建客户端时也可传入 `mode=MODE_NOUL`。模式不是 `ov.conf` 配置项。
+Choice 返回候选池内总和为 1 的相对概率，不代表绝对相关性；原有 `threshold`
+仍然生效，应结合候选数量重新评估阈值。
 
 **参数**
 
@@ -1062,7 +1072,7 @@ Jev 适配器将 query 和候选文档作为结构化 System One `state`，并�
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI 兼容的 Rerank 接口
 - `litellm`: LiteLLM Rerank 接口
-- `jev`: Jev (TypeSafe System One) 结构化判定接口，为每篇文档独立计算 Noul 相关性分数
+- `jev`: Jev (TypeSafe System One) 结构化判定接口，支持 Choice 横向比较和 Noul 独立评分
 
 如果未配置 Rerank，搜索仅使用向量相似度。
 
