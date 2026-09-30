@@ -78,8 +78,7 @@ ov observer queue
     "is_healthy": true,
     "has_errors": false,
     "status": "Queue                 Pending  In Progress  Processed  Errors  Total\nEmbedding             0        0            10         0       10\nSemantic              0        0            10         0       10\nTOTAL                 0        0            20         0       20"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -170,8 +169,7 @@ ov observer vikingdb
       "distance_metric": "cosine",
       "pure_dense_score_scale": "cosine_affine_0_1"
     }
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -254,8 +252,7 @@ ov observer models
     "is_healthy": true,
     "has_errors": false,
     "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -302,8 +299,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -354,8 +350,7 @@ ov observer retrieval
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -406,8 +401,7 @@ ov observer filesystem
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -520,8 +514,7 @@ ov observer system
         "status": "..."
       }
     }
-  },
-  "time": 0.1
+  }
 }
 ```
 

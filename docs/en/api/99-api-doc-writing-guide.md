@@ -263,8 +263,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
     "root_uri": "viking://resources/documents/guide.md",
     "task_id": "uuid-xxx",
     "errors": []
-  },
-  "time": 0.123
+  }
 }
 ```
 

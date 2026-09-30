@@ -169,8 +169,7 @@ The HTTP `result` remains an entry array. `has_more=true` means more matching no
       "uri": "viking://resources/docs/"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -294,8 +293,7 @@ As with `ls`, the HTTP `result` remains a node array and `has_more` is returned 
       "uri": "viking://resources/docs/api.md"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -375,8 +373,7 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -394,8 +391,7 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "uri": "viking://resources/docs",
     "count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -577,8 +573,7 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
   "status": "ok",
   "result": {
     "uri": "viking://resources/new-project/"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -656,8 +651,7 @@ openviking rm viking://resources/old.md [--recursive]
   "status": "ok",
   "result": {
     "uri": "viking://resources/docs/old.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -669,8 +663,7 @@ openviking rm viking://resources/old.md [--recursive]
   "result": {
     "uri": "viking://resources/old-project/",
     "estimated_deleted_count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -837,8 +830,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
   "result": {
     "from": "viking://resources/old-name/",
     "to": "viking://resources/new-name/"
-  },
-  "time": 0.1
+  }
 }
 ```
 

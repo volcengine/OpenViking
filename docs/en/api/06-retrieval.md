@@ -962,8 +962,7 @@ For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags wi
             }
         ],
         "count": 1
-    },
-    "time": 0.1
+    }
 }
 ```
 
@@ -1102,8 +1101,7 @@ Default (URI strings):
             "viking://resources/docs/guide.md"
         ],
         "count": 2
-    },
-    "time": 0.1
+    }
 }
 ```
 
@@ -1118,8 +1116,7 @@ With `extra_fields=["name","size","mtime"]`:
             {"name": "guide.md", "uri": "viking://resources/docs/guide.md", "size": 8234, "mtime": 1720000001}
         ],
         "count": 2
-    },
-    "time": 0.2
+    }
 }
 ```
 

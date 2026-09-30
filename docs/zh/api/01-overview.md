@@ -221,8 +221,7 @@ ov -o json ls viking://resources/
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -236,8 +235,7 @@ ov -o json ls viking://resources/
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 

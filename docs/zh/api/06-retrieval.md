@@ -963,8 +963,7 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
             }
         ],
         "count": 1
-    },
-    "time": 0.1
+    }
 }
 ```
 
@@ -1093,8 +1092,7 @@ openviking glob "**/*.md" -f tags
             "viking://resources/docs/guide.md"
         ],
         "count": 2
-    },
-    "time": 0.1
+    }
 }
 ```
 

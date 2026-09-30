@@ -77,7 +77,7 @@ If your deployment protects `/metrics` at the gateway layer, configure the scrap
 **Notes**
 
 - `/metrics` is meant for frequent scraping, so the exported metrics should remain low-cardinality and low-cost.
-- `/metrics` returns Prometheus text, not the standard OpenViking `{status, result, time}` JSON response format.
+- `/metrics` returns Prometheus text, not the standard OpenViking `{status, result}` JSON response format.
 - For human-readable component snapshots, prefer `/api/v1/observer/*`.
 - `/metrics` also includes VikingBot feedback observability metrics derived from scrape-time aggregation of persisted session data; see the Metrics concept documentation for the feedback metric families and examples.
 

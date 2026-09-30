@@ -92,8 +92,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"],
-  "time": 0.01
+  "result": ["skill"]
 }
 ```
 
@@ -121,8 +120,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs/skill \
 ```json
 {
   "status": "ok",
-  "result": ["byted-viking-search-knowledgebase"],
-  "time": 0.01
+  "result": ["byted-viking-search-knowledgebase"]
 }
 ```
 
@@ -166,8 +164,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
         "base_url": "https://example.com"
       }
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -233,8 +230,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
       "region": "cn"
     },
     "change_reason": "rotate key"
-  },
-  "time": 0.02
+  }
 }
 ```
 
@@ -262,8 +258,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
 ```json
 {
   "status": "ok",
-  "result": [1, 2, 3, 4],
-  "time": 0.01
+  "result": [1, 2, 3, 4]
 }
 ```
 
@@ -301,8 +296,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
       "api_key": "secret-1",
       "base_url": "https://example.com"
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -348,8 +342,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
       "api_key": "secret-1",
       "base_url": "https://example.com"
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 

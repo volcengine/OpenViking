@@ -77,7 +77,7 @@ scrape_configs:
 **注意事项**
 
 - `/metrics` 适合高频抓取，因此其中的指标应保持低基数、低成本。
-- `/metrics` 返回的是 Prometheus 文本，不是标准 OpenViking API 的 `{status, result, time}` JSON 结构。
+- `/metrics` 返回的是 Prometheus 文本，不是标准 OpenViking API 的 `{status, result}` JSON 结构。
 - 人工查看组件瞬时状态更适合使用 `/api/v1/observer/*`。
 - `/metrics` 现在也包含 VikingBot feedback observability 指标，这些指标来自对持久化 session 数据的 scrape-time 聚合；具体指标族与示例可参见 Metrics 概念文档中的 feedback 章节。
 

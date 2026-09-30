@@ -226,8 +226,7 @@ All HTTP API responses follow a unified format:
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -241,8 +240,7 @@ The top-level `status` describes whether the HTTP API request succeeded. Some su
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 

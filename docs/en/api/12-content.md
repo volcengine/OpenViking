@@ -63,8 +63,7 @@ openviking abstract viking://resources/docs/
 ```json
 {
   "status": "ok",
-  "result": "Documentation for the project API, covering authentication, endpoints...",
-  "time": 0.1
+  "result": "Documentation for the project API, covering authentication, endpoints..."
 }
 ```
 
@@ -128,8 +127,7 @@ openviking overview viking://resources/docs/
 ```json
 {
   "status": "ok",
-  "result": "## docs/\n\nContains API documentation and guides...",
-  "time": 0.1
+  "result": "## docs/\n\nContains API documentation and guides..."
 }
 ```
 
@@ -202,8 +200,7 @@ openviking read viking://resources/docs/api.md
 ```json
 {
   "status": "ok",
-  "result": "# API Documentation\n\nFull content of the file...",
-  "time": 0.1
+  "result": "# API Documentation\n\nFull content of the file..."
 }
 ```
 
@@ -742,8 +739,7 @@ openviking reindex viking://user/default/skills --mode semantic_and_vectors --wa
     "object_type": "resource",
     "status": "accepted",
     "task_id": "task_xxx"
-  },
-  "time": 0.1
+  }
 }
 ```
 

@@ -108,8 +108,7 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
   "result": {
     "enabled": false,
     "account_id": "default"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -929,8 +928,7 @@ ov --sudo admin create-account acme-private --admin alice \
     "account_id": "acme",
     "admin_user_id": "alice",
     "user_key": "7f3a9c1e..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1041,8 +1039,7 @@ ov --sudo admin list-accounts --limit 50 --page 2
   "result": [
     {"account_id": "default", "created_at": "2026-02-12T10:00:00Z", "user_count": 1},
     {"account_id": "acme", "created_at": "2026-02-13T08:00:00Z", "user_count": 2}
-  ],
-  "time": 0.1
+  ]
 }
 ```
 
@@ -1142,8 +1139,7 @@ ov --sudo task status <task_id>
     "account_id": "acme",
     "status": "deleting",
     "task_id": "550e8400-e29b-41d4-a716-446655440000"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1279,8 +1275,7 @@ ov admin register-user acme bob-private --role user \
     "account_id": "acme",
     "user_id": "bob",
     "user_key": "d91f5b2a..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1404,8 +1399,7 @@ ov admin list-users acme --limit 50 --page 2
   "result": [
     {"user_id": "alice", "role": "admin"},
     {"user_id": "bob", "role": "user"}
-  ],
-  "time": 0.1
+  ]
 }
 ```
 
@@ -1504,8 +1498,7 @@ ov --sudo admin remove-user acme bob
     "user_id": "bob",
     "status": "deleting",
     "task_id": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1600,8 +1593,7 @@ ov --sudo admin set-role acme bob admin
     "account_id": "acme",
     "user_id": "bob",
     "role": "admin"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1709,8 +1701,7 @@ ov --sudo admin regenerate-key acme bob
   "status": "ok",
   "result": {
     "user_key": "e82d4e0f..."
-  },
-  "time": 0.1
+  }
 }
 ```
 

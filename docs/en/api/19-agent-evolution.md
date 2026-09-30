@@ -54,8 +54,7 @@ curl -X GET "http://localhost:1933/api/v1/agent-evolution/experiences/trajectori
     "limit": 50,
     "offset": 0,
     "has_more": false
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -105,8 +104,7 @@ curl -X GET "http://localhost:1933/api/v1/agent-evolution/experiences/outcomes?e
       {"outcome": "unknown", "count": 0},
       {"outcome": "unfinished", "count": 0}
     ]
-  },
-  "time": 0.01
+  }
 }
 ```
 

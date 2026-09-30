@@ -235,8 +235,7 @@ ov system status
   "result": {
     "initialized": true,
     "user": "alice"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -426,8 +425,7 @@ ov system wait --timeout 60
       "error_count": 0,
       "errors": []
     }
-  },
-  "time": 0.1
+  }
 }
 ```
 
