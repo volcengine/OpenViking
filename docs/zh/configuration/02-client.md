@@ -145,7 +145,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 }
 ```
 
-许多配置项都有对应的 `OPENVIKING_*` 环境变量，例如 `OPENVIKING_RECALL_LIMIT` 对应 `recallLimit`，`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 对应 `captureAssistantTurns`。少数配置只支持环境变量，比如一次性的 `OPENVIKING_BYPASS_SESSION`。完整列表在插件 README 里：[Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。取列表值的配置项（`bypassSessionPatterns`、`recallQueryFilters`、`captureFilters`）在这里是 JSON 数组，而它们的环境变量对应物是逗号分隔的字符串，所以值里带字面逗号的只能写进数组。
+许多配置项都有对应的 `OPENVIKING_*` 环境变量，例如 `OPENVIKING_RECALL_LIMIT` 对应 `recallLimit`，`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 对应 `captureAssistantTurns`。`OPENVIKING_BYPASS_SESSION` 也有文件配置项 `plugin.bypassSession`；仅需覆盖当前进程时可使用环境变量。完整共享列表由 `examples/memory-plugin-shared/lib/config-schema.mjs` 定义。用法见插件 README：[Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。取列表值的配置项（`bypassSessionPatterns`、`recallQueryFilters`、`captureFilters`）在这里是 JSON 数组，而它们的环境变量对应物是逗号分隔的字符串，所以值里带字面逗号的只能写进数组。
 
 优先级从高到低：环境变量 → [工作区各层](#工作区配置) → `plugin.<harness>` → `plugin` → `ov.conf` 里遗留的按 harness 分块 → 内置默认值。独立启动的 hook 进程在每次触发时重新读文件；常驻插件何时重载取决于宿主，不确定时重启 Agent。环境变量改动也需要重启，因为 hook 继承的是 Agent 进程的环境。
 
@@ -226,13 +226,13 @@ peer 是用户空间下的一段路径前缀——`viking://user/<you>/peers/<pe
 {"version": 1, "peer": {"id": "my-project"}}
 ```
 
-插件在这个目录及其子目录中捕获的记忆会写入 peer `my-project`，无论它是否为 Git 仓库。这个 id 不含路径，因此目录移动、改名、换一台机器都不会变；连接同一服务端、使用同一账户和用户的两个目录，写同一个 peer id 就共享同一记忆范围，这正是合并它们的方式。
+没有更高优先级的 peer 设置或嵌套工作区覆盖时，插件在这个目录及其子目录中捕获的记忆会写入 peer `my-project`，无论它是否为 Git 仓库。这个 id 不含路径，因此目录移动、改名、换一台机器都不会变；连接同一服务端、使用同一账户和用户的两个目录，写同一个 peer id 就共享同一记忆范围，这正是合并它们的方式。
 
 其余写法，优先级从高到低：
 
 | 写在哪 | 作用 |
 |---|---|
-| `OPENVIKING_PEER_ID=my-project` | 为单个进程指定 peer，优先于配置文件 |
+| `OPENVIKING_PEER_ID=my-project` | 为单个进程指定 peer；凭据固定从 `ovcli.conf` 读取时忽略此变量，宿主显式指定的 peer 优先 |
 | `.openviking/config.json` 的 `peer.id` | 指定本工作区的 peer。推荐做法；`config.local.json` 是同一个键，只是不提交 |
 | 同一文件的 `peer.source` | 不直接指定，而是推导——`"cwd"` 用目录路径，`"team-{dir}"` 用模板 |
 | `ovcli.conf` 的 `plugin.peerSource`，或 `OPENVIKING_PEER_SOURCE` | 对本机所有目录生效；`"cwd"` 可整体恢复 `git` 默认之前的行为 |

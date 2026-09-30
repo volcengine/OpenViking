@@ -148,7 +148,7 @@ Settings for memory plugins live under `plugin`. Keys directly under it provide 
 }
 ```
 
-Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. A few variables are environment-only, such as the one-shot `OPENVIKING_BYPASS_SESSION`. The full list lives in the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
+Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. `OPENVIKING_BYPASS_SESSION` also has a file setting, `plugin.bypassSession`; use the environment variable for a process-specific override. The full shared list is defined in `examples/memory-plugin-shared/lib/config-schema.mjs`. For usage, see the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
 
 Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Separately launched hook processes reread the file on each invocation. Reload behavior for persistent plugins depends on the host; restart the agent when uncertain. Environment changes also require a restart because hooks inherit the agent’s environment.
 
@@ -229,13 +229,13 @@ Create `.openviking/config.json` in the directory:
 {"version": 1, "peer": {"id": "my-project"}}
 ```
 
-Memories captured by the plugin in that directory and its subdirectories are written under the peer `my-project`, whether or not it is a Git repository. The id names no path, so it survives a move, a rename and a second machine — and two directories using the same server, account, user, and peer id share the same memory scope, which is how you merge them on purpose.
+Unless a higher-priority peer setting or a nested workspace overrides it, memories captured by the plugin in that directory and its subdirectories are written under the peer `my-project`, whether or not it is a Git repository. The id names no path, so it survives a move, a rename and a second machine — and two directories using the same server, account, user, and peer id share the same memory scope, which is how you merge them on purpose.
 
 The other ways to set it, highest precedence first:
 
 | Where | What it does |
 |---|---|
-| `OPENVIKING_PEER_ID=my-project` | Pins the peer for one process, whatever the files say |
+| `OPENVIKING_PEER_ID=my-project` | Sets the peer for one process; ignored when credentials are pinned to `ovcli.conf`, and an explicit host peer takes precedence |
 | `peer.id` in `.openviking/config.json` | Names this workspace's peer. The recommended way; `config.local.json` is the same key kept out of the commit |
 | `peer.source` in the same file | Derives the peer instead of naming it — `"cwd"` for the directory path, `"team-{dir}"` for a template |
 | `plugin.peerSource` in `ovcli.conf`, or `OPENVIKING_PEER_SOURCE` | The same choice for every directory on this machine; `"cwd"` restores the pre-`git` behavior everywhere |
