@@ -19,6 +19,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.exceptions import InvalidArgumentError
 
 
 class _FakePathLock:
@@ -395,6 +396,34 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
     assert events == ["lock", "stat"]
     assert captured["target_preexisting"] is True
     assert captured["formal_snapshot"] == ({"": content_write_module.FormalEntry(is_dir=False)}, True)
+
+
+@pytest.mark.asyncio
+async def test_missing_generated_sidecar_is_rejected_after_exact_lock(monkeypatch, ctx):
+    fake_fs = _FakeVikingFS()
+    events = []
+    original_acquire = fake_fs._async_agfs.pathlock_acquire_exact
+
+    async def _acquire(path):
+        events.append("lock")
+        return await original_acquire(path)
+
+    fake_fs._async_agfs.pathlock_acquire_exact = _acquire
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    coordinator._classify_locked_write_target = AsyncMock(
+        side_effect=InvalidArgumentError("cannot create generated abstract overview directly")
+    )
+
+    with pytest.raises(InvalidArgumentError, match="cannot create generated"):
+        await coordinator.write(
+            uri="viking://resources/demo/.abstract.md",
+            content="manual body",
+            mode="replace",
+            ctx=ctx,
+        )
+
+    assert events == ["lock"]
+    coordinator._classify_locked_write_target.assert_awaited_once()
 
 
 def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_state():

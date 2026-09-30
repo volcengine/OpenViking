@@ -109,6 +109,18 @@ class _InlineArtifactRef:
     backend: str = "inline"
 
 
+@dataclass(frozen=True)
+class _LockedWriteTarget:
+    """One locked target classification shared by all single-file write paths."""
+
+    preexisting: bool
+    formal_snapshot: tuple[dict[str, FormalEntry], bool]
+
+    @property
+    def is_new_file(self) -> bool:
+        return not self.preexisting
+
+
 def _queue_has_errors(queue_status: Optional[Dict[str, Any]], name: str) -> bool:
     if not isinstance(queue_status, dict):
         return False
@@ -862,13 +874,9 @@ class ContentWriteCoordinator:
         lock_released = False
         request_registered = False
         try:
-            stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
-            target_preexisting = not stat.get("not_found")
-            if target_preexisting and stat.get("isDir"):
-                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
-            if not target_preexisting:
-                self._validate_create_extension(uri)
-            is_new_file = not target_preexisting
+            target_state = await self._classify_locked_write_target(uri, ctx=ctx)
+            target_preexisting = target_state.preexisting
+            is_new_file = target_state.is_new_file
             if mode == "append":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
@@ -902,11 +910,7 @@ class ContentWriteCoordinator:
                 request_intent=request,
                 root_is_file=True,
                 target_preexisting=target_preexisting,
-                formal_snapshot=(
-                    ({"": FormalEntry(is_dir=bool(stat.get("isDir")))}, True)
-                    if target_preexisting
-                    else ({}, True)
-                ),
+                formal_snapshot=target_state.formal_snapshot,
                 artifact_inventory=inline_inventory,
                 vector_scope="self",
             )
@@ -1043,6 +1047,9 @@ class ContentWriteCoordinator:
         lock_released = False
         request_registered = False
         try:
+            # Preserve the public invariant that generated sidecars cannot be
+            # materialized, while keeping the state check inside the exact lock.
+            await self._classify_locked_write_target(uri, ctx=ctx)
             previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             await self._write_in_place(
                 uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
@@ -1178,6 +1185,24 @@ class ContentWriteCoordinator:
                     raise
                 raise NotFoundError(uri, "file") from exc
             raise NotFoundError(uri, "file") from exc
+
+    async def _classify_locked_write_target(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+    ) -> _LockedWriteTarget:
+        """Read target state exactly once after its exact write lock is held."""
+        stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
+        preexisting = not stat.get("not_found")
+        if preexisting:
+            if stat.get("isDir"):
+                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+            return _LockedWriteTarget(True, ({"": FormalEntry(is_dir=False)}, True))
+        if is_abstract_overview_uri(uri):
+            raise InvalidArgumentError(f"cannot create generated abstract overview directly: {uri}")
+        self._validate_create_extension(uri)
+        return _LockedWriteTarget(False, ({}, True))
 
     def _validate_create_extension(self, uri: str) -> None:
         _, ext = os.path.splitext(uri)
@@ -1354,13 +1379,8 @@ class ContentWriteCoordinator:
         released = False
         request_registered = False
         try:
-            stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
-            target_preexisting = not stat.get("not_found")
-            if target_preexisting and stat.get("isDir"):
-                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
-            is_new_file = not target_preexisting
-            if is_new_file:
-                self._validate_create_extension(uri)
+            target_state = await self._classify_locked_write_target(uri, ctx=ctx)
+            is_new_file = target_state.is_new_file
             write_kwargs = {
                 "mode": mode,
                 "ctx": ctx,
