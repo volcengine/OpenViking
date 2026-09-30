@@ -573,6 +573,7 @@ async def build_rnfv_snapshot(
     request_intent: RequestIntent | None = None,
     root_is_file: bool = False,
     target_preexisting: bool = True,
+    formal_snapshot: tuple[Dict[str, FormalEntry], bool] | None = None,
     artifact_inventory: ArtifactInventory | None = None,
     vector_scope: Literal["subtree", "self"] = "subtree",
 ) -> RNFVSnapshot:
@@ -592,6 +593,8 @@ async def build_rnfv_snapshot(
         )
 
     async def read_formal() -> tuple[Dict[str, FormalEntry], bool]:
+        if formal_snapshot is not None:
+            return formal_snapshot
         if not target_preexisting:
             return {}, True
         return await read_target_file_snapshot(

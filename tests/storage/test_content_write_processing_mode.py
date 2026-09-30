@@ -15,6 +15,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
@@ -310,6 +311,105 @@ async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ct
     ingest_options = coordinator._write_direct_with_refresh.await_args.kwargs["ingest_options"]
     assert ingest_options.search_tags == ["team=search"]
     assert ingest_options.search_tag_mode == "append"
+
+
+@pytest.mark.asyncio
+async def test_create_routes_as_replace_without_prelock_target_stat(ctx):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    coordinator._safe_stat = AsyncMock(return_value={"not_found": True})
+    coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
+    coordinator._write_direct_with_refresh = AsyncMock(
+        return_value={"uri": "viking://resources/new.md"}
+    )
+
+    await coordinator.write(
+        uri="viking://resources/new.md",
+        content="new content",
+        mode="create",
+        ctx=ctx,
+    )
+
+    kwargs = coordinator._write_direct_with_refresh.await_args.kwargs
+    assert kwargs["mode"] == "replace"
+    coordinator._safe_stat.assert_not_awaited()
+    coordinator._resolve_root_uri.assert_awaited_once_with(
+        "viking://resources/new.md",
+        ctx=ctx,
+        _allow_not_found=True,
+        anchor_to_parent=True,
+        validate_storage=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state(monkeypatch, ctx):
+    fake_fs = _FakeVikingFS()
+    events = []
+    original_acquire = fake_fs._async_agfs.pathlock_acquire_exact
+
+    async def _acquire(path):
+        events.append("lock")
+        return await original_acquire(path)
+
+    async def _stat(*args, **kwargs):
+        del args, kwargs
+        events.append("stat")
+        return {"isDir": False}
+
+    fake_fs._async_agfs.pathlock_acquire_exact = _acquire
+    fake_fs.stat = _stat
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    captured = {}
+
+    async def _snapshot(**kwargs):
+        captured["formal_snapshot"] = kwargs["formal_snapshot"]
+        captured["target_preexisting"] = kwargs["target_preexisting"]
+        return SimpleNamespace()
+
+    async def _plan(**kwargs):
+        del kwargs
+        return None, SimpleNamespace()
+
+    async def _commit(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(semantic_requested=False, vector_requested=False, semantic_action=None)
+
+    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
+    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
+    monkeypatch.setattr(content_write_module, "commit_and_enqueue_plan", _commit)
+
+    await coordinator._write_direct_with_refresh(
+        uri="viking://resources/demo.md",
+        root_uri="viking://resources",
+        content="updated",
+        mode="replace",
+        response_mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        telemetry_id="",
+        ingest_options=IngestOptions(),
+    )
+
+    assert events == ["lock", "stat"]
+    assert captured["target_preexisting"] is True
+    assert captured["formal_snapshot"] == ({"": content_write_module.FormalEntry(is_dir=False)}, True)
+
+
+def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_state():
+    uri = "viking://user/account-1/memories/new.md"
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    rendered = coordinator._render_final_bytes(
+        uri,
+        "new memory content",
+        mode="replace",
+        existing_raw=None,
+        is_new_file=True,
+    )
+
+    assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).content == "new memory content"
 
 
 @pytest.mark.asyncio

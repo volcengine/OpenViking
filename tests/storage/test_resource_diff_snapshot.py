@@ -512,6 +512,40 @@ async def test_inline_bytes_store_returns_preset_bytes():
 
 
 @pytest.mark.asyncio
+async def test_build_rnfv_snapshot_uses_locked_formal_snapshot_without_second_stat(monkeypatch):
+    root = "viking://resources/x/a.py"
+
+    async def _unexpected_formal_read(*args, **kwargs):
+        raise AssertionError("locked formal state must be reused")
+
+    async def _empty_inventory(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.read_target_file_snapshot", _unexpected_formal_read
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff._read_incremental_vector_inventory", _empty_inventory
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=_FakeVikingDB({}),
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=make_inline_file_inventory(b"new"),
+        root_is_file=True,
+        target_preexisting=True,
+        formal_snapshot=({"": FormalEntry(is_dir=False)}, True),
+        vector_scope="self",
+    )
+
+    assert snapshot.formal.entries == {"": FormalEntry(is_dir=False)}
+
+
+@pytest.mark.asyncio
 async def test_build_rnfv_snapshot_self_scope_reads_only_target_uri():
     root = "viking://resources/x/a.py"
     vikingdb = _FakeVikingDB(
