@@ -19,7 +19,7 @@ uv tool install "openviking[bot]" --upgrade
 ```
 
 ```bash [pip]
-pip install "openviking[bot]" --upgrade --force-reinstall
+pip install "openviking[bot]" --upgrade
 ```
 
 ```bash [pipx]
@@ -37,6 +37,8 @@ pipx upgrade openviking
 ```bash
 vikingbot --version
 ```
+
+使用 pip 时先激活虚拟环境。源码安装还需要准备[开发构建依赖](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md)。
 
 ### 从源码安装
 
@@ -94,6 +96,8 @@ openviking-server doctor
 
 详细配置见 [OpenViking 配置指南](01-configuration.md)。VikingBot 默认继承根级 `vlm` 作为 Agent 模型，因此通常不需要重复配置 `bot.agents`。
 
+Server 使用 `api_key` 模式时，先注册 User/Admin Key 并写入 `bot.ov_server.api_key`；不能把 root 管理 Key 当作用户 Key 使用。操作见[认证指南](04-authentication.md)。继承 `trusted` 模式时，Bot 使用服务端的可信身份配置。
+
 ### 2. 一体启动
 
 ```bash
@@ -112,6 +116,8 @@ ov find "我的回答偏好"
 ```
 
 `ov config` 中的 URL 应指向当前 OpenViking Server，默认是 `http://127.0.0.1:1933`。如果 Server 开启了鉴权，还需要配置当前调用者的 User/Admin API Key。
+
+记忆在 commit 后异步提取，立即运行 `ov find` 可能还没有结果。用检索验证记忆是否保存前，先确认记忆任务已完成。
 
 ## 场景 B：本地调试 Agent
 
@@ -185,7 +191,7 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-没有可用的 OpenViking Server 时，VikingBot 会以 standalone 方式运行。本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
+未显式配置 `bot.ov_server.server_url` 时，继承的服务不可用可降级为 standalone；显式配置的服务不可用，或可访问的服务鉴权不匹配，会停止启动。本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
 
 ## 场景 C：Gateway 统一入口
 
@@ -209,6 +215,7 @@ vikingbot chat --session my-session
     },
     "ov_server": {
       "server_url": "https://openviking.example.com",
+      "api_key_type": "user",
       "api_key": "<bot-openviking-user-api-key>"
     }
   }
