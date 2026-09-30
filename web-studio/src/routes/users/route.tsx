@@ -20,6 +20,7 @@ import {
   Trash2Icon,
   UserRoundIcon,
   UsersRoundIcon,
+  BookOpenTextIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -127,9 +128,11 @@ function UserManagementRoute() {
   })
   const activeTab = pathname.startsWith('/users/permissions')
     ? 'permissions'
-    : pathname.startsWith('/users/groups')
-      ? 'groups'
-      : 'users'
+    : pathname.startsWith('/users/memory-templates')
+      ? 'memory-templates'
+      : pathname.startsWith('/users/groups')
+        ? 'groups'
+        : 'users'
   return (
     <Tabs
       value={activeTab}
@@ -137,9 +140,11 @@ function UserManagementRoute() {
         const to =
           value === 'groups'
             ? '/users/groups'
-            : value === 'permissions'
-              ? '/users/permissions'
-              : '/users'
+            : value === 'memory-templates'
+              ? '/users/memory-templates'
+              : value === 'permissions'
+                ? '/users/permissions'
+                : '/users'
         void navigate({ to })
       }}
       className="w-full min-w-0"
@@ -164,6 +169,13 @@ function UserManagementRoute() {
           <ShieldCheckIcon />
           {t('acl.page.title')}
         </TabsTrigger>
+        <TabsTrigger
+          value="memory-templates"
+          className={managementTabClassName}
+        >
+          <BookOpenTextIcon />
+          {t('memoryTemplates.tab')}
+        </TabsTrigger>
       </TabsList>
       <TabsContent value="users" className="pt-5">
         {activeTab === 'users' && <Outlet />}
@@ -173,6 +185,9 @@ function UserManagementRoute() {
       </TabsContent>
       <TabsContent value="permissions" className="pt-5">
         {activeTab === 'permissions' && <Outlet />}
+      </TabsContent>
+      <TabsContent value="memory-templates" className="pt-5">
+        {activeTab === 'memory-templates' && <Outlet />}
       </TabsContent>
     </Tabs>
   )

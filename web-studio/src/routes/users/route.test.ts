@@ -6,6 +6,7 @@ it.each([
   ['/users', '/users/'],
   ['/users/groups', '/users/groups'],
   ['/users/permissions', '/users/permissions'],
+  ['/users/memory-templates', '/users/memory-templates'],
 ])('matches the user and permissions tab at %s', (path, routeId) => {
   const router = createRouter({
     routeTree,

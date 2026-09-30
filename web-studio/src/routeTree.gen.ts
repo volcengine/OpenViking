@@ -30,6 +30,7 @@ import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as CompileIndexRouteImport } from './routes/compile/index'
 import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
 import { Route as UsersPermissionsRouteImport } from './routes/users/permissions'
+import { Route as UsersMemoryTemplatesRouteImport } from './routes/users/memory-templates'
 import { Route as UsersGroupsRouteImport } from './routes/users/groups'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
@@ -142,6 +143,11 @@ const UsersPermissionsRoute = UsersPermissionsRouteImport.update({
   path: '/permissions',
   getParentRoute: () => UsersRouteRoute,
 } as any)
+const UsersMemoryTemplatesRoute = UsersMemoryTemplatesRouteImport.update({
+  id: '/memory-templates',
+  path: '/memory-templates',
+  getParentRoute: () => UsersRouteRoute,
+} as any)
 const UsersGroupsRoute = UsersGroupsRouteImport.update({
   id: '/groups',
   path: '/groups',
@@ -195,6 +201,7 @@ export interface FileRoutesByFullPath {
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
+  '/users/memory-templates': typeof UsersMemoryTemplatesRoute
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
@@ -220,6 +227,7 @@ export interface FileRoutesByTo {
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
+  '/users/memory-templates': typeof UsersMemoryTemplatesRoute
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience': typeof AgentExperienceIndexRoute
   '/compile': typeof CompileIndexRoute
@@ -250,6 +258,7 @@ export interface FileRoutesById {
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
+  '/users/memory-templates': typeof UsersMemoryTemplatesRoute
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
@@ -281,6 +290,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
+    | '/users/memory-templates'
     | '/users/permissions'
     | '/agent-experience/'
     | '/compile/'
@@ -306,6 +316,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
+    | '/users/memory-templates'
     | '/users/permissions'
     | '/agent-experience'
     | '/compile'
@@ -335,6 +346,7 @@ export interface FileRouteTypes {
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
+    | '/users/memory-templates'
     | '/users/permissions'
     | '/agent-experience/'
     | '/compile/'
@@ -516,6 +528,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsersPermissionsRouteImport
       parentRoute: typeof UsersRouteRoute
     }
+    '/users/memory-templates': {
+      id: '/users/memory-templates'
+      path: '/memory-templates'
+      fullPath: '/users/memory-templates'
+      preLoaderRoute: typeof UsersMemoryTemplatesRouteImport
+      parentRoute: typeof UsersRouteRoute
+    }
     '/users/groups': {
       id: '/users/groups'
       path: '/groups'
@@ -588,12 +607,14 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
 
 interface UsersRouteRouteChildren {
   UsersGroupsRoute: typeof UsersGroupsRoute
+  UsersMemoryTemplatesRoute: typeof UsersMemoryTemplatesRoute
   UsersPermissionsRoute: typeof UsersPermissionsRoute
   UsersIndexRoute: typeof UsersIndexRoute
 }
 
 const UsersRouteRouteChildren: UsersRouteRouteChildren = {
   UsersGroupsRoute: UsersGroupsRoute,
+  UsersMemoryTemplatesRoute: UsersMemoryTemplatesRoute,
   UsersPermissionsRoute: UsersPermissionsRoute,
   UsersIndexRoute: UsersIndexRoute,
 }

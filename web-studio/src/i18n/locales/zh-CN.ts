@@ -4,6 +4,7 @@ import memoryPolicy from './zh-CN/user-memory-policy'
 import workspace from './zh-CN/workspace'
 import resources from './zh-CN/resources'
 import activity from './zh-CN/activity'
+import memoryTemplates from './zh-CN/memory-templates'
 
 const zhCN = {
   compile,
@@ -11,7 +12,7 @@ const zhCN = {
   ...workspace,
   ...resources,
   ...activity,
-  settings: { ...workspace.settings, memoryPolicy },
+  settings: { ...workspace.settings, memoryPolicy, memoryTemplates },
 } as const
 
 export default zhCN

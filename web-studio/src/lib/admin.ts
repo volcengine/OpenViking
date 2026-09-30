@@ -123,7 +123,7 @@ function setOptionalHeader(
   }
 }
 
-function createAdminClient(connection: AdminConnection) {
+export function createAdminClient(connection: AdminConnection) {
   const headers: Record<string, string> = {
     Accept: 'application/json',
   }
