@@ -215,9 +215,10 @@ async def get_upload_request_context(
     When an API key (``X-API-Key`` / ``Authorization: Bearer``) is present, resolve identity
     normally — an authenticated caller is never downgraded to the token path. Otherwise, if a
     ``?token=`` is present, consume it (single-use) and rebuild the bound identity/business
-    params; the token itself is the authorization, so no auth-plugin identity checks run and
-    any spoofed ``X-OpenViking-Account/User`` headers are ignored. The consumed token is
-    stashed on ``request.state.signed_upload`` so the handler can finish ingestion.
+    params. In API-key mode the issuing role is retained only while the account user
+    exists and has not been downgraded. Other auth modes retain their USER token context.
+    Spoofed identity headers are ignored. The consumed token is stashed on
+    ``request.state.signed_upload`` so the handler can finish ingestion.
     """
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
@@ -226,6 +227,25 @@ async def get_upload_request_context(
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
+        if _auth_mode(request) == AuthMode.API_KEY:
+            manager = get_api_key_manager_or_raise(request)
+            if not manager.has_user(consumed.account_id, consumed.user_id):
+                raise UnauthenticatedError("Upload token's user no longer exists")
+            current_role = Role(manager.get_user_role(consumed.account_id, consumed.user_id))
+            if Role(consumed.role).rank > current_role.rank:
+                raise UnauthenticatedError(
+                    "Upload token's role exceeds the user's current role; request a new upload"
+                )
+            return _build_request_context(
+                request,
+                ResolvedIdentity(
+                    role=consumed.role,
+                    account_id=consumed.account_id,
+                    user_id=consumed.user_id,
+                    from_oauth=consumed.from_oauth,
+                ),
+                actor_peer_id=consumed.actor_peer_id or None,
+            )
         try:
             ctx = RequestContext(
                 user=UserIdentifier(consumed.account_id, consumed.user_id),

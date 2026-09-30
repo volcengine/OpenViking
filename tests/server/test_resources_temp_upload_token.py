@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from openviking.server.identity import Role
 from openviking.server.upload_token_store import upload_token_store
 
 
@@ -41,6 +42,7 @@ def _issue(
     token, _ = upload_token_store.issue(
         account_id,
         user_id,
+        role=Role.USER,
         ttl_seconds=600,
         to=to,
         parent=parent,
@@ -73,39 +75,97 @@ def _stub_ingest(service, monkeypatch, root_uri: str = "viking://resources/uploa
     return captured
 
 
+@pytest.mark.parametrize(
+    ("issued_role", "current_role", "from_oauth", "expected_status"),
+    [
+        (Role.ADMIN, Role.ADMIN, False, 200),
+        (Role.ADMIN, Role.ADMIN, True, 200),
+        (Role.ADMIN, Role.USER, True, 401),
+        (Role.USER, Role.ADMIN, False, 403),
+        (Role.ADMIN, None, False, 401),
+    ],
+)
 async def test_token_upload_auto_ingests_and_returns_result(
-    client: httpx.AsyncClient, service, upload_temp_dir: Path, monkeypatch
+    upload_temp_dir: Path, monkeypatch, issued_role, current_role, from_oauth, expected_status
 ):
-    captured = _stub_ingest(service, monkeypatch)
+    """An upload keeps the issuing authority, but cannot outlive a role downgrade."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
     from urllib.parse import parse_qs, urlparse
 
-    from openviking.server.identity import RequestContext, Role
-    from openviking.server.mcp_endpoint import _mcp_ctx, add_resource
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from openviking.server import mcp_endpoint, resource_ingest
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.config import ServerConfig
+    from openviking.server.identity import RequestContext
+    from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
+    from openviking.server.routers.resources import router
     from openviking.storage.acl import AclSpec
+    from openviking.storage.viking_fs._access import _AccessMixin
+    from openviking_cli.exceptions import OpenVikingError
     from openviking_cli.session.user_id import UserIdentifier
 
+    config = ServerConfig(auth_mode="api_key", root_api_key="test-root")
+    app = FastAPI()
+    app.state.config = config
+    app.state.auth_plugin = ApiKeyAuthPlugin()
+    app.state.api_key_manager = SimpleNamespace(
+        has_user=lambda *_: current_role is not None,
+        get_user_role=lambda *_: current_role,
+        get_user_group_ids=lambda *_: (),
+        is_deleting=lambda *_: False,
+    )
+    app.include_router(router)
+
+    @app.exception_handler(OpenVikingError)
+    async def handle_error(_request, exc):
+        return JSONResponse(
+            status_code=ERROR_CODE_TO_HTTP_STATUS[exc.code], content={"error": exc.code}
+        )
+
+    fs = _AccessMixin()
+    fs.acl_manager = SimpleNamespace(is_enabled=AsyncMock(return_value=False))
     acl = AclSpec(acl_mode="restricted", entries=[{"principal": "user:bob", "level": "read"}])
-    identity_token = _mcp_ctx.set(RequestContext(UserIdentifier("acct", "user"), Role.USER))
+    target = "viking://resources/hello.md"
+    imported = []
+
+    async def ingest(*, path, ctx, acl, to, **_kwargs):
+        # Exercise the actual kernel authorization, without an embedding/native stack.
+        await fs.prepare_acl_update(to, acl, ctx)
+        imported.append(Path(path).read_bytes())
+        return {"root_uri": to}
+
+    service = SimpleNamespace(resources=SimpleNamespace(add_resource=ingest))
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    monkeypatch.setattr(mcp_endpoint, "get_server_config", lambda: config)
+    monkeypatch.setattr(resource_ingest, "get_service", lambda: service)
+    identity_token = mcp_endpoint._mcp_ctx.set(
+        RequestContext(UserIdentifier("acct", "user"), issued_role, from_oauth=from_oauth)
+    )
     try:
-        instruction = await add_resource(path="/tmp/hello.md", acl=acl)
+        instruction = await mcp_endpoint.add_resource(path="/tmp/hello.md", to=target, acl=acl)
     finally:
-        _mcp_ctx.reset(identity_token)
+        mcp_endpoint._mcp_ctx.reset(identity_token)
     upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)
     token = parse_qs(urlparse(upload_url).query)["token"][0]
-    resp = await client.post(
-        "/api/v1/resources/temp_upload",
-        params={"token": token},
-        files={"file": ("hello.md", b"hello world", "text/markdown")},
-    )
-    assert resp.status_code == 200, resp.text
-    result = resp.json()["result"]
-    # Auto-ingest returns the final resource, not a temp_file_id handshake.
-    assert result["root_uri"] == "viking://resources/uploaded"
-    assert "temp_file_id" not in result
-    assert captured["acl"] == acl
-    # The stored file was resolved and handed to add_resource as a local path.
-    assert captured["allow_local_path_resolution"] is True
-    assert captured["content"] == b"hello world"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/v1/resources/temp_upload",
+            params={"token": token},
+            headers={"X-OpenViking-Role": "admin", "X-OpenViking-User": "spoofed"},
+            files={"file": ("hello.md", b"hello world", "text/markdown")},
+        )
+    assert resp.status_code == expected_status, resp.text
+    if expected_status == 200:
+        assert resp.json()["result"]["root_uri"] == target
+        assert "temp_file_id" not in resp.json()["result"]
+        assert imported == [b"hello world"]
+    else:
+        assert imported == []
 
 
 async def test_token_upload_forwards_to_and_reason(
@@ -278,7 +338,9 @@ def _skill_zip(name: str) -> bytes:
 async def test_skill_token_upload_installs_zipped_skill_directory(
     client: httpx.AsyncClient, service, upload_temp_dir: Path
 ):
-    token, _ = upload_token_store.issue("acct", "user", ttl_seconds=600, kind="skill")
+    token, _ = upload_token_store.issue(
+        "acct", "user", role=Role.USER, ttl_seconds=600, kind="skill"
+    )
     resp = await client.post(
         "/api/v1/resources/temp_upload",
         params={"token": token},
@@ -298,7 +360,7 @@ async def test_skill_token_upload_list_only_does_not_install(
 
     monkeypatch.setattr(service.resources, "add_skill", fail_add_skill)
     token, _ = upload_token_store.issue(
-        "acct", "user", ttl_seconds=600, kind="skill", list_only=True
+        "acct", "user", role=Role.USER, ttl_seconds=600, kind="skill", list_only=True
     )
     resp = await client.post(
         "/api/v1/resources/temp_upload",

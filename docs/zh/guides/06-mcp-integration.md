@@ -191,10 +191,6 @@ claude mcp add --transport http openviking \
 `restricted` 只使用直接授权。重置为继承使用 `{"acl_mode":"inherit","entries":[]}`。
 受限 ACL 可能移除操作者自身的访问权限；账号 ADMIN 始终保留治理权限。
 
-账号开启 ACL 时，`list`、`tree`、`find` 和 `search(mode="list")` 的共享资源结果带有
-`my_permission=read/write/manage`，仅表示调用者自身的 ACL 等级；若权限刚被撤回，可为 `none`。
-个人空间和 ACL 未开启的账号不附加该字段。它不替代实际操作时的鉴权。
-
 工具执行失败会标记 MCP `isError=true`，业务错误文本保留 `PERMISSION_DENIED` 等错误码；
 支持结构化输出的工具还返回 `error.code/message/details`，同时保留原有 `result` 文本。
 批量读取或搜索部分失败时保留成功结果，并在失败项中显示原因。
@@ -204,7 +200,9 @@ claude mcp add --transport http openviking \
 `add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
 
 - **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
-- **本地文件路径**:返回**上传指令**(纯文本)。agent 把文件以 `multipart/form-data`(字段名 `file`)POST 到响应里给出的 `temp_upload` URL。该 URL 内嵌一次性 token(默认 10 分钟过期)作为鉴权凭证,无需 API Key。Server 随后在**同一次请求内自动入库**并返回最终结果,agent **无需**再次调用 `add_resource`。
+- **本地文件路径**:返回**上传指令**(纯文本)。agent 把文件以 `multipart/form-data`(字段名 `file`)POST 到响应里给出的 `temp_upload` URL。该 URL 内嵌一次性 token(默认 10 分钟过期)作为鉴权凭证,无需 API Key。Server 随后自动提交导入并返回受理结果，后台处理可以继续进行；agent **无需**再次调用 `add_resource`。
+
+在 `api_key` 鉴权模式下，token 保留发起 MCP 调用时的角色，API Key 和 OAuth 调用均适用。上传时会检查用户是否仍存在、是否正在删除，以及角色是否已降级；不满足条件时拒绝上传。角色后来被提升也不会扩大旧 token 的权限。trusted 模式的 token 仍按 USER 身份处理。
 
 这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。token 上传复用认证版的 `temp_upload` 路由(API Key 优先,否则走一次性 `?token=`)及其 `TempUploadStore` 持久化,所以 `local` / `shared` 上传模式行为一致。注意:一次性 token 保存在进程内,因此多 worker 部署下 `add_resource` 调用与后续的上传 POST 必须落到同一个 worker(或以单 worker 运行),token 才能被解析。
 

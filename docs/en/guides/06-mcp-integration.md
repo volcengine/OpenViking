@@ -202,11 +202,6 @@ For example, `set_acl` accepts:
 `restricted` uses only direct grants. Reset with `{"acl_mode":"inherit","entries":[]}`.
 A restricted ACL can remove the caller's own access; account ADMIN retains implicit management access.
 
-With account ACL enabled, shared-resource results in `list`, `tree`, `find` and `search(mode="list")`
-include `my_permission=read/write/manage`, describing only the caller's ACL level. It may be `none`
-if access was just revoked. Private namespaces and accounts with ACL disabled omit this annotation.
-Actual operations always enforce permissions again.
-
 Failed tool calls set MCP `isError=true` and retain business codes such as `PERMISSION_DENIED` in
 text. Tools supporting structured output also include `error.code/message/details` alongside the
 existing `result` text. Partial batch reads or searches preserve successful results and report
@@ -217,7 +212,9 @@ failed items separately.
 The `add_resource` tool accepts both **remote URLs** and **local file paths**, handled differently:
 
 - **Remote URL** (`http(s)://`, `git@`, `ssh://`, `git://`): single round-trip — the server fetches and ingests directly.
-- **Local file path**: the tool returns an **upload instruction** (plain prose). The agent POSTs the file as `multipart/form-data` (field name `file`) to the `temp_upload` URL given in the response. The URL embeds a one-shot token (10-minute TTL by default) that authorizes the upload, so no API key is needed. The server then ingests the file **automatically in the same request** and returns the final result — the agent does **not** call `add_resource` again.
+- **Local file path**: the tool returns an **upload instruction** (plain prose). The agent POSTs the file as `multipart/form-data` (field name `file`) to the `temp_upload` URL given in the response. The URL embeds a one-shot token (10-minute TTL by default) that authorizes the upload, so no API key is needed. The server automatically submits ingestion and returns the acceptance result; processing can continue in the background. The agent does **not** call `add_resource` again.
+
+In `api_key` auth mode, the token retains the role of the issuing MCP call, for both API-key and OAuth callers. Uploads are rejected if the user no longer exists, the identity is being deleted, or the role has been downgraded. A later promotion does not expand an existing token's permissions. Trusted-mode upload tokens continue to use the USER role.
 
 This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The token upload reuses the authenticated `temp_upload` route (API key first, otherwise the one-shot `?token=`) and its `TempUploadStore` persistence, so the same `local` / `shared` upload modes apply. Note: the one-shot token is held in-process, so in a multi-worker deployment the `add_resource` call and the follow-up upload POST must reach the same worker (or run single-worker) for the token to resolve.
 

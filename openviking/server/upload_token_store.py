@@ -8,8 +8,9 @@ API key. Tokens are 6-character base62 strings indexed in a process-local dict â
 key, no on-disk state, no replay-set bookkeeping. ``dict.pop`` doubles as the
 consume-and-burn primitive.
 
-The token carries the identity bound at issue time (account/user), the caller's actor peer
-scope (``actor_peer_id``), and the business params (``to``/``parent``/``reason``/``parse_mode``) so the server can
+The token carries the identity bound at issue time (account/user/role and OAuth origin),
+the caller's actor peer scope (``actor_peer_id``), and the business params
+(``to``/``parent``/``reason``/``parse_mode``) so the server can
 finish ingestion automatically once the file lands â€” the caller does not re-invoke
 ``add_resource``, and the ingest keeps the original peer scope. Tokens minted by the MCP
 ``add_skill`` tool carry ``kind="skill"`` plus the skill install params instead, and the upload
@@ -32,6 +33,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
+from openviking.server.identity import Role
 from openviking.storage.acl import AclSpec
 
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
@@ -46,6 +48,7 @@ class UploadTokenError(Exception):
 class _TokenInfo:
     account_id: str
     user_id: str
+    role: Role
     to: str
     parent: str
     reason: str
@@ -60,6 +63,7 @@ class _TokenInfo:
     skill_names: Optional[list[str]] = None
     list_only: bool = False
     acl: AclSpec | None = None
+    from_oauth: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,7 @@ class ConsumedUploadToken:
 
     account_id: str
     user_id: str
+    role: Role
     to: str
     reason: str
     actor_peer_id: str
@@ -81,6 +86,7 @@ class ConsumedUploadToken:
     skill_names: Optional[list[str]] = None
     list_only: bool = False
     acl: AclSpec | None = None
+    from_oauth: bool = False
 
 
 class UploadTokenStore:
@@ -93,6 +99,7 @@ class UploadTokenStore:
         user_id: str,
         ttl_seconds: int,
         *,
+        role: Role,
         to: str = "",
         parent: str = "",
         reason: str = "",
@@ -106,6 +113,7 @@ class UploadTokenStore:
         skill_names: Optional[list[str]] = None,
         list_only: bool = False,
         acl: AclSpec | None = None,
+        from_oauth: bool = False,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -119,6 +127,7 @@ class UploadTokenStore:
         info = _TokenInfo(
             account_id,
             user_id,
+            role,
             to,
             parent,
             reason,
@@ -133,6 +142,7 @@ class UploadTokenStore:
             skill_names,
             list_only,
             acl,
+            from_oauth,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -153,6 +163,7 @@ class UploadTokenStore:
         return ConsumedUploadToken(
             account_id=info.account_id,
             user_id=info.user_id,
+            role=info.role,
             to=info.to,
             parent=info.parent,
             reason=info.reason,
@@ -166,6 +177,7 @@ class UploadTokenStore:
             skill_names=info.skill_names,
             list_only=info.list_only,
             acl=info.acl,
+            from_oauth=info.from_oauth,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

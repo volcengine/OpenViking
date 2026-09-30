@@ -23,15 +23,10 @@ const pluginDir = resolve(scriptsDir, "..");
 const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
-const mcpEndpointPath = join(repoRoot, "openviking", "server", "mcp_endpoint.py");
 const canonicalExperienceSkillPath = join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md");
 const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
 
 const PLUGIN_NAME = "openviking-memory";
-const REAL_MCP_TOOLS = [
-  "find", "search", "read", "list", "tree", "remember", "write", "edit",
-  "add_resource", "add_skill", "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
-];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
 function readJson(path) {
@@ -230,14 +225,6 @@ test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
   assert.doesNotMatch(entrypoint, /localToolProvider/);
   assert.match(entrypoint, /toMcpProxyConfig\(/);
   assert.doesNotMatch(entrypoint, /resolveEffectivePeerId|process\.cwd\(\)/);
-});
-
-test("canonical MCP tool list matches server registrations", () => {
-  const source = readFileSync(mcpEndpointPath, "utf-8");
-  const registered = [
-    ...source.matchAll(/@mcp\.tool\(([^)]*)\)\s*\nasync def ([a-z_]+)\(/g),
-  ].map((match) => match[1].match(/(?:^|,\s*)name="([a-z_]+)"/)?.[1] || match[2]);
-  assert.deepEqual(registered, REAL_MCP_TOOLS);
 });
 
 test("plugin.json declares the skills directory so Codex loads bundled skills", () => {

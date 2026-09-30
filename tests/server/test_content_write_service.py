@@ -134,7 +134,6 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     # Content created with ACL disabled gains default management when enabled.
     await service.fs.mkdir(public_uri, ctx=writer)
     await service.resources.wait_processed()
-    assert await service.viking_fs.get_acl_permissions([public_uri], writer) == {}
     with pytest.raises(PermissionDeniedError):
         await service.fs.get_acl(public_uri, ctx=outsider)
     await service.runtime_config_manager.patch_account(
@@ -178,23 +177,13 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     with pytest.raises(PermissionDeniedError):
         await service.fs.set_acl(uri, [], ctx=writer)
 
-    # MCP publishes only the caller's level, while full ACL stays manage-only.
+    # MCP keeps full ACL access manage-only and preserves permission errors.
     import openviking.server.mcp_endpoint as mcp_endpoint
     from openviking.storage.acl import AclSpec
 
     monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
-    for caller, level in (
-        (writer, "write"),
-        (reader, "read"),
-        (admin, "manage"),
-        (outsider, "none"),
-    ):
-        assert await service.viking_fs.get_acl_permissions([uri], caller) == {uri: level}
     token = mcp_endpoint._mcp_ctx.set(reader)
     try:
-        listing = await mcp_endpoint.ls(parent_uri)
-        assert "my_permission=read" in listing
-        assert "group:readers" not in listing
         with pytest.raises(PermissionDeniedError):
             await mcp_endpoint.get_acl(uri)
         with pytest.raises(PermissionDeniedError):

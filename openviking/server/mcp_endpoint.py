@@ -727,7 +727,6 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         return "No matching context found."
 
     await _describe_skills_by_package(items, service=service, ctx=ctx)
-    permissions = await service.viking_fs.get_acl_permissions([item["uri"] for item in items], ctx)
 
     contents: dict[str, str] = {}
     if read_content:
@@ -749,8 +748,6 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
         line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}\n    {abstract}"
-        if uri in permissions:
-            line += f"\n    my_permission={permissions[uri]}"
         origin_score = item["origin_score"]
         time_score = item["time_score"]
         if origin_score is not None or time_score is not None:
@@ -1046,7 +1043,6 @@ async def ls(
         return f"(no entries under {uri})"
 
     lines = []
-    permissions = await service.viking_fs.get_acl_permissions([e["uri"] for e in entries], ctx)
     for e in entries:
         name = e.get("name", "?") if isinstance(e, dict) else getattr(e, "name", "?")
         is_dir = e.get("isDir", False) if isinstance(e, dict) else getattr(e, "is_dir", False)
@@ -1055,8 +1051,6 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
-        if entry_uri in permissions:
-            lines[-1] += f" [my_permission={permissions[entry_uri]}]"
     if page.has_more:
         lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
@@ -1134,7 +1128,6 @@ async def tree(
     lines = [
         f"Tree of {uri} (depth <= {level_limit}, {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}):"
     ]
-    permissions = await service.viking_fs.get_acl_permissions([e["uri"] for e in entries], ctx)
     for e in entries:
         rel = (e.get("rel_path") or e.get("name") or "?").strip("/")
         name = rel.rsplit("/", 1)[-1]
@@ -1144,8 +1137,6 @@ async def tree(
             lines.append(f"{indent}{name}/")
         else:
             lines.append(f"{indent}{name} ({e.get('size', 0)} B)")
-        if e["uri"] in permissions:
-            lines[-1] += f" [my_permission={permissions[e['uri']]}]"
         abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
@@ -1639,6 +1630,8 @@ async def add_resource(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
+        role=ctx.role,
+        from_oauth=ctx.from_oauth,
         to=to,
         parent=parent,
         reason=description,
@@ -1815,6 +1808,8 @@ async def add_skill(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
+        role=ctx.role,
+        from_oauth=ctx.from_oauth,
         actor_peer_id=ctx.actor_peer_id or "",
         kind="skill",
         skill_target_uri=target,

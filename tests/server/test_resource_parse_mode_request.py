@@ -57,6 +57,7 @@ async def test_signed_temp_upload_forwards_token_bound_parse_mode(
     signed = ConsumedUploadToken(
         account_id="test_account",
         user_id="test_user",
+        role=Role.USER,
         to="",
         parent="viking://user/test_user/resources/team",
         reason="",
