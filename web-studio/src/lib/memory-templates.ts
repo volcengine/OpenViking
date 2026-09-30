@@ -15,6 +15,8 @@ export type EditableMemoryType = (typeof editableMemoryTypes)[number]
 
 export type MemoryTemplateSchema = {
   description: string
+  directory: string
+  filename_template: string
   fields: Array<{ name: string; description: string; [key: string]: unknown }>
   content_template?: string
   [key: string]: unknown

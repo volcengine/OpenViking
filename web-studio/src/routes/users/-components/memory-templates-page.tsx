@@ -70,18 +70,17 @@ const editableFields: Record<EditableMemoryType, string[]> = {
   ],
 }
 
-const examplePaths: Record<EditableMemoryType, string> = {
-  profile: 'profile.md',
-  preferences: 'preferences/{topic}.md',
-  entities: 'entities/{category}/{name}.md',
-  events: 'events/{event_name}.md',
-  soul: 'soul.md',
-  identity: 'identity.md',
-}
-
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function fieldValidationError(field: string, value: string) {
+  if (!value.trim()) return 'required'
+  if (field !== 'content_template' && [...value].length > 50000) {
+    return 'tooLong'
+  }
+  return null
 }
 
 export function MemoryTemplatesPage() {
@@ -214,13 +213,9 @@ export function MemoryTemplatesPage() {
   const hasInvalidField = Boolean(
     selected &&
     current &&
-    editableFields[selected].some((field) => {
-      const value = templateFieldValue(current, field)
-      return (
-        !value.trim() ||
-        (field !== 'content_template' && [...value].length > 50000)
-      )
-    }),
+    editableFields[selected].some((field) =>
+      fieldValidationError(field, templateFieldValue(current, field)),
+    ),
   )
 
   return (
@@ -346,9 +341,7 @@ export function MemoryTemplatesPage() {
             </h3>
             <div className="overflow-hidden rounded-xl border bg-card">
               <div className="break-all border-b bg-muted/20 px-4 py-3 font-mono text-xs text-muted-foreground">
-                {t('memoryTemplates.examplePath', {
-                  path: examplePaths[selected],
-                })}
+                {`${template.defaults.directory}/${template.defaults.filename_template}`}
               </div>
               <div className="min-h-52 p-4">
                 <pre className="whitespace-pre-wrap break-words rounded-lg border border-dashed bg-background p-4 font-mono text-xs leading-7 text-muted-foreground">
@@ -524,10 +517,7 @@ function TemplateField({
       : field === 'content_template'
         ? t('memoryTemplates.contentTemplate')
         : t(`memoryTemplates.fields.${field.split('.')[1] as 'content'}`)
-  const invalid =
-    editing &&
-    (!value.trim() ||
-      (field !== 'content_template' && [...value].length > 50000))
+  const validationError = editing ? fieldValidationError(field, value) : null
   return (
     <section className="overflow-hidden rounded-xl border bg-card">
       <div className="flex items-start justify-between gap-3 p-4">
@@ -583,13 +573,9 @@ function TemplateField({
                 {[...value].length} /{' '}
                 {field === 'content_template' ? '—' : '50000'}
               </div>
-              {invalid ? (
+              {validationError ? (
                 <p className="text-xs text-destructive">
-                  {t(
-                    !value.trim()
-                      ? 'memoryTemplates.required'
-                      : 'memoryTemplates.tooLong',
-                  )}
+                  {t(`memoryTemplates.${validationError}`)}
                 </p>
               ) : null}
               {field !== 'content_template' ? (

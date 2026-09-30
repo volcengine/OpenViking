@@ -5,6 +5,9 @@ import type { MemoryTemplateSchema } from './memory-templates'
 const schema: MemoryTemplateSchema = {
   memory_type: 'events',
   description: 'Event extraction',
+  directory: 'viking://user/{{ user_space }}/memories/events',
+  filename_template:
+    '{{ extract_context.get_year(ranges) }}/{{ extract_context.get_month(ranges) }}/{{ extract_context.get_day(ranges) }}/{{ event_name }}.md',
   enabled: true,
   fields: [
     { name: 'event_name', description: 'Name', merge_op: 'replace' },

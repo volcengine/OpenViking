@@ -43,6 +43,8 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 const schema = {
   memory_type: 'profile',
   description: 'Original rule',
+  directory: 'viking://user/{{ user_space }}/memories',
+  filename_template: 'profile.md',
   enabled: true,
   fields: [{ name: 'content', description: 'Profile body', merge_op: 'patch' }],
 }
@@ -99,4 +101,44 @@ it('publishes edited instructions with the locked schema values intact', async (
       },
     )
   })
+})
+
+it('shows the path pattern returned by the server', async () => {
+  const eventSchema = {
+    ...schema,
+    memory_type: 'events',
+    directory: 'viking://user/{{ user_space }}/memories/events',
+    filename_template: '{{ year }}/{{ month }}/{{ day }}/{{ event_name }}.md',
+  }
+  api.fetch.mockResolvedValue({
+    account_id: 'acme',
+    templates: [
+      {
+        memory_type: 'events',
+        status: 'system_default',
+        updated_at: null,
+        defaults: eventSchema,
+        effective: eventSchema,
+      },
+    ],
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryTemplatesPage />
+    </QueryClientProvider>,
+  )
+
+  fireEvent.click(
+    (
+      await screen.findAllByRole('button', { name: /memoryTemplates.fileName/ })
+    )[3],
+  )
+  expect(
+    screen.getByText(
+      'viking://user/{{ user_space }}/memories/events/{{ year }}/{{ month }}/{{ day }}/{{ event_name }}.md',
+    ),
+  ).toBeTruthy()
 })

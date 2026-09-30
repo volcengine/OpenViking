@@ -56,8 +56,8 @@ export default {
   required: 'Extraction instructions cannot be empty.',
   tooLong: 'Each extraction instruction is limited to 50,000 characters.',
   example: 'Example memory file',
-  exampleHint: 'Illustrative only; this is not generated from your edits.',
-  examplePath: 'viking://user/{user_id}/memories/{{path}}',
+  exampleHint:
+    'Path variables are filled when memory is generated; the example body is not generated from your edits.',
   examples: {
     profile:
       '# User profile\n- Occupation: product designer\n- Communication: conclusions and evidence first\n- Long-term interest: knowledge management',

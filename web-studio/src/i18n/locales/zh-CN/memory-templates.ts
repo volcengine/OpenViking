@@ -49,8 +49,8 @@ export default {
   required: '抽取说明不能为空。',
   tooLong: '单项抽取说明最多 50000 个字符。',
   example: '示例记忆文件',
-  exampleHint: '仅用于说明该类型可能生成的内容；不会随编辑实时生成。',
-  examplePath: 'viking://user/{user_id}/memories/{{path}}',
+  exampleHint:
+    '路径中的模板变量会在生成记忆时填充；示例正文不会随编辑实时生成。',
   examples: {
     profile:
       '# 用户画像\n- 职业：产品设计师\n- 沟通偏好：先看结论与依据\n- 长期关注：知识管理',
