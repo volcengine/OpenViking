@@ -30,6 +30,10 @@ class RerankConfig(BaseModel):
     model: Optional[str] = Field(
         default=None, description="Model name for OpenAI-compatible, LiteLLM, or Jev providers"
     )
+    mode: Optional[str] = Field(
+        default="noul",
+        description="Jev rerank mode: 'noul' or 'choice'",
+    )
 
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
@@ -82,6 +86,11 @@ class RerankConfig(BaseModel):
     def validate_provider_fields(self) -> "RerankConfig":
         if 0 < self.max_input_tokens < 128:
             raise ValueError("Rerank max_input_tokens must be 0 or at least 128")
+
+        if self.mode is not None:
+            self.mode = self.mode.strip().lower()
+            if self.mode not in ("noul", "choice"):
+                raise ValueError("Jev rerank mode must be one of ['noul', 'choice']")
 
         provider = self._effective_provider()
         if provider and provider not in [

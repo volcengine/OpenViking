@@ -16,7 +16,6 @@ rerank_batch(query, documents) -> List[float]
 
 import json
 import time
-from string import ascii_uppercase
 from typing import Dict, List, Optional
 
 import httpx
@@ -70,11 +69,9 @@ class NoulRerankMode:
 
 
 class ChoiceRerankMode:
-    """One choice question comparing 2–26 documents, with A–Z as candidate keys."""
+    """One choice question comparing all documents."""
 
     def build_questions(self, documents: List[str]) -> Dict[str, dict]:
-        if not 2 <= len(documents) <= len(ascii_uppercase):
-            raise ValueError("Choice rerank requires 2–26 candidate documents")
         return {
             "relevance": {
                 "type": MODE_CHOICE,
@@ -82,7 +79,7 @@ class ChoiceRerankMode:
                     "Which candidate document best answers or matches the retrieval intent of query?"
                 ),
                 "criteria": {
-                    ascii_uppercase[index]: (
+                    f"candidate_{index}": (
                         f"candidate_documents[{index}] directly answers or is relevant to the query"
                     )
                     for index in range(len(documents))
@@ -99,7 +96,7 @@ class ChoiceRerankMode:
             raise ValueError("Choice answer has no probabilities object")
         # Use candidate keys, never response iteration order or winner confidence.
         return [
-            _validate_score(probabilities.get(ascii_uppercase[index]))
+            _validate_score(probabilities.get(f"candidate_{index}"))
             for index in range(document_count)
         ]
 
@@ -114,7 +111,7 @@ class JevRerankClient(RerankBase):
         api_base: str = "https://api.typesafe.ai",
         timeout: float = 30.0,
         log_payloads: bool = False,
-        mode: str = MODE_CHOICE,
+        mode: str = MODE_NOUL,
     ):
         super().__init__()
         modes = {MODE_NOUL: NoulRerankMode, MODE_CHOICE: ChoiceRerankMode}
@@ -221,4 +218,5 @@ class JevRerankClient(RerankBase):
             api_base=api_base,
             timeout=config.timeout,
             log_payloads=config.log_payloads,
+            mode=config.mode or MODE_NOUL,
         )

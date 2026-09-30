@@ -1075,21 +1075,18 @@ Notes for Vercel:
 The Jev adapter sends the query and candidate documents as shared System One `state`
 and supports two modes:
 
-- `choice` (default): one question compares 2–26 documents, with `A`–`Z` mapped to
-  input indices. Scores come from `probabilities` in document order, not `confidence`.
-  Unsupported candidate counts return failure so retrieval falls back to vector scores;
-  empty input returns an empty list.
-- `noul`: one independent relevance question per document, using its returned yes
+- `noul` (default): one independent relevance question per document, using its returned yes
   probability as the score. All questions are sent in one HTTP request, and document
   scores do not have to sum to 1.
+- `choice`: one question compares all candidate documents, with `candidate_{index}`
+  mapped to input indices. Scores come from `probabilities` in document order.
 
-Modes are defined by `MODE_CHOICE` and `MODE_NOUL` in
-`openviking/models/rerank/jev_rerank.py`, with the constructor default `mode: str = MODE_CHOICE`.
-Change this default and restart the service to switch modes, or pass `mode=MODE_NOUL`
-when constructing a client directly. This is not an `ov.conf` setting.
-Choice scores are relative probabilities summing to 1 within the candidate pool,
-not absolute relevance. The existing `threshold` still applies and should be
-reassessed for the candidate count.
+Select the mode with `rerank.mode`; omitting it or setting it to `null` keeps the
+default `noul` behavior. Choice scores are relative probabilities summing to 1 within
+the candidate pool, not absolute relevance probabilities, so they are unsuitable for
+absolute score filtering. When enabling Choice, set `"threshold": 0`. The MCP `find`
+and `search` `min_score` argument overrides that setting, so pass `min_score=0` when
+using Choice through MCP.
 
 **Parameters**
 
@@ -1102,6 +1099,7 @@ reassessed for the candidate count.
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
 | `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
+| `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
