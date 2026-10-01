@@ -22,8 +22,6 @@ timing windows. It cannot make the backend state transition and local counter
 update one atomic operation, so it does not strictly solve the problem across
 threads, event loops, or processes.
 
-<a id="previous-backend-behavior"></a>
-
 ## ACK Lifecycle
 
 SQLite and cache-backed queues implement an acknowledgement lifecycle:

@@ -157,8 +157,6 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 已有记忆会参与提取，更新可以合并或修改现有文件，也可能创建或删除文件。实际操作受记忆 schema、写入权限和输出校验约束，不能把每次提交理解成必然新增记忆。只有产生 case 时，后续训练才会生成 trajectory、experience 或已启用的 session skill。
 
-<a id="去重决策"></a>
-
 ### 如何检查更新结果
 
 先等待 commit 对应任务完成，再查看 `memory_diff.json`。其中新增、修改、删除是实际文件变更；`skipped_operations` 表示提取提出了操作，但校验或策略使其跳过。无实际变化的更新不会计入 diff；正文未变但元数据发生变化时，仍可能记录为更新。
