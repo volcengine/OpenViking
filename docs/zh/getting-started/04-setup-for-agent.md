@@ -9,7 +9,7 @@
 ## 总原则
 
 - 默认走普通用户安装路径，不默认走源码构建
-- 默认使用预编译包，不默认要求 Go / Rust / C++ / CMake
+- 默认使用预编译包，不默认要求 Rust / C++ / CMake
 - 先读取已有配置和用户已给出的信息，缺失或不确定的项要先问用户；不要替用户猜 provider、model、api_base、api_key、workspace
 - 不覆盖已有配置；更新前检查实际差异，保留与本次安装无关的字段
 - 只有在安装失败并明确指向本地编译，或用户主动要求源码安装时，才进入源码构建路径
@@ -78,7 +78,6 @@
 - 用户明确要修改或重编底层原生组件
 
 进入后再说明需要：
-- Go 1.22+ 仅用于 `sdk/go` 开发，构建 Python 服务端不需要 Go
 - Rust 1.91.1+
 - C++ 编译器
 - CMake
@@ -323,7 +322,7 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 
 #### 路径 E：源码构建
 
-只有进入源码构建路径后，才准备 Rust、C++ 和 CMake；Go 仅用于 Go SDK 开发。完整构建步骤见仓库 CONTRIBUTING.md。
+只有进入源码构建路径后，才准备 Rust、C++ 和 CMake。完整构建步骤见仓库 CONTRIBUTING.md。
 
 ### 5. 失败分流
 

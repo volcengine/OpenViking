@@ -9,7 +9,7 @@ This page is for OpenViking server setup. For client-only CLI setup, use the [Op
 ## General Principles
 
 - Default to the normal end-user installation path; do not default to source builds
-- Default to prebuilt packages; do not assume Go / Rust / C++ / CMake are required
+- Default to prebuilt packages; do not assume Rust / C++ / CMake are required
 - Read existing configuration and supplied requirements first; ask the user about missing or uncertain values. Do not guess provider, model, api_base, api_key, or workspace
 - Preserve existing configuration and unrelated fields; inspect the actual changes before updating it
 - Only move to the source-build path when installation clearly falls back to local compilation, or when the user explicitly asks for a source install
@@ -78,7 +78,6 @@ Only use this path if one of the following is true:
 - The user explicitly wants to modify or rebuild low-level native components
 
 Only then explain the required toolchain:
-- Go 1.22+ only for `sdk/go` development; the Python server build does not require Go
 - Rust 1.91.1+
 - A C++ compiler
 - CMake
@@ -323,7 +322,7 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 
 #### Path E: Source build
 
-Prepare Rust, C++, and CMake only when a source build is needed. Go is only needed for Go SDK development. See CONTRIBUTING.md in the repository for the full build steps.
+Prepare Rust, C++, and CMake only when a source build is needed. See CONTRIBUTING.md in the repository for the full build steps.
 
 ### 5. Triage
 
