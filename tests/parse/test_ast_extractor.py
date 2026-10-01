@@ -83,6 +83,36 @@ def test_no_tags_uses_process(monkeypatch):
     assert result.text
 
 
+def test_process_cache_miss_skips_runtime_download(monkeypatch):
+    process = Mock(side_effect=AssertionError("process must not download at runtime"))
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.process_engine._is_tree_sitter_language_preloaded",
+        lambda _lang: False,
+    )
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.process_engine.process",
+        process,
+    )
+
+    assert extract_process_skeleton("sample.py", "def run():\n    pass\n") is None
+    process.assert_not_called()
+
+
+def test_tags_query_cache_miss_skips_runtime_download(monkeypatch):
+    from grep_ast import tsl
+
+    get_parser = Mock(side_effect=AssertionError("get_parser must not download at runtime"))
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.aider_repomap._is_tree_sitter_language_preloaded",
+        lambda _lang: False,
+    )
+    monkeypatch.setattr(tsl, "get_parser", get_parser)
+
+    with pytest.raises(ValueError, match="tree-sitter grammar is not preloaded"):
+        _query_captures("sample.c", "int run(void) { return 1; }\n")
+    get_parser.assert_not_called()
+
+
 def test_both_extractors_unavailable_requests_llm_fallback(monkeypatch):
     process = Mock()
     process.return_value = None
@@ -140,6 +170,10 @@ def test_tags_query_rendered_skeleton_is_useful_after_cleaning(monkeypatch):
         "openviking.parse.parsers.code.ast.providers.extract_process_skeleton",
         process,
     )
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.aider_repomap._is_tree_sitter_language_preloaded",
+        lambda _lang: True,
+    )
     content = """#include <stdio.h>
 
 struct Widget { int x; };
@@ -166,7 +200,11 @@ static void run(void) {
 
 
 @pytest.mark.parametrize("file_name", ["sample.cpp", "kernel.cu"])
-def test_cpp_tags_capture_top_level_function_template_declarations_only(file_name):
+def test_cpp_tags_capture_top_level_function_template_declarations_only(file_name, monkeypatch):
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.aider_repomap._is_tree_sitter_language_preloaded",
+        lambda _lang: True,
+    )
     content = """#include <vector>
 
 template <class T>
@@ -193,6 +231,10 @@ def test_ocaml_interface_tags_capture_interface_structures(monkeypatch):
     monkeypatch.setattr(
         "openviking.parse.parsers.code.ast.providers.extract_process_skeleton",
         process,
+    )
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.aider_repomap._is_tree_sitter_language_preloaded",
+        lambda _lang: True,
     )
     content = """type user = {
   id : string;
@@ -238,7 +280,11 @@ val create : id:string -> name:string -> user
         ("sample.ts", "export function buildOrder(): number { return 1; }\n", "buildOrder"),
     ],
 )
-def test_process_smoke(file_name, content, symbol):
+def test_process_smoke(file_name, content, symbol, monkeypatch):
+    monkeypatch.setattr(
+        "openviking.parse.parsers.code.ast.process_engine._is_tree_sitter_language_preloaded",
+        lambda _lang: True,
+    )
     text = extract_process_skeleton(file_name, content)
     assert text is not None
     assert symbol in text
