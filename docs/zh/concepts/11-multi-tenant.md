@@ -237,8 +237,6 @@ openclaw config set plugins.entries.openviking.config.peer_prefix "<peer-prefix>
 如果给插件直接配置 root key，则普通租户数据 API 没有从 key 绑定出来的租户用户，
 这不适合作为日常读写方式。
 
-<a id="vikingbot-root-key-代管用户身份"></a>
-
 ### VikingBot：匹配 Server 的认证模式
 
 当前 VikingBot 通过 `bot.ov_server.api_key_type` 选择连接方式，不会通过 root key 自动注册并缓存每个终端用户的 user key：

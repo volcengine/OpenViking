@@ -240,8 +240,6 @@ If you give the plugin a root key directly, normal tenant-scoped data APIs will
 not have a key-bound tenant user, so that is not a good default for day-to-day
 access.
 
-<a id="vikingbot-root-key-manages-many-end-users"></a>
-
 ### VikingBot: Match the Server Authentication Mode
 
 Current VikingBot selects its connection through `bot.ov_server.api_key_type`. It does not automatically register each end user and cache a user key using a root key:
