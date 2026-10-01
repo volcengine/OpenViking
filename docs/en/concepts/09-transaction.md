@@ -18,12 +18,19 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 
 ## Architecture
 
+<PathLockDiagram />
+
+<details>
+<summary>Text version</summary>
+
 ```text
 Service: rm / mv / add_resource / session.commit
     → Acquire a lease through RAGFS PathLockManager
     → Modify covered paths and coordinate indexes and queues
     → Release the lease or hand it to background processing
 ```
+
+</details>
 
 ## Two Core Components
 

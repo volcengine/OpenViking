@@ -18,12 +18,19 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 
 ## 架构
 
+<PathLockDiagram />
+
+<details>
+<summary>文本版本</summary>
+
 ```text
 服务层：rm / mv / add_resource / session.commit
     → RAGFS PathLockManager 申请 lease
     → 在覆盖的路径内修改文件、协调索引和队列
     → 释放 lease，或交接给后台处理
 ```
+
+</details>
 
 ## 两个核心组件
 

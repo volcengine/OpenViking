@@ -4,10 +4,17 @@
 
 ## 概览
 
+<IngestionPipelineDiagram />
+
+<details>
+<summary>文本版本</summary>
+
 ```text
 输入 → Parser → TreeBuilder → 内容写入 → SemanticQueue → EmbeddingQueue → 向量库
         解析产物    目标 URI                 L0/L1 生成
 ```
+
+</details>
 
 解析与目录语义生成分开处理。具体解析器可能调用模型或外部解析服务，因此不能把解析阶段视为一律不使用 LLM。导入接口通常先返回任务 ID；需要立即检索时，应先确认该任务完成，见[任务管理](../api/17-tasks.md)。
 

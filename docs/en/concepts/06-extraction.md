@@ -4,10 +4,17 @@ Resource ingestion proceeds through parsing, target-path resolution, content per
 
 ## Overview
 
+<IngestionPipelineDiagram />
+
+<details>
+<summary>Text version</summary>
+
 ```text
 Input → Parser → TreeBuilder → Content persistence → SemanticQueue → EmbeddingQueue → Vector index
         Artifacts  Target URI                        L0/L1 generation
 ```
+
+</details>
 
 Parsing and directory-summary generation are separate stages. Individual parsers may call models or external parsing services, so parsing is not universally LLM-free. Import APIs normally return a task ID before processing finishes; wait for that task before dependent searches. See [Task Management](../api/17-tasks.md).
 
