@@ -200,8 +200,8 @@ In the Volcano Ark Console:
 
 | Model Type | Billing Unit |
 |------------|--------------|
-| VLM | Billed by Input/Output Tokens |
-| Embedding | Token usage by model and input modality; see official pricing for details |
+| VLM | Check the selected model’s input/output billing rules in [Ark pricing](https://www.volcengine.com/product/ark) |
+| Embedding | Check the selected model and input modality in [Ark pricing](https://www.volcengine.com/product/ark) |
 
 ### Free Tier
 

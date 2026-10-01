@@ -168,7 +168,7 @@ Typical usage:
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | duration distribution of ingestion stages |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | resource ingestion wait duration distribution (for example queue waiting) |
 
-Typical `stage` values include:
+Current built-in resource event producers emit these `stage` values, depending on the path taken:
 
 - `source_prepare`
 - `parse_artifact`
@@ -176,6 +176,12 @@ Typical `stage` values include:
 - `update_plan`
 - `content_commit`
 - `derived_enqueue`
+- `semantic_queue_wait`
+- `semantic_execute`
+- `embedding_queue_wait`
+- `embedding_execute`
+
+The telemetry bridge also recognizes legacy summary keys for `request`, `process`, `parse`, `finalize`, `summarize`, `wait`, and `watch`. The current resource summary builder does not produce those keys, so they are not additional stages emitted by the current import pipeline. `persist` is not in that bridge map.
 
 ### Vector, Memory, and Semantic Metrics
 

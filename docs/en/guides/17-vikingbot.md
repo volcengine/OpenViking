@@ -192,7 +192,9 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-Without an explicit `bot.ov_server.server_url`, an unavailable inherited server allows standalone mode. An explicitly configured server that is unavailable, or a reachable server with an authentication mismatch, stops startup. Local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
+Without an explicit `bot.ov_server.server_url`, a connection failure to the inherited server allows standalone mode in local chat. An unavailable explicitly configured server stops startup. An inherited authentication-mode mismatch also stops startup; for an explicit server, Bot adopts the reported mode and validates the credentials. Authentication failures and unhealthy HTTP responses stop startup. In integrated server-managed startup, Bot keeps the inherited upstream while the server starts.
+
+In standalone mode, local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
 
 ## Scenario C: Use the Gateway as a Unified Entry Point
 

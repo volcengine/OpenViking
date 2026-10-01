@@ -622,7 +622,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 
 #### Sparse Embedding
 
-> This example uses `doubao-embedding-vision-251215`, which supports sparse output for text input. See the Ark [embedding documentation](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1) for model compatibility.
+> This example uses `doubao-embedding-vision-251215`. Check sparse text-output support for your selected model in the Ark [embedding documentation](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1).
 
 ```json
 {
@@ -754,7 +754,7 @@ When resources are added, VLM generates:
 1. **L0 (Abstract)**: file or directory summary, with a default limit of 256 characters
 2. **L1 (Overview)**: directory overview with navigation, with a default limit of 4000 characters
 
-When the VLM is unavailable, generic file summaries are empty and directory overviews fall back to a not-ready placeholder. Paths such as local code-skeleton extraction retain their own behavior. Do not treat this as completed semantic indexing; inspect the model configuration and processing task.
+When the VLM configuration reports `is_available() == false`, generic file summaries are empty and directory overviews fall back to a not-ready placeholder. Paths such as local code-skeleton extraction retain their own behavior. Do not treat this as completed semantic indexing; inspect the model configuration and processing task.
 
 **Supported providers:**
 - `volcengine`: Volcengine VLM API
@@ -899,7 +899,7 @@ Then add the following to your OpenViking configuration:
 
 For `ollama/guoxuter/ov_intent_analysis_sft:v7_q8` (and `v4_q8`), OpenViking automatically uses the matching bundled prompt during search (`retrieval.ov_intent_analysis_sft_v7` and `retrieval.ov_intent_analysis_sft_v4` respectively). No prompt file replacement or `prompts.templates_dir` override is required. If you use an unmapped model, OpenViking keeps the default `retrieval.intent_analysis` prompt.
 
-This lets a smaller model handle retrieval planning, usually with lower latency, while a stronger `vlm` handles semantic extraction, memory extraction, and multimodal processing. Actual latency depends on the model, hardware, and request load.
+This lets a smaller model handle retrieval planning while a stronger `vlm` handles semantic extraction, memory extraction, and multimodal processing. Measure latency with your model, hardware, and request load.
 
 ### feishu
 
@@ -1757,7 +1757,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | Normally a user/admin key for data access. A root key here only works for admin APIs in API Key mode | `null` (no auth) |
-| `root_api_key` | Root key used when a command runs with `--sudo`; also used when `api_key` is unset | `null` |
+| `root_api_key` | Root key used by the `ov` CLI with `--sudo`, or as a fallback when `api_key` is unset. The Python HTTP SDK does not use this fallback | `null` |
 | `account` | Optional trusted-mode account identity header value | `null` |
 | `user` | Optional trusted-mode user identity header value | `null` |
 | `profile` | Whether to append `profile=1` to HTTP requests by default. Applies to both the Python HTTP client and the `ov` CLI; `ov --profile` can enable it per invocation. Actual effect still depends on the server enabling `server.profile_enabled`. | `false` |

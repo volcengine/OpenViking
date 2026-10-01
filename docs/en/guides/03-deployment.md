@@ -235,7 +235,7 @@ Since the server binds to `0.0.0.0` inside the container (required for Docker po
 }
 ```
 
-Without a `root_api_key`, the server auto-detects dev mode and refuses to start on a non-loopback address. The example above uses API key authentication; see [Authentication](04-authentication.md) for other modes. Override the bind address with `OPENVIKING_SERVER_HOST` if needed.
+When `auth_mode` is unset and no `root_api_key` is configured, the server auto-detects dev mode and refuses to start on a non-loopback address. The example above uses API key authentication; see [Authentication](04-authentication.md) for other modes. Override the bind address with `OPENVIKING_SERVER_HOST` if needed.
 
 The image enables Bot by default. In API key mode, Bot also needs a valid User/Admin key in `bot.ov_server.api_key`; a root key is not a data credential. For a server-only deployment, use `--without-bot` below. To run Bot, complete the identity settings in [VikingBot Configuration](17-vikingbot.md).
 
@@ -328,12 +328,12 @@ Initial bootstrap can be completed entirely within the browser:
 #### Configuration Management
 
 - **Initial Configuration**: The template pre-populates `OPENVIKING_CONF_CONTENT` with a complete configuration referencing `${OPENAI_API_KEY}`. This variable is used only on the first startup, when `ov.conf` does not yet exist.
-- **Later Changes**: After the first startup, edit the volume-backed `ov.conf` directly using `railway ssh` or `railway volume files`. To regenerate it, first back up the old configuration and verify `OPENVIKING_CONF_CONTENT`, then move the old file aside and redeploy. Check storage and authentication settings afterward.
+- **Later Changes**: After the first startup, edit the volume-backed `ov.conf` directly using the commands supported by your installed [Railway CLI](https://docs.railway.com/cli). To regenerate it, first back up the old configuration and verify `OPENVIKING_CONF_CONTENT`, then move the old file aside and redeploy. Check storage and authentication settings afterward.
 
 #### Pricing & Resource Sizing
 
-- **Estimate costs**: Railway charges for the selected plan and actual CPU, memory, storage, and network usage. Test with your own document volume and request rate, then estimate ongoing costs from the usage dashboard. See [Railway pricing](https://docs.railway.com/pricing) for current plans and billing rules.
-- **Trial and retention**: Trial includes $5 once for up to 30 days, then becomes the Free plan with $1 monthly credit. Runtime coverage depends on resource consumption. Volumes created by Trial accounts are deleted 30 days after credits expire; upgrade or back up first. See [Railway trial rules](https://docs.railway.com/pricing/free-trial).
+- **Estimate costs**: Check [Railway pricing](https://docs.railway.com/pricing) for the current plan and resource billing rules. Test with your document volume and request rate, then estimate costs from the usage dashboard.
+- **Trial and retention**: Check [Railway trial rules](https://docs.railway.com/pricing/free-trial) and your account for credits, expiration, and volume retention. Back up data before the applicable retention deadline.
 
 > **Security Note**: The service is publicly accessible by default. Keep `OPENVIKING_ROOT_API_KEY` confidential and consult the [public access guide](12-public-access.md) before production rollout.
 

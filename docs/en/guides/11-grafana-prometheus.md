@@ -65,9 +65,9 @@ curl http://localhost:30300/metrics
 If the response includes text with the `openviking_` prefix, metrics are enabled. For example:
 
 ```text
-# HELP openviking_http_requests_total Total number of HTTP requests
+# HELP openviking_http_requests_total OpenViking metric.
 # TYPE openviking_http_requests_total counter
-openviking_http_requests_total{method="GET",route="/api/v1/search/find",status="200"} 12
+openviking_http_requests_total{method="POST",route="/api/v1/search/find",status="200"} 12
 ```
 
 If the response returns `Prometheus metrics are disabled.`, the configuration has not taken effect or the service has not been restarted.

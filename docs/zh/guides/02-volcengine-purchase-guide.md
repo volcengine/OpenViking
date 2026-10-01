@@ -1,6 +1,6 @@
 # 火山引擎模型购买指南
 
-本指南适用于自建 OpenViking：开通火山方舟模型、取得 API Key，并验证服务端配置。使用托管 OpenViking 时，无需在客户端购买或配置这些模型，见[快速开始](../getting-started/02-quickstart.md)。
+本指南适用于自建 OpenViking：开通火山方舟模型、取得 API Key，并验证服务端配置。使用托管 OpenViking 时，无需在客户端配置这些模型，见[快速开始](../getting-started/02-quickstart.md)。
 
 ## 概述
 
@@ -202,8 +202,8 @@ ov find "谁负责备份流程？" --uri viking://resources/model-check
 
 | 模型类型 | 计费单位 |
 |---------|---------|
-| VLM | 按输入/输出 Token 计费 |
-| Embedding | 按模型及输入模态的 token 用量计费，具体规则见官方价格页 |
+| VLM | 所选模型的输入/输出计费规则见[方舟价格说明](https://www.volcengine.com/product/ark) |
+| Embedding | 所选模型及输入模态的计费规则见[方舟价格说明](https://www.volcengine.com/product/ark) |
 
 ### 免费额度
 

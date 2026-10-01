@@ -168,7 +168,7 @@ scrape_configs:
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | 资源导入阶段耗时分布 |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | 资源导入等待耗时分布（例如队列等待） |
 
-典型 `stage` 包括：
+当前内置资源事件按执行路径上报以下 `stage` 值：
 
 - `source_prepare`
 - `parse_artifact`
@@ -176,6 +176,12 @@ scrape_configs:
 - `update_plan`
 - `content_commit`
 - `derived_enqueue`
+- `semantic_queue_wait`
+- `semantic_execute`
+- `embedding_queue_wait`
+- `embedding_execute`
+
+Telemetry bridge 还识别旧摘要键，对应 `request`、`process`、`parse`、`finalize`、`summarize`、`wait`、`watch`。当前资源摘要构建器不生成这些键，因此它们不是当前导入流水线额外上报的阶段。该转换表也不包含 `persist`。
 
 ### 向量检索、记忆与语义节点
 

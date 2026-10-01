@@ -620,7 +620,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 
 #### Sparse Embedding
 
-> 以下示例使用 `doubao-embedding-vision-251215`，它支持文本输入的 sparse 输出。模型支持范围见方舟[向量化文档](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1)。
+> 以下示例使用 `doubao-embedding-vision-251215`。所选模型是否支持文本 sparse 输出，请核对方舟[向量化文档](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1)。
 
 ```json
 {
@@ -750,7 +750,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 1. **L0（摘要）**：文件或目录摘要，默认字符上限为 256
 2. **L1（概览）**：目录概览，包含导航信息，默认字符上限为 4000
 
-VLM 不可用时，通用文件摘要会返回空内容，目录概览会退回“尚未就绪”的占位内容；可由本地解析器提取的代码骨架等仍按各自路径处理。这种状态不能视为已完成语义索引，应检查模型配置和对应处理任务。
+VLM 配置返回 `is_available() == false` 时，通用文件摘要会返回空内容，目录概览会退回“尚未就绪”的占位内容；可由本地解析器提取的代码骨架等仍按各自路径处理。这种状态不能视为已完成语义索引，应检查模型配置和对应处理任务。
 
 **支持的 provider：**
 - `volcengine`：火山引擎 VLM API
@@ -894,7 +894,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 对于 `ollama/guoxuter/ov_intent_analysis_sft:v7_q8`（以及 `v4_q8`），OpenViking 会在 search 阶段自动使用对应的内置 prompt（分别为 `retrieval.ov_intent_analysis_sft_v7` 和 `retrieval.ov_intent_analysis_sft_v4`），不需要替换 prompt 文件，也不需要设置 `prompts.templates_dir`。如果使用未映射的模型，OpenViking 会继续使用默认的 `retrieval.intent_analysis` prompt。
 
-这样可以用小模型承担检索规划，通常延迟更低，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。实际延迟取决于模型、硬件和请求负载。
+这样可以用小模型承担检索规划，同时保留更强的 `vlm` 处理语义提取、记忆提取和多模态内容。延迟需按模型、硬件和请求负载测量。
 
 
 ### feishu
@@ -1747,7 +1747,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | 通常填写用于数据访问的 user/admin key。API Key 模式下，这里填 root key 只能调用管理 API | `null`（无认证） |
-| `root_api_key` | 命令带 `--sudo` 时使用的 root key；`api_key` 未设置时也会使用它 | `null` |
+| `root_api_key` | `ov` CLI 带 `--sudo` 时使用的 root key；CLI 在 `api_key` 未设置时也会回退到它。Python HTTP SDK 不使用该回退 | `null` |
 | `account` | 可选的 trusted 模式 account 身份 header | `null` |
 | `user` | 可选的 trusted 模式 user 身份 header | `null` |
 | `profile` | 是否默认给 HTTP 请求追加 `profile=1`。对 Python HTTP client 和 `ov` CLI 都生效；也可通过 CLI 的 `--profile` 单次开启。是否真正生效还取决于服务端是否开启 `server.profile_enabled`。 | `false` |

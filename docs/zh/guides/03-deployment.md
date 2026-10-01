@@ -230,7 +230,7 @@ Docker 镜像默认会同时启动：
 }
 ```
 
-未设置 `root_api_key` 时，服务会自动进入 dev 模式，而 dev 模式监听非回环地址会拒绝启动。上面的示例用于 API Key 认证，其他认证方式见[认证指南](04-authentication.md)。如需自定义绑定地址，可通过 `OPENVIKING_SERVER_HOST` 覆盖。
+未指定 `auth_mode` 且未配置 `root_api_key` 时，服务会自动进入 dev 模式，而 dev 模式监听非回环地址会拒绝启动。上面的示例用于 API Key 认证，其他认证方式见[认证指南](04-authentication.md)。如需自定义绑定地址，可通过 `OPENVIKING_SERVER_HOST` 覆盖。
 
 镜像默认启用 Bot。API Key 模式下，Bot 还需要在 `bot.ov_server.api_key` 中配置可用的 User/Admin key，不能把 root key 当数据访问凭据。只部署 OpenViking Server 时使用下文的 `--without-bot`，需要 Bot 时按[VikingBot 配置](17-vikingbot.md)完成身份设置。
 
@@ -323,12 +323,12 @@ docker compose up -d
 #### 配置管理
 
 - **首次生成配置**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。该变量仅在首次启动且 `ov.conf` 尚不存在时生效。
-- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway volume files` 直接修改持久卷上的 `ov.conf`；需要重新生成时，先备份原配置并核对 `OPENVIKING_CONF_CONTENT`，再移走原配置并重新部署；生成后检查存储和认证设置。
+- **后续修改配置**：首次启动后，请按所安装的 [Railway CLI](https://docs.railway.com/cli) 文档 直接修改持久卷上的 `ov.conf`；需要重新生成时，先备份原配置并核对 `OPENVIKING_CONF_CONTENT`，再移走原配置并重新部署；生成后检查存储和认证设置。
 
 #### 资源与费用参考
 
-- **费用估算**：Railway 按套餐和 CPU、内存、存储、网络等实际用量计费。先用自己的文档规模和请求量试跑，再根据用量面板估算持续运行成本。套餐和计费规则见 [Railway 官方说明](https://docs.railway.com/pricing)。
-- **试用与数据保留**：Trial 提供一次性 $5 额度，最多持续 30 天，之后转为每月 $1 额度的 Free 计划。是否够用取决于实际资源消耗。Trial 账户的持久卷会在额度到期 30 天后删除，提前升级或备份；规则见[Railway 试用说明](https://docs.railway.com/pricing/free-trial)。
+- **费用估算**：套餐和资源计费规则见 [Railway 官方说明](https://docs.railway.com/pricing)。先用自己的文档规模和请求量试跑，再根据用量面板估算成本。
+- **试用与数据保留**：试用额度、有效期和持久卷保留期限，以[Railway 试用说明](https://docs.railway.com/pricing/free-trial)及账户显示为准。请在对应保留期限前备份数据。
 
 > **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
 

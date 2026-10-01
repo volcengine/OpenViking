@@ -65,9 +65,9 @@ curl http://localhost:30300/metrics
 如果返回包含 `openviking_` 前缀的文本，说明 metrics 已经启用。例如：
 
 ```text
-# HELP openviking_http_requests_total Total number of HTTP requests
+# HELP openviking_http_requests_total OpenViking metric.
 # TYPE openviking_http_requests_total counter
-openviking_http_requests_total{method="GET",route="/api/v1/search/find",status="200"} 12
+openviking_http_requests_total{method="POST",route="/api/v1/search/find",status="200"} 12
 ```
 
 如果返回 `Prometheus metrics are disabled.`，说明配置未生效或服务未重启。

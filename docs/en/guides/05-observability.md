@@ -177,7 +177,7 @@ The most useful pages for observability are:
 
 Write operations (`Add Resource`, `Add Memory`, tenant/user administration) are gated by the API key currently signed in — there's no separate `--write-enabled` switch.
 
-From an observability standpoint, Studio reads dashboard summaries, token series, context commits, and audit logs through `/api/v1/console/*`. For operations such as `find`, `add-resource`, and `session commit`, you can expand the result panel to inspect `telemetry.summary`.
+From an observability standpoint, Studio reads dashboard summaries, token series, context commits, and audit logs through `/api/v1/console/*`. To inspect `telemetry.summary` for operations such as `find`, `add-resource`, and `session commit`, read the complete HTTP response as shown in [Operation Telemetry](07-operation-telemetry.md).
 
 Studio is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
 

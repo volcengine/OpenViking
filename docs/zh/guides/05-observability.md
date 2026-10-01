@@ -177,7 +177,7 @@ http://127.0.0.1:1933/studio
 
 写操作（`Add Resource`、`Add Memory`、租户/用户管理）通过当前已登录的 API key 鉴权，没有额外的 `--write-enabled` 开关需要打开。
 
-Studio 从 `/api/v1/console/*` 读取 dashboard summary、token series、context commits 和 audit logs。对于 `find`、`add-resource` 和 `session commit` 这类操作，结果面板可以展开看 `telemetry.summary`。
+Studio 从 `/api/v1/console/*` 读取 dashboard summary、token series、context commits 和 audit logs。查看 `find`、`add-resource` 和 `session commit` 等操作的 `telemetry.summary` 时，按[操作遥测](07-operation-telemetry.md)读取完整 HTTP 响应。
 
 Studio 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
 

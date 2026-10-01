@@ -191,7 +191,9 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-未显式配置 `bot.ov_server.server_url` 时，继承的服务不可用可降级为 standalone；显式配置的服务不可用，或可访问的服务鉴权不匹配，会停止启动。本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
+本地 chat 未显式配置 `bot.ov_server.server_url` 时，连接继承的服务失败可降级为 standalone。显式配置的服务不可用时停止启动。继承的认证模式不匹配也会停止启动；显式配置远端服务时，Bot 会采用服务端报告的模式，再验证凭据。认证失败或收到不健康的 HTTP 响应都会停止启动。一体启动由服务端管理时，Bot 会保留继承的上游配置并等待服务启动。
+
+standalone 模式下，本地文件、Shell、Web 和 Skill 等能力仍可使用，但不会提供 OpenViking 资源检索和长期记忆能力。
 
 ## 场景 C：Gateway 统一入口
 
