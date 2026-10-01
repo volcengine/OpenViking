@@ -291,7 +291,7 @@ export default defineConfig({
       { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
-      message: 'Open source under the AGPL-3.0 License.',
+      message: `Open source under the AGPL-3.0 License. <a href="${base}font-licenses.html">Font licenses</a>`,
       copyright: 'Copyright OpenViking contributors'
     }
   },

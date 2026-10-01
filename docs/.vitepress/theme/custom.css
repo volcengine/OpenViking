@@ -12,8 +12,8 @@
   --vp-c-bg-soft: #eeefeb;
   --vp-c-text-1: #202723;
   --vp-c-text-2: #5c665f;
-  --vp-font-family-base: "Source Sans 3", "OV Reading Kai", sans-serif;
-  --vp-font-family-display: "Source Serif 4", "OV Reading Kai", serif;
+  --vp-font-family-base: "IBM Plex Sans", "LXGW Neo XiHei Screen Full", sans-serif;
+  --vp-font-family-display: "Source Serif 4", "Noto Serif SC", serif;
   --vp-font-family-mono: "OV Code", ui-monospace, monospace;
 
   /* Embed-widget theming. The widget renders in a shadow root whose :host does

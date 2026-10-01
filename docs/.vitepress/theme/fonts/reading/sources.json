@@ -1,14 +1,6 @@
 {
   "subsets": [
     {
-      "source_file": "wenkai-screen.ttf",
-      "family": "OV Reading Kai",
-      "slug": "reading-kai",
-      "upstream": "LXGW WenKai GB Screen v1.522",
-      "url": "https://github.com/lxgw/LxgwWenKai-Screen/releases/download/v1.522/LXGWWenKaiGBScreen.ttf",
-      "sha256": "23ec023913e1851925eb94462c4b0ccd1d78bb89533745aaa8cc682ccd339dc0"
-    },
-    {
       "source_file": "maple-regular.ttf",
       "family": "OV Code",
       "slug": "maple-code",
@@ -19,16 +11,6 @@
     }
   ],
   "unmodified": [
-    {
-      "file": "source-sans-3.woff2",
-      "url": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/VF/SourceSans3VF-Upright.otf.woff2",
-      "sha256": "f9e4eac0e8f8ffdae91cf6eff3962b96e81417cba5c728bc1c89efe9510e7653"
-    },
-    {
-      "file": "source-sans-3-italic.woff2",
-      "url": "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/VF/SourceSans3VF-Italic.otf.woff2",
-      "sha256": "2cac627e742dec5b6fa73a0ad243a97e189c362ea11ae85c22b2e52b214d00a3"
-    },
     {
       "file": "source-serif-4.woff2",
       "url": "https://raw.githubusercontent.com/adobe-fonts/source-serif/80d3f8894c09c937bebfa9011247d2e1c79fd6f4/WOFF2/VAR/SourceSerif4Variable-Roman.otf.woff2",
