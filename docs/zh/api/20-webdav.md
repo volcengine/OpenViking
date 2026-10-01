@@ -4,8 +4,6 @@ WebDAV 为 `resources` 命名空间提供文件协议访问。
 
 **代码入口**：`openviking/server/routers/webdav.py`
 
-<a id="webdav-phase-1"></a>
-
 ## 支持范围
 
 OpenViking Server 也提供了一个面向资源文件的精简 WebDAV 适配层：

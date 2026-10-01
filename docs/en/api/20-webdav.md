@@ -4,8 +4,6 @@ WebDAV provides file-protocol access to the `resources` namespace.
 
 **Code entry point**: `openviking/server/routers/webdav.py`
 
-<a id="webdav-phase-1"></a>
-
 ## Supported operations
 
 OpenViking Server also exposes a minimal WebDAV adapter for resource files:

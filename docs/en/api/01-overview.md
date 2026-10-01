@@ -557,8 +557,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 ---
 
-<a id="documentation-reading-plan"></a>
-
 ## Find an API by Task
 
 Choose a reference page by operation type:

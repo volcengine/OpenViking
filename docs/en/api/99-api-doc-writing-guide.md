@@ -135,8 +135,6 @@ Explain the processing steps and link to the implementation, router, or CLI hand
 
 Use the following sections for each API. Add implementation details after the response contract when they help explain behavior. Existing pages still use the legacy `API Implementation Overview` section with code entries; follow this structure for new pages and when migrating a page.
 
-<a id="1-api-implementation-introduction"></a>
-
 #### 1. Purpose and Prerequisites
 
 - Explain the operation and its intended use.
