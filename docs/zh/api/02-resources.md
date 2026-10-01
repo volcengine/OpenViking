@@ -187,7 +187,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给 Parser/Accessor 的参数，详见下文。核心请求字段不能放入 `args`。 |
+| args | object | 否 | `{}` | 传给 Parser/Accessor 的参数，详见下文。核心请求字段不能放入 `args`，下文列出的 Connector 专用选项除外。 |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 按目标占用规则为可重新读取的来源创建新 Watch；通过 `temp_file_id` 上传的一次性快照不能创建 Watch。≤0 不创建 Watch：原生导入显式指定 `to` 时暂停唯一可访问的任务（存在歧义时返回 409），Connector 导入不影响已有 Watch。显式 `to` 优先，否则绑定本次导入的 `root_uri`。 |
 | is_active | bool | 否 | True | Watch 初始调度状态。设为 `false` 时要求 `watch_interval > 0`，并在 `to`、`parent` 中二选一。`parent` 支持原生飞书 URL 和 Git 导入；Connector 仍要求精确的 `to`。首次导入仍执行一次，随后保持暂停 |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
@@ -203,12 +203,12 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。
 - `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`。
 - 飞书用户 token 导入传 `args.feishu_access_token`。
-- `path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args`
+- `path`、`to`、`watch_interval`、`include` 等 `add_resource` 核心字段不能放入 `args`。原生导入也拒绝 `args.exclude`；TOS Connector 导入允许它与 `args.tos_prefix` 一起使用。
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
 - 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
-- `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
+- `wait=false` 时，原生导入入队后返回 `status=success`，Connector 导入返回 `status=accepted`。两者都不表示后台处理已经完成；最终状态以对应 `task_id` 为准。
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
@@ -570,7 +570,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "accepted",
+    "status": "success",
     "root_uri": "viking://resources/guide",
     "task_id": "uuid-xxx"
   }
@@ -584,7 +584,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 Note: Resource is being processed in the background.
 Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
-status       accepted
+status       success
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -595,7 +595,7 @@ task_id      uuid-xxx
 {
   "ok": true,
   "result": {
-    "status": "accepted",
+    "status": "success",
     "root_uri": "viking://resources/01-overview",
     "task_id": "uuid-xxx"
   }
@@ -606,7 +606,7 @@ task_id      uuid-xxx
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 处理状态：`accepted` 表示已入队，`success` 表示同步处理完成。请求失败通过顶层错误响应返回，后台失败通过任务 API 查询 |
+| `status` | string | 原生导入的入队结果和同步结果都返回 `success`；Connector 提交返回 `accepted`。`wait=false` 时需轮询 `task_id` 确认完成。请求失败通过顶层错误响应返回，后台失败通过任务 API 查询 |
 | `root_uri` | string | 资源在 OpenViking 中的最终 URI |
 | `task_id` | string | （可选，仅当 `wait=false` 时）可轮询 `/api/v1/tasks/{task_id}` 的任务 ID。非 Git 导入用于队列跟踪；Git 仓库导入用于完整后台导入跟踪。 |
 | `temp_uri` | string | 导入过程中生成的临时 URI |

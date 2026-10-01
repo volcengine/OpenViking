@@ -187,7 +187,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser/accessor options; see the source-specific notes below. Core request fields remain outside `args`. |
+| args | object | No | `{}` | Parser/accessor options; see the source-specific notes below. Core request fields remain outside `args`, except Connector-owned options described below. |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a new Watch for a re-readable source, subject to target ownership rules; uploaded `temp_file_id` snapshots cannot be watched. <=0 creates no Watch: native imports with explicit `to` pause a single accessible task (409 if ambiguous), while Connector imports leave Watches untouched. Explicit `to` wins, otherwise the Watch binds to the imported `root_uri`. |
 | is_active | bool | No | True | Initial Watch scheduling state. `false` requires `watch_interval > 0` and either `to` or `parent`. `parent` is supported for native Feishu URL and Git imports; Connector imports still require an exact `to`. The initial import still runs once and the Watch remains paused afterward |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
@@ -203,12 +203,12 @@ This endpoint is the core entry point for resource management. It supports vario
 - `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body).
 - `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`.
 - Feishu user-token imports pass `args.feishu_access_token`.
-- Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args`
+- Core `add_resource` fields such as `path`, `to`, `watch_interval`, and `include` are not allowed inside `args`. Native imports also reject `args.exclude`; TOS Connector imports accept it with `args.tos_prefix`.
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. `to` is the final save location: a missing target is created, and an existing target is refreshed. If the target is a directory, old files or subdirectories that are not produced by the current import may be removed. `parent` is the destination directory, and is the right option for adding a new resource under an existing directory; use `create_parent=true` or CLI `--parent-auto-create` when that directory should be created automatically. When the imported `root_uri` is the same as `to`, semantic and vector processing reuse unchanged content and process only the changed parts.
 - Creating a resource requires write access to its target parent; updating an existing explicit `to` requires write access to that target. These checks run before the task is queued. Automatic naming uses actual URI occupancy, so an unreadable collision selects `_1`, `_2`, and so on instead of attempting an overwrite.
-- With `wait=false`, `status=accepted` means that preflight passed and the task was queued; it does not mean resource processing has completed. Use the returned `task_id` for the final status.
+- With `wait=false`, native imports return `status=success` after queue submission; Connector imports return `status=accepted`. Neither means background processing has completed. Use the returned `task_id` for the final status.
 - If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
 - Resource targets may use public `viking://resources/...`, the home alias `viking://~/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. The home alias is expanded to the canonical path using the authenticated request identity; the uid-less spelling `viking://user/resources/...` is rejected with an error pointing at `viking://~/resources/...`.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
@@ -571,7 +571,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 {
   "status": "ok",
   "result": {
-    "status": "accepted",
+    "status": "success",
     "root_uri": "viking://resources/guide",
     "task_id": "uuid-xxx"
   }
@@ -585,7 +585,7 @@ Use the returned `task_id` to poll `/api/v1/tasks/{task_id}` for queue completio
 ```
 Note: Resource is being processed in the background.
 Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
-status       accepted
+status       success
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
 ```
@@ -596,7 +596,7 @@ task_id      uuid-xxx
 {
   "ok": true,
   "result": {
-    "status": "accepted",
+    "status": "success",
     "root_uri": "viking://resources/01-overview",
     "task_id": "uuid-xxx"
   }
@@ -607,7 +607,7 @@ task_id      uuid-xxx
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | string | Processing status: `accepted` means queued; `success` means synchronous processing finished. Request failures use the top-level error envelope; background failures appear in the Task API. |
+| `status` | string | Native imports return `success` for both queued and synchronous results; Connector submissions return `accepted`. With `wait=false`, poll `task_id` to confirm completion. Request failures use the top-level error envelope; background failures appear in the Task API. |
 | `root_uri` | string | Final URI of the resource in OpenViking |
 | `task_id` | string | (Optional, only when `wait=false`) Task ID for polling `/api/v1/tasks/{task_id}`. Non-Git imports use it for queue tracking; Git repository imports use it for full background import tracking. |
 | `temp_uri` | string | Temporary URI produced during import |

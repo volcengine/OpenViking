@@ -20,7 +20,7 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 
 - **Commit**: A snapshot is a commit, uniquely identified by a 40-hex SHA-1 `commit_oid`. Most commands also accept an abbreviated OID prefix or a branch name (e.g. `main`).
 - **Branch**: The default branch is `main`. Unless you pass one explicitly, every command operates on `main`.
-- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. The restore preserves prior commits; when no file changes are needed, it returns `noop` without creating a commit.
+- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. The restore preserves prior commits; when the selected source tree matches HEAD, it returns `noop` without creating a commit. This comparison does not inspect uncommitted workspace changes.
 - **Scope**: `commit` can be limited to specific URIs via `paths`; `restore` can be limited to a subtree via `project_dir`, leaving files outside it untouched.
 
 ## ACL permissions

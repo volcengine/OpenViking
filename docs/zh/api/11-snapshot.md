@@ -20,7 +20,7 @@
 
 - **提交（commit）**：一个快照对应一个提交，由 40 位十六进制的 SHA-1 `commit_oid` 唯一标识。多数命令也接受 OID 的缩写前缀，或分支名（如 `main`）。
 - **分支（branch）**：默认分支为 `main`。除非显式传入，所有命令都作用在 `main` 上。
-- **正向恢复（forward-commit restore）**：`restore` **不会**回退或改写历史。它会读取 `source_commit` 的内容，把差异写回工作区，并在当前 HEAD 之上**生成一个新的提交**。因此新提交的父提交是恢复操作发生前的 HEAD，而**不是** `source_commit`。恢复保留此前的提交；不需要修改文件时返回 `noop`，不生成新提交。
+- **正向恢复（forward-commit restore）**：`restore` **不会**回退或改写历史。它会读取 `source_commit` 的内容，把差异写回工作区，并在当前 HEAD 之上**生成一个新的提交**。因此新提交的父提交是恢复操作发生前的 HEAD，而**不是** `source_commit`。恢复保留此前的提交；选定的源文件树与 HEAD 一致时返回 `noop`，不生成新提交。该比较不检查工作区中未提交的改动。
 - **作用范围**：`commit` 可以通过 `paths` 限定只快照部分 URI；`restore` 可以通过 `project_dir` 限定只恢复某个子目录，目录之外的文件保持不变。
 
 ## ACL 权限

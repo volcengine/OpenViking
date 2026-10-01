@@ -172,7 +172,7 @@ The field describes only a pure-dense vector score. Sparse fusion, time decay, r
 
 #### 1. API Implementation Overview
 
-Get model instance and token-usage information for VLM, embedding, and rerank. `is_healthy` indicates that at least one model instance exists; it does not probe every provider. Use `/ready` for the embedding connectivity probe and inspect actual request errors for other models.
+Get the current account’s VLM and embedding configuration and token-usage information. `is_healthy` is true when the observer resolves that account’s model information without an error; it does not probe every provider. Use `/ready` for the embedding connectivity probe and inspect actual request errors for other models.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP route
@@ -236,7 +236,7 @@ ov observer models
     "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "No model usage data available."
+    "status": "Account: default\nEmbedding dimension: 1024\nNo model usage data available."
   }
 }
 ```

@@ -788,14 +788,14 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
         "created_at": "2026-03-24T09:10:20Z"
       }
     ],
-    "estimatedTokens": 160,
+    "estimatedTokens": 29,
     "stats": {
       "totalArchives": 2,
       "includedArchives": 0,
       "droppedArchives": 2,
       "failedArchives": 0,
-      "activeTokens": 98,
-      "archiveTokens": 62
+      "activeTokens": 10,
+      "archiveTokens": 19
     }
   }
 }
@@ -1418,7 +1418,7 @@ console.log(await client.commitSession("session-id"));
 
 ```go
 commit, err := client.CommitSession(ctx, "a1b2c3d4", &openviking.CommitSessionOptions{
-    KeepRecentCount: 0,
+    KeepRecentCount: openviking.Int(0),
 })
 if err != nil {
     return err
