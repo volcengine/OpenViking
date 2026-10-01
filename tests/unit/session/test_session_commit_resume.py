@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import inspect
 import json
+import threading
 from dataclasses import fields
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -304,3 +307,80 @@ def test_session_commit_message_ignores_unknown_fields():
     assert message.auto_commit_policy == {}
     assert "actor_peer_id" not in message.to_dict()
     assert "usage_uris" not in message.to_dict()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_append_keeps_loop_responsive_while_decoding_live_messages(monkeypatch, cancel):
+    session_uri = "viking://user/default/sessions/session-1"
+    uri = f"{session_uri}/messages.jsonl"
+    original = Message(id="old", role="assistant", parts=[TextPart("before\u2028after")])
+    content = "\r\n" + original.to_jsonl() + "\r\n"
+    fs: Any = _MemoryVikingFS({uri: content})
+    fs.append_file = AsyncMock(wraps=fs.append_file)
+    session = Session(viking_fs=fs, session_id="session-1", session_uri=session_uri)
+    decoded = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop = asyncio.get_running_loop()
+    from_dict = Message.from_dict
+
+    def slow_decode(data):
+        loop.call_soon_threadsafe(decoded.set)
+        try:
+            # Bound the wait so a regression cannot hang the test runner.
+            assert release.wait(2), "live JSONL decoding blocked the event loop"
+            return from_dict(data)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(Message, "from_dict", slow_decode)
+    append = asyncio.create_task(
+        session.add_messages_async([{"role": "user", "parts": [TextPart("next")]}])
+    )
+    try:
+        await asyncio.wait_for(decoded.wait(), timeout=5)
+        assert not append.done()
+        fs._async_agfs.pathlock_release.assert_not_awaited()
+        if cancel:
+            append.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await append
+            fs.append_file.assert_not_awaited()
+            assert session.messages == []
+        release.set()
+        if not cancel:
+            await append
+            assert [message.content for message in session.messages] == [
+                "before\u2028after",
+                "next",
+            ]
+            fs.append_file.assert_awaited_once()
+        assert await asyncio.to_thread(finished.wait, 2)
+        if cancel:
+            assert session.messages == []
+            assert fs.files[uri] == content
+        else:
+            assert fs.files[uri] == content + session.messages[-1].to_jsonl() + "\n"
+        fs._async_agfs.pathlock_release.assert_awaited_once()
+    finally:
+        release.set()
+        await asyncio.gather(append, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", ["{invalid", '{"role":"user"}'])
+async def test_append_rejects_corrupt_live_jsonl_without_writing(row):
+    session_uri = "viking://user/default/sessions/session-1"
+    uri = f"{session_uri}/messages.jsonl"
+    fs: Any = _MemoryVikingFS({uri: "\r\n" + row + "\r\n"})
+    fs.append_file = AsyncMock(wraps=fs.append_file)
+    session = Session(viking_fs=fs, session_id="session-1", session_uri=session_uri)
+
+    with pytest.raises(ValueError, match="Invalid live message JSONL at line 2") as error:
+        await session.add_messages_async([{"role": "user", "parts": [TextPart("next")]}])
+
+    assert error.value.__cause__ is not None
+    assert session.messages == []
+    fs.append_file.assert_not_awaited()
+    fs._async_agfs.pathlock_release.assert_awaited_once()
