@@ -392,7 +392,7 @@ The main project uses AGPLv3; the CLI and most examples use Apache 2.0. See the 
 ## Related Documentation
 
 - [Introduction](../getting-started/01-introduction.md) - Understand OpenViking's design philosophy
-- [Quick Start](../getting-started/02-quickstart.md) - Your first import and search
+- [Quick Start](../getting-started/02-quickstart.md) - 5-minute tutorial
 - [Architecture Overview](../concepts/01-architecture.md) - Deep dive into system design
 - [Retrieval Mechanism](../concepts/07-retrieval.md) - Detailed retrieval process
 - [Configuration Guide](../guides/01-configuration.md) - Complete configuration reference

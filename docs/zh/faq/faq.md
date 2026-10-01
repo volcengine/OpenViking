@@ -390,7 +390,7 @@ OpenViking 主体采用 AGPLv3，CLI 和大部分示例采用 Apache 2.0。各�
 ## 相关文档
 
 - [简介](../getting-started/01-introduction.md) - 了解 OpenViking 的设计理念
-- [快速开始](../getting-started/02-quickstart.md) - 首次导入与检索
+- [快速开始](../getting-started/02-quickstart.md) - 5 分钟上手教程
 - [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
 - [检索机制](../concepts/07-retrieval.md) - 检索流程详解
 - [配置指南](../guides/01-configuration.md) - 完整配置参考
