@@ -22,106 +22,16 @@
 
 ---
 
-## API 参考
+## 记忆召回
 
-### recall()
-
-> **已弃用**：`/api/v1/search/recall` 现在只是 [`/api/v1/search/search` 的 `mode="context"`](06-retrieval.md#search-mode-context) 之上的轻量预设，自身不再包含独立的组装逻辑。新接入请直接使用 context 模式；v1 字段别名仅在本端点保留。响应会带上 `Deprecation: true` 头。
-
-按记忆类型分别检索，并在预算内组合成可直接注入 Agent 上下文的记忆块。相对 context 模式，`/recall` 会叠加 `purpose="coding"`、兼容 v1 的 `score_threshold=0.1`、带 `session_id` 时 `dedup_turns=5`、`query_expansion="auto"`。Coding Agent 插件会显式发送 `score_threshold=0.35`；公共 `/recall` 默认值仍为 `0.1`，避免相同请求在升级后静默减少结果。省略 `quotas` 时沿用 v1 的分桶默认值（`events=10, entities=10, preferences=3, experiences=0`）；显式传 `"quotas": null` 才改用 `purpose` 预设配比。
-
-**v1 字段折叠**
-
-| v1 字段 | 折叠为 | 说明 |
-|---------|--------|------|
-| `max_chars` | `max_tokens = max(64, round(max_chars / 4))` | `6500` → `1625`；显式传 `max_tokens` 时以后者为准 |
-| `min_score` | `score_threshold` | 都未提供时取兼容 v1 的默认值 `0.1` |
-| `render: true` | 不指定统一 detail | 默认行为：各类别取自己的默认档 |
-| `render: false` | 只返回 `entries`，`rendered` 为空 | |
-| `render: "compact"` | `detail="abstract"` | 原型期的紧凑模式；把所有类别设为 abstract |
-| v1 `quotas` 键 | 叠加在 v1 分桶默认值之上 | 键名未变；只传一部分键时其余桶保留默认值 |
-
-context 模式的参数（`max_tokens`、`detail`、`dedup_turns`、`session_id`、`query_expansion`、`exclude_uris`、`purpose`、`rewrite`、`rewrite_max_bullets`）在本端点同样接受，供已实现此兼容接口的服务使用；使用新增参数前，应核对部署版本。
-
-**HTTP API**
+用 [`search(mode="context")`](06-retrieval.md#search-mode-context) 检索记忆并组装可直接注入的记忆块。服务端 MCP 以 `search(mode="context")` 提供同一能力，没有单独的 `recall` 工具。
 
 ```http
 POST /api/v1/search/recall
 Content-Type: application/json
 ```
 
-```bash
-curl -X POST http://localhost:1933/api/v1/search/recall \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENVIKING_API_KEY" \
-  -d '{
-    "query":"OpenViking API 文档偏好",
-    "quotas":{"events":5,"entities":5,"preferences":3,"experiences":2},
-    "max_chars":6500,
-    "peer_scope":"all"
-  }'
-```
-
-**MCP 替代调用**
-
-服务端 MCP 提供 `search(mode="context")`，没有独立的 `recall` 工具：
-
-```text
-search(
-  mode="context",
-  purpose="coding",
-  min_score=0.1,
-  query="OpenViking API 文档偏好",
-  quotas={"events": 5, "entities": 5, "preferences": 3, "experiences": 2},
-  max_tokens=1625,
-  peer_scope="all"
-)
-```
-
-**响应**
-
-响应形状与 context 模式一致（entries 扁平化、`rendered` 为扁平 XML）：
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "entries": [
-      {
-        "uri": "viking://user/default/memories/preferences/api-docs.md",
-        "category": "preferences",
-        "score": 0.82,
-        "detail": "full",
-        "text": "用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。",
-        "origin": "self"
-      }
-    ],
-    "rendered": "<memory uri=\"viking://user/default/memories/preferences/api-docs.md\" type=\"preferences\" score=\"0.82\" detail=\"full\">\n用户偏好在 API 文档中同时提供 HTTP、SDK 和 CLI 示例。\n</memory>",
-    "digest": "",
-    "stats": {
-      "quotas": {"events": 5, "entities": 5, "preferences": 3, "experiences": 2},
-      "candidates": 4,
-      "returned": 1,
-      "dropped": 0,
-      "max_tokens": 1625,
-      "used_tokens": 96,
-      "tier_counts": {"full": 1},
-      "peer_scope": "all",
-      "origins": {"actor_peer": 0, "self": 1, "other_peer": 0},
-      "deprecated": {
-        "endpoint": "/api/v1/search/recall",
-        "successor": "/api/v1/search/search",
-        "successor_body": {"mode": "context"},
-        "aliases_used": ["max_chars"]
-      }
-    }
-  }
-}
-```
-
-字段含义见 [检索 - search(mode="context")](06-retrieval.md#search-mode-context)。相对 v1 的形状变化：`type` → `category`、`mode` → `detail`、`content`/`summary` → `text`，`rendered` 由三层嵌套改为扁平 `<memory>` 标签，`rank` 不再返回。
-
-公共 Python、TypeScript、Go SDK 和 `ov` CLI 当前尚未封装该端点，调用旧接口需使用 HTTP；MCP 使用上面的 `search` 替代示例。
+`/api/v1/search/recall` 已弃用。它只是 `search(mode="context")` 叠加 `purpose="coding"` 和 v1 默认值的预设，为现有调用方保留；响应带 `Deprecation: true` 头。新接入不要使用。
 
 ## 相关文档
 
