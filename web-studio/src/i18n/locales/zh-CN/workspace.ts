@@ -452,6 +452,13 @@ const workspace = {
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
       noResultCancelledDescription: '该任务已取消，未返回执行结果。',
     },
+    cancelDialog: {
+      title: '确认取消该任务？',
+      description:
+        '将请求取消任务 {{taskId}}。任务会在下一个安全检查点协作式停止，队列槽位随即释放，状态将更新为“已取消”。',
+      confirm: '取消任务',
+      dismiss: '继续运行',
+    },
     events: {
       title: '任务执行日志',
       description: '显示已上报的任务事件，时间为后端记录各事件的时间。',
@@ -480,6 +487,7 @@ const workspace = {
       clear: '清除筛选',
     },
     actions: {
+      cancelTask: '取消任务',
       retrigger: '重新发起任务',
     },
     pipeline: {

@@ -30,7 +30,7 @@ import { commitSession } from '#/lib/sessions/api'
 import { Route } from './route'
 import type { TaskRecord } from './-lib/task-record'
 
-const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
+const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn(), post: vi.fn() }))
 
 const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -41,7 +41,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
-  ovClient: { instance: { post: vi.fn() } },
+  ovClient: { client: { post: clientMocks.post } },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
@@ -117,6 +117,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   records = runningTasks(12)
   clientMocks.getTasks.mockReset()
+  clientMocks.post.mockReset()
   // Model the API contract: filtering precedes ordering and the result limit.
   clientMocks.getTasks.mockImplementation(({ query }) =>
     records
@@ -133,12 +134,63 @@ afterEach(() => {
 })
 
 describe('task status presentation', () => {
-  it('keeps all twelve running tasks running in both rows and the count', async () => {
-    await renderPage()
-    await screen.findByRole('row', { name: 'View details for task task-12' })
+  it('reflects server statuses before and after requesting cancellation', async () => {
+    const user = await renderPage()
+    const row = await screen.findByRole('row', {
+      name: 'View details for task task-12',
+    })
 
     expectRunningRows(12)
     expect(screen.getByText('12 / 0')).toBeDefined()
+
+    await user.click(within(row).getByRole('button', { name: 'Cancel task' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(clientMocks.post).not.toHaveBeenCalled()
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Keep running' }),
+    )
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(clientMocks.post).not.toHaveBeenCalled()
+
+    clientMocks.post.mockRejectedValueOnce(new Error('Cancellation rejected'))
+    await user.click(within(row).getByRole('button', { name: 'Cancel task' }))
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', {
+        name: 'Cancel task',
+      }),
+    )
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Cancellation rejected'),
+    )
+    expect(screen.getByRole('alertdialog')).toBeDefined()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(within(row).getByText('Running')).toBeDefined()
+
+    clientMocks.post.mockImplementationOnce(() => {
+      records[11] = { ...records[11], status: 'cancelling' }
+      return Promise.resolve(records[11])
+    })
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Cancel task',
+      }),
+    )
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(clientMocks.post).toHaveBeenLastCalledWith({
+      url: '/api/v1/tasks/task-12/cancel',
+    })
+    expect(await within(row).findByText('Cancelling')).toBeDefined()
+    expect(
+      within(row).queryByRole('button', { name: 'Cancel task' }),
+    ).toBeNull()
+    expect(screen.getByText('11 / 0')).toBeDefined()
+
+    records[11] = { ...records[11], status: 'cancelled' }
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await within(row).findByText('Cancelled')).toBeDefined()
+    expect(
+      within(row).queryByRole('button', { name: 'Cancel task' }),
+    ).toBeNull()
   })
 
   it('shows no pending tasks when all tasks are running, including after type filtering', async () => {
