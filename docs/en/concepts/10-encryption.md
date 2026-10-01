@@ -143,15 +143,6 @@ Startup resolves the root key, then RAGFS `EncryptionWrappedFS` handles file con
 
 <EncryptionFlowDiagram mode="write" />
 
-<details>
-<summary>Text version</summary>
-
-```text
-Client plaintext → RAGFS encryption wrapper → Backend ciphertext
-```
-
-</details>
-
 1. Derive the account key from the root key and `account_id` with HKDF-SHA256; it may be cached at runtime.
 2. Generate a random File Key and nonces for this encryption.
 3. Encrypt content with the File Key using AES-256-GCM, then wrap the File Key with the account key.
@@ -160,15 +151,6 @@ Client plaintext → RAGFS encryption wrapper → Backend ciphertext
 ### Read Flow
 
 <EncryptionFlowDiagram mode="read" />
-
-<details>
-<summary>Text version</summary>
-
-```text
-Backend file → Check OVE1 → Unwrap File Key → Authenticate and decrypt → Client plaintext
-```
-
-</details>
 
 For encrypted files, the account key unwraps the File Key, which authenticates and decrypts the content. Old files without `OVE1` are read as plaintext. An incorrect key or failed ciphertext authentication returns an error, not decrypted content.
 
