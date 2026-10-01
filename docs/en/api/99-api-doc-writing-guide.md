@@ -165,7 +165,7 @@ paragraph and use one of these fixed base forms: `**Python SDK**`, `**TypeScript
 `**Go SDK**`, `**HTTP API**`, or `**CLI**`. When a transport qualifier is useful,
 put it inside the same bold label with ASCII parentheses, for example
 `**Python SDK (HTTP)**`. Do not put the qualifier after the bold label or use
-full-width parentheses. A label such as `**Python SDK (HTTP)**` is recognized as a Python tab. Show only surfaces that are actually
+full-width parentheses. A label such as `**Python HTTP SDK**` does not match the tab matcher and renders as plain text. Show only surfaces that are actually
 implemented. If an SDK or CLI does not expose the capability, omit that tab and
 briefly identify the available alternative. Do not wrap a handwritten HTTP request
 and present it as a nonexistent SDK method.
