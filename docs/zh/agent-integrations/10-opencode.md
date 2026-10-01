@@ -1,6 +1,6 @@
 # OpenCode 插件
 
-为 [OpenCode](https://opencode.ai/) 提供跨项目、跨会话的长期记忆和已索引仓库上下文。安装后，每次对话都会通过 OpenCode plugin hooks 自动召回相关记忆并捕获新内容；模型可调用工具来自 Claude Code / Codex 记忆插件同款的 OpenViking stdio MCP proxy。
+为 [OpenCode](https://opencode.ai/) 提供跨项目、跨会话的长期记忆和已索引仓库上下文。安装后，每次对话都会通过 OpenCode plugin hooks 自动召回相关记忆并捕获新内容；模型可调用工具来自 Claude Code / Codex 记忆插件同款的 OpenViking stdio MCP 代理。
 
 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
@@ -102,7 +102,7 @@ node examples/memory-plugin-shared/sync.mjs
 node examples/opencode-plugin/scripts/setup.mjs
 ```
 
-行为旋钮写在 `~/.openviking/ovcli.conf` 的 `plugin` 段，与向导写入的连接字段同一个文件。共享键对所有记忆插件生效；`plugin.opencode` 下的键只对本插件生效，并覆盖共享键：
+行为配置写在 `~/.openviking/ovcli.conf` 的 `plugin` 段，与向导写入的连接字段同一个文件。共享键对所有记忆插件生效；`plugin.opencode` 下的键只对本插件生效，并覆盖共享键：
 
 ```json
 {

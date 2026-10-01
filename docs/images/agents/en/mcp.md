@@ -15,7 +15,4 @@
 
 ### Step 2: Test MCP tool connectivity
 
-Enter `ov health` to check the OpenViking version and connection status.
-```bash
-ov health
-```
+Reconnect the MCP service in your client and confirm that its tools are listed. Ask the assistant to call OpenViking's `health` tool, then use `list` to check the directories accessible to your account. `ov health` checks the CLI connection; it does not verify this client's MCP connection.
