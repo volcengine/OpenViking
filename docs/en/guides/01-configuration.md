@@ -2040,8 +2040,6 @@ Suitable for Volcengine cloud deployments:
 
 For detailed encryption explanations, see [Data Encryption](../concepts/10-encryption.md). For complete usage instructions, see [Encryption Guide](./08-encryption.md).
 
-<a id="full-schema"></a>
-
 ## Configuration Structure
 
 This illustrates the main sections, not a complete runnable configuration or JSON Schema. Replace `string` and `|`-separated options with actual values; see the module sections for fields omitted here.

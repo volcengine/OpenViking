@@ -2029,8 +2029,6 @@ Task 记录文件位于所属账号的系统目录：
 /local/{account_id}/_system/tasks/{user_id}/{task_id}.json
 ```
 
-<a id="完整-schema"></a>
-
 ## 配置结构示意
 
 下面展示主要配置段的结构，不是可直接运行的完整配置或 JSON Schema。`string` 和用 `|` 连接的选项需要替换为实际值；没有列出的字段见前文各模块。
