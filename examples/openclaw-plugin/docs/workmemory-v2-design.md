@@ -14,7 +14,7 @@
 |---|---|
 | 自动检测归档时机 | `pending_tokens` 滑动窗口，O(1) 计算 |
 | 增量更新 WM | tool_call + JSON schema + 服务端 Guards |
-| 归档后保留最近消息 | `keep_recent_count`，保持上下文连贯 |
+| 归档后保留最近消息 | commit 全部归档，插件保留最近 `commitKeepRecentCount` 条原文放进组装的上下文，保持上下文连贯 |
 
 ### compact（主动上下文压缩）
 
@@ -182,13 +182,14 @@ Errors 是纯 append-only（UPDATE 总被降级为 APPEND）；Key Facts 允许�
 
 ### 1.6 保留最近消息
 
-commit 归档时不全量清空消息，保留最近 N 条维持上下文连贯。
+服务端 commit 支持 `keep_recent_count`，归档时把最近 N 条留作活跃消息。OpenClaw 插件的 commit 都不传这个参数（即 0，全部归档；`turn_budget` 模式下 afterTurn 改传 `retention_mode`），最近消息由插件自己保留：
 
-- 参数 `keep_recent_count` 由插件在 commit API body 中传入
-- `afterTurn` 路径默认 10，`compact` 路径硬编码 0
+- afterTurn commit 前，插件读取 session context，与上次保留的消息合并后取最近 `commitKeepRecentCount` 条（默认 10）。上次保留的消息在每次自动 commit 前清空，只有 commit 产生 archive 且这次读取成功时，才换成新取到的消息，存在进程内存里
+- assemble 时把这些消息接在 OpenViking 返回的消息前面，并在第一条服务端也返回的消息处截断，避免重复
+- compact 和 reset 丢弃保留的消息
 - OV 存储模型保证 `tool_use` / `tool_result` 配对完整性（ToolPart 自包含）
 
-关键实现：`session.py: commit_async(keep_recent_count)`、`routers/sessions.py: CommitRequest`、`context-engine.ts`、`client.ts`
+关键实现：`session.py: commit_async(keep_recent_count)`、`routers/sessions.py: CommitRequest`、`services/context-lifecycle-service.ts`、`services/retained-tail.ts`
 
 ---
 
@@ -196,7 +197,7 @@ commit 归档时不全量清空消息，保留最近 N 条维持上下文连贯�
 
 ### 2.1 afterTurn 流程
 
-插件端不变，commit 在服务端完成：
+commit 在服务端完成，最近消息由插件保留：
 
 ```
 [插件] afterTurn
@@ -206,14 +207,15 @@ commit 归档时不全量清空消息，保留最近 N 条维持上下文连贯�
   ├── GET /sessions/{id} → 返回 pending_tokens（O(1)）
   └── pending_tokens >= tokenBudget * commitTokenThresholdRatio?
         │
-        YES → commitSession(wait=false, keepRecentCount=cfg.commitKeepRecentCount)
+        YES → GET /sessions/{id}/context → 与上次保留的消息合并，取最近 commitKeepRecentCount 条（读取失败只记日志；仅 message_count 模式且 commitKeepRecentCount > 0）
+              清空上次保留的消息
+              commitSession(wait=false, keepRecentCount=0)
+              → 返回 archived=true 且读取成功时，插件在进程内存中保存这些消息
               │
               [服务端 commit_async]
               │
               ├── Phase 1（同步，不阻塞返回）
-              │    ├── split_idx = total - keep_recent_count
-              │    ├── 归档 messages[:split_idx] → archive_NNN/
-              │    ├── 保留 messages[split_idx:]
+              │    ├── 全部消息 → archive_NNN/, messages.clear()
               │    └── pending_tokens = 0, 更新 meta
               │
               └── Phase 2（asyncio.create_task 后台执行，包在
@@ -245,8 +247,11 @@ Phase 2 关键细节：
   └── commitSession(wait=true, keepRecentCount=0)
         ├── Phase 1: 全部消息 → archive, messages.clear()
         ├── Phase 2: 读旧 WM → 创建/更新 → 写入
-        └── 返回 → getSessionContext → 回读最新 WM
+        ├── 返回 → getSessionContext → 回读最新 WM
+        └── 丢弃插件保留的最近消息
 ```
+
+上次自动 commit 已归档全部消息时，compact 的 commit 没有可归档的内容；只要插件保留着最近消息，压缩仍然成功：丢弃这些消息，并返回当前 archive overview 作为摘要。
 
 ### 2.3 assemble（上下文组装）
 
@@ -256,7 +261,8 @@ instruction / archive / session 三分区：
 ┌──────────── System Prompt ────────────────────┐
 │ systemPromptAddition（语义示意，非逐字）：       │
 │   1. [Session History Summary] 是压缩摘要      │
-│   2. Active messages 是最新未压缩上下文        │
+│   2. Active messages 是最近几轮原文，          │
+│      开头可能与摘要末尾重复                    │
 │   3. 二者冲突时优先 active messages            │
 │   4. 缺细节时询问用户，不要猜                   │
 │ + 原始 system prompt                           │
@@ -275,6 +281,8 @@ instruction / archive / session 三分区：
 └────────────────────────────────────────────────┘
 
 ┌──── Layer 2: Session Context ─────────────────┐
+│  插件保留的最近消息（截到第一条与下列          │
+│  消息重叠处）                                  │
 │  server 侧合并后的 ctx.messages:               │
 │  - 未完成 archive 的 pending messages          │
 │  - 当前 live session messages                  │
@@ -328,7 +336,7 @@ OpenViking 在插件侧暴露两个独立的 archive 回查工具。
 | 滑动窗口 / pending_tokens | `openviking/session/session.py: SessionMeta / add_message()` |
 | commit API + keep_recent_count clamp | `openviking/server/routers/sessions.py: CommitRequest` |
 | WM v2 prompt 模板 | `prompts/templates/compression/ov_wm_v2.yaml`、`ov_wm_v2_update.yaml` |
-| 插件 commit / afterTurn / compact | `examples/openclaw-plugin/context-engine.ts` |
+| 插件 commit / afterTurn / compact / assemble | `examples/openclaw-plugin/services/context-lifecycle-service.ts`、`services/retained-tail.ts` |
 | 插件 ov_archive_search 工具 | `examples/openclaw-plugin/index.ts: ov_archive_search` |
 | 插件 ov_archive_expand 工具 | `examples/openclaw-plugin/index.ts: ov_archive_expand` |
 | 单元测试 | `tests/unit/session/test_wm_v2_guards.py`、`test_working_memory_growth.py`、`test_working_memory_v2.py`（共 107 用例） |

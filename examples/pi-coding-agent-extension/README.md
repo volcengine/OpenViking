@@ -183,7 +183,8 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
-| `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
+
+`commitKeepRecentCount` (`OPENVIKING_COMMIT_KEEP_RECENT_COUNT`) is no longer read: every commit archives all captured messages. Delete it from existing config.
 
 ### Context takeover
 
@@ -411,7 +412,7 @@ TypeScript is loaded directly by pi's jiti transpiler. The official MCP client i
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
 | Takeover never advances                  | Pending addMessage replay or commit failed, or the archive summary never arrives (Working Memory disabled on the server) | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
-| `/viking commit`: `nothing new to archive … (all_within_keep_window)` | The server already archived everything older than the last `takeoverKeepRecentTurns` user turns (an earlier archive whose summary failed, a native-compaction archive, or a 0.3.x commit) | Nothing to fix; the next commit archives once more user turns accumulate. If it follows `archive_NNN failed on the server`, check the server log for the Phase 2 (Working Memory) error |
+| `/viking commit`: `nothing to archive: the server session has no live messages (no_messages)` | An earlier commit already archived every captured message and no new turn has reached the server since: a takeover archive dropped without a summary, a native-compaction archive, or, with takeover off, a commit that just ran | Nothing to fix; the next commit archives the turns captured after it. If it follows `archive_NNN failed on the server`, check the server log for the Phase 2 (Working Memory) error |
 
 ## License
 

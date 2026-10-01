@@ -139,7 +139,6 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
-          OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "7",
           OPENVIKING_MIN_QUERY_LENGTH: "1",
           OPENVIKING_WRITE_PATH_ASYNC: "0",
           OPENVIKING_TIMEOUT_MS: "5000",
@@ -155,7 +154,7 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
     const commitCall = calls.find((call) => call.path.endsWith("/commit"));
     const debugLog = await readFile(debugLogPath, "utf-8").catch(() => "");
     assert.ok(commitCall, `expected threshold commit call; calls=${JSON.stringify(calls)} debug=${debugLog}`);
-    assert.deepEqual(commitCall.body, { keep_recent_count: 7 });
+    assert.deepEqual(commitCall.body, { keep_recent_count: 0 });
     assert.match(debugLog, /"trace_id":"trace-codex-commit"/);
 
     const batchCall = calls.find((call) => call.path.endsWith("/messages/batch"));

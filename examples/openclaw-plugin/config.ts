@@ -73,10 +73,10 @@ export type MemoryOpenVikingConfig = {
   /** Auto-commit retention: legacy message count (default) or the server's turn-budget policy. */
   commitRetentionMode?: "message_count" | "turn_budget";
   /**
-   * WM v2: number of most-recent messages to keep live after an afterTurn
-   * commit so the next turn still has immediate context. Forwarded to the
-   * server as `keep_recent_count`. Default 10. Ignored in turn_budget mode.
-   * The compact path ignores this value and always passes 0.
+   * Number of most-recent messages the plugin keeps verbatim in the assembled
+   * context after an afterTurn commit, so the next turn still has immediate
+   * context. The commit itself archives every message. Default 10; 0 keeps
+   * none. Ignored in turn_budget mode. Compact and reset drop the kept messages.
    */
   commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
@@ -941,15 +941,15 @@ export const memoryOpenVikingConfigSchema = {
     commitRetentionMode: {
       label: "Commit Retention Mode",
       advanced: true,
-      help: "Auto-commit only: message_count (default) keeps recent messages; turn_budget uses the server's turn-aware defaults. Manual commit and compact still archive everything.",
+      help: "Auto-commit only: message_count (default) archives everything and the plugin keeps commitKeepRecentCount recent messages for assembly; turn_budget has the server keep recent turns live. Reset and compact archive everything.",
     },
     commitKeepRecentCount: {
       label: "Commit Keep Recent Count",
       placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
       advanced: true,
       help:
-        "Number of most-recent messages to keep live after an afterTurn commit. " +
-        "Forwarded as keep_recent_count to the server in message_count mode; ignored in turn_budget mode. Compact path always uses 0.",
+        "Recent messages the plugin holds in memory after an afterTurn commit (which archives every message) " +
+        "and places verbatim in the assembled context. 0 disables. Ignored in turn_budget mode. Compact and reset drop them.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

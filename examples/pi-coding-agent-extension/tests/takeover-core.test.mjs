@@ -112,9 +112,6 @@ function makeCore(overrides = {}) {
       calls.overviewCalls = (calls.overviewCalls || 0) + 1;
       return value;
     },
-    // What sync's capture path sends: conversational messages only.
-    captureCount: (slice) => slice.filter((entry) =>
-      entry?.type === "message" && entry.message?.role !== "system").length,
     persistEntry: (type, data) => calls.persisted.push({ type, data }),
     getWatermark: () => watermark,
     droppedCount: () => dropped,
@@ -466,7 +463,6 @@ test("commitAndAdvance advances to an entry id and the next context is trimmed",
   assert.equal(calls.flushed, 1);
   assert.equal(calls.committed, 1);
   assert.equal(calls.lastCommitOpts.queueOnFailure, false);
-  assert.equal(calls.lastCommitOpts.keepRecentCount, 1);
   assert.deepEqual(calls.slept, []);
   // Once for the pending archive, once for the advance.
   assert.equal(calls.persisted.length, 2);
@@ -484,14 +480,13 @@ test("commitAndAdvance advances to an entry id and the next context is trimmed",
   assert.deepEqual(out.slice(1).map((message) => message.content), ["three", "c", "four"]);
 });
 
-test("keep_recent_count counts captured messages after the covered prefix", async () => {
-  const { core, calls } = makeCore({ config: { takeoverKeepRecentTurns: 1 } });
+test("the boundary lands in front of the oldest kept user turn when the branch holds system entries", async () => {
+  const { core } = makeCore({ config: { takeoverKeepRecentTurns: 1 } });
   const branch = branchOf(
     system("base"), user("one"), assistant("one answer"),
     STATE, user("two"), assistant("tool one"), system("tool added"), assistant("tool two"),
   );
   assert.equal(await core.onTurnSynced(120, branch), true);
-  assert.equal(calls.lastCommitOpts.keepRecentCount, 3);
   assert.equal(core.state.coveredThroughEntryId, branch[3].id);
 });
 
@@ -499,7 +494,7 @@ test("keepRecentTurns zero archives every captured message and cuts at the tip",
   const { core, calls } = makeCore({ config: { takeoverKeepRecentTurns: 0 } });
   const branch = branchOf(user("one"), assistant("answer"));
   assert.equal(await core.onTurnSynced(120, branch), true);
-  assert.equal(calls.lastCommitOpts.keepRecentCount, 0);
+  assert.deepEqual(Object.keys(calls.lastCommitOpts).sort(), ["queueOnFailure", "timeoutMs"]);
   assert.equal(core.state.coveredThroughEntryId, branch[1].id);
   assert.equal(core.state.coveredUserTurns, 1);
 
@@ -509,7 +504,7 @@ test("keepRecentTurns zero archives every captured message and cuts at the tip",
 });
 
 test("the boundary is counted on the context pi rebuilt after its own compaction", async () => {
-  const { core, calls } = makeCore({ config: { takeoverKeepRecentTurns: 1 } });
+  const { core } = makeCore({ config: { takeoverKeepRecentTurns: 1 } });
   const head = branchOf(user("one"), assistant("a1"), STATE, user("two"), assistant("a2"));
   const tail = branchOf(
     { type: "compaction", summary: "pi summary", firstKeptEntryId: head[3].id },
@@ -520,7 +515,6 @@ test("the boundary is counted on the context pi rebuilt after its own compaction
   // Pre-compaction turn one is not part of the active context and not counted.
   assert.equal(core.state.coveredUserTurns, 2);
   assert.equal(core.state.coveredThroughEntryId, tail[4].id);
-  assert.equal(calls.lastCommitOpts.keepRecentCount, 1);
 
   const out = core.transformContext(contextOf(branch), branch);
   assert.deepEqual(out.slice(1).map((message) => message.content), ["four"]);
@@ -806,7 +800,7 @@ test("handleBeforeCompact uses pi's keep position, archives all messages, and ho
     branch,
   );
   assert.equal(result.compaction.firstKeptEntryId, "pi-kept");
-  assert.equal(normal.calls.lastCommitOpts.keepRecentCount, 0);
+  assert.deepEqual(Object.keys(normal.calls.lastCommitOpts).sort(), ["queueOnFailure", "timeoutMs"]);
   assert.equal(normal.calls.lastSyncBranch, branch);
 
   const cancelled = makeCore();
@@ -1046,20 +1040,15 @@ test("shutdown persists deduped state once", async () => {
 });
 
 test("a manual commit the server skips says why instead of a bare failure", async () => {
-  // 0.4.22 user report: /viking commit POSTed keep_recent_count=125, the server
-  // answered 200 `skipped: all_within_keep_window`, and pi only showed
-  // "commit failed".
   const { core } = makeCore({
     commitResult: {
       status: "skipped", archived: false, archive_uri: null, task_id: null,
-      reason: "all_within_keep_window", trace_id: "",
+      reason: "no_messages", trace_id: "",
     },
   });
   const branch = branchOf(user("one"), assistant("a"), user("two"), assistant("b"));
   assert.equal(await core.commitAndAdvance(branch), false);
-  assert.match(core.lastFailure, /^nothing new to archive/);
-  assert.match(core.lastFailure, /all_within_keep_window/);
-  assert.match(core.lastFailure, / 2 most recent messages/);
+  assert.equal(core.lastFailure, "nothing to archive: the server session has no live messages (no_messages)");
   assert.equal(core.state.coveredThroughEntryId, "");
 });
 
@@ -1103,6 +1092,5 @@ test("an archive that failed on the server without a summary is named in the rea
 
 test("describeSkip reads the server skip reasons", () => {
   assert.match(describeSkip("no_messages"), /no live messages/);
-  assert.match(describeSkip("all_within_keep_window", 125), /at most the 125 most recent messages/);
   assert.equal(describeSkip("weird"), "the server skipped the archive (weird)");
 });

@@ -160,7 +160,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
   - `memory.session_auto_commit.enabled = false`（`memory_config.py`）；无存储 policy 的会话自动 commit 关闭（`session_service.py`）；idle 扫描器在 `enabled=false` 时根本不创建（`core.py`），构成双重门控。
   - `POST /messages` 的 auto_create 不接受 policy 参数，但配置后会继承 `server.user_config_defaults.auto_commit_policy`；`POST /sessions`（create）与 `PATCH /sessions/{id}/config` 仍是显式的 Session 级控制面。
   - 当前没有插件下发 `auto_commit_policy`；第一方客户端中会下发该字段的是 **ov CLI**（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
-  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
+  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端自己的 commit 阈值（通常为 20000 token）是相互独立的两层配置。
 - **由此**：插件可通过 `server.user_config_defaults.auto_commit_policy` 继承新 Session 的 token/message 阈值；idle timeout 兜底还需开启 `memory.session_auto_commit.enabled=true`。未配置该 fallback 时，客户端仍需自行安排 commit 路径（[§3.3](#_3-3-会话与-commit-生命周期)）。
 - **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
 - **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。
@@ -349,23 +349,23 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 - **写入路径**：JS 系统一通过 `batch-send.mjs` 处理（对应接口 `POST /messages/batch`，每批最多 100 条，与服务端的 `max_length=100` 限制保持一致；若遇 404/405 错误则降级为逐条发送）。增量游标由各家自行实现（cc 按 transcript turn 序号计算，codex 机制相同；cursor 采用 `sha256(index+role+content)`；zcode 基于 rollout 的 `turn_id`；opencode v1 依赖事件流 Map，v2 在 execution 结束时读取 context 并按 message id 推进游标；dsh 基于事件白名单；pi 依据 branch 条目水位；hermes 则按当前轮切片）。
 - **commit 是客户端触发的**（详见 [§2.3](#_2-3-服务端会话与-commit-语义)）：服务端默认不自动 commit。下表所有的"阈值/触发"条件，均指客户端逻辑。
-- **keep_recent_count 差异**（即 commit 后给宿主留多少 live tail）：服务端默认值为 0。各家传参如下：cc/codex 阈值提交传 10；cursor、trae×2、zcode 发空 body `{}`，即传 0（每次均为全量归档）；opencode 传 10；dsh 传 10；pi 在非 takeover 模式传 10，takeover 模式传 3（本地含义是"保留 3 个用户轮"，而服务端按消息条数解释，实际保留更少）；openclaw 在 afterTurn 阈值触发时传 10，在 compact/reset/memory_store 操作时传 0；hermes 恒定传 0。
+- **keep_recent_count 差异**（即 commit 后给宿主留多少 live tail）：服务端默认值为 0。各家传参如下：cc、codex、opencode、dsh、pi 每次 commit 都传 0，因为近期轮次已在它们各自的 transcript 里（takeover 模式下，pi 在模型上下文中自行保留最近 3 个用户轮）；cursor、trae×2、zcode 发空 body `{}`，即传 0（每次均为全量归档）；openclaw 一律传 0，afterTurn 阈值 commit 后由插件在组装上下文时补上最近 10 条消息；hermes 恒定传 0。
 - **写路径 detach**（`async-writer.mjs`，cc/codex/zcode 的 Stop 默认开）：drain stdin → spawn detached worker → approve → write payload → unref（注：spawn 失败时尚未 approve，回落同步恰好只输出一次）。detached worker 自成进程组，不受终端信号波及——这是保证 cc 在关闭链路时具有高可靠性、zcode 在按下 Ctrl+C 时不丢失写入数据的关键机制。附带效果：执行 detach 后，Stop 的 `appended N turn(s)` 提示将不再展示（设置 `OPENVIKING_WRITE_PATH_ASYNC=0` 可恢复该提示）。
 
 ### 3.3.2 常规 commit 触发条件
 
 | harness | 轮内阈值触发 | 显式/边界触发 | 压缩触发 |
 |---|---|---|---|
-| claude-code | Stop：`pending_tokens ≥ 20000`（读服务端值），keep 10 | SessionEnd：无条件触发；SubagentStop：无条件触发（无阈值）；SessionStart：重放 pending | PreCompact：无条件触发（同步执行，不 detach） |
-| codex / trae-cli | Stop：同上，20000 / keep 10 | SessionEnd（Codex ≥ 0.145）：无条件触发，先补齐 Stop 漏掉的轮次再 commit——父 hook 只写 `.ended` 标记并 detach worker（Codex 默认给 1s，`timeout` 上限 3s）；SessionStart(startup\|clear)：兜底扫描，提交带 `.ended` 标记或闲置超过 30min 的 state。trae-cli 若无 `SessionEnd` 则只走扫描 | PreCompact：全量 commit（发空 body `{}`），随后置 `ovSessionId=null` |
+| claude-code | Stop：`pending_tokens ≥ 20000`（读服务端值），keep 0 | SessionEnd：无条件触发；SubagentStop：无条件触发（无阈值）；SessionStart：重放 pending | PreCompact：无条件触发（同步执行，不 detach） |
+| codex / trae-cli | Stop：同上，20000 / keep 0 | SessionEnd（Codex ≥ 0.145）：无条件触发，先补齐 Stop 漏掉的轮次再 commit——父 hook 只写 `.ended` 标记并 detach worker（Codex 默认给 1s，`timeout` 上限 3s）；SessionStart(startup\|clear)：兜底扫描，提交带 `.ended` 标记或闲置超过 30min 的 state。trae-cli 若无 `SessionEnd` 则只走扫描 | PreCompact：全量 commit（发空 body `{}`），随后置 `ovSessionId=null` |
 | cursor | stop：`capturedSinceCommit ≥ 8`（按消息条数计算，≈4 轮问答；纯客户端计数），keep 0 | sessionEnd：已注册该事件（但实践中不触达，见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | preCompact：无条件触发 |
 | trae / trae-cn | 每个有内容的 Stop 都 commit（无阈值），keep 0 | — | 无（上游无 PreCompact 事件） |
 | zcode | 同 trae（每 Stop 都 commit，keep 0；rollout 增量游标保守推进，若有漏掉的轮次，将在同会话的下个 Stop 补齐） | — | 无（上游无 PreCompact 事件） |
-| opencode | v1 `session.idle` / v2 execution 结束：flush 后 `pending_tokens ≥ 20000` 才 commit，keep 10 | `session.deleted` / v1 `session.error`：强制 commit；v1 dispose / v2 cleanup：强制 commit | v1 在 compacting 前与 compacted 后触发；v2 只在 `session.compaction.ended` 后触发 |
-| dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 10 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | 无（不监听 compaction 事件） |
-| pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000` 且 `lastSeenUserTurns > 3` 时，执行 commitAndAdvance（keep 3；overview 15×2s 轮询，拿不到则边界不推进，但 pendingTokens 会清零，重新累计后重试） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
-| pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 10 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
-| openclaw | afterTurn：`pending_tokens ≥ floor(tokenBudget × 0.5)`（ratio 默认 0.5，tokenBudget 缺省 128000，即阈值 ~64000），wait=false，keep 10 | `before_reset`（执行 `/new` `/reset`）：wait=true，keep 0；`memory_store` 工具：wait=true，keep 0 | `compact()`：wait=true，keep 0（Phase2 轮询上限 5 分钟） |
+| opencode | v1 `session.idle` / v2 execution 结束：flush 后 `pending_tokens ≥ 20000` 才 commit，keep 0 | `session.deleted` / v1 `session.error`：强制 commit；v1 dispose / v2 cleanup：强制 commit | v1 在 compacting 前与 compacted 后触发；v2 只在 `session.compaction.ended` 后触发 |
+| dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 0 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | 无（不监听 compaction 事件） |
+| pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000`，且 pi 上下文在当前边界之后有超过 3 个用户轮时，执行 commitAndAdvance（keep 0，由 `context` hook 原样保留最近 3 个用户轮；归档 overview 每轮只读一次、不等待，读到非空才推进边界；服务端已标记完成或失败却没有 overview 的归档会被丢弃，其冻结的 token 压力随之扣除） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
+| pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 0 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
+| openclaw | afterTurn：`pending_tokens ≥ floor(tokenBudget × 0.5)`（ratio 默认 0.5，tokenBudget 缺省 128000，即阈值 ~64000），wait=false，keep 0（插件在内存中保留最近 10 条，组装时补上） | `before_reset`（执行 `/new` `/reset`）：wait=true，keep 0；`memory_store` 工具：wait=true，keep 0 | `compact()`：wait=true，keep 0（Phase2 轮询上限 5 分钟） |
 | hermes | 无阈值 commit——触发面全是会话边界：`on_session_end`（drain 10s，drain 不净则本次不 commit）、`on_session_switch`（涉及 `/new`、`/resume`、`/branch` 或压缩 fork，异步 drain 预算 65s）、gateway 缓存驱逐；`/undo` 与原地压缩不 commit。用幂等集合防二次 commit；keep 0 | atexit 兜底 | fork 型压缩边界 commit；原地压缩不 commit |
 | ov CLI | 无 | `ov session commit`；`ov add-memory` 第三步固定 commit | — |
 | ingest | `pending ≥ 6000` 或 idle 5s，keep 0；backfill 在每个会话结束时执行 `commit_if_needed` | 退出时执行 `_flush_all()` | — |
@@ -446,17 +446,17 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 ### 3.4.3 openclaw ContextEngine
 
-- 实现宿主 `ContextEngine` 接口，`assemble()` 分两个分支：transformContext（只做召回前置注入，5 道 passthrough 守卫）与 main-assemble（`getSessionContext(tokenBudget)` → 用服务端返回替换宿主 live 历史，四层预算切分，3 道 passthrough 保护 + provider 消息 sanitize 管线）。
+- 实现宿主 `ContextEngine` 接口，`assemble()` 分两个分支：transformContext（只做召回前置注入，5 道 passthrough 守卫）与 main-assemble（`getSessionContext(tokenBudget)` → 用服务端返回、加上插件在上次自动 commit 时保留的最近消息替换宿主 live 历史，四层预算切分，3 道 passthrough 保护 + provider 消息 sanitize 管线）。
 - `compact()` = `commit(wait=true, keep 0)`（500ms 轮询，Phase2 上限 5 分钟）→ `latest_archive_overview` 当 summary、`archive_uri` 末段当 `firstKeptEntryId`。`customInstructions`/`compactionTarget` 保留接口，当前不参与压缩产物。
 - `ingest()/ingestBatch()` 是刻意 no-op，写入全走 `afterTurn`。
-- 有归档时额外注入 20 行 "Session Context Guide" systemPromptAddition，指示模型在说"没有信息"之前先重读摘要，并用 `ov_archive_search` 尝试至少 2 组关键词。
+- 有归档时额外注入 "Session Context Guide" systemPromptAddition，指示模型在说"没有信息"之前先重读摘要，并用 `ov_archive_search` 尝试至少 2 组关键词。
 
 ### 3.4.4 pi 与 openclaw 接管方式对照
 
 | 维度 | pi takeover | openclaw ContextEngine |
 |---|---|---|
 | 宿主契约 | 一个 context 钩子的 messages 改写 | 注册 ContextEngine，`ownsCompaction: true` |
-| 历史真相源 | 仍是 pi 本地 branch | OV 服务端 getSessionContext |
+| 历史真相源 | 仍是 pi 本地 branch | OV 服务端 getSessionContext，加上插件在内存中保留的最近消息 |
 | 触发 | 客户端 token 阈值 30000 + 保留 3 轮 | 宿主调用 assemble/compact |
 | 压缩产物 | 一条合成 user 消息（3000 token 截断） | 重建后的整个 messages 数组 + compaction summary |
 | 失败姿态 | fail-open 回完整历史 | passthrough 回宿主 live 消息 |
@@ -530,7 +530,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 - **集成文档**：[Claude Code 记忆插件](./02-claude-code.md)
 - **形态**：CC 插件（marketplace），采用四合一架构：9 hook + MCP 代理（16 工具透传）+ slash command + statusline + 4 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor`）。版本 0.6.1。
 - **能力亮点**：hook 覆盖最全的 harness——SessionStart(120s) / UserPromptSubmit(60s) / PostToolUse:Read(5s，默认关的 skill-experience) / PreToolUse:Read\|Glob\|Grep\|Edit\|Write\|Bash(5s，uri-guard：文件工具的路径是 `viking://` URI 时拒绝，针对 skill URI 的 Write/Edit 会被引导到 `add_skill`；Bash 命令带 `viking://` URI 时附加提示) / Stop(45s) / PreCompact(30s) / SessionEnd(30s) / SubagentStart(10s) / SubagentStop(45s)；默认启用召回再摘要（本地 `claude -p`，本地不可用时自动回落服务端 rewrite，[§3.2.5](#_3-2-5-召回再摘要)）；支持 SubagentStart/Stop 的完整子会话隔离（[§3.3.5](#_3-3-5-subagent-会话对照)）；statusline + slash + uri-guard；关闭链路除 kill -9 外全部 commit（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
-- **行为要点**：session id 为 `cc-<CC session_id 原文>`，subagent 为 `…__subagent-<agent_id>`；Stop 阈值 commit 20000/keep 10，PreCompact 同步 commit；自动召回排除 resources（[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；增量游标存于 `/tmp`（被系统清理后，同一会话会整段重推）。
+- **行为要点**：session id 为 `cc-<CC session_id 原文>`，subagent 为 `…__subagent-<agent_id>`；Stop 阈值 commit 20000/keep 0，PreCompact 同步 commit；自动召回排除 resources（[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；增量游标存于 `/tmp`（被系统清理后，同一会话会整段重推）。
 - **配置**：env + ovcli.conf `plugin.claude_code` + ov.conf `claude_code`（[§3.1.4](#_3-1-4-配置体系分层)），约 70 个旋钮；压缩器命令与模型固定为 `claude`/`sonnet`/`low`/30s。
 - **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜压缩 [§3.4](#_3-4-压缩-compaction-接管) ｜降级 [§3.6](#_3-6-降级与容错) ｜UX [§3.7](#_3-7-附加-ux-对照)。
 
@@ -609,7 +609,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 - **集成文档**：[pi Coding Agent 扩展](./11-pi.md)
 - **形态**：pi 原生扩展（目录装载，jiti 直译 TS）。扩展使用 `@modelcontextprotocol/client`，把服务端 `tools/list` 的每个描述符注册成名为 `openviking_<tool>` 的 pi 工具，当前 16 个（[§2.1](#_2-1-服务端-mcp-工具面)）。扩展里没有任何工具目录，服务端增删工具，pi 下一次会话即跟上，不需要发插件版本。召回、会话同步、profile 注入与 takeover 仍走 REST。9 事件 + `/viking` 命令；tool_call 拦截路径是 `viking://` URI 的 read/grep/find/ls/write/edit，bash 命令带 `viking://` URI 时，tool_result 在结果末尾追加提示。版本 0.4.1。
 - **能力亮点**：takeover 压缩接管（默认开，[§3.4.2](#_3-4-2-pi-takeover)）；两段式召回（before_agent_start 排队 + context 事件同步检索，当前轮 prompt 拿当前轮记忆）；statusline；`session_shutdown` 在所有关闭方式下都触发且被 await。
-- **行为要点**：默认 takeover 下退出不 commit（handler 持久化本地状态，归档靠下次续跑攒满阈值或 `/viking commit`，[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；takeover 阈值 30000 token + 保留 3 轮（keep 3，服务端按消息条数解释）；非 takeover 阈值 20000/keep 10、退出无条件 commit；工具注册需 health、ensureSession 与 `/mcp` 握手三项前置（[§1.1](#_1-1-主动工具面-agentic-调用能力)），ROOT 角色的 API key 访问 `/mcp` 会被 403 拒绝，凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时本次会话就没有工具——0.4.0 之前是 REST 工具照常注册、每次调用静默返回 "No results found."；`openviking_remember` 走 MCP 面，即自建一次性会话并立即提交，不再并入 pi 的会话（[§2.1](#_2-1-服务端-mcp-工具面)）；`openviking_add_resource` 可直接摄取远端 URL，本地路径则由服务端返回一条上传指引，需要模型用 `bash` 把文件 POST 上去，与其他 MCP harness 一致；`openviking_read` 只返回全文，目录 URI 会得到 `Cannot render …: URI points to a directory`，旧的 `level="abstract"/"overview"` 两档在 MCP 面没有对应工具，替代路径是 `openviking_search(mode="context", detail="overview")` 或 `openviking_tree(include_abstract=true)`，takeover 的归档 overview 仍由扩展自己经 REST 注入；单次工具调用受共享的 `timeoutMs` 约束（15000ms，`OPENVIKING_TIMEOUT_MS` 可调），`write`/`edit` 带 `wait=true` 或 `add_resource` 同步 ingest 有可能超过，而超时或 ESC 只让本地调用失败，已经发出的请求会跑完，写入仍可能已经生效；从 0.3.x 升级时全部工具改名且没有别名期，`--tools` / `--exclude-tools` 白名单里写死的 `viking_*` 必须手工替换，否则工具会静默消失；非 takeover 模式下 `pi -c` 续跑会重新上报整条 branch。
+- **行为要点**：默认 takeover 下退出不 commit（handler 持久化本地状态，归档靠下次续跑攒满阈值或 `/viking commit`，[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；takeover 阈值 30000 token，每次 commit 全量归档（keep 0），由 `context` hook 原样保留最近 3 个用户轮；非 takeover 阈值 20000/keep 0、退出无条件 commit；工具注册需 health、ensureSession 与 `/mcp` 握手三项前置（[§1.1](#_1-1-主动工具面-agentic-调用能力)），ROOT 角色的 API key 访问 `/mcp` 会被 403 拒绝，凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时本次会话就没有工具——0.4.0 之前是 REST 工具照常注册、每次调用静默返回 "No results found."；`openviking_remember` 走 MCP 面，即自建一次性会话并立即提交，不再并入 pi 的会话（[§2.1](#_2-1-服务端-mcp-工具面)）；`openviking_add_resource` 可直接摄取远端 URL，本地路径则由服务端返回一条上传指引，需要模型用 `bash` 把文件 POST 上去，与其他 MCP harness 一致；`openviking_read` 只返回全文，目录 URI 会得到 `Cannot render …: URI points to a directory`，旧的 `level="abstract"/"overview"` 两档在 MCP 面没有对应工具，替代路径是 `openviking_search(mode="context", detail="overview")` 或 `openviking_tree(include_abstract=true)`，takeover 的归档 overview 仍由扩展自己经 REST 注入；单次工具调用受共享的 `timeoutMs` 约束（15000ms，`OPENVIKING_TIMEOUT_MS` 可调），`write`/`edit` 带 `wait=true` 或 `add_resource` 同步 ingest 有可能超过，而超时或 ESC 只让本地调用失败，已经发出的请求会跑完，写入仍可能已经生效；从 0.3.x 升级时全部工具改名且没有别名期，`--tools` / `--exclude-tools` 白名单里写死的 `viking_*` 必须手工替换，否则工具会静默消失；非 takeover 模式下 `pi -c` 续跑会重新上报整条 branch。
 - **配置**：env + ovcli.conf `plugin.pi` + workspace 文件（凭据统一走凭据链，[§3.1.3](#_3-1-3-凭据体系)）；bypass 走共享 `isBypassed` 的 glob 匹配，键名 `bypassSessionPatterns`（旧名 `bypassPatterns` 仍可读）；共享键 `mcpEnabled: false` 现在对 pi 也生效：不发起桥接、不注册工具，`/viking` 标注成配置而非故障。
 - **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜takeover [§3.4.2](#_3-4-2-pi-takeover) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)。
 

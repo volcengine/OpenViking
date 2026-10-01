@@ -207,13 +207,13 @@
     "commitRetentionMode": {
       "label": "Commit Retention Mode",
       "advanced": true,
-      "help": "Auto-commit only: message_count (default) keeps recent messages; turn_budget uses the server's turn-aware defaults. Manual commit and compact still archive everything."
+      "help": "Auto-commit only: message_count (default) archives everything and the plugin keeps commitKeepRecentCount recent messages for assembly; turn_budget has the server keep recent turns live. Reset and compact archive everything."
     },
     "commitKeepRecentCount": {
       "label": "Commit Keep Recent Count",
       "placeholder": "10",
       "advanced": true,
-      "help": "Number of most-recent messages kept live after an afterTurn commit in message_count mode; ignored in turn_budget mode. Compact path always uses 0."
+      "help": "Recent messages the plugin holds in memory after an afterTurn commit (which archives every message) and places verbatim in the assembled context. 0 disables. Ignored in turn_budget mode. Compact and reset drop them."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",

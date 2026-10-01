@@ -64,8 +64,6 @@ async function openSession(t, config = {}) {
         archive_uri: `viking://user/u/sessions/pi-s/history/archive_${String(++archives).padStart(3, "0")}`,
       }),
       readArchiveOverview: async () => "OV SUMMARY",
-      captureCount: (slice) => slice.filter((entry) =>
-        entry?.type === "message" && entry.message?.role !== "system").length,
       // Exactly how takeover.ts persists: a custom entry at the session leaf.
       persistEntry: (type, data) => sm.appendCustomEntry(type, data),
       getWatermark: () => sm.getEntries().length,

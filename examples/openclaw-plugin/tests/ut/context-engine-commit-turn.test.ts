@@ -11,6 +11,7 @@ function makeEngine(hostVersion: string | undefined, overrides = {}) {
   const client = {
     addSessionMessage: vi.fn().mockResolvedValue(undefined),
     getSession: vi.fn().mockResolvedValue({ pending_tokens: 100_000 }),
+    getSessionContext: vi.fn().mockResolvedValue({ latest_archive_overview: "", pre_archive_abstracts: [], messages: [] }),
     commitSession: vi.fn().mockResolvedValue({ status: "accepted" }),
   };
   const getClient = vi.fn().mockResolvedValue(client);

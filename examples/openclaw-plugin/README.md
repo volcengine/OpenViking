@@ -191,12 +191,12 @@ During preflight, `assemble()` is not just replaying old chat history. It reads 
 
 - `latest_archive_overview` becomes `[Session History Summary]`
 - `pre_archive_abstracts` becomes `[Archive Index]`
-- active session messages stay in message-block form
+- active session messages stay in message-block form, preceded by the recent messages the plugin kept from the last auto-commit
 - assistant tool parts become `toolCall` (input compatible: `toolUse`/`input` is normalized to `toolCall`/`arguments`)
 - tool output becomes separate `toolResult`
 - the final message list goes through a tool-use/result pairing repair pass
 
-That means OpenClaw sees "compressed history summary + archive index + active messages", not an ever-growing raw transcript.
+That means OpenClaw sees "compressed history summary + archive index + kept recent messages + active messages", not an ever-growing raw transcript.
 
 ### What `afterTurn()` does
 
@@ -227,13 +227,13 @@ After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThre
 
 Memory extraction on this automatic path is commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
 
-Auto-commit keeps the most recent 10 messages by default (`commitKeepRecentCount`). This count-based window can start mid-turn. With a server that supports turn-aware retention, set `"commitRetentionMode": "turn_budget"` in the plugin config to opt in:
+Auto-commit archives every message. The plugin keeps the most recent 10 messages (`commitKeepRecentCount`) in memory and places them verbatim after the archive summary when it assembles the next turns' context. This count-based window can start mid-turn. With a server that supports turn-aware retention, set `"commitRetentionMode": "turn_budget"` in the plugin config to have the server keep recent turns live instead:
 
 - `commitKeepRecentCount` is ignored. The server defaults apply: up to 3 recent user turns, a 12,000-token retention budget, and at least the final assistant/tool step.
 - For an oversized newest turn, the server retains its user question and recent steps and checkpoints the archived prefix. The mandatory tail can exceed the retention budget.
 - `pending_tokens` counts only messages that will leave the live window, not a user question shared with the archive.
 
-Manual commit and `/compact` still archive everything. Leave the option unset (or use `"message_count"`) to preserve existing behavior.
+`/new`, `/reset`, and `/compact` archive everything in both modes and drop the messages the plugin kept. `"message_count"` is the default.
 
 ### Explicit long-term memory writes
 

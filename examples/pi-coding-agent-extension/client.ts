@@ -119,14 +119,10 @@ export class OVClient {
   }
 
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
-  async commitSessionResponse(
-    sessionId: string,
-    keepRecentCount = this.cfg.commitKeepRecentCount,
-    timeoutMs = 30000,
-  ): Promise<OVCommitResponse> {
+  async commitSessionResponse(sessionId: string, timeoutMs = 30000): Promise<OVCommitResponse> {
     const res = await this.fetchJSON<OVCommitResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount }) },
+      { method: "POST", body: JSON.stringify({ keep_recent_count: 0 }) },
       { timeoutMs },
     );
     if (res.ok && res.result && !res.result.trace_id && res.traceId) {

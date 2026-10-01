@@ -84,7 +84,7 @@ The OV session id is `pi-<pi session id>`, derived locally by the shared `derive
 
 **Backlog drain.** `flushForTakeover` is the barrier takeover waits on, and it needs the queue empty for this session. Startup restores takeover state before replay, then routes the current session through the tracked Pi drainer rather than the generic replay path. Sync drains queued `addMessage` entries through the batch endpoint, `BATCH_LIMIT` per request, and also treats active `.processing` files as undelivered. The drain is bounded by wall time (`OPENVIKING_PENDING_DRAIN_BUDGET_MS`, 10s by default, narrowed further to whatever takeover's handler budget leaves) and optionally by batch count, so a huge backlog cannot block `turn_end` indefinitely; the remainder drains on later turns. Once this session's queue is empty, startup hands other sessions' entries to the generic replay; while this session still has a backlog they wait for a later start, because the generic path drops rejected entries without recording whose gap they are. Other sessions never affect this session's barrier. The same generic replay runs in every OpenViking harness plugin on the machine over the same queue, so a gap is guaranteed to be recorded only for losses this session's own drainer sees.
 
-**Commit.** Outside takeover, sync asks the server for `pending_tokens` after each accepted turn and commits when it crosses `commitTokenThreshold` — server-side accounting, not a local estimate. A failed commit is queued for replay unless the caller passes `queueOnFailure: false`, which takeover always does, because a commit that lands later cannot justify a boundary that moved now.
+**Commit.** Every commit archives all captured messages (`keep_recent_count: 0`); pi keeps its recent turns in its own transcript, so the server holds back no live tail. The archive, and therefore its summary, also covers the turns the context keeps verbatim, so the summary may overlap the retained tail. Outside takeover, sync asks the server for `pending_tokens` after each accepted turn and commits when it crosses `commitTokenThreshold` — server-side accounting, not a local estimate. A failed commit is queued for replay unless the caller passes `queueOnFailure: false`, which takeover always does, because a commit that lands later cannot justify a boundary that moved now.
 
 ### takeover.ts
 
@@ -128,9 +128,9 @@ Every takeover step runs inside a pi event handler, and pi hosts cap those at 30
 
 1. `turn_end` captures new branch entries into the OpenViking session, falling back to the disk pending queue when the server is unreachable.
 2. When `pendingTokens` reaches `takeoverTokenThreshold`, and there are more user turns than `takeoverKeepRecentTurns`, takeover tries to advance.
-3. On one branch snapshot, takeover freezes the candidate boundary entry, token pressure and the exact number of capture payloads the branch holds after the boundary. A candidate no later than the current boundary is not worth an archive.
+3. On one branch snapshot, takeover freezes the candidate boundary entry and the token pressure. A candidate no later than the current boundary is not worth an archive.
 4. It syncs the latest branch and drains this session's queue. A transient queued failure may proceed after the drain succeeds; a permanent rejection, enqueue failure or retry exhaustion persists `captureGap` and blocks takeover for this session.
-5. The commit runs with `queueOnFailure: false` and the retained payload count as `keep_recent_count`. A skipped commit, `archived: false` or missing `archive_uri` cannot advance the boundary.
+5. The commit runs with `queueOnFailure: false`. A skipped commit, `archived: false` or missing `archive_uri` cannot advance the boundary.
 6. The extension reads `<archive_uri>/.overview.md` directly, once. It never substitutes an older session-context overview. A summary that is not there yet — phase 2 usually needs longer than a handler may wait — persists the pending archive and frozen boundary; every later `turn_end` and the next `before_agent_start` read that archive once, without committing again. When the archive carries the server's terminal marker — `.done`, written last once phase 2 completed (with Working Memory disabled it completes without a summary), or `.failed.json` — and a last read still finds no summary, the pending archive is dropped and its frozen token pressure spent, so the next archive waits for fresh pressure. The markers are the server's own archive state and, unlike task records, do not expire. A pending archive whose boundary left the active context is dropped without a read.
 7. Once the overview is non-empty, takeover confirms the frozen boundary entry is still in the active context. Only then does it advance; token pressure accumulated while waiting remains for the next archive.
 8. The `context` hook then replaces the covered *conversation* with one synthetic user message beginning `[OpenViking Session Context]`, keeps every covered `system` message in front of it in original order, keeps the recent tail verbatim, and recall is injected into the newest kept user turn as usual. With `takeoverKeepRecentTurns` 0 the boundary is the tip at commit time and applies from the next user turn; conversation the run added after that commit is never trimmed, because no archive covers it.
@@ -171,12 +171,7 @@ If any step fails the handler returns nothing and pi's default compaction runs. 
 | Boundary not in the active context (other branch, pi compaction) | Send the full context; keep the boundary for a return to that branch |
 | Compaction takeover fails | Returns nothing; pi's default compaction proceeds |
 
-Successful ordinary and compaction summaries share a recovery footer when the
-required MCP tools are active. It names the exact `archive_uri`, explains that
-the source contains captured historical messages rather than an unfiltered Pi
-transcript, and directs the model to `openviking_list` plus paginated
-`openviking_read`. The footer is appended after overview truncation so the
-summary budget cannot remove the recovery entry point.
+Successful ordinary and compaction summaries share a recovery footer when the required MCP tools are active. It names the `archive_uri` the overview came from and its history directory, explains that the archives there hold the captured history in order, as captured messages rather than an unfiltered Pi transcript, and that the named archive and any newer one also hold recent turns the model still sees verbatim. It then directs the model to `openviking_list` plus paginated `openviking_read`. The footer is appended after overview truncation so the summary budget cannot remove the recovery entry point.
 
 #### Live gate
 

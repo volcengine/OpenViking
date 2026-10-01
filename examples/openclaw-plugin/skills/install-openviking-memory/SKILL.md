@@ -624,7 +624,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
 | `recallTokenBudget` | deprecated | Compatibility alias for `recallMaxInjectedChars`. |
 | `commitTokenThresholdRatio` | `0.5` | Async-commit threshold as a fraction (0-1) of the model context window (e.g. 0.5 = 50%); `0` commits every turn. |
-| `commitKeepRecentCount` | `10` | Recent messages kept live after afterTurn commit. Compact always uses `0`. |
+| `commitKeepRecentCount` | `10` | Recent messages the plugin keeps verbatim in the assembled context after an afterTurn commit, which archives every message. Compact and reset drop them. |
 | `bypassSessionPatterns` | — | Glob patterns for sessions skipped by capture. |
 | `ingestReplyAssist` | (plugin default) | Reply-assist ingestion toggle. |
 | `emitStandardDiagnostics` | `false` | Emit structured `openviking: diag {...}` lines. |

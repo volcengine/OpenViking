@@ -317,13 +317,7 @@ function archiveName(archiveUri) {
 }
 
 /** A user-facing reading of a `skipped` commit. */
-export function describeSkip(reason, keepRecentCount = 0) {
-  if (reason === "all_within_keep_window") {
-    return (
-      `nothing new to archive: the server session holds at most the ${keepRecentCount} most recent ` +
-      "messages this commit keeps, and anything older was already archived (all_within_keep_window)"
-    );
-  }
+export function describeSkip(reason) {
   if (reason === "no_messages") return "nothing to archive: the server session has no live messages (no_messages)";
   return `the server skipped the archive (${reason || "unknown"})`;
 }
@@ -343,10 +337,6 @@ export class TakeoverCore {
       // An archive's terminal state from its server markers: "completed",
       // "failed", "pending", or null when it cannot be asked.
       archiveState: io.archiveState || (async () => null),
-      // How many messages the capture path would actually send for a slice of
-      // the branch — the server keep_recent_count is a message count, not a
-      // user-turn count, and it must exclude system/custom/filtered entries.
-      captureCount: io.captureCount || (() => 0),
       persistEntry: io.persistEntry || (() => {}),
       getWatermark: io.getWatermark || (() => 0),
       // Messages OpenViking will never receive (4xx / retries exhausted): a
@@ -641,16 +631,15 @@ export class TakeoverCore {
       return this.fail("some messages never reached OpenViking (capture gap); takeover is off for this session");
     }
 
-    // One snapshot is frozen, synced and counted, so the archive and
-    // keep_recent_count describe the same entries even if pi appends more
-    // while this commit is in flight.
+    // One snapshot is frozen and synced, so the archive covers the frozen
+    // boundary even if pi appends more while this commit is in flight.
     const snapshot = currentBranch(branch);
     const frozen = this.freezeBoundary(snapshot);
     if (!frozen) {
       this.log("takeover: no advanceable boundary; commit skipped");
       return this.fail(
         `nothing new to archive: the context needs more than ${this.config.takeoverKeepRecentTurns} ` +
-          "user turns beyond the last archive",
+          "user turns beyond the current boundary",
       );
     }
 
@@ -668,11 +657,7 @@ export class TakeoverCore {
       this.log("takeover: handler budget spent before commit; commit postponed");
       return this.fail("ran out of time delivering messages; retry");
     }
-    const committed = await this.io.commit({
-      queueOnFailure: false,
-      keepRecentCount: frozen.keepRecentCount,
-      timeoutMs: left - READ_RESERVE_MS,
-    });
+    const committed = await this.io.commit({ queueOnFailure: false, timeoutMs: left - READ_RESERVE_MS });
     const outcome = commitOutcome(committed);
     if (!outcome.accepted) {
       // No archive was written: hold the boundary, keep the token pressure so
@@ -685,7 +670,7 @@ export class TakeoverCore {
       if (outcome.reason.startsWith("skipped:")) {
         const reason = outcome.reason.slice(8);
         this.log(`takeover: archive skipped (${reason}); boundary held`);
-        return this.fail(describeSkip(reason, frozen.keepRecentCount));
+        return this.fail(describeSkip(reason));
       }
       this.log(`takeover: commit returned no usable archive (${outcome.reason}); boundary held`);
       return this.fail(`the server returned no archive (${outcome.reason})`);
@@ -853,12 +838,11 @@ export class TakeoverCore {
   /**
    * Compute the candidate boundary on pi's context projection of the branch:
    * keep the last `takeoverKeepRecentTurns` user turns, archive the rest.
-   * Returns the entry the covered prefix ends at, the exact keep_recent_count
-   * and the token snapshot, or null when there is nothing new to archive.
+   * Returns the entry the covered prefix ends at and the token snapshot, or
+   * null when there is nothing new to archive.
    */
   freezeBoundary(branch) {
-    const raw = currentBranch(branch);
-    const entries = projectContextEntries(raw);
+    const entries = projectContextEntries(currentBranch(branch));
     const users = [];
     entries.forEach((entry, i) => {
       if (isUserEntry(entry)) users.push(i);
@@ -879,14 +863,9 @@ export class TakeoverCore {
       return null;
     }
 
-    // keep_recent_count is a server message count: the capture payloads the
-    // branch holds after the covered prefix, in the order sync sent them —
-    // system, custom and filtered entries excluded.
-    const rawThrough = raw.findIndex((entry) => entry?.id === id);
     return {
       coveredThroughEntryId: id,
       coveredUserTurns: users.length - keep,
-      keepRecentCount: Math.max(0, Math.floor(Number(this.io.captureCount(raw.slice(rawThrough + 1))) || 0)),
       frozenTokens: this.pendingTokens,
     };
   }
@@ -926,8 +905,8 @@ export class TakeoverCore {
     this.committing = true;
     try {
       // Sync the latest branch first; native compaction archives all captured
-      // history (keepRecentCount 0) and hands pi its own firstKeptEntryId, so
-      // the summary and the retained tail may overlap.
+      // history and hands pi its own firstKeptEntryId, so the summary and the
+      // retained tail may overlap.
       if (!(await this.confirmDelivery(currentBranch(branch), until))) return undefined;
       if (preparation.signal?.aborted) return undefined;
 
@@ -936,9 +915,7 @@ export class TakeoverCore {
         this.log("takeover: handler budget spent before native compaction commit; using pi compaction");
         return undefined;
       }
-      const committed = await this.io.commit({
-        queueOnFailure: false, keepRecentCount: 0, timeoutMs: left - READ_RESERVE_MS,
-      });
+      const committed = await this.io.commit({ queueOnFailure: false, timeoutMs: left - READ_RESERVE_MS });
       const outcome = commitOutcome(committed);
       if (!outcome.accepted) {
         if (outcome.reason === "no_result") {
@@ -1028,7 +1005,9 @@ export class TakeoverCore {
     if (!archive || !history) return "";
     return (
       `\n\nArchived capture: ${archive}\n` +
-      `This contains captured historical messages, not the unfiltered Pi transcript. ` +
+      `The archives under ${history} hold the captured historical messages in order, not the ` +
+      `unfiltered Pi transcript. This is the archive the summary above came from; it and any newer ` +
+      `archive also contain recent turns that are still shown verbatim. ` +
       `Semantic search does not retrieve archive source verbatim. Use openviking_list on ${history} ` +
       `to locate archives, then openviking_read with uris=["${archive}/messages.jsonl"], ` +
       `offset and limit to read it in chunks.` +

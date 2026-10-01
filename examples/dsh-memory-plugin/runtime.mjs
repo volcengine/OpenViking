@@ -201,9 +201,7 @@ export class OpenVikingRuntime {
         error: response.ok ? undefined : response.error?.message || response.error?.code,
       });
       if (isRetryableFailure(response)) {
-        await this.enqueueFinalCommit(state, {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        });
+        await this.enqueueFinalCommit(state, { keep_recent_count: 0 });
       }
     });
   }
@@ -215,9 +213,7 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
-        const commitPayload = {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        };
+        const commitPayload = { keep_recent_count: 0 };
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;

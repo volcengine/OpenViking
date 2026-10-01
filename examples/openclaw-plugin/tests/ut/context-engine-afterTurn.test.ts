@@ -298,8 +298,8 @@ describe("context-engine afterTurn()", () => {
   });
 
   it.each([
-    { cfgOverrides: {}, expectedBody: { keep_recent_count: 10 } },
-    { cfgOverrides: { commitRetentionMode: "message_count", commitKeepRecentCount: 7 }, expectedBody: { keep_recent_count: 7 } },
+    { cfgOverrides: {}, expectedBody: {} },
+    { cfgOverrides: { commitRetentionMode: "message_count", commitKeepRecentCount: 7 }, expectedBody: {} },
     { cfgOverrides: { commitKeepRecentCount: 0 }, expectedBody: {} },
     { cfgOverrides: { commitRetentionMode: "turn_budget" }, expectedBody: { retention_mode: "turn_budget" } },
   ])("commits with $expectedBody when pendingTokens >= threshold", async ({ cfgOverrides, expectedBody }) => {

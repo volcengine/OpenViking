@@ -84,7 +84,7 @@ OpenClaw 会在 context engine 上调用 `assemble`。当前实现把 assemble �
 
 | 调用形态 | 判断方式 | 插件行为 |
 | --- | --- | --- |
-| 主 assemble / preflight | 参数带 `prompt`、`availableTools` 或 `citationsMode` | 从 OpenViking 获取 session context，回放 archive summary + active messages |
+| 主 assemble / preflight | 参数带 `prompt`、`availableTools` 或 `citationsMode` | 从 OpenViking 获取 session context，回放 archive summary + 插件保留的最近消息 + active messages |
 | transformContext assemble | 不带上述字段，通常最后一条已经是当前 user | 执行 auto recall，把长期记忆块 prepend 到最新 user message |
 
 判断逻辑在 `context-engine.ts:1097`。
@@ -93,11 +93,12 @@ OpenClaw 会在 context engine 上调用 `assemble`。当前实现把 assemble �
 
 1. 解析 session 身份，计算 token budget，记录诊断日志。
 2. 调用 `GET /api/v1/sessions/{sessionId}/context?token_budget=...`：`context-engine.ts:1193`、`client.ts:873`。
-3. 如果 OpenViking 没有可用 archive/session 数据，直接 passthrough，不影响主链路。
-4. 将 `latest_archive_overview` 转成 `[Session History Summary]`。
-5. 将 OpenViking parts 消息转换为 OpenClaw `AgentMessage`，包括 tool part → `toolCall` + `toolResult`。
-6. 修复 transcript：合并连续 user/assistant、修复 toolCall/toolResult 配对，必要时插入占位 user 以满足 provider 交替约束。
-7. 返回组装后的 messages 和可选 `systemPromptAddition`。
+3. 把插件在上次自动 commit 时保留的最近消息接在 OpenViking 返回的消息前面，并在第一条服务端也返回的消息处截断，避免重复。
+4. 如果 OpenViking 没有可用 archive/session 数据，直接 passthrough，不影响主链路。
+5. 将 `latest_archive_overview` 转成 `[Session History Summary]`。
+6. 将 OpenViking parts 消息转换为 OpenClaw `AgentMessage`，包括 tool part → `toolCall` + `toolResult`。
+7. 修复 transcript：合并连续 user/assistant、修复 toolCall/toolResult 配对，必要时插入占位 user 以满足 provider 交替约束。
+8. 返回组装后的 messages 和可选 `systemPromptAddition`。
 
 transformContext auto recall 流程：
 
@@ -124,8 +125,9 @@ transformContext auto recall 流程：
 5. 逐条调用 `POST /api/v1/sessions/{sessionId}/messages`：`context-engine.ts:1378`、`client.ts:703`。
 6. 调 `GET /api/v1/sessions/{sessionId}` 读取 `pending_tokens`：`context-engine.ts:1389`、`client.ts:770`。
 7. 若 `pending_tokens < tokenBudget × commitTokenThresholdRatio`，本轮结束。
-8. 否则调用 `commitSession(wait=false, keepRecentCount=cfg.commitKeepRecentCount)`；服务端 Phase 2 记忆抽取异步继续执行：`context-engine.ts:1403`。
-9. 开启 `logFindRequests` 时，插件轮询 task 结果并打印 Phase 2 抽取状态：`context-engine.ts:1424`。
+8. 否则在 `message_count` 模式下（且 `commitKeepRecentCount > 0`）先调 `GET /api/v1/sessions/{sessionId}/context`，与上次保留的消息合并后取最近 `commitKeepRecentCount` 条；这次读取失败只记日志，不影响 commit。
+9. 调用 `commitSession(wait=false, keepRecentCount=0)` 归档全部消息，服务端 Phase 2 记忆抽取异步继续执行。上次保留的消息在每次自动 commit 前清空，只有 commit 产生 archive 且第 8 步读取成功时，才换成第 8 步取到的消息：`services/context-lifecycle-service.ts`。`turn_budget` 模式跳过第 8 步，改传 `retention_mode=turn_budget`，由服务端保留最近几轮。
+10. 开启 `logFindRequests` 时，插件轮询 task 结果并打印 Phase 2 抽取状态：`context-engine.ts:1424`。
 
 ### 4.5 `compact`：主动压缩边界
 
@@ -136,13 +138,14 @@ transformContext auto recall 流程：
 1. 解析 OpenViking session id。
 2. 调用 `commitSession(wait=true, keepRecentCount=0)`，要求服务端归档所有当前消息：`context-engine.ts:1500`。
 3. 如果 Phase 2 failed/timeout，返回失败原因。
-4. 如果没有生成 archive，返回 `commit_no_archive`。
-5. 如果归档成功，再回读 `getSessionContext`，获取最新 `latest_archive_overview` 作为 summary：`context-engine.ts:1605`。
+4. 如果没有生成 archive，且插件也没有保留的最近消息，返回 `commit_no_archive`。上次自动 commit 已归档全部消息时，这次 commit 没有可归档的内容；只要插件保留着最近消息，压缩仍然成功：丢弃这些消息，并返回当前 archive overview 作为 summary。
+5. 否则回读 `getSessionContext`，获取最新 `latest_archive_overview` 作为 summary：`context-engine.ts:1605`。
 6. 返回 tokensBefore/tokensAfter、latest archive id 和 summary。
+7. 无论结果如何，最后丢弃插件保留的最近消息。
 
 ### 4.6 `before_reset`：重置前保护性提交
 
-插件监听 `before_reset`，在 reset 前尽量 commit 当前 OpenViking session，避免对话被重置时未归档内容丢失：`index.ts:1919`。
+插件监听 `before_reset`，在 reset 前尽量 commit 当前 OpenViking session，避免对话被重置时未归档内容丢失，并丢弃插件保留的最近消息：`index.ts:1919`。
 
 ---
 
@@ -170,10 +173,20 @@ transformContext auto recall 流程：
 
 插件把 OpenClaw turn 持续写入 OpenViking session，由服务端维护 `pending_tokens` 与 archive。超过阈值时：
 
-- `afterTurn` 路径：`wait=false`，异步 Phase 2，默认保留最近 10 条消息。
-- `compact` 路径：`wait=true`，同步等待 Phase 2，`keepRecentCount=0`，形成明确压缩边界。
+- `afterTurn` 路径：`wait=false`，异步 Phase 2，归档全部消息；插件在内存中保留最近 10 条，组装上下文时原样放在归档摘要之后。
+- `compact` 路径：`wait=true`，同步等待 Phase 2，`keepRecentCount=0`，形成明确压缩边界，并丢弃插件保留的消息。
 
 `commitKeepRecentCount` 默认 10，`commitTokenThresholdRatio` 默认 0.5（模型上下文窗口的 50%）：`config.ts`。
+
+插件保留的最近消息有以下限制：
+
+- 只存在于插件进程内存中，最多保存 1024 个会话。进程重启后、被淘汰后，或由另一个进程（例如单独的 CLI 运行）组装上下文时，没有这些消息；archive 完成后，上下文只剩归档摘要和 commit 之后的新消息。
+- 服务端自己触发的 commit，以及 `memory_store` 指定当前会话 ID 时的 commit，都不会更新保留的消息，此后组装的上下文可能没有或带着过期的保留消息。
+- 保留的消息同时也在归档摘要里，两者内容会有重叠。
+- 服务端的 `pending_tokens` 计入全部活跃消息，包括 commit 后插件会保留的最近几条，所以自动 commit 会稍早触发。
+- archive 完成后，服务端为自动召回做查询扩展时只能看到摘要和新消息，看不到保留的原文。
+- `afterTurn` 与 `compact` 并发时，`afterTurn` 可能在 `compact` 丢弃之后又写回压缩前的保留消息。
+- 如果 `compact` 在上次自动 commit 的 archive 还在生成摘要时运行，返回的 summary 是上一份摘要；摘要生成之前，服务端会继续回放该 archive 的消息。
 
 ### 5.3 显式记忆工具
 
@@ -298,9 +311,9 @@ transformContext auto recall 流程：
 | `GET /api/v1/sessions/{sessionId}` | 获取 session 元信息 | `afterTurn` 元信息检查 | 返回 `message_count`，插件兼容读取 `commit_count`、`pending_tokens`、`llm_token_usage`：`client.ts:770` |
 | `DELETE /api/v1/sessions/{sessionId}` | 删除 session | `deleteSession`（内部能力，未暴露普通用户工具） | 删除 active messages、archives、tools、元数据；不删除已抽取 memories：`client.ts:931` |
 | `POST /api/v1/sessions/{sessionId}/messages` | 追加 user/assistant 消息 | `afterTurn` 增量提交 | body 支持 `role`、`content` 或 `parts`；插件使用 `parts` 保存 text/tool/context，另扩展 tool result 外置字段：`client.ts:703` |
-| `POST /api/v1/sessions/{sessionId}/commit` | 归档消息、抽取长期记忆、清空/保留 active buffer | `afterTurn` 异步 commit、`compact` 同步 wait | 插件会传 `keep_recent_count`；若服务端返回 `task_id`，插件可轮询 Phase 2：`client.ts:798` |
+| `POST /api/v1/sessions/{sessionId}/commit` | 归档消息、抽取长期记忆、清空/保留 active buffer | `afterTurn` 异步 commit、`compact` 同步 wait | 插件不传 `keep_recent_count`（即 `0`，全部归档），`turn_budget` 模式下改传 `retention_mode`；若服务端返回 `task_id`，插件可轮询 Phase 2：`client.ts:798` |
 | `GET /api/v1/tasks/{taskId}` | 查询异步任务 | commit Phase 2 轮询 | 官方导航未单列，但插件依赖该端点判断 memory extraction 完成/失败：`client.ts:864` |
-| `GET /api/v1/sessions/{sessionId}/context?token_budget=...` | 获取 session working memory 上下文 | `assemble` / `compact` | 返回 latest archive overview、pre archive abstracts、active messages 和 token 估算：`client.ts:873` |
+| `GET /api/v1/sessions/{sessionId}/context?token_budget=...` | 获取 session working memory 上下文 | `assemble` / `compact` / `afterTurn`（commit 前读取最近消息） | 返回 latest archive overview、pre archive abstracts、active messages 和 token 估算：`client.ts:873` |
 | `GET /api/v1/sessions/{sessionId}/archives/{archiveId}` | 展开 archive 原文 | `ov_archive_expand` | 用于从有损 summary 回查原始消息：`client.ts:885` |
 | `GET /api/v1/sessions/{sessionId}/tool-results` | 列外置工具结果 | `openviking_tool_result_list` | 支持 `tool_name`、`limit`：`client.ts:517` |
 | `GET /api/v1/sessions/{sessionId}/tool-results/{toolResultId}` | 分页读取外置工具结果 | `openviking_tool_result_read` | 支持 `offset`、`limit`、`include_metadata`：`client.ts:478` |
@@ -730,7 +743,7 @@ openclaw config get plugins.slots.contextEngine
 | `recallScoreThreshold` | `0.15` | 召回阈值 |
 | `recallMaxInjectedChars` | `4000` | 注入字符预算 |
 | `commitTokenThresholdRatio` | `0.5` | `pending_tokens` 达到「模型上下文窗口 × 该比例」触发 afterTurn commit（0-1，例 0.5=50%）；设 0 可每轮 commit |
-| `commitKeepRecentCount` | `10` | afterTurn commit 后保留最近消息数；compact 固定 0 |
+| `commitKeepRecentCount` | `10` | afterTurn commit 全部归档后，插件在组装的上下文里原样保留的最近消息数；compact 和 reset 会丢弃 |
 | `bypassSessionPatterns` | `[]` | 匹配 sessionKey/sessionId 时完全绕过 OpenViking |
 | `emitStandardDiagnostics` | `false` | 输出 `openviking: diag {...}` 结构化诊断日志 |
 | `logFindRequests` | `false` | 输出 routing/search/session 写入日志；也可用 `OPENVIKING_LOG_ROUTING=1` 或 `OPENVIKING_DEBUG=1` |
@@ -1218,7 +1231,7 @@ curl -sS "$OPENVIKING_BASE_URL/api/v1/content/read?uri=$(python3 -c 'import urll
 | 内容读取 | `GET /api/v1/content/read?uri=...` | `memory_recall` / `ov_read` / 手工排查 | 根据命中的 `viking://...` URI 读取完整内容 |
 | 写入 session 消息 | `POST /api/v1/sessions/{sessionId}/messages` | `afterTurn` | 保存 OpenClaw 本轮 user/assistant/tool 片段 |
 | 获取 session 元信息 | `GET /api/v1/sessions/{sessionId}` | `afterTurn` | 查看 `pending_tokens`、message count、commit count |
-| 获取组装上下文 | `GET /api/v1/sessions/{sessionId}/context?token_budget=...` | 主 assemble / compact | 获取 archive summary + active messages |
+| 获取组装上下文 | `GET /api/v1/sessions/{sessionId}/context?token_budget=...` | 主 assemble / compact / afterTurn commit 前 | 获取 archive summary + active messages |
 | session commit | `POST /api/v1/sessions/{sessionId}/commit` | `afterTurn` / `compact` | 归档会话并触发 Phase 2 记忆抽取 |
 | 查询异步任务 | `GET /api/v1/tasks/{taskId}` | Phase 2 轮询 | 查看 memory extraction 是否完成、失败或超时 |
 | 展开 archive | `GET /api/v1/sessions/{sessionId}/archives/{archiveId}` | `ov_archive_expand` | 回看某个 archive 的原始消息 |

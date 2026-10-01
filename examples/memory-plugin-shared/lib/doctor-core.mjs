@@ -323,7 +323,12 @@ export const KNOWN_PLUGIN_KEYS = pluginConfigKeys();
 /** Nested objects in `plugin` are per-harness overrides, not knobs. */
 const PLUGIN_HARNESS_KEYS = HARNESS_CONFIG_KEYS;
 
+// A retired knob only looks like a typo: renaming it to the nearest live knob
+// would carry its old value into a setting that means something else.
+const RETIRED_PLUGIN_KEYS = new Set(["commitKeepRecentCount"]);
+
 function nearestKnownKey(key) {
+  if (RETIRED_PLUGIN_KEYS.has(key)) return "";
   // Levenshtein would be overkill; a typo that matters is almost always one
   // edit away, and case-folding alone catches the most common one.
   const folded = key.toLowerCase();

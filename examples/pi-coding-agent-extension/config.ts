@@ -39,7 +39,6 @@ export interface OVConfig {
   skillCatalogTokenBudget: number;
   resumeContextBudget: number;
   commitTokenThreshold: number;
-  commitKeepRecentCount: number;
   takeoverEnabled: boolean;
   takeoverTokenThreshold: number;
   takeoverKeepRecentTurns: number;

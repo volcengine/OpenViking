@@ -335,6 +335,7 @@ describe("context-engine lifecycle service seam", () => {
     const client = {
       addSessionMessage: vi.fn().mockResolvedValue(undefined),
       getSession: vi.fn().mockResolvedValue({ pending_tokens: 25000 }),
+      getSessionContext: vi.fn().mockResolvedValue({ latest_archive_overview: "", pre_archive_abstracts: [], messages: [] }),
       commitSession: vi.fn().mockResolvedValue({
         status: "accepted",
         archived: false,
@@ -387,9 +388,10 @@ describe("context-engine lifecycle service seam", () => {
       undefined,
     );
     expect(client.getSession).toHaveBeenCalledWith(ovSessionId);
+    expect(client.getSessionContext).toHaveBeenCalledWith(ovSessionId, 100000);
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: false,
-      keepRecentCount: 7,
+      keepRecentCount: 0,
     });
     expect(diag).toHaveBeenCalledWith("afterTurn_commit", ovSessionId, expect.objectContaining({
       pendingTokens: 25000,

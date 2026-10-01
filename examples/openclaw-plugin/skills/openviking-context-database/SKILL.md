@@ -78,7 +78,7 @@ Core config lives under `plugins.entries.openviking.config`:
 | `recallScoreThreshold` | `0.15` | Min score after post-processing. |
 | `recallMaxInjectedChars` | `4000` | Total injected character cap; complete memories that do not fit are skipped. |
 | `commitTokenThresholdRatio` | `0.5` | Async-commit threshold as a fraction (0-1) of the model context window (e.g. 0.5 = 50%); `0` commits every turn. |
-| `commitKeepRecentCount` | `10` | Recent messages kept live after afterTurn commit. Compact always uses `0`. |
+| `commitKeepRecentCount` | `10` | Recent messages the plugin keeps verbatim in the assembled context after an afterTurn commit, which archives every message. Compact and reset drop them. |
 | `bypassSessionPatterns` | empty | Glob-like session keys that completely bypass OpenViking (`*` segment, `**` multi-segment). |
 | `emitStandardDiagnostics` | `false` | Emit structured `openviking: diag {...}` lines. |
 | `logFindRequests` | `false` | Log routing for find/session writes. Also enabled by `OPENVIKING_LOG_ROUTING=1` or `OPENVIKING_DEBUG=1`. |
