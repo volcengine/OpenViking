@@ -65,23 +65,23 @@ enum CustomEditKeyAction {
 // brand kit's 24-grid mark (`mark-24-*.svg`, the size the brand manual assigns
 // to terminals) into braille: each cell is 2x4 dots, so with a ~1:2 terminal
 // cell every dot is square and the mark keeps its proportions. The ink spans
-// 12 rows (48 dots, 8/3 dots per grid unit); a dot is inked when at least half
+// 12 rows (48 dots, 8/3 dots per grid unit); E tapered slash uses 25% coverage so its fine tip survives; a dot is inked when a quarter
 // of it falls inside the mark. Blank first and last rows keep the art centered
 // against the status details.
 const OV_LOGO_LINES: [&str; 14] = [
     "",
-    "                  ⣴⣿⣿⣿⠋   ⣴",
-    "                ⢀⣾⣿⣿⡿⠁  ⢀⣾⣿",
-    "               ⣠⣿⣿⣿⠟   ⣠⣿⣿⣿",
-    "              ⣴⣿⣿⣿⠋   ⣴⣿⣿⣿⣿",
-    "            ⢀⣾⣿⣿⡿⠁  ⢀⣾⣿⣿⣿⣿⣿",
-    "           ⣠⣿⣿⣿⠟   ⣠⣿⣿⣿⣿⣿⣿⣿",
-    "          ⣴⣿⣿⣿⠋   ⣴⣿⣿⣿⣿⣿⣿⣿⣿",
-    "        ⢀⣾⣿⣿⡿⠁  ⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿",
-    "       ⣠⣿⣿⣿⠟   ⣠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
-    "      ⣴⣿⣿⣿⠋   ⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
-    "    ⢀⣾⣿⣿⡿⠁  ⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
-    "   ⣠⣿⣿⣿⠟   ⣠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿",
+    "                     ⢀⡔   ⣰⡇",
+    "                    ⣠⠏  ⢀⣼⣿⡇",
+    "                  ⣠⡾⠃  ⢠⣾⣿⣿⡇",
+    "                ⢀⣾⡟⠁  ⣰⣿⣿⣿⣿⡇",
+    "              ⢀⣴⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⡇",
+    "             ⣴⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⡇",
+    "           ⣠⣾⣿⡟⠁  ⣰⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "         ⣠⣾⣿⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "       ⢀⣴⣿⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "     ⢀⣴⣿⣿⣿⡟⠁  ⣰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "    ⣠⣿⣿⣿⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "  ⣠⣾⣿⣿⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
     "",
 ];
 
@@ -641,35 +641,13 @@ fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLev
     theme::style_theme_color_for_level(line, theme::active_theme().wordmark, true, color_level)
 }
 
-fn interpolate_rgb(start: Rgb, end: Rgb, ratio: f32) -> Rgb {
-    let ratio = ratio.clamp(0.0, 1.0);
-    Rgb(
-        interpolate_channel(start.0, end.0, ratio),
-        interpolate_channel(start.1, end.1, ratio),
-        interpolate_channel(start.2, end.2, ratio),
-    )
-}
-
-fn interpolate_channel(start: u8, end: u8, ratio: f32) -> u8 {
-    (start as f32 + (end as f32 - start as f32) * ratio).round() as u8
-}
-
 fn tagline_texture_color(column: usize, width: usize) -> Rgb {
     tagline_color_for_theme(theme::active_theme(), column, width)
 }
 
-// Deep-teal title text with a faint Signal glow toward the center, capped so
-// the text stays readable on light terminals.
-fn tagline_color_for_theme(palette: theme::CliTheme, column: usize, width: usize) -> Rgb {
-    let base = palette.brand_title.rgb_fallback();
-    let ratio = if width <= 1 {
-        0.0
-    } else {
-        column as f32 / (width - 1) as f32
-    };
-    let center_glow = (1.0 - (ratio - 0.5).abs() * 2.0).clamp(0.0, 1.0);
-
-    interpolate_rgb(base, palette.mark_start, center_glow * 0.18)
+// Solid deep teal is readable on both light and dark terminal backgrounds.
+fn tagline_color_for_theme(palette: theme::CliTheme, _column: usize, _width: usize) -> Rgb {
+    palette.brand_title.rgb_fallback()
 }
 
 fn styled_tagline(text: &str) -> String {
@@ -1553,23 +1531,12 @@ fn logo_glass_color_for_theme(
 
 fn logo_glass_color_for_theme_with_height(
     palette: theme::CliTheme,
-    column: usize,
-    row: usize,
-    width: usize,
-    logo_height: usize,
+    _column: usize,
+    _row: usize,
+    _width: usize,
+    _logo_height: usize,
 ) -> Rgb {
-    if width <= 1 {
-        return palette.mark_start;
-    }
-
-    // Signal at the sail's tip (top) fading to deep teal at its base, so the
-    // lower, heavier part of the mark keeps contrast on light terminals too.
-    let column_ratio = column as f32 / (width - 1) as f32;
-    let row_height = logo_height.saturating_sub(1).max(1);
-    let row_ratio = row as f32 / row_height as f32;
-    let ratio = (column_ratio * 0.4 + row_ratio * 0.6).clamp(0.0, 1.0);
-
-    interpolate_rgb(palette.mark_start, palette.mark_end, ratio)
+    palette.mark
 }
 
 fn styled_detail_to_width(detail: &StatusBoxDetail, width: usize) -> String {
@@ -6637,7 +6604,7 @@ mod tests {
         assert!(!text.contains("/\\"));
     }
     #[test]
-    fn status_box_logo_reads_as_slash_then_upright_sail() {
+    fn status_box_logo_reads_as_tapered_slash_then_upright_sail() {
         let ink_rows = &OV_LOGO_LINES[1..OV_LOGO_LINES.len() - 1];
 
         // Same row budget and width as the art it replaces, so the full
@@ -6650,6 +6617,7 @@ mod tests {
         let mast = display_width(ink_rows[0]);
         let mut previous_start = usize::MAX;
         let mut previous_sail = 0;
+        let mut previous_slash = 0;
         for line in ink_rows {
             // Every ink row is two strokes, the slash and the sail, separated
             // by the brand's slash-to-sail gap: that pair is what reads as `//`.
@@ -6668,8 +6636,12 @@ mod tests {
                 "{line:?} should keep open space between slash and sail"
             );
             assert!(
-                (5..=6).contains(&display_width(slash)),
-                "{line:?} slash should keep a constant stroke width"
+                slash
+                    .chars()
+                    .map(|ch| (ch as u32 - 0x2800).count_ones())
+                    .sum::<u32>()
+                    >= previous_slash,
+                "{line:?} E slash should widen from its fine tip toward the base"
             );
 
             // Upright mast: the sail's vertical edge sits in one column.
@@ -6688,9 +6660,13 @@ mod tests {
             );
             previous_start = start;
             previous_sail = display_width(sail);
+            previous_slash = slash
+                .chars()
+                .map(|ch| (ch as u32 - 0x2800).count_ones())
+                .sum::<u32>();
         }
         assert!(
-            ink_rows[ink_rows.len() - 1].ends_with("⣿⣿⣿⣿"),
+            ink_rows[ink_rows.len() - 1].contains("⣿⣿⣿⣿"),
             "the base should be a flat, fully inked edge"
         );
     }
@@ -6818,7 +6794,7 @@ mod tests {
     }
 
     #[test]
-    fn tagline_is_deep_teal_with_a_faint_signal_glow() {
+    fn tagline_is_solid_deep_teal() {
         let width = display_width("Context Database for AI Agents");
         let palette = theme::active_theme();
 
@@ -6830,10 +6806,9 @@ mod tests {
             tagline_color_for_theme(palette, width - 1, width),
             theme::BRAND_DEEP_TEAL
         );
-        let center = tagline_color_for_theme(palette, width / 2, width);
-        assert!(
-            center.1 > theme::BRAND_DEEP_TEAL.1 && center.1 < theme::BRAND_SIGNAL.1,
-            "center should lean toward Signal without becoming Signal: {center:?}"
+        assert_eq!(
+            tagline_color_for_theme(palette, width / 2, width),
+            theme::BRAND_DEEP_TEAL
         );
     }
     fn ansi256_indexes(rendered: &str) -> Vec<u8> {
@@ -6870,27 +6845,17 @@ mod tests {
         );
     }
     #[test]
-    fn status_box_logo_fades_from_signal_to_deep_teal() {
+    fn status_box_logo_is_solid_deep_teal() {
         let width = ov_logo_width();
         let palette = theme::active_theme();
-
-        assert_eq!(palette.mark_start, theme::BRAND_SIGNAL);
-        assert_eq!(palette.mark_end, theme::BRAND_DEEP_TEAL);
-        assert_eq!(
-            logo_glass_color_for_theme(palette, 0, 0, width),
-            theme::BRAND_SIGNAL
-        );
-        assert_eq!(
-            logo_glass_color_for_theme(palette, width - 1, 13, width),
-            theme::BRAND_DEEP_TEAL
-        );
-
-        let tip = logo_glass_color_for_theme(palette, width - 1, 1, width);
-        let base = logo_glass_color_for_theme(palette, width - 1, 12, width);
-        assert!(
-            base.0 < tip.0 && base.1 < tip.1 && base.2 < tip.2,
-            "the sail should darken from its tip toward its base"
-        );
+        for row in 0..OV_LOGO_LINES.len() {
+            for column in 0..width {
+                assert_eq!(
+                    logo_glass_color_for_theme(palette, column, row, width),
+                    theme::BRAND_DEEP_TEAL
+                );
+            }
+        }
     }
     #[test]
     fn active_summary_hides_url_and_shows_kind() {

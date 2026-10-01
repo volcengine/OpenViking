@@ -33,20 +33,17 @@ impl ThemeColor {
     }
 }
 
-/// OpenViking brand Signal cyan (#4FD6F0). The brand manual shows the
-/// terminal mark in Signal on a dark background; it is too light to carry
-/// text on a light background, so it only tints the mark and the tagline glow.
-pub(crate) const BRAND_SIGNAL: Rgb = Rgb(79, 214, 240);
+#[cfg(test)]
+const BRAND_SIGNAL: Rgb = Rgb(79, 214, 240);
+
 /// OpenViking brand deep teal (#0A7C93). Readable on both light and dark
 /// terminals, so it is the accent for borders, commands and headings.
 pub(crate) const BRAND_DEEP_TEAL: Rgb = Rgb(10, 124, 147);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CliTheme {
-    /// Top-left stop of the braille mark gradient.
-    pub(crate) mark_start: Rgb,
-    /// Bottom-right stop of the braille mark gradient.
-    pub(crate) mark_end: Rgb,
+    /// Solid ink for the braille mark, readable on both terminal backgrounds.
+    pub(crate) mark: Rgb,
     /// Block-letter wordmark. The brand wordmark is Paper on dark and Ink on
     /// light, which is what the terminal default foreground already gives.
     pub(crate) wordmark: ThemeColor,
@@ -74,8 +71,7 @@ pub(crate) fn active_theme() -> CliTheme {
 
 pub(crate) fn palette() -> CliTheme {
     CliTheme {
-        mark_start: BRAND_SIGNAL,
-        mark_end: BRAND_DEEP_TEAL,
+        mark: BRAND_DEEP_TEAL,
         wordmark: ThemeColor::DefaultFg,
         border: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
         version: ThemeColor::TrueColor(BRAND_DEEP_TEAL),
@@ -488,7 +484,7 @@ mod tests {
     #[test]
     fn signal_cyan_never_carries_text() {
         // The brand forbids Signal on light backgrounds, and the CLI cannot
-        // see the terminal background, so Signal stays on the mark only.
+        // see the terminal background, so the CLI uses solid deep teal for the mark and accents.
         let palette = palette();
         for (name, color) in accent_colors(palette) {
             assert_ne!(
