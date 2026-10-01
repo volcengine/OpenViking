@@ -126,7 +126,9 @@ class OpenVikingBuildExt(build_ext):
         if sys.platform != "win32":
             os.chmod(str(dst), 0o755)
 
-    def _copy_artifacts_to_build_lib(self, target_binary=None, target_lib=None):
+    def _copy_artifacts_to_build_lib(
+        self, target_binary=None, target_lib=None, target_stub=None
+    ):
         """Copy built artifacts into build_lib so wheel packaging can include them."""
         if self.build_lib:
             build_pkg_dir = Path(self.build_lib) / "openviking"
@@ -134,6 +136,10 @@ class OpenVikingBuildExt(build_ext):
                 self._copy_artifact(target_binary, build_pkg_dir / "bin" / target_binary.name)
             if target_lib and target_lib.exists():
                 self._copy_artifact(target_lib, build_pkg_dir / "lib" / target_lib.name)
+            if target_stub and target_stub.exists():
+                target = build_pkg_dir / "lib" / target_stub.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(target_stub), str(target))
 
     def _require_artifact(self, artifact_path, artifact_name, stage_name):
         """Abort the build immediately when a required artifact is missing."""
@@ -369,7 +375,13 @@ class OpenVikingBuildExt(build_ext):
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")
                 else:
-                    self._copy_artifacts_to_build_lib(target_lib=target_path)
+                    stub_source = ragfs_python_dir / "ragfs_python.pyi"
+                    stub_target = ragfs_lib_dir / stub_source.name
+                    shutil.copy2(str(stub_source), str(stub_target))
+                    self._copy_artifacts_to_build_lib(
+                        target_lib=target_path,
+                        target_stub=stub_target,
+                    )
 
             except Exception as exc:
                 error_detail = ""
@@ -576,6 +588,7 @@ setup(
         "openviking": [
             "lib/ragfs_python*.so",
             "lib/ragfs_python*.pyd",
+            "lib/ragfs_python.pyi",
             "bin/ov",
             "bin/ov.exe",
             "server/static/**/*",
