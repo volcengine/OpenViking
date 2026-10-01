@@ -83,7 +83,7 @@ function collectAllMdFiles(
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
-      if (ignored.has(entry)) continue
+      if (ignored.has(entry) || (dir === srcDir && entry === 'repository')) continue
       const abs = path.join(dir, entry)
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
