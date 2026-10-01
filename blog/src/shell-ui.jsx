@@ -23,7 +23,7 @@ function Topbar({ lang, preference, theme, onLang, onToggleTheme, onHome, S }) {
         <a className="b-brand" href="/" onClick={(e) => { e.preventDefault(); onHome(); }}>
           <img
             className="b-brand__mark"
-            src="/assets/logo.png"
+            src={dark ? "/assets/nav-logo-dark.svg" : "/assets/nav-logo-light.svg"}
             alt="OpenViking"
             loading="eager"
             decoding="async"

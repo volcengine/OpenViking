@@ -3,38 +3,12 @@
  * Common base first, then per-mode overrides.
  */
 
-@font-face {
-  font-family: 'OV JetBrains Mono';
-  src: url('./assets/fonts/JetBrainsMono.woff2') format('woff2');
-  font-weight: 400 500;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'TsangerJinKai02';
-  src:
-    url('./assets/fonts/TsangerJinKai02-W04.ttf') format('truetype'),
-    url('https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W04.ttf') format('truetype');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'TsangerJinKai02';
-  src:
-    url('./assets/fonts/TsangerJinKai02-W05.ttf') format('truetype'),
-    url('https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W05.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
+@import "./fonts.css";
 
 :root {
-  --font-latin-serif: Charter, Georgia, Palatino, 'Times New Roman', 'TsangerJinKai02', 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', serif;
-  --font-cjk-serif: 'TsangerJinKai02', 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSong', Georgia, serif;
-  --font-mono: 'OV JetBrains Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-body: 'Source Sans 3', 'OV Reading Kai', system-ui, sans-serif;
+  --font-display: 'Source Serif 4', 'OV Reading Kai', Georgia, serif;
+  --font-mono: 'OV Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* ===========================================================
@@ -45,7 +19,7 @@ html, body { margin: 0; padding: 0; overflow-x: clip; }
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  font-synthesis-weight: none;
+  font-synthesis-weight: auto;
   font-synthesis-style: none;
 }
 body {
@@ -205,7 +179,7 @@ button { font: inherit; color: inherit; }
   overflow-x: auto;
   font-family: var(--th-font-mono);
   font-size: 12px;
-  line-height: 1.62;
+  line-height: 1.85;
   white-space: pre;
   tab-size: 2;
   color: var(--th-ink);
@@ -314,8 +288,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-topbar { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--th-bg) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--th-line); }
 .b-topbar__inner { max-width: 1280px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 24px; }
 .b-brand { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; color: inherit; text-decoration: none; }
-.b-brand__mark { width: 26px; height: 26px; border-radius: 4px; object-fit: cover; transition: filter 0.3s; }
-[data-theme="washi"] .b-brand__mark { filter: invert(1); }
+.b-brand__mark { width: 24px; height: 24px; border-radius: 4px; object-fit: cover; transition: filter 0.3s; }
+
 .b-brand__name { font-family: var(--th-font-display); font-weight: 500; font-size: 17px; letter-spacing: 0; }
 .b-brand__sub { font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.1em; color: var(--th-mute); margin-left: 4px; }
 .b-topbar__nav { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -483,8 +457,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-accent-2: #6b4c3b;
   --th-warn: #c14a3a;
   --th-tip: #4a8c5a;
-  --th-font-display: var(--font-latin-serif);
-  --th-font-body: var(--font-latin-serif);
+  --th-font-display: var(--font-display);
+  --th-font-body: var(--font-body);
   --th-font-mono: var(--font-mono);
   --th-radius: 2px;
   --th-shadow: 0 4px 12px rgba(26, 26, 26, 0.06);
@@ -548,8 +522,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-accent-2: #c9956b;
   --th-warn: #e5796b;
   --th-tip: #7bba6b;
-  --th-font-display: var(--font-latin-serif);
-  --th-font-body: var(--font-latin-serif);
+  --th-font-display: var(--font-display);
+  --th-font-body: var(--font-body);
   --th-font-mono: var(--font-mono);
   --th-radius: 2px;
   --th-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
@@ -596,14 +570,14 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 
 html[lang="zh"][data-theme="kami"],
 html[lang="zh"][data-theme="washi"] {
-  --th-font-display: var(--font-cjk-serif);
-  --th-font-body: var(--font-cjk-serif);
+  --th-font-display: var(--font-display);
+  --th-font-body: var(--font-body);
   --th-measure: 760px;
 }
 
 html[lang="zh"] body {
   font-size: 18px;
-  line-height: 1.62;
+  line-height: 1.85;
   letter-spacing: 0.02em;
   line-break: loose;
   word-break: normal;

@@ -63,7 +63,7 @@ export function getPageMeta({ route, lang = 'en' }) {
     const meta = post?.meta || {};
     const title = pickLocale(meta.title, effectiveLang);
     const description = pickLocale(meta.description, effectiveLang);
-    const cover = meta.cover || '/assets/logo.png';
+    const cover = meta.cover || '/assets/og-image.png';
     return {
       lang: effectiveLang,
       type: 'article',
