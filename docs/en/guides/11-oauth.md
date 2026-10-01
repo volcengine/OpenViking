@@ -184,7 +184,7 @@ claude mcp add --transport http openviking https://my.ov/mcp \
 If you want Claude Code to drive OAuth, the connector flow is identical to
 Claude.ai's once configured.
 
-### ChatGPT
+### ChatGPT (Codex, Plus, Enterprise)
 
 Create a custom App in ChatGPT developer mode, enter the MCP URL, and complete OAuth authorization in the browser. Availability and admin controls depend on the plan and workspace settings; follow the [official OpenAI instructions](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt). For Codex plugins and MCP configuration, see the [Codex integration](../agent-integrations/04-codex.md).
 
