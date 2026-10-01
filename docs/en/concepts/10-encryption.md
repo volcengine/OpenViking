@@ -2,6 +2,7 @@
 
 <script setup>
 import EncryptionFlowDiagram from '../../.vitepress/theme/components/EncryptionFlowDiagram.vue'
+import KeyHierarchyDiagram from '../../.vitepress/theme/components/KeyHierarchyDiagram.vue'
 </script>
 
 OpenViking supports at-rest encryption: it encrypts files before storage and decrypts them for authorized reads. Each account uses a separate account key.
@@ -28,30 +29,7 @@ Enabling encryption preserves the client API:
 
 OpenViking uses an Envelope Encryption architecture with a three-layer key system:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Layer 1: Root Key                                     │
-│  • Global unique per OpenViking instance               │
-│  • Storage: local key or KMS/Vault-protected ciphertext    │
-│  • Purpose: Derive all account keys                    │
-└────────────────────┬────────────────────────────────────┘
-                     │ HKDF derivation
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Layer 2: Account Key (KEK)                           │
-│  • One independent key per account                     │
-│  • Not stored, derived at runtime                      │
-│  • Purpose: Encrypt all file keys for this account     │
-└────────────────────┬────────────────────────────────────┘
-                     │ AES-256-GCM encryption
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Layer 3: File Key (DEK)                              │
-│  • New random key generated per write operation        │
-│  • Stored encrypted in file header (envelope)          │
-│  • Purpose: Encrypt actual file content                │
-└─────────────────────────────────────────────────────────┘
-```
+<KeyHierarchyDiagram />
 
 ### Key Hierarchy Summary
 
@@ -158,13 +136,13 @@ For encrypted files, the account key unwraps the File Key, which authenticates a
 
 Encrypted files use a unified envelope format starting with the magic number `OVE1` (OpenViking Encryption v1):
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Magic   │ Version │ Provider  │ Encrypted File Key │  ...  │
-│  4 bytes │ 1 byte  │  1 byte   │   Variable length  │  ...  │
-│  "OVE1"  │  0x01   │ 0x01=local│                    │  ...  │
-└─────────────────────────────────────────────────────────────┘
-```
+| Field | Size | Value |
+| --- | --- | --- |
+| Magic | 4 bytes | `OVE1` |
+| Version | 1 byte | `0x01` |
+| Provider | 1 byte | `0x01` = local |
+| Encrypted File Key | variable | File Key wrapped with the account key |
+| … | | nonces and content ciphertext |
 
 - If a file doesn't start with `OVE1`, it's treated as unencrypted and plaintext is returned directly
 - Old files remain readable; protecting existing plaintext requires a separate migration or rewrite
