@@ -234,6 +234,8 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: `${base}apple-touch-icon.png` }],
     ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
@@ -283,7 +285,7 @@ export default defineConfig({
     ]
   },
   themeConfig: {
-    logo: '/ov-logo.png',
+    logo: { light: '/nav-logo-light.svg', dark: '/nav-logo-dark.svg', alt: 'OpenViking' },
     logoLink: base,
     nav: enNav,
     socialLinks: [
