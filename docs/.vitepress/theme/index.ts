@@ -1,7 +1,7 @@
 import { docsLanguageEntry } from './language-entry.js'
 import { createLanguagePreference } from './language-preference.js'
 import { h, defineAsyncComponent } from 'vue'
-import DefaultTheme, { VPButton } from 'vitepress/theme'
+import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
 import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
 import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'

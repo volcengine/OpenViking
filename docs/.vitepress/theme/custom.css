@@ -12,9 +12,9 @@
   --vp-c-bg-soft: #eeefeb;
   --vp-c-text-1: #202723;
   --vp-c-text-2: #5c665f;
-  --vp-font-family-base: "Space Grotesk", sans-serif;
-  --vp-font-family-display: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-  --vp-font-family-mono: "JetBrains Mono", monospace;
+  --vp-font-family-base: "Source Sans 3", "OV Reading Kai", sans-serif;
+  --vp-font-family-display: "Source Serif 4", "OV Reading Kai", serif;
+  --vp-font-family-mono: "OV Code", ui-monospace, monospace;
 
   /* Embed-widget theming. The widget renders in a shadow root whose :host does
      `all: initial` — that resets inherited properties but NOT custom

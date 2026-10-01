@@ -1,0 +1,86 @@
+[
+  {
+    "lang": "zh",
+    "fontBytes": 1329968,
+    "fonts": [
+      {
+        "url": "/assets/maple-code-latin.DbSj44pc.woff2",
+        "bytes": 65984,
+        "status": 200
+      },
+      {
+        "url": "/assets/source-sans-3.DRrN49PX.woff2",
+        "bytes": 164736,
+        "status": 200
+      },
+      {
+        "url": "/assets/maple-code-common.D3f5B--M.woff2",
+        "bytes": 332700,
+        "status": 200
+      },
+      {
+        "url": "/assets/source-serif-4.CYlkDfJE.woff2",
+        "bytes": 426716,
+        "status": 200
+      },
+      {
+        "url": "/assets/reading-kai-common.BAaK_vX6.woff2",
+        "bytes": 339832,
+        "status": 200
+      }
+    ],
+    "actual": {
+      ".vp-doc p": [
+        "SourceSans3VF",
+        "OV Code",
+        "OV Reading Kai"
+      ],
+      ".vp-doc h1": [
+        "Source Serif 4 Variable",
+        "OV Reading Kai"
+      ],
+      ".vp-doc p code": [
+        "OV Code"
+      ],
+      ".vp-doc pre code .line": [
+        "OV Code"
+      ]
+    }
+  },
+  {
+    "lang": "en",
+    "fontBytes": 657436,
+    "fonts": [
+      {
+        "url": "/assets/source-sans-3.DRrN49PX.woff2",
+        "bytes": 164736,
+        "status": 200
+      },
+      {
+        "url": "/assets/maple-code-latin.DbSj44pc.woff2",
+        "bytes": 65984,
+        "status": 200
+      },
+      {
+        "url": "/assets/source-serif-4.CYlkDfJE.woff2",
+        "bytes": 426716,
+        "status": 200
+      }
+    ],
+    "actual": {
+      ".vp-doc p": [
+        "SourceSans3VF",
+        "OV Code"
+      ],
+      ".vp-doc h1": [
+        "Source Serif 4 Variable"
+      ],
+      ".vp-doc p code": [
+        "OV Code"
+      ],
+      ".vp-doc pre code .line": [
+        "OV Code"
+      ]
+    }
+  }
+]
