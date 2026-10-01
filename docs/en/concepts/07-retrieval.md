@@ -22,22 +22,22 @@ For `search`, `limit` applies to each planned query. Merged results may exceed i
 
 ### Usage Examples
 
-These examples use a configured asynchronous Python SDK client named `client`.
+These examples use a configured synchronous Python SDK client named `client`.
 
 ```python
 # find(): Simple query
-results = await client.find(
+results = client.find(
     query="OAuth authentication",
     target_uri="viking://resources/",
 )
 
 # search(): Complex task (needs session context)
-session_info = await client.create_session()
-await client.add_message(
+session_info = client.create_session()
+client.add_message(
     session_id=session_info["session_id"], role="user",
     content="We are designing the OAuth login flow for this project.",
 )
-results = await client.search(
+results = client.search(
     query="Help me create an RFC document",
     session_id=session_info["session_id"],
 )

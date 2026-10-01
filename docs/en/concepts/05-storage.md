@@ -137,19 +137,19 @@ index_meta = {
 
 ## Vector Synchronization
 
-Filesystem operations coordinate changes to files and vector records. Summary refreshes can continue asynchronously, and failures can leave partial changes; see the [filesystem API](../api/03-filesystem.md) for operation-specific behavior. The examples below use an initialized asynchronous Python SDK client.
+Filesystem operations coordinate changes to files and vector records. Summary refreshes can continue asynchronously, and failures can leave partial changes; see the [filesystem API](../api/03-filesystem.md) for operation-specific behavior. The examples below use an initialized synchronous Python SDK client.
 
 ### Delete Sync
 
 ```python
-await client.rm("viking://resources/docs/auth", recursive=True)
+client.rm("viking://resources/docs/auth", recursive=True)
 # Automatically deletes all records with this URI prefix from vector index
 ```
 
 ### Move Sync
 
 ```python
-await client.mv(
+client.mv(
     "viking://resources/docs/auth",
     "viking://resources/docs/authentication"
 )

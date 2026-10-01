@@ -304,31 +304,31 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 
 ## API 使用
 
-以下 Python 示例使用已配置连接的 `AsyncHTTPClient` 实例 `client`，详见[客户端配置](../configuration/02-client.md)。
+以下 Python 示例使用已配置连接的 `SyncHTTPClient` 实例 `client`，详见[客户端配置](../configuration/02-client.md)。
 
 ### 指定作用域搜索
 
 ```python
 # 仅在资源中搜索
-results = await client.find(
+results = client.find(
     query="认证",
     target_uri="viking://resources/",
 )
 
 # 仅在自己的资源中搜索
-results = await client.find(
+results = client.find(
     query="私有项目笔记",
     target_uri="viking://~/resources/"
 )
 
 # 仅在自己的记忆中搜索
-results = await client.find(
+results = client.find(
     query="编码偏好",
     target_uri="viking://~/memories/"
 )
 
 # 仅在自己的技能中搜索
-results = await client.find(
+results = client.find(
     query="网络搜索",
     target_uri="viking://~/skills/"
 )
@@ -338,16 +338,16 @@ results = await client.find(
 
 ```python
 # 列出目录
-entries = await client.ls(uri="viking://resources/")
+entries = client.ls(uri="viking://resources/")
 
 # 读取文件
-content = await client.read(uri="viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 
 # 获取摘要
-abstract = await client.abstract(uri="viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 
 # 获取概览
-overview = await client.overview(uri="viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 ```
 
 ## 特殊文件
@@ -376,13 +376,13 @@ overview = await client.overview(uri="viking://resources/docs/")
 
 ```python
 # 添加到 account 共享资源作用域
-await client.add_resource(url, to="viking://resources/project/")
+client.add_resource(url, to="viking://resources/project/")
 
 # 添加到自己的私有资源根
-await client.add_resource(path, parent="viking://~/resources/project/")
+client.add_resource(path, parent="viking://~/resources/project/")
 
 # 技能默认添加到自己的技能根
-await client.add_skill(skill)  # 默认根目录：viking://~/skills/
+client.add_skill(skill)  # 默认根目录：viking://~/skills/
 ```
 
 通过 CLI 安装到账户共享技能目录，需要有该路径的写入权限：

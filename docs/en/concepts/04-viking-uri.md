@@ -316,37 +316,37 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 
 ## API Usage
 
-The Python examples below use a configured `AsyncHTTPClient` instance named `client`; see [Client Configuration](../configuration/02-client.md).
+The Python examples below use a configured `SyncHTTPClient` instance named `client`; see [Client Configuration](../configuration/02-client.md).
 
 ### Targeting Specific Scopes
 
 ```python
 # Search only in resources
-results = await client.find(
+results = client.find(
     query="authentication",
     target_uri="viking://resources/",
 )
 
 # Search only in your own resources
-results = await client.find(
+results = client.find(
     query="private project notes",
     target_uri="viking://~/resources/"
 )
 
 # Search only in your own memories
-results = await client.find(
+results = client.find(
     query="coding preferences",
     target_uri="viking://~/memories/"
 )
 
 # Search only in your own skills
-results = await client.find(
+results = client.find(
     query="web search",
     target_uri="viking://~/skills/"
 )
 
 # Search only in global agent skills
-results = await client.find(
+results = client.find(
     query="web search",
     target_uri="viking://agent/skills/",
 )
@@ -356,16 +356,16 @@ results = await client.find(
 
 ```python
 # List directory
-entries = await client.ls(uri="viking://resources/")
+entries = client.ls(uri="viking://resources/")
 
 # Read file
-content = await client.read(uri="viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 
 # Get abstract
-abstract = await client.abstract(uri="viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 
 # Get overview
-overview = await client.overview(uri="viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 ```
 
 ## Special Files
@@ -394,13 +394,13 @@ Each directory may contain special files:
 
 ```python
 # Add resources to the shared account resource scope
-await client.add_resource(url, to="viking://resources/project/")
+client.add_resource(url, to="viking://resources/project/")
 
 # Add private resources to your own resource root
-await client.add_resource(path, parent="viking://~/resources/project/")
+client.add_resource(path, parent="viking://~/resources/project/")
 
 # Skills are added to your own skills root by default
-await client.add_skill(skill)  # default root: viking://~/skills/
+client.add_skill(skill)  # default root: viking://~/skills/
 ```
 
 Install into the account-shared skills directory with the CLI. This requires write access to that path:

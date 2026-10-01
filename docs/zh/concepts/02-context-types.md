@@ -12,27 +12,26 @@ OpenViking 管理三类上下文：资源提供参考资料，记忆保存交互
 
 ## 示例准备
 
-以下示例使用异步 Python SDK，需先启动服务端。`add_resource` 和 `add_skill` 可传 `wait=True`，等处理完成后再返回。会话提交会在记忆提取完成前返回，且没有内置等待参数，因此先用下面的函数查询提交任务，再检索新内容。轮询超时不会取消服务端任务。
+以下示例使用同步 Python SDK，需先启动服务端。`add_resource` 和 `add_skill` 可传 `wait=True`，等处理完成后再返回。会话提交会在记忆提取完成前返回，且没有内置等待参数，因此先用下面的函数查询提交任务，再检索新内容。轮询超时不会取消服务端任务。
 
 ```python
-import asyncio
-from openviking_sdk import AsyncHTTPClient
+import time
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 
 
-async def wait_for_task(task_id):
-    deadline = asyncio.get_running_loop().time() + 300
-    while asyncio.get_running_loop().time() < deadline:
-        task = await client.get_task(task_id)
+def wait_for_task(task_id):
+    deadline = time.monotonic() + 300
+    while time.monotonic() < deadline:
+        task = client.get_task(task_id)
         if task is None:
             raise RuntimeError(f"Task {task_id} not found")
         if task["status"] == "completed":
             return task
         if task["status"] in {"failed", "cancelled"}:
             raise RuntimeError(task)
-        await asyncio.sleep(1)
+        time.sleep(1)
     raise TimeoutError(f"Task {task_id} is still running")
 ```
 
@@ -56,7 +55,7 @@ async def wait_for_task(task_id):
 
 ```python
 # 添加资源
-await client.add_resource(
+client.add_resource(
     path="https://docs.example.com/api.pdf",
     options={"reason": "API 文档"},
     wait=True,
@@ -64,7 +63,7 @@ await client.add_resource(
 )
 
 # 搜索资源
-results = await client.find(
+results = client.find(
     query="认证方法",
     target_uri="viking://resources/",
 )
@@ -104,18 +103,18 @@ Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它�
 from openviking_sdk import TextPart
 
 # 记忆从会话中自动提取
-session_info = await client.create_session()
+session_info = client.create_session()
 session = client.session(session_id=session_info["session_id"])
-await session.add_message(
+session.add_message(
     role="user",
     parts=[TextPart(text="我喜欢深色模式")],
 )
-commit = await session.commit()  # 启动后台记忆提取
+commit = session.commit()  # 启动后台记忆提取
 if commit.get("task_id"):
-    await wait_for_task(commit["task_id"])
+    wait_for_task(commit["task_id"])
 
 # 搜索记忆
-results = await client.find(
+results = client.find(
     query="用户界面偏好",
     target_uri="viking://~/memories/"
 )
@@ -162,7 +161,7 @@ viking://agent/skills/{skill-name}/  # 通过 -p/--parent-auto-create 覆盖，�
 
 ```python
 # 添加技能（默认写入 viking://~/skills/）
-await client.add_skill(
+client.add_skill(
     data={
         "name": "search-web",
         "description": "搜索网络获取信息",
@@ -173,13 +172,13 @@ await client.add_skill(
 )
 
 # 搜索用户技能
-results = await client.find(
+results = client.find(
     query="网络搜索",
     target_uri="viking://~/skills/"
 )
 
 # 搜索全局 agent 技能
-results = await client.find(
+results = client.find(
     query="网络搜索",
     target_uri="viking://agent/skills/",
 )
@@ -197,7 +196,7 @@ ov skills add ./skills/search-web -p viking://agent/skills
 
 ```python
 # 跨所有上下文类型搜索
-results = await client.find(
+results = client.find(
     query="用户认证",
     target_uri=["viking://~", "viking://resources", "viking://agent/skills"],
 )
@@ -213,7 +212,7 @@ for context in results.get("skills", []):
 操作结束后关闭客户端：
 
 ```python
-await client.close()
+client.close()
 ```
 
 ## 相关文档
