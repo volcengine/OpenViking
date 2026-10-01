@@ -44,8 +44,8 @@ python -m benchmark.aml.server --host 0.0.0.0 --port 8088
 
 OpenViking's standard `api_key` mode cannot use one root key to switch among
 dynamic AML users: in that mode a request must use the key belonging to the
-target user. `AML_API_KEY` is unrelated; it only protects this adapter's
-incoming `/add` and `/search` endpoints.
+target user. `AML_API_KEY` is unrelated; it protects all incoming HTTP requests
+to this adapter, including health checks, documentation, and unknown paths.
 
 The adapter provides:
 
@@ -60,7 +60,21 @@ isolated by its `user_id`; session IDs only separate histories inside that
 user's space. Transient SDK calls are retried up to three times by
 default; use `AML_RETRY_ATTEMPTS` and `AML_RETRY_DELAY_SECONDS` to adjust that
 behavior. `Token`, `Bearer`, and `X-Api-Key` authentication are accepted when
-`AML_API_KEY` is set.
+`AML_API_KEY` is set. Missing or invalid keys return HTTP 401 before routing or
+request-body validation. Local deployments without `AML_API_KEY` remain unauthenticated.
+
+The CLI writes structured JSON request audit records to stderr by default. Set
+`AML_AUDIT_LOG_FILE` to persist them to a dedicated file; it rotates at 20 MiB
+and retains 49 backups plus the current file, with file permissions `0600`.
+Retention is capacity-based rather than a fixed number of days.
+
+Audit records include a server-generated trace ID (also returned in
+`X-AML-Trace-Id`), source IP, HTTP method, known path, status and handling time.
+Validated Add/Search requests also record user/session/request identifiers and
+counts. Add records link the native commit task and archive; transient backend
+failures record their type, code and retry decision. Logs omit request/response
+bodies, query strings, authentication headers and exception text. They do not
+replace Add idempotency or prove that a client received a response.
 
 The native `find` call uses quick retrieval without reranking, even when the
 OpenViking server has a reranker configured. The adapter returns each hit's
@@ -96,6 +110,13 @@ runner therefore creates one stable AML user for each unique
 `namespace + unit + history_key + history contents`: questions sharing a
 history share that user, while different histories stay isolated. This is ID
 creation in the local runner; `server.py` forwards the resulting ID unchanged.
+
+For `locomo_refined`, prepared cases must include `extra.speaker_1_name` and
+`extra.speaker_2_name`. The caller preserves existing speaker prefixes, adds
+missing names, and rejects conflicting names before sending Add requests.
+Long messages retain the speaker prefix and any dialogue ID in every fragment.
+The original `user`/`assistant` roles remain unchanged; other datasets do not
+receive this name processing.
 
 Use repeated `--unit` arguments to select individual datasets. Add runs up to
 16 histories (AML users) concurrently by default, while Search runs up to 16 questions
