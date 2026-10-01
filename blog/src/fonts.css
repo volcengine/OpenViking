@@ -1,21 +1,6 @@
+@import "./assets/fonts/tosaki/typography.css";
 /* Self-hosted OFL fonts. Sources, licenses, and reproduction notes: assets/fonts/reading/. */
 @import "./assets/fonts/reading/subsets.css";
-
-@font-face {
-  font-family: 'Source Sans 3';
-  font-style: normal;
-  font-weight: 200 900;
-  font-display: swap;
-  src: url('./assets/fonts/reading/source-sans-3.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Source Sans 3';
-  font-style: italic;
-  font-weight: 200 900;
-  font-display: swap;
-  src: url('./assets/fonts/reading/source-sans-3-italic.woff2') format('woff2');
-}
 
 @font-face {
   font-family: 'Source Serif 4';

@@ -6,8 +6,8 @@
 @import "./fonts.css";
 
 :root {
-  --font-body: 'Source Sans 3', 'OV Reading Kai', system-ui, sans-serif;
-  --font-display: 'Source Serif 4', 'OV Reading Kai', Georgia, serif;
+  --font-body: 'IBM Plex Sans', 'LXGW Neo XiHei Screen Full', system-ui, sans-serif;
+  --font-display: 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
   --font-mono: 'OV Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
