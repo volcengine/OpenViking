@@ -29,7 +29,8 @@ light surfaces and Paper #F4F5F3 on dark surfaces; no CSS filter or synthetic fo
 The header logo is 160px wide (112px below 375px viewport width). The separate small `/ docs` label sits outside
 the artwork and is hidden on mobile. Article typography remains independent;
 #5543 cannot alter this wordmark. README PNGs are 800px wide, displayed at 300px.
-Their absolute main-branch URLs also work in the next PyPI release. Existing
+Their absolute URLs pin the asset commit so PR previews and the next PyPI
+release both work before or after merge. Existing
 square-image URLs are retained and updated for external consumers.
 
 Studio/PWA, server/MCP, plugin and VikingBot icons use the matching E kit.
