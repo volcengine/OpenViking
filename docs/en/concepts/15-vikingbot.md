@@ -14,26 +14,7 @@ Together, they allow an Agent not only to complete the current task, but also to
 
 ## System Overview
 
-```text
-CLI / Feishu / Slack / Telegram / Discord / Email / HTTP API
-                              │
-                              ▼
-                    Channel + MessageBus
-                              │
-                              ▼
-                         AgentLoop
-                Context → Model → Tools → Model
-                    │                   │
-          ┌─────────┴─────────┐         ▼
-          ▼                   ▼    Replies and events
-  OpenViking Context     Tools / Skills
-  Resource / Memory      Files / Shell / Web
-  Experience / Session   MCP / Cron / Subagent
-          │                   │
-          └─────────┬─────────┘
-                    ▼
-        Session synchronization and learning
-```
+<VikingBotOverviewDiagram />
 
 Every entry point ultimately uses the same AgentLoop. Channel-specific events are converted into common messages, so models and tools do not need to know whether a request came from the CLI, Feishu, or an HTTP API.
 

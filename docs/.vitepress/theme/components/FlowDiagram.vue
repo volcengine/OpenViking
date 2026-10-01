@@ -1,8 +1,9 @@
 <script setup>
 import { computed, useId } from 'vue'
 
-// Vertical flow: one box per step, arrows between them. `note` lines are
-// wrapped by the caller so widths stay predictable at phone size.
+// Vertical flow: one box per step, arrows between them. `notes` lines are
+// wrapped by the caller so widths stay predictable at phone size; `edge`
+// labels the arrow to the next step.
 const props = defineProps({
   title: { type: String, required: true },
   desc: { type: String, required: true },
@@ -27,11 +28,13 @@ const layout = computed(() => {
   const boxes = props.steps.map((step, i) => {
     const notes = step.notes ?? []
     const h = 14 + NAME_H + notes.length * NOTE_H
-    const box = { ...step, notes, i, y, h, cy: y + h / 2 }
-    y += h + GAP
+    const gap = step.edge ? GAP + 10 : GAP
+    const box = { ...step, notes, i, y, h, gap }
+    y += h + gap
     return box
   })
-  return { boxes, height: y - GAP + PAD }
+  const last = boxes[boxes.length - 1]
+  return { boxes, height: last.y + last.h + PAD }
 })
 </script>
 
@@ -50,9 +53,15 @@ const layout = computed(() => {
         <path
           v-if="box.i < layout.boxes.length - 1"
           class="arrow"
-          :d="`M${W / 2} ${box.y + box.h}v${GAP - 2}`"
+          :d="`M${W / 2} ${box.y + box.h}v${box.gap - 2}`"
           :marker-end="`url(#${arrowId})`"
         />
+        <text
+          v-if="box.edge && box.i < layout.boxes.length - 1"
+          class="edge"
+          :x="W / 2 + 10"
+          :y="box.y + box.h + box.gap / 2"
+        >{{ box.edge }}</text>
         <rect class="box" :class="{ core: box.i === core }" :x="BOX_X" :y="box.y" :width="BOX_W" :height="box.h" rx="8" />
         <text class="name" :x="W / 2" :y="box.y + 7 + NAME_H / 2">{{ box.name }}</text>
         <text
@@ -93,6 +102,12 @@ text {
 
 .note {
   font-size: 13.5px;
+  fill: var(--vp-c-text-2);
+}
+
+.edge {
+  font-size: 13px;
+  text-anchor: start;
   fill: var(--vp-c-text-2);
 }
 

@@ -4,19 +4,7 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 
 ## Overview
 
-```
-┌─────────────────────────────────────────┐
-│          VikingFS (URI Abstraction)      │
-│    URI Mapping · Hierarchical Access     │
-└────────────────┬────────────────────────┘
-        ┌────────┴────────┐
-        │                 │
-┌───────▼────────┐  ┌─────▼───────────┐
-│  Vector Index  │  │      AGFS       │
-│ (Semantic      │  │ (Content        │
-│  Search)       │  │  Storage)       │
-└────────────────┘  └─────────────────┘
-```
+<StorageLayersDiagram />
 
 ## Dual-Layer Storage
 
