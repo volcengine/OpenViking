@@ -150,18 +150,6 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 <MemoryExtractionDiagram />
 
-<details>
-<summary>文本版本</summary>
-
-```text
-归档消息 + 启用的记忆 schema
-    → ExtractLoop 读取相关记忆并生成更新操作
-    → MemoryUpdater 校验并应用新增、修改和删除
-    → 保存记忆、更新索引、记录 memory_diff.json
-```
-
-</details>
-
 已有记忆会参与提取，更新可以合并或修改现有文件，也可能创建或删除文件。实际操作受记忆 schema、写入权限和输出校验约束，不能把每次提交理解成必然新增记忆。只有产生 case 时，后续训练才会生成 trajectory、experience 或已启用的 session skill。
 
 ### 如何检查更新结果

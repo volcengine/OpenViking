@@ -150,18 +150,6 @@ Within `memory_policy.memory_types`, `experiences` enables the complete Agent Ev
 
 <MemoryExtractionDiagram />
 
-<details>
-<summary>Text version</summary>
-
-```text
-Archived messages + enabled memory schemas
-    → ExtractLoop reads relevant memories and produces update operations
-    → MemoryUpdater validates and applies additions, edits, and deletions
-    → Persist memories, update indexes, and record memory_diff.json
-```
-
-</details>
-
 Existing memories inform extraction. An update can merge or edit existing files, create files, or delete them. Memory schemas, write permissions, and output validation constrain these operations; a commit does not necessarily add a memory. Subsequent training produces trajectories, experiences, or enabled session skills only when extraction yields a case.
 
 ### Checking Update Results
