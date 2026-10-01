@@ -7,6 +7,8 @@
   </picture>
 </a>
 
+### AIエージェントのためのコンテキストデータベース
+
 [English](README.md) / [中文](README_CN.md) / 日本語
 
 <a href="https://www.openviking.ai">Webサイト</a> · <a href="https://openviking.ai/studio">ライブデモ</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">ドキュメント</a> · <a href="https://blog.openviking.ai/">ブログ</a>

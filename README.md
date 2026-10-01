@@ -7,6 +7,8 @@
   </picture>
 </a>
 
+### The Context Database for AI Agents
+
 English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 <a href="https://www.openviking.ai">Website</a> · <a href="https://openviking.ai/studio">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">Docs</a> · <a href="https://blog.openviking.ai/">Blog</a>
