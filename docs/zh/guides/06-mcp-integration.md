@@ -115,8 +115,6 @@ claude mcp add --transport http openviking \
 - `OPENVIKING_PUBLIC_BASE_URL` 与 `oauth` 配置项
 - Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 
-> 社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理是独立的第三方项目。上面的原生流程无需额外部署单元，也不会把 API Key 交给第三方；选择代理时，应单独核对其配置和凭证处理方式。
-
 
 ## 可用的 MCP 工具
 

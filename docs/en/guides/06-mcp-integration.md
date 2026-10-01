@@ -119,9 +119,6 @@ Enable `oauth.enabled` on the server and configure HTTPS as described in the OAu
 - `OPENVIKING_PUBLIC_BASE_URL` and the `oauth` config block
 - Token model (`ovat_` / `ovrt_` / `ovac_` prefixes) and revocation
 
-> The community [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth)
-> Cloudflare Worker proxy is a separate third-party project. The native flow above needs no extra deployment unit and does not pass your API key through a third party; deployments choosing the proxy should review its configuration and credential handling.
-
 
 ## Available MCP Tools
 

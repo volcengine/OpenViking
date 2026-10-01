@@ -11,7 +11,6 @@ const sectionNames: Record<string, string> = {
   guides: 'Guides',
   'agent-integrations': 'Agent Integrations',
   'context-compilation': 'Context Compilation',
-  migration: 'Migration',
   api: 'API Reference',
   faq: 'FAQ',
   about: 'About',
@@ -25,7 +24,6 @@ const zhSectionNames: Record<string, string> = {
   guides: '指南',
   'agent-integrations': 'Agent 集成',
   'context-compilation': '上下文编译',
-  migration: '迁移指南',
   api: 'API 参考',
   faq: '常见问题',
   about: '关于',
@@ -614,30 +612,12 @@ function guidesSection(
   return section
 }
 
-function migrationSection(
-  locale: 'en' | 'zh',
-  title: string,
-  collapsed = true
-): DefaultTheme.SidebarItem {
-  return {
-    text: title,
-    collapsed,
-    items: [
-      {
-        text: '0.3.x → 0.4.0',
-        link: linkFor(path.join(docsRoot, locale, 'migration', '01-user-peer-model.md'))
-      }
-    ]
-  }
-}
-
 type LocalizedSidebarSection =
   | 'getting-started'
   | 'configuration'
   | 'concepts'
   | 'guides'
   | 'agent-integrations'
-  | 'migration'
 
 type LocalizedSidebarSectionBuilder = (
   locale: 'en' | 'zh',
@@ -654,8 +634,7 @@ const localizedSidebarSectionBuilders: Record<
     sidebarSection(`${locale}/configuration`, title, collapsed),
   concepts: conceptsSection,
   guides: guidesSection,
-  'agent-integrations': agentIntegrationSection,
-  migration: migrationSection
+  'agent-integrations': agentIntegrationSection
 }
 
 function localizedSidebarSection(
@@ -707,7 +686,7 @@ export function documentationSections(locale: 'en' | 'zh') {
   return [
     ...localizedGroupedSidebarItems(locale, ['getting-started', 'configuration', 'agent-integrations']),
     ...localizedSectionSidebarItems(locale, 'concepts'),
-    ...localizedGroupedSidebarItems(locale, ['guides', 'migration']),
+    ...localizedGroupedSidebarItems(locale, ['guides']),
     ...localizedReferenceSidebarItems(locale),
     sidebarSection(`${locale}/faq`, labels.faq, false),
     ...localizedAboutSidebarItems(locale)

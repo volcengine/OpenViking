@@ -57,7 +57,7 @@ const navLabels = {
 const enNav: DefaultTheme.NavItem[] = [
   { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
-  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration|context-compilation)/' },
+  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|context-compilation)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
@@ -66,7 +66,7 @@ const enNav: DefaultTheme.NavItem[] = [
 const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
-  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration|context-compilation)/' },
+  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|context-compilation)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
@@ -309,10 +309,9 @@ export default defineConfig({
           '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/configuration/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
-          '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
+          '/en/guides/': localizedGroupedSidebarItems('en', ['guides']),
           '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
-          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
-          '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
+          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/faq/': [sidebarSection('en/faq', 'FAQ', false)],
           '/en/about/': localizedAboutSidebarItems('en'),
@@ -333,10 +332,9 @@ export default defineConfig({
           '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/configuration/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
-          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
+          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides']),
           '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
-          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
-          '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
+          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides']),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/faq/': [sidebarSection('zh/faq', '常见问题', false)],
           '/zh/about/': localizedAboutSidebarItems('zh')
