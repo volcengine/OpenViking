@@ -169,3 +169,93 @@ async def test_get_experience_outcome_distribution_passes_date_range(
     assert response.status_code == 200
     assert captured["start_date"] == "2026-08-01"
     assert captured["end_date"] == "2026-08-10"
+
+
+async def test_get_experience_usage_counts_from_usage_audit(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    captured = {}
+
+    async def fake_usage(**kwargs):
+        captured.update(kwargs)
+        return {
+            "experience_uri": kwargs["experience_uri"],
+            "available": kwargs["store"] is not None,
+            "recall_count": 3,
+            "inject_count": 1,
+        }
+
+    monkeypatch.setattr(service.agent_evolution, "get_experience_usage", fake_usage)
+    uri = "viking://user/default/memories/experiences/exchange.md"
+    response = await client.get(
+        "/api/v1/agent-evolution/experiences/usage",
+        params={"experience_uri": uri, "start_date": "2026-09-01"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["recall_count"] == 3
+    assert captured["experience_uri"] == uri
+    assert captured["start_date"] == "2026-09-01"
+    assert captured["end_date"] is None
+
+
+async def test_get_experience_usage_rejects_other_users_experience(
+    client: httpx.AsyncClient,
+):
+    response = await client.get(
+        "/api/v1/agent-evolution/experiences/usage",
+        params={"experience_uri": "viking://user/someone-else/memories/experiences/x.md"},
+    )
+
+    assert response.status_code in (400, 403)
+
+
+async def test_auto_recall_is_counted_end_to_end(client, app, service, monkeypatch, tmp_path):
+    """HTTP context recall -> reporter -> event bus -> Usage/Audit -> usage query."""
+    import asyncio
+
+    from openviking.observability.usage_audit import (
+        init_usage_audit_from_server_config,
+        shutdown_usage_audit,
+    )
+    from openviking.retrieve.context_assembler.models import AssembledEntry, AssembleResult
+    from openviking.server.config import ServerConfig
+    from openviking.server.routers import search as search_router
+
+    config = ServerConfig()
+    config.observability.usage_audit.sqlite_path = str(tmp_path / "usage.sqlite3")
+    runtime = await init_usage_audit_from_server_config(config, app=app, service=service)
+    uri = "viking://user/default/memories/experiences/exchange.md"
+
+    async def fake_assemble(*, service, ctx, params):
+        return AssembleResult(
+            entries=[AssembledEntry(uri=uri, category="experiences", score=0.9, detail="abstract")],
+            stats={},
+        )
+
+    async def evolution_on(account_id):
+        return True
+
+    monkeypatch.setattr(search_router, "assemble_context", fake_assemble)
+    monkeypatch.setattr(service.sessions, "get_agent_evolution_enabled", evolution_on)
+    try:
+        response = await client.post(
+            "/api/v1/search/search", json={"query": "fix lock", "mode": "context"}
+        )
+        assert response.status_code == 200
+        await asyncio.gather(*search_router._USAGE_REPORT_TASKS)
+        await runtime.worker.flush()
+
+        usage = await client.get(
+            "/api/v1/agent-evolution/experiences/usage", params={"experience_uri": uri}
+        )
+        assert usage.json()["result"] == {
+            "experience_uri": uri,
+            "available": True,
+            "recall_count": 1,
+            "inject_count": 0,
+        }
+    finally:
+        await shutdown_usage_audit(app=app)

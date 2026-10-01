@@ -135,6 +135,10 @@ class SessionService:
         """Set the usage reporter for newly created sessions."""
         self._usage_reporter = usage_reporter
 
+    @property
+    def usage_reporter(self) -> Optional["UsageReporter"]:
+        return self._usage_reporter
+
     def set_session_auto_commit_config(self, config: SessionAutoCommitConfig) -> None:
         """Set server-wide controls for automatic session commits."""
         self._session_auto_commit_config = config.model_copy(deep=True)

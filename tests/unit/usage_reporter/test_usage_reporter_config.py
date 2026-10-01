@@ -9,7 +9,12 @@ import pytest
 
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UsageReporterConfig
-from openviking.usage_reporter import FileLogUsageSink, UsageContext, UsageEvent
+from openviking.usage_reporter import (
+    EventBusUsageSink,
+    FileLogUsageSink,
+    UsageContext,
+    UsageEvent,
+)
 from openviking.usage_reporter.config import build_usage_reporter
 
 
@@ -100,10 +105,11 @@ def test_builtin_file_log_sink_is_built_from_config(tmp_path, monkeypatch):
     )
 
     assert reporter is not None
-    assert len(reporter.sinks) == 1
-    assert isinstance(reporter.sinks[0], FileLogUsageSink)
-    assert reporter.sinks[0].path == log_path
-    reporter.sinks[0].close()
+    assert len(reporter.sinks) == 2
+    assert isinstance(reporter.sinks[0], EventBusUsageSink)
+    assert isinstance(reporter.sinks[1], FileLogUsageSink)
+    assert reporter.sinks[1].path == log_path
+    reporter.sinks[1].close()
 
 
 async def test_app_reuses_and_closes_usage_reporter(monkeypatch):

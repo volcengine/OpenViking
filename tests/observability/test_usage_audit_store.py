@@ -444,7 +444,7 @@ async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_pa
         assert "hour_utc" in context_columns
         assert "hour_bucket" not in context_columns
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        assert version == ("6",)
     finally:
         conn.close()
 
@@ -520,8 +520,12 @@ async def test_sqlite_usage_audit_store_migrates_v4_without_losing_rows(tmp_path
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(request_audit)")}
         assert {"error_code", "error_message", "error_details"} <= columns
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert "usage_experience_event" in tables
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version == ("5",)
+        assert version == ("6",)
     finally:
         conn.close()
 
@@ -537,20 +541,20 @@ async def test_sqlite_usage_audit_store_rejects_unhandled_future_migration_witho
     await store.initialize()
     await store.close()
 
-    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 6)
+    monkeypatch.setattr(sqlite_store_module, "SCHEMA_VERSION", 7)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         with pytest.raises(
             RuntimeError,
-            match="No usage/audit schema migration path from version 5 to 6",
+            match="No usage/audit schema migration path from version 6 to 7",
         ):
             SQLiteUsageAuditStore._migrate_legacy_sync(conn)
 
         assert conn.execute("SELECT COUNT(*) FROM request_audit").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM usage_token_hourly").fetchone()[0] == 1
         version = conn.execute("SELECT value FROM _schema_meta WHERE key = 'version'").fetchone()
-        assert version[0] == "5"
+        assert version[0] == "6"
     finally:
         conn.close()
 

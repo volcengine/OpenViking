@@ -34,15 +34,13 @@ _TRAJECTORY_OUTPUT_FIELDS = [
 ]
 
 
-def _trajectory_created_at_range(
+def _utc_date_bounds(
     start_date: Optional[str],
     end_date: Optional[str],
-) -> Optional[TimeRange]:
-    """Build a UTC, end-date-inclusive filter over trajectory creation time."""
+) -> tuple[Optional[date], Optional[date]]:
+    """Validate optional inclusive YYYY-MM-DD bounds."""
     normalized_start = (start_date or "").strip()
     normalized_end = (end_date or "").strip()
-    if not normalized_start and not normalized_end:
-        return None
 
     def parse_date(value: str, field: str) -> date:
         try:
@@ -57,6 +55,17 @@ def _trajectory_created_at_range(
     end = parse_date(normalized_end, "end_date") if normalized_end else None
     if start is not None and end is not None and start > end:
         raise InvalidArgumentError("start_date must be earlier than or equal to end_date")
+    return start, end
+
+
+def _trajectory_created_at_range(
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> Optional[TimeRange]:
+    """Build a UTC, end-date-inclusive filter over trajectory creation time."""
+    start, end = _utc_date_bounds(start_date, end_date)
+    if start is None and end is None:
+        return None
 
     start_time = (
         datetime.combine(start, time.min, tzinfo=timezone.utc).isoformat()
@@ -225,3 +234,40 @@ class AgentEvolutionService:
                 for outcome, count in zip(TRAJECTORY_OUTCOMES, counts, strict=True)
             ],
         }
+
+    async def get_experience_usage(
+        self,
+        *,
+        experience_uri: str,
+        ctx: RequestContext,
+        store: Any,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Count recall/inject usage events for an Experience over UTC dates.
+
+        ``store`` is the Usage/Audit store; ``None`` means usage is not persisted
+        on this server, reported as ``available: false`` rather than zeros.
+        """
+        start, end = _utc_date_bounds(start_date, end_date)
+        canonical_uri = canonical_experience_uri(experience_uri, ctx)
+        if canonical_uri is None:
+            raise InvalidArgumentError(
+                "experience_uri must identify an Experience owned by the current user"
+            )
+        result: dict[str, Any] = {
+            "experience_uri": canonical_uri,
+            "available": store is not None,
+            "recall_count": 0,
+            "inject_count": 0,
+        }
+        if store is not None:
+            result.update(
+                await store.get_experience_usage(
+                    account_id=ctx.account_id,
+                    resource_uri=canonical_uri,
+                    start_date_utc=start.isoformat() if start else None,
+                    end_date_utc=end.isoformat() if end else None,
+                )
+            )
+        return result
