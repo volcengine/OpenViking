@@ -31,13 +31,13 @@ This work involves three related problems: extracting searchable information fro
 
 ### Development History and Technical Evolution
 
-| Period | Work |
-| --- | --- |
-| 2019–2023 | VikingDB used for vector retrieval within ByteDance |
-| 2024 | VikingDB, Viking Knowledge Base, and Viking Memory Base offered on Volcengine, used by thousands of enterprise customers to build AI applications |
-| 2025 | Expanded into AI search and knowledge assistants |
-| Late 2025 | Open-sourced [MineContext](https://github.com/volcengine/MineContext) to explore proactive context applications |
-| Early 2026 | Open-sourced OpenViking |
+| Time Period | Milestone | Technical Breakthroughs and Industry Impact |
+|-------------|-----------|---------------------------------------------|
+| **2019–2023** | VikingDB vector database widely adopted inside ByteDance | Powered multiple core products’ unstructured information retrieval; accumulated engineering experience in large-scale vector retrieval; validated the technical value of vector databases in real-world business scenarios |
+| **2024** | Released developer-facing product matrix: VikingDB, Viking Knowledge Base, Viking Memory Base | Officially provided on Volcano Engine public cloud; successfully supported thousands of enterprise customers building AI-native applications; marked the successful transition from internal tooling to commercial products |
+| **2025** | Expanded to upper-layer applications such as AI Search and Knowledge Assistants | Built a complete product matrix from infrastructure to application layer; further validated business value across scenarios; formed a full loop from technology to product |
+| **Late 2025** | Open-sourced [MineContext](https://github.com/volcengine/MineContext) project | Explored proactive AI application patterns; validated personal context engineering ideas; accumulated community operation experience for OpenViking |
+| **Early 2026** | Open-sourced OpenViking project | Released a newly designed context database architecture for the global AI Agent ecosystem; marked the strategic shift from commercial product provider to open-source contributor |
 
 ### Academic Collaboration and Industry–Academia Integration
 
