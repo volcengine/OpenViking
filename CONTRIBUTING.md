@@ -1,6 +1,8 @@
 # Contributing to OpenViking
 
-English / [中文](CONTRIBUTING_CN.md) / [日本語](CONTRIBUTING_JA.md)
+English / [中文](docs/repository/CONTRIBUTING_CN.md) / [日本語](docs/repository/CONTRIBUTING_JA.md)
+
+Maintainer release guides: [English](docs/repository/RELEASE.md) / [中文](docs/repository/RELEASE_CN.md).
 
 Thank you for contributing to OpenViking. This guide exists to help contributors
 submit changes that are clear, focused, and practical to review.

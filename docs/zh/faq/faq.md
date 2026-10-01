@@ -82,7 +82,7 @@ OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Pyth
 
 ### 遇到 "AGFS binding library not found" 错误怎么办？
 
-这通常表示 RAGFS 共享库缺失或无法加载。先检查 Python 版本和平台是否有对应的预编译 wheel，并尝试重新安装。只有平台缺少 wheel 或需要修改源码时才[从源码构建](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)，届时需准备原生编译工具链。
+这通常表示 RAGFS 共享库缺失或无法加载。先检查 Python 版本和平台是否有对应的预编译 wheel，并尝试重新安装。只有平台缺少 wheel 或需要修改源码时才[从源码构建](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md)，届时需准备原生编译工具链。
 
 ### 如何安装 OpenViking？
 

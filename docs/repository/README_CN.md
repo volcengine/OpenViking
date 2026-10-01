@@ -9,7 +9,7 @@
 
 ### AI 智能体的上下文数据库
 
-[English](README.md) / 中文 / [日本語](README_JA.md)
+[English](../../README.md) / 中文 / [日本語](README_JA.md)
 
 <a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a> · <a href="https://blog.openviking.ai/">博客</a>
 
@@ -27,10 +27,10 @@
 </p>
 
 <p>
-  <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="docs/images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> ·
-  <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> ·
-  <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> ·
-  <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
+  <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="../images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> ·
+  <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="../images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> ·
+  <a href="https://discord.com/invite/eHvx8E9XF3"><img src="../images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> ·
+  <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/community/x-dark.svg"><img src="../images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
 </p>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -47,12 +47,12 @@ OpenViking 是面向 AI 智能体的开源上下文数据库——用一个文�
 
 <a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-playground-dark.png">
-    <img src="docs/images/studio-playground.png" alt="OpenViking Studio：浏览上下文，体验语义检索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
+    <img src="../images/studio-playground.png" alt="OpenViking Studio：浏览上下文，体验语义检索">
   </picture>
 </a>
 
-[在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。 [自行部署 Web Studio](web-studio/README_CN.md)。
+[在线体验 OpenViking Studio](https://openviking.ai/studio)，无需安装。 [自行部署 Web Studio](../../web-studio/README_CN.md)。
 
 ## 为什么用 OpenViking
 
@@ -108,13 +108,13 @@ viking://resources/my_project/
 
 ## 评测结果
 
-OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](./benchmark)。
+OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智能体任务（tau2-bench）。完整结果和实验设置（含知识库问答）见[评测报告](https://blog.openviking.ai/post/openviking-benchmark-results/)，复现脚本在 [./benchmark](../../benchmark)。
 
 记忆评测使用 [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) 作为 VLM，使用 [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) 作为 Embedding 模型。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
-  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="../images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="../images/benchmark-light.svg">
 </picture>
 
 - **用户记忆（LoCoMo）**：接入 OpenViking 后，三种 Agent 集成的准确率都到 80–83%，原生记忆只有 24–57%；同时输入 token 减少 34.3%–91.0%，查询时延降低 58.45%–66.10%。
@@ -180,7 +180,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 `ov find` 返回匹配的上下文及其 URI，可继续查看内容。客户端配置（`ov config`）、CLI 独立安装和索引维护，见 [CLI 安装](https://docs.openviking.ai/zh/getting-started/05-cli-setup)。
 
-构建自己的应用，可使用 [Python](sdk/python/README_CN.md)、[Go](sdk/go/README_CN.md)、[TypeScript](sdk/typescript/README_CN.md) SDK 或 [HTTP API](https://docs.openviking.ai/zh/api/01-overview)。
+构建自己的应用，可使用 [Python](../../sdk/python/README_CN.md)、[Go](../../sdk/go/README_CN.md)、[TypeScript](../../sdk/typescript/README_CN.md) SDK 或 [HTTP API](https://docs.openviking.ai/zh/api/01-overview)。
 
 ## 接入你的 Agent
 
@@ -241,27 +241,27 @@ Codex 首次启动会停在 `Hooks need review`，选 `Trust all and continue`�
 <tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="docs/images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/02-claude-code"><img src="../images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/openai-dark.svg"><img src="docs/images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/openai-dark.svg"><img src="../images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="docs/images/integrations/logos/cursor.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/12-cursor"><img src="../images/integrations/logos/cursor.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="docs/images/integrations/logos/trae.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/13-trae"><img src="../images/integrations/logos/trae.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="docs/images/integrations/logos/openclaw.png" width="32" height="32" alt=""><br><strong>OpenClaw</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/03-openclaw"><img src="../images/integrations/logos/openclaw.png" width="32" height="32" alt=""><br><strong>OpenClaw</strong></a><br>
 <sub>上下文引擎</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="docs/images/integrations/logos/hermes-agent.png" width="32" height="32" alt=""><br><strong>Hermes</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/05-hermes"><img src="../images/integrations/logos/hermes-agent.png" width="32" height="32" alt=""><br><strong>Hermes</strong></a><br>
 <sub>内置记忆</sub>
 </td>
 </tr>
@@ -269,27 +269,27 @@ Codex 首次启动会停在 `Hooks need review`，选 `Trust all and continue`�
 <tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="docs/images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/10-opencode"><img src="../images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/pi-dark.svg"><img src="docs/images/integrations/logos/pi.svg" width="32" height="32" alt=""></picture><br><strong>pi</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/pi-dark.svg"><img src="../images/integrations/logos/pi.svg" width="32" height="32" alt=""></picture><br><strong>pi</strong></a><br>
 <sub>原生扩展</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="docs/images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/deerflow-dark.svg"><img src="docs/images/integrations/logos/deerflow.svg" width="32" height="32" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<a href="../images/agents/zh/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/deerflow-dark.svg"><img src="../images/integrations/logos/deerflow.svg" width="32" height="32" alt=""></picture><br><strong>DeerFlow</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/17-dsh"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/dsh-dark.svg"><img src="docs/images/integrations/logos/dsh.svg" width="32" height="32" alt=""></picture><br><strong>DSH</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/17-dsh"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/dsh-dark.svg"><img src="../images/integrations/logos/dsh.svg" width="32" height="32" alt=""></picture><br><strong>DSH</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="docs/images/agents/zh/doubao-work.md"><img src="docs/images/integrations/logos/doubao-work.png" width="32" height="32" alt=""><br><strong>豆包工作</strong></a><br>
+<a href="../images/agents/zh/doubao-work.md"><img src="../images/integrations/logos/doubao-work.png" width="32" height="32" alt=""><br><strong>豆包工作</strong></a><br>
 <sub>连接器</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/logos/langchain.svg" width="32" height="32" alt=""><br><strong>LangChain</strong></a><br>
+<a href="https://docs.openviking.ai/zh/agent-integrations/07-langchain-langgraph"><img src="../images/integrations/logos/langchain.svg" width="32" height="32" alt=""><br><strong>LangChain</strong></a><br>
 <sub>工具&nbsp;+&nbsp;存储</sub>
 </td>
 </tr>
@@ -301,10 +301,10 @@ Codex 首次启动会停在 `Hooks need review`，选 `Trust all and continue`�
 <table>
 <tr>
 <td align="center" valign="bottom" width="50%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/logos/agent-plugins.svg" width="32" height="32" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+<a href="https://docs.openviking.ai/zh/agent-integrations/15-agent-plugins"><img src="../images/integrations/logos/agent-plugins.svg" width="32" height="32" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="50%">
-<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/logos/mcp.svg" width="32" height="32" alt=""><br><strong>MCP&nbsp;客&#8288;户&#8288;端</strong></a>
+<a href="https://docs.openviking.ai/zh/agent-integrations/06-mcp-clients"><img src="../images/integrations/logos/mcp.svg" width="32" height="32" alt=""><br><strong>MCP&nbsp;客&#8288;户&#8288;端</strong></a>
 </td>
 </tr>
 </table>
@@ -335,7 +335,7 @@ ov chat   # 在另一个终端运行
 
 ## 生产部署
 
-开源服务器采用 [AGPLv3](LICENSE)，可在自己的环境部署，无需激活码。见[服务器配置](https://docs.openviking.ai/zh/getting-started/03-quickstart-server)和 [Docker 与部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
+开源服务器采用 [AGPLv3](../../LICENSE)，可在自己的环境部署，无需激活码。见[服务器配置](https://docs.openviking.ai/zh/getting-started/03-quickstart-server)和 [Docker 与部署指南](https://docs.openviking.ai/zh/guides/03-deployment)。
 
 服务器支持[账号与用户隔离](https://docs.openviking.ai/zh/concepts/11-multi-tenant)，并可按需启用[资源 ACL](https://docs.openviking.ai/zh/concepts/15-acl)。开放非本机访问前，需配置[身份认证](https://docs.openviking.ai/zh/guides/04-authentication)。
 
@@ -345,7 +345,7 @@ ov chat   # 在另一个终端运行
 <tr>
 <td width="50%" valign="top">
 
-<img src="docs/images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
+<img src="../images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
 
 <h3>☁️ 商业化 SaaS 版</h3>
 <p>由<a href="https://www.volcengine.com/product/openviking-service">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。中国以外地区的托管服务计划在 <a href="https://www.byteplus.com">BytePlus</a> 上线。</p>
@@ -353,7 +353,7 @@ ov chat   # 在另一个终端运行
 </td>
 <td width="50%" valign="top">
 
-<img src="docs/images/commercial-self-hosted.png" alt="私有化部署版" width="100%" />
+<img src="../images/commercial-self-hosted.png" alt="私有化部署版" width="100%" />
 
 <h3>🏢 私有化部署版</h3>
 <p>部署在自己的云账号 / VPC（BYOC）或离线环境中，提供分布式部署和官方技术支持，通过激活码启用。<a href="https://my.feishu.cn/share/base/form/shrcnMFqymCd9sq77sLk34Krxoc">咨询私有化部署</a>。</p>
@@ -399,7 +399,7 @@ ov chat   # 在另一个终端运行
 - **文档**：[docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/zh/faq/faq)
 - **博客**：[blog.openviking.ai](https://blog.openviking.ai/)
 - **团队**：[关于我们](https://docs.openviking.ai/zh/about/01-about-us)
-- **交流**：<a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="docs/images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> · <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> · <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
+- **交流**：<a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="../images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="../images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> · <a href="https://discord.com/invite/eHvx8E9XF3"><img src="../images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> · <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/community/x-dark.svg"><img src="../images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
 - **贡献**：修 bug、加新功能都欢迎——见 [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md)
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
@@ -408,13 +408,13 @@ ov chat   # 在另一个终端运行
 
 ## 安全与隐私
 
-漏洞报告方式和受支持的版本，见 [SECURITY.md](SECURITY.md)
+漏洞报告方式和受支持的版本，见 [SECURITY.md](../../SECURITY.md)
 
 ## 许可证
 
 OpenViking 各组件采用不同的许可证：
 
-- **主项目**：AGPLv3——详见 [LICENSE](./LICENSE)
-- **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](./crates/LICENSE)
-- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)。`examples/hermes-plugin` 中的 Hermes 插件保留其 [MIT 许可证](./examples/hermes-plugin/LICENSE)。
+- **主项目**：AGPLv3——详见 [LICENSE](../../LICENSE)
+- **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](../../crates/LICENSE)
+- **examples**：Apache 2.0——详见 [LICENSE](../../examples/LICENSE)。`examples/hermes-plugin` 中的 Hermes 插件保留其 [MIT 许可证](../../examples/hermes-plugin/LICENSE)。
 - **third\_party**：各三方项目保留其原有协议

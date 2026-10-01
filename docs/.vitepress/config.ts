@@ -232,6 +232,8 @@ export default defineConfig({
   // The existing Markdown corpus links to examples, bot docs, localhost snippets,
   // and historical design notes that are outside the VitePress page tree.
   ignoreDeadLinks: true,
+  // Repository translations and maintainer guides are browsed on GitHub.
+  srcExclude: ['repository/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],

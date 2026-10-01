@@ -80,7 +80,7 @@ OpenViking 自启动起就与高校和研究机构合作，共同探索面向 AI
 
 开源治理委员会负责技术路线、版本与功能优先级、核心架构和兼容性评审、工程规范、贡献者协作，以及相关项目的集成。成员包括 Maojia Sheng（[@MaojiaSheng](https://github.com/MaojiaSheng)）、Haojie Qin（[@qin-ctx](https://github.com/qin-ctx)）、Jiahui Zhou（[@zhoujh01](https://github.com/zhoujh01)）、Zhiheng Liu（[@ZaynJarvis](https://github.com/ZaynJarvis)）。符合条件的社区贡献者可以通过后续的提名与选举程序加入委员会。
 
-具体模块的协作入口和近期活跃评审者见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
+具体模块的协作入口和近期活跃评审者见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md)。
 
 功能建议和问题在 [GitHub Issues](https://github.com/volcengine/OpenViking/issues) 讨论，代码与文档变更通过 Pull Request 评审。涉及公开接口、数据存储、权限边界或跨模块架构的改动，请先说明当前行为、目标行为、请求或配置示例，以及兼容性影响，再开始实现。
 
@@ -107,11 +107,11 @@ OpenViking 自启动起就与高校和研究机构合作，共同探索面向 AI
 ### 参与方式
 
 - **报告问题或提建议**：在 [Issues](https://github.com/volcengine/OpenViking/issues) 提供场景、版本和复现步骤。
-- **改代码或文档**：阅读[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)，提交实现、测试、文档或翻译。
+- **改代码或文档**：阅读[贡献指南](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md)，提交实现、测试、文档或翻译。
 - **开发集成**：为 Agent 工具或框架添加插件，参考[插件开发指南](../agent-integrations/18-plugin-development.md)。
 - **分享经验**：在社区分享使用案例、排障过程，或帮助其他用户解决问题。
 
-Issue 和 PR 需要提供的信息见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
+Issue 和 PR 需要提供的信息见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md)。
 
 ## 讨论与协作机制
 

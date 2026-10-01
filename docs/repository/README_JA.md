@@ -9,7 +9,7 @@
 
 ### AIエージェントのためのコンテキストデータベース
 
-[English](README.md) / [中文](README_CN.md) / 日本語
+[English](../../README.md) / [中文](README_CN.md) / 日本語
 
 <a href="https://www.openviking.ai">Webサイト</a> · <a href="https://openviking.ai/studio">ライブデモ</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">ドキュメント</a> · <a href="https://blog.openviking.ai/">ブログ</a>
 
@@ -27,10 +27,10 @@
 </p>
 
 <p>
-  <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group"><img src="docs/images/community/lark.svg" width="18" height="18" alt="Lark">&nbsp;Lark</a> ·
-  <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="WeChat">&nbsp;WeChat</a> ·
-  <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> ·
-  <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
+  <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group"><img src="../images/community/lark.svg" width="18" height="18" alt="Lark">&nbsp;Lark</a> ·
+  <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group"><img src="../images/community/wechat.svg" width="18" height="18" alt="WeChat">&nbsp;WeChat</a> ·
+  <a href="https://discord.com/invite/eHvx8E9XF3"><img src="../images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> ·
+  <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/community/x-dark.svg"><img src="../images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
 </p>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -47,12 +47,12 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 <a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-playground-dark.png">
-    <img src="docs/images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
+    <img src="../images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
   </picture>
 </a>
 
-[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](web-studio/README.md)。
+[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](../../web-studio/README.md)。
 
 ## OpenVikingを選ぶ理由
 
@@ -108,13 +108,13 @@ viking://resources/my_project/
 
 ## 実証データ
 
-OpenViking 0.3.22 は、長い会話でのユーザーメモリ（LoCoMo）と複数ターンのエージェントタスク（tau2-bench）で評価されています。ナレッジベースQAを含む完全な結果と実験設定は[ベンチマークレポート](https://blog.openviking.ai/post/openviking-benchmark-results/)を、再現用スクリプトは [./benchmark](./benchmark) を参照してください。
+OpenViking 0.3.22 は、長い会話でのユーザーメモリ（LoCoMo）と複数ターンのエージェントタスク（tau2-bench）で評価されています。ナレッジベースQAを含む完全な結果と実験設定は[ベンチマークレポート](https://blog.openviking.ai/post/openviking-benchmark-results/)を、再現用スクリプトは [./benchmark](../../benchmark) を参照してください。
 
 メモリ評価では、VLM に [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro)、Embedding モデルに [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) を使用しました。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/benchmark-dark.svg">
-  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="docs/images/benchmark-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="../images/benchmark-dark.svg">
+  <img alt="Benchmark results. LoCoMo accuracy: OpenClaw 24.20% native vs 82.08% with OpenViking; Hermes 33.38% vs 82.86%; Claude Code 57.21% vs 80.32%. tau2-bench task success: Retail 70.94% vs 77.81%; Airline 54.38% vs 66.25%." src="../images/benchmark-light.svg">
 </picture>
 
 - **ユーザーメモリ（LoCoMo）**: OpenViking を接続すると、3つのエージェント統合すべてで精度が 80–83% に達します（ネイティブメモリでは 24–57%）。同時に入力 token は 34.3–91.0%、クエリレイテンシは 58.45–66.10% 削減されます。
@@ -181,7 +181,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 
 `ov find` は一致したコンテキストと URI を返します。クライアント設定（`ov config`）、CLI の単体インストール、インデックス管理は [CLI セットアップ](https://docs.openviking.ai/en/getting-started/05-cli-setup)を参照してください。
 
-独自のアプリには [Python](sdk/python/README.md)、[Go](sdk/go/README.md)、[TypeScript](sdk/typescript/README.md) SDK、または [HTTP API](https://docs.openviking.ai/en/api/01-overview) を使えます。
+独自のアプリには [Python](../../sdk/python/README.md)、[Go](../../sdk/go/README.md)、[TypeScript](../../sdk/typescript/README.md) SDK、または [HTTP API](https://docs.openviking.ai/en/api/01-overview) を使えます。
 
 ## エージェントと組み合わせて使う
 
@@ -248,27 +248,27 @@ Codex は初回起動時に `Hooks need review` で止まるので、`Trust all 
 <tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="../images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/openai-dark.svg"><img src="docs/images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/openai-dark.svg"><img src="../images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/integrations/logos/cursor.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="../images/integrations/logos/cursor.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/integrations/logos/trae.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="../images/integrations/logos/trae.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
 <sub>Hooks&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/logos/openclaw.png" width="32" height="32" alt=""><br><strong>OpenClaw</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="../images/integrations/logos/openclaw.png" width="32" height="32" alt=""><br><strong>OpenClaw</strong></a><br>
 <sub>コンテキストエンジン</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/logos/hermes-agent.png" width="32" height="32" alt=""><br><strong>Hermes</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="../images/integrations/logos/hermes-agent.png" width="32" height="32" alt=""><br><strong>Hermes</strong></a><br>
 <sub>内蔵メモリ</sub>
 </td>
 </tr>
@@ -276,27 +276,27 @@ Codex は初回起動時に `Hooks need review` で止まるので、`Trust all 
 <tbody>
 <tr>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="../images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/pi-dark.svg"><img src="docs/images/integrations/logos/pi.svg" width="32" height="32" alt=""></picture><br><strong>pi</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/pi-dark.svg"><img src="../images/integrations/logos/pi.svg" width="32" height="32" alt=""></picture><br><strong>pi</strong></a><br>
 <sub>ネイティブ拡張</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/deerflow-dark.svg"><img src="docs/images/integrations/logos/deerflow.svg" width="32" height="32" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<a href="../images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/deerflow-dark.svg"><img src="../images/integrations/logos/deerflow.svg" width="32" height="32" alt=""></picture><br><strong>DeerFlow</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/17-dsh"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/dsh-dark.svg"><img src="docs/images/integrations/logos/dsh.svg" width="32" height="32" alt=""></picture><br><strong>DSH</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/17-dsh"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/integrations/logos/dsh-dark.svg"><img src="../images/integrations/logos/dsh.svg" width="32" height="32" alt=""></picture><br><strong>DSH</strong></a><br>
 <sub>Plugin&nbsp;+&nbsp;MCP</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="docs/images/agents/en/doubao-work.md"><img src="docs/images/integrations/logos/doubao-work.png" width="32" height="32" alt=""><br><strong>Doubao&nbsp;Work</strong></a><br>
+<a href="../images/agents/en/doubao-work.md"><img src="../images/integrations/logos/doubao-work.png" width="32" height="32" alt=""><br><strong>Doubao&nbsp;Work</strong></a><br>
 <sub>コネクタ</sub>
 </td>
 <td align="center" valign="bottom" width="16%">
-<a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/logos/langchain.svg" width="32" height="32" alt=""><br><strong>LangChain</strong></a><br>
+<a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="../images/integrations/logos/langchain.svg" width="32" height="32" alt=""><br><strong>LangChain</strong></a><br>
 <sub>ツール&nbsp;+&nbsp;ストア</sub>
 </td>
 </tr>
@@ -308,10 +308,10 @@ Codex は初回起動時に `Hooks need review` で止まるので、`Trust all 
 <table>
 <tr>
 <td align="center" valign="bottom" width="50%">
-<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/logos/agent-plugins.svg" width="32" height="32" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="../images/integrations/logos/agent-plugins.svg" width="32" height="32" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
 </td>
 <td align="center" valign="bottom" width="50%">
-<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/logos/mcp.svg" width="32" height="32" alt=""><br><strong>MCP&nbsp;ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="../images/integrations/logos/mcp.svg" width="32" height="32" alt=""><br><strong>MCP&nbsp;ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
 </td>
 </tr>
 </table>
@@ -342,7 +342,7 @@ ov chat   # 別のターミナルで実行
 
 ## 本番環境へのデプロイ
 
-オープンソースのサーバーは [AGPLv3](LICENSE) のもとで自分の環境にデプロイでき、アクティベーションキーは不要です。[サーバー設定](https://docs.openviking.ai/en/getting-started/03-quickstart-server) · [Docker とデプロイのガイド](https://docs.openviking.ai/en/guides/03-deployment)
+オープンソースのサーバーは [AGPLv3](../../LICENSE) のもとで自分の環境にデプロイでき、アクティベーションキーは不要です。[サーバー設定](https://docs.openviking.ai/en/getting-started/03-quickstart-server) · [Docker とデプロイのガイド](https://docs.openviking.ai/en/guides/03-deployment)
 
 サーバーは[アカウントとユーザーの分離](https://docs.openviking.ai/en/concepts/11-multi-tenant)に対応し、[リソース ACL](https://docs.openviking.ai/en/concepts/15-acl)を必要に応じて有効にできます。localhost 以外から接続する前に[認証](https://docs.openviking.ai/en/guides/04-authentication)を設定してください。
 
@@ -352,7 +352,7 @@ ov chat   # 別のターミナルで実行
 <tr>
 <td width="50%" valign="top">
 
-<img src="docs/images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
+<img src="../images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
 <p><a href="https://www.volcengine.com/product/openviking-service">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
@@ -360,7 +360,7 @@ ov chat   # 別のターミナルで実行
 </td>
 <td width="50%" valign="top">
 
-<img src="docs/images/commercial-self-hosted.png" alt="プライベートデプロイ版" width="100%" />
+<img src="../images/commercial-self-hosted.png" alt="プライベートデプロイ版" width="100%" />
 
 <h3>🏢 プライベートデプロイ版</h3>
 <p>自社のクラウドアカウント / VPC（BYOC）、またはオフライン環境にデプロイできます。分散デプロイと公式サポートを提供し、ライセンスキーで有効化します。<a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform">チームに問い合わせる</a>。</p>
@@ -406,7 +406,7 @@ ov chat   # 別のターミナルで実行
 - **ドキュメント**: [docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/en/faq/faq)
 - **ブログ**: [blog.openviking.ai](https://blog.openviking.ai/)
 - **チーム**: [About us](https://docs.openviking.ai/en/about/01-about-us)
-- **チャット**: <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group"><img src="docs/images/community/lark.svg" width="18" height="18" alt="Lark">&nbsp;Lark</a> · <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="WeChat">&nbsp;WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> · <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
+- **チャット**: <a href="https://docs.openviking.ai/en/about/01-about-us#lark-group"><img src="../images/community/lark.svg" width="18" height="18" alt="Lark">&nbsp;Lark</a> · <a href="https://docs.openviking.ai/en/about/01-about-us#wechat-group"><img src="../images/community/wechat.svg" width="18" height="18" alt="WeChat">&nbsp;WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3"><img src="../images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> · <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="../images/community/x-dark.svg"><img src="../images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
 - **コントリビュート**: バグ修正も新機能も歓迎します — [CONTRIBUTING_JA.md](CONTRIBUTING_JA.md) を参照してください
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
@@ -415,13 +415,13 @@ ov chat   # 別のターミナルで実行
 
 ## セキュリティとプライバシー
 
-脆弱性の報告方法とサポート対象バージョンについては、[SECURITY.md](SECURITY.md) を参照してください
+脆弱性の報告方法とサポート対象バージョンについては、[SECURITY.md](../../SECURITY.md) を参照してください
 
 ## ライセンス
 
 OpenViking プロジェクトは、コンポーネントごとに異なるライセンスを使用しています:
 
-- **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](./LICENSE) ファイルを参照してください
-- **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](./crates/LICENSE) を参照してください
-- **examples**: Apache 2.0 - 詳細は [LICENSE](./examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](./examples/hermes-plugin/LICENSE) を保持します。
+- **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](../../LICENSE) ファイルを参照してください
+- **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](../../crates/LICENSE) を参照してください
+- **examples**: Apache 2.0 - 詳細は [LICENSE](../../examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](../../examples/hermes-plugin/LICENSE) を保持します。
 - **third\_party**: 各サードパーティプロジェクトの元のライセンス

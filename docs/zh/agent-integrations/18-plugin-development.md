@@ -46,7 +46,7 @@ Task: <describe the plugin addition, fix, or maintenance change>
 5. **交付方式决定生成时机**。用户直接加载仓库目录时，目录必须已经完整；用户安装构建产物时，在打包前生成依赖。不为减少 diff 破坏安装，也不为方便开发提交不需要的生成物。
 6. **每次抽象都减少维护点**。新接口应让后续修复少改一个地方。若只是多了一层转发、更多布尔参数或第二套配置表，应重新考虑。
 
-这些原则与仓库[贡献指南的职责与设计要求](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md#职责与设计)一致。衡量改动是否合理，要看一个新维护者能否沿调用关系找到规则、解释失败、完成交付。代码行数和文件数量只是结果。
+这些原则与仓库[贡献指南的职责与设计要求](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md#职责与设计)一致。衡量改动是否合理，要看一个新维护者能否沿调用关系找到规则、解释失败、完成交付。代码行数和文件数量只是结果。
 
 ## 2. 接入前先确定宿主契约
 
