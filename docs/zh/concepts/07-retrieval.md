@@ -22,22 +22,22 @@ OpenViking 使用全局向量检索，并可在召回完成后对候选结果执
 
 ### 使用示例
 
-以下示例使用已配置的同步 Python SDK 客户端 `client`。
+以下示例使用已配置的异步 Python SDK 客户端 `client`。
 
 ```python
 # find(): 简单查询
-results = client.find(
+results = await client.find(
     query="OAuth 认证",
     target_uri="viking://resources/",
 )
 
 # search(): 复杂任务（需要会话上下文）
-session_info = client.create_session()
-client.add_message(
+session_info = await client.create_session()
+await client.add_message(
     session_id=session_info["session_id"], role="user",
     content="我们正在为项目设计 OAuth 登录流程。",
 )
-results = client.search(
+results = await client.search(
     query="帮我创建一个 RFC 文档",
     session_id=session_info["session_id"],
 )

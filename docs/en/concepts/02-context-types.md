@@ -12,26 +12,27 @@ OpenViking manages three types of context: resources provide reference material,
 
 ## Example Setup
 
-The examples below use the synchronous Python SDK and an existing server. `add_resource` and `add_skill` take `wait=True` to block until processing finishes. Session commits return before memory extraction finishes and have no built-in wait, so this helper polls the commit task before dependent searches. A polling timeout does not cancel the server task.
+The examples below use the asynchronous Python SDK and an existing server. `add_resource` and `add_skill` take `wait=True` to block until processing finishes. Session commits return before memory extraction finishes and have no built-in wait, so this helper polls the commit task before dependent searches. A polling timeout does not cancel the server task.
 
 ```python
-import time
-from openviking_sdk import SyncHTTPClient
+import asyncio
+from openviking_sdk import AsyncHTTPClient
 
-client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+await client.initialize()
 
 
-def wait_for_task(task_id):
-    deadline = time.monotonic() + 300
-    while time.monotonic() < deadline:
-        task = client.get_task(task_id)
+async def wait_for_task(task_id):
+    deadline = asyncio.get_running_loop().time() + 300
+    while asyncio.get_running_loop().time() < deadline:
+        task = await client.get_task(task_id)
         if task is None:
             raise RuntimeError(f"Task {task_id} not found")
         if task["status"] == "completed":
             return task
         if task["status"] in {"failed", "cancelled"}:
             raise RuntimeError(task)
-        time.sleep(1)
+        await asyncio.sleep(1)
     raise TimeoutError(f"Task {task_id} is still running")
 ```
 
@@ -55,7 +56,7 @@ Resources are external knowledge that Agents can reference.
 
 ```python
 # Add resource
-client.add_resource(
+await client.add_resource(
     path="https://docs.example.com/api.pdf",
     options={"reason": "API documentation"},
     wait=True,
@@ -63,7 +64,7 @@ client.add_resource(
 )
 
 # Search resources
-results = client.find(
+results = await client.find(
     query="authentication methods",
     target_uri="viking://resources/",
 )
@@ -103,18 +104,18 @@ The schema-defined `memories/tools/` and `memories/skills/` types are disabled. 
 from openviking_sdk import TextPart
 
 # Memories are auto-extracted from sessions
-session_info = client.create_session()
+session_info = await client.create_session()
 session = client.session(session_id=session_info["session_id"])
-session.add_message(
+await session.add_message(
     role="user",
     parts=[TextPart(text="I prefer dark mode")],
 )
-commit = session.commit()  # Starts background memory extraction
+commit = await session.commit()  # Starts background memory extraction
 if commit.get("task_id"):
-    wait_for_task(commit["task_id"])
+    await wait_for_task(commit["task_id"])
 
 # Search memories
-results = client.find(
+results = await client.find(
     query="UI preferences",
     target_uri="viking://~/memories/"
 )
@@ -161,7 +162,7 @@ The table below lists the design categories for shared capabilities. Skills are 
 
 ```python
 # Add skill (defaults to viking://~/skills/)
-client.add_skill(
+await client.add_skill(
     data={
         "name": "search-web",
         "description": "Search the web for information",
@@ -172,13 +173,13 @@ client.add_skill(
 )
 
 # Search user skills
-results = client.find(
+results = await client.find(
     query="web search",
     target_uri="viking://~/skills/"
 )
 
 # Search global agent skills
-results = client.find(
+results = await client.find(
     query="web search",
     target_uri="viking://agent/skills/",
 )
@@ -196,7 +197,7 @@ A single retrieval can return resources, memories, and skills within its search 
 
 ```python
 # Search across all context types
-results = client.find(
+results = await client.find(
     query="user authentication",
     target_uri=["viking://~", "viking://resources", "viking://agent/skills"],
 )
@@ -212,7 +213,7 @@ for context in results.get("skills", []):
 Close the client when these operations are finished:
 
 ```python
-client.close()
+await client.close()
 ```
 
 ## Related Documents

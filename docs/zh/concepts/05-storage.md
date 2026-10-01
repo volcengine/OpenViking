@@ -134,19 +134,19 @@ index_meta = {
 
 ## 向量同步
 
-文件系统操作协调文件与向量记录的变更。目录摘要可能继续异步刷新，失败也可能留下部分变更；各操作的具体行为见[文件系统 API](../api/03-filesystem.md)。下面的示例使用已初始化的同步 Python SDK 客户端。
+文件系统操作协调文件与向量记录的变更。目录摘要可能继续异步刷新，失败也可能留下部分变更；各操作的具体行为见[文件系统 API](../api/03-filesystem.md)。下面的示例使用已初始化的异步 Python SDK 客户端。
 
 ### 删除同步
 
 ```python
-client.rm("viking://resources/docs/auth", recursive=True)
+await client.rm("viking://resources/docs/auth", recursive=True)
 # 自动递归删除向量库中所有 uri 以此开头的记录
 ```
 
 ### 移动同步
 
 ```python
-client.mv(
+await client.mv(
     "viking://resources/docs/auth",
     "viking://resources/docs/authentication"
 )

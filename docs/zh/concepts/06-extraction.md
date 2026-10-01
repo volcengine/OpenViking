@@ -131,13 +131,13 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 | **基础 URI** | `viking://resources` | `viking://~/memories` | `viking://~/skills` |
 | **SemanticMsg type** | resource | memory | skill |
 
-以下示例使用已配置的同步 Python SDK 客户端 `client`。
+以下示例使用已配置的异步 Python SDK 客户端 `client`。
 
 ### 资源提取
 
 ```python
 # 添加资源
-client.add_resource(
+await client.add_resource(
     path="/path/to/doc.pdf",
     options={"reason": "API 文档"},
 )
@@ -149,7 +149,7 @@ client.add_resource(
 
 ```python
 # 添加技能
-client.add_skill(
+await client.add_skill(
     data={
         "name": "search-web",
         "content": "# search-web\n...",
@@ -163,7 +163,7 @@ client.add_skill(
 
 ```python
 # 记忆从会话自动提取
-client.commit_session(session_id)
+await client.commit_session(session_id)
 
 # 流程: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```

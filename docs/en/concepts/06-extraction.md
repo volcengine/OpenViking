@@ -131,13 +131,13 @@ This routing applies to short and long code files alike.
 | **Base URI** | `viking://resources` | `viking://~/memories` | `viking://~/skills` |
 | **SemanticMsg type** | resource | memory | skill |
 
-The examples below use a configured synchronous Python SDK client named `client`.
+The examples below use a configured asynchronous Python SDK client named `client`.
 
 ### Resource Extraction
 
 ```python
 # Add resource
-client.add_resource(
+await client.add_resource(
     path="/path/to/doc.pdf",
     options={"reason": "API documentation"},
 )
@@ -149,7 +149,7 @@ client.add_resource(
 
 ```python
 # Add skill
-client.add_skill(
+await client.add_skill(
     data={
         "name": "search-web",
         "content": "# search-web\n...",
@@ -163,7 +163,7 @@ client.add_skill(
 
 ```python
 # Memory auto-extracted from session
-client.commit_session(session_id)
+await client.commit_session(session_id)
 
 # Flow: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```
