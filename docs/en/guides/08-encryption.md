@@ -58,32 +58,31 @@ Merge the following encryption settings into `~/.openviking/ov.conf`; retain you
 Restart the server after changing encryption settings, and run this example against that server. Install the [Python SDK](../api/01-overview.md#using-python-sdk-client-without-configuration-file) in the environment running the script.
 
 ```python
-import asyncio
 from pathlib import Path
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
 
-async def test():
+def test():
     # OPENVIKING_API_KEY: use a tenant-bound user/admin key when authentication is enabled.
-    client = AsyncHTTPClient(url="http://localhost:1933")
+    client = SyncHTTPClient(url="http://localhost:1933")
     try:
-        await client.initialize()
+        client.initialize()
         sample = Path("./encrypted-sample.txt")
         sample.write_text("Hello, encrypted world!", encoding="utf-8")
-        imported = await client.add_resource(
+        imported = client.add_resource(
             path=str(sample),
             wait=True,
             timeout=120,
         )
-        results = await client.find(
+        results = client.find(
             query="encrypted", target_uri=imported["root_uri"]
         )
         print(f"Found {len(results.get('resources', []))} resources")
     finally:
-        await client.close()
+        client.close()
 
 
-asyncio.run(test())
+test()
 ```
 
 It waits for import processing and checks retrieval; successful retrieval alone does not prove encryption at rest. Use [Check File Content](#method-1-check-file-content) to inspect the stored file header.

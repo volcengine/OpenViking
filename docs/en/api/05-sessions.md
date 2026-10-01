@@ -99,19 +99,19 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 import openviking_sdk as ov
 
 # Use HTTP client
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Create new session (auto-generated ID)
-result = await client.create_session()
+result = client.create_session()
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with specified ID
-result = await client.create_session(session_id="my-custom-session-id")
+result = client.create_session(session_id="my-custom-session-id")
 print(f"Session ID: {result['session_id']}")
 
 # Create new session with a custom auto-commit policy
-result = await client.create_session(
+result = client.create_session(
     options={
         "auto_commit_policy": {
             "pending_token_threshold": 8000,
@@ -202,12 +202,12 @@ curl -X GET http://localhost:1933/api/v1/sessions \
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-sessions = await client.list_sessions()
+sessions = client.list_sessions()
 for s in sessions:
     print(f"{s['session_id']} -> {s['uri']}")
 ```
@@ -303,19 +303,19 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Get existing session (raises NotFoundError if not found)
-info = await client.get_session(session_id="a1b2c3d4")
+info = client.get_session(session_id="a1b2c3d4")
 print(f"Live Messages: {info['message_count']}")
 print(f"Total Messages: {info.get('total_message_count', 'n/a')}")
 print(f"Commits: {info['commit_count']}")
 
 # Get or create session
-info = await client.get_session(session_id="a1b2c3d4", auto_create=True)
+info = client.get_session(session_id="a1b2c3d4", auto_create=True)
 ```
 
 **TypeScript SDK**
@@ -463,7 +463,7 @@ curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
 **Python SDK**
 
 ```python
-result = await client.update_session_config(
+result = client.update_session_config(
     session_id="a1b2c3d4",
     options={
         "memory_extraction_config": {
@@ -730,12 +730,12 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-context = await client.get_session_context(session_id="a1b2c3d4", token_budget=128000)
+context = client.get_session_context(session_id="a1b2c3d4", token_budget=128000)
 print(context["latest_archive_overview"])
 print(len(context["messages"]))
 ```
@@ -842,10 +842,10 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 ```python
 import openviking_sdk as ov
 
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-archive = await client.get_session_archive(
+archive = client.get_session_archive(
     session_id="a1b2c3d4",
     archive_id="archive_002",
 )
@@ -960,11 +960,11 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 ```python
 import openviking_sdk as ov
 
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Delete session
-await client.delete_session(session_id="a1b2c3d4")
+client.delete_session(session_id="a1b2c3d4")
 ```
 
 **TypeScript SDK**
@@ -1135,18 +1135,18 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 import openviking_sdk as ov
 from openviking_sdk import ContextPart, ImagePart, TextPart
 
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Simple mode: Add user message
-await client.add_message(
+client.add_message(
     session_id="a1b2c3d4",
     role="user",
     content="How do I authenticate users?",
 )
 
 # Parts mode: Add assistant message with context reference
-await client.add_message(
+client.add_message(
     session_id="a1b2c3d4",
     role="assistant",
     parts=[
@@ -1160,7 +1160,7 @@ await client.add_message(
 )
 
 # Parts mode: Add user message with an image URL
-await client.add_message(
+client.add_message(
     session_id="a1b2c3d4",
     role="user",
     parts=[
@@ -1262,13 +1262,13 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages/batch \
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Add messages in batch
-result = await client.batch_add_messages(
+result = client.batch_add_messages(
     session_id="a1b2c3d4",
     messages=[
         {"role": "user", "content": "How do I authenticate users?"},
@@ -1391,18 +1391,18 @@ curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
 ```python
 import openviking_sdk as ov
 
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 # Commit finishes Phase 1; summary and memory extraction run in the background
-result = await client.commit_session(session_id="a1b2c3d4")
+result = client.commit_session(session_id="a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
 # Check once; poll again if the task is still pending or running
 task_id = result.get("task_id")
 if task_id:
-    task = await client.get_task(task_id=task_id)
+    task = client.get_task(task_id=task_id)
     print(task["status"])
     if task["status"] == "completed":
         print(task["result"]["memories_extracted"])
@@ -1616,29 +1616,29 @@ An empty `memory_diff.json` (all counts zero) is written when long-term memory e
 **Python SDK**
 
 ```python
-import asyncio
+import time
 
-from openviking_sdk import AsyncHTTPClient, ContextPart, TextPart
+from openviking_sdk import SyncHTTPClient, ContextPart, TextPart
 
 # Initialize client
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 try:
     # Create new session
-    session_result = await client.create_session()
+    session_result = client.create_session()
     session_id = session_result["session_id"]
     print(f"Session created: {session_id}")
 
     # Add user message
-    await client.add_message(
+    client.add_message(
         session_id=session_id,
         role="user",
         content="How do I configure embedding?",
     )
 
     # Search with session context
-    results = await client.search(
+    results = client.search(
         query="embedding configuration",
         session_id=session_id,
     )
@@ -1647,7 +1647,7 @@ try:
     resources = results.get("resources", [])
     if resources:
         resource = resources[0]
-        await client.add_message(
+        client.add_message(
             session_id=session_id,
             role="assistant",
             parts=[
@@ -1660,24 +1660,24 @@ try:
             ],
         )
     # Commit session; summary and memory extraction run in the background
-    commit_result = await client.commit_session(session_id=session_id)
+    commit_result = client.commit_session(session_id=session_id)
     print(f"Task ID: {commit_result['task_id']}")
 
     # Optional: poll for completion
     task_id = commit_result.get("task_id")
     if task_id:
         for _ in range(30):
-            task = await client.get_task(task_id=task_id)
+            task = client.get_task(task_id=task_id)
             if task and task["status"] == "completed":
                 print(task.get("result"))
                 break
             if task and task["status"] in {"failed", "cancelled"}:
                 raise RuntimeError(task)
-            await asyncio.sleep(1)
+            time.sleep(1)
         else:
             print(f"Still pending: {task_id}; check this task again later")
 finally:
-    await client.close()
+    client.close()
 ```
 
 **HTTP API**
@@ -1724,16 +1724,16 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 
 ```python
 # Commit after significant interactions
-session_info = await client.get_session(session_id=session_id)
+session_info = client.get_session(session_id=session_id)
 if session_info["message_count"] > 10:
-    await client.commit_session(session_id=session_id)
+    client.commit_session(session_id=session_id)
 ```
 
 ### Use Session Context for Search
 
 ```python
 # Interpret the query using session context; results depend on relevance and query-planning settings
-results = await client.search(query=query, session_id=session_id)
+results = client.search(query=query, session_id=session_id)
 ```
 
 ---

@@ -145,10 +145,10 @@ pip install openviking --upgrade --force-reinstall
 ### 如何初始化客户端？
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 ```
 
 Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` 管理。
@@ -168,20 +168,20 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 
 ```python
 # 添加单个文件
-await client.add_resource(
+client.add_resource(
     path="./document.pdf",
     parent="viking://resources",  # 存到这个目录下面，文件名由来源决定
     options={"reason": "项目技术文档"},  # 未传 instruction 时用于生成 L0/L1 摘要，也用于资源相关的记忆提取
 )
 
 # 添加网页
-await client.add_resource(
+client.add_resource(
     path="https://example.com/api-docs",
     options={"reason": "API 参考文档"},
 )
 
 # 等待处理完成
-await client.wait_processed()
+client.wait_processed()
 ```
 
 ### `to` 和 `parent` 有什么区别？该用哪个？
@@ -218,13 +218,13 @@ await client.wait_processed()
 
 ```python
 # find(): 简单直接的语义搜索
-results = await client.find(
+results = client.find(
     query="OAuth 认证流程",
     target_uri="viking://resources/",
 )
 
 # search(): 复杂任务，需要意图分析
-results = await client.search(
+results = client.search(
     query="帮我实现用户登录功能",
     session_id=session.session_id,
 )
@@ -242,21 +242,21 @@ results = await client.search(
 from openviking_sdk import TextPart
 
 # 创建会话
-session_info = await client.create_session()
+session_info = client.create_session()
 session = client.session(session_id=session_info["session_id"])
 
 # 添加对话消息
-await session.add_message(
+session.add_message(
     role="user",
     parts=[TextPart(text="帮我分析这段代码的性能问题")],
 )
-await session.add_message(
+session.add_message(
     role="assistant",
     parts=[TextPart(text="我来分析一下...")],
 )
 
 # 提交会话，触发记忆提取
-await session.commit()
+session.commit()
 ```
 
 ### OpenViking 支持哪些记忆类型？
@@ -269,16 +269,16 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 ```python
 # 列出目录内容
-items = await client.ls(uri="viking://resources/")
+items = client.ls(uri="viking://resources/")
 
 # 读取完整内容（L2）
-content = await client.read(uri="viking://resources/doc.md")
+content = client.read(uri="viking://resources/doc.md")
 
 # 获取摘要（L0）
-abstract = await client.abstract(uri="viking://resources")
+abstract = client.abstract(uri="viking://resources")
 
 # 获取概览（L1）
-overview = await client.overview(uri="viking://resources")
+overview = client.overview(uri="viking://resources")
 ```
 
 ## 检索优化
@@ -307,7 +307,7 @@ overview = await client.overview(uri="viking://resources")
 
 1. **未等待处理完成**
    ```python
-   result = await client.add_resource(path="./doc.pdf", wait=True)
+   result = client.add_resource(path="./doc.pdf", wait=True)
    print(result)
    ```
    新导入时可用 `wait=True` 等待。排查已经提交的导入时，用返回的 `task_id` 查询任务，不必重复导入。状态仍为 `pending` 或 `running` 时需要继续等待；`failed` 或 `cancelled` 时查看任务详情。请求超时也不能据此判断后台任务已经失败，详见[异步任务](../api/17-tasks.md)。
@@ -331,8 +331,8 @@ overview = await client.overview(uri="viking://resources")
    用导入时返回的 `task_id` 查询任务；`completed` 表示处理完成，`failed` 或 `cancelled` 需先检查原因。
    ```python
    # 检查资源是否存在
-   items = await client.ls(uri="viking://resources/")
-   task = await client.get_task("<导入时返回的 task_id>")
+   items = client.ls(uri="viking://resources/")
+   task = client.get_task("<导入时返回的 task_id>")
    print(task["status"] if task is not None else "任务不存在或已过期")
    ```
 
@@ -346,7 +346,7 @@ overview = await client.overview(uri="viking://resources")
 
 4. **检查 L0 摘要质量**
    ```python
-   abstract = await client.abstract(uri="viking://resources/your-doc")
+   abstract = client.abstract(uri="viking://resources/your-doc")
    print(abstract)  # 确认摘要是否准确反映内容
    ```
 
@@ -356,7 +356,7 @@ overview = await client.overview(uri="viking://resources")
 
 1. **确保调用了 `commit()`**
    ```python
-   await session.commit()  # 触发记忆提取
+   session.commit()  # 触发记忆提取
    ```
 
 2. **检查 VLM 配置**
@@ -369,7 +369,7 @@ overview = await client.overview(uri="viking://resources")
 
 4. **查看记忆目录**
    ```python
-   memories = await client.ls(uri="viking://~/memories/")
+   memories = client.ls(uri="viking://~/memories/")
    ```
 
 ### 性能问题
@@ -379,7 +379,7 @@ overview = await client.overview(uri="viking://resources")
 1. **定位瓶颈**：先检查处理队列、模型延迟和存储耗时，再调整并发
 2. **合理设置 `batch_size`**：Embedding 配置中调整批处理大小
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
-4. **异步操作**：充分利用 `AsyncHTTPClient` 的异步特性
+4. **异步操作**：应用自身已有事件循环（FastAPI、agent 框架）时用 `AsyncHTTPClient`；脚本和 notebook 用 `SyncHTTPClient`，它是异步客户端的包装
 
 ## 部署相关
 

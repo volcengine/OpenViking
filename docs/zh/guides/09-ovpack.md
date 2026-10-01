@@ -116,7 +116,7 @@ ov system consistency viking://resources/my-project
 Python SDK：
 
 ```python
-report = await client.check_consistency(uri="viking://resources/my-project")
+report = client.check_consistency(uri="viking://resources/my-project")
 print(report["ok"], report["missing_records"])
 ```
 
@@ -186,40 +186,40 @@ OPENVIKING_CLI_CONFIG_FILE=./restore.ovcli.conf \
 跨部署迁移时，导出和备份使用源端身份，导入和恢复使用单独配置的目标客户端。下方全量恢复示例以已完成上述目标 account 初始化和覆盖检查为前提。队列结束不证明索引重建成功，仍需检查错误和一致性结果。
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
 
-async def migrate_project():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
+def migrate_project():
+    client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+    client.initialize()
     try:
-        await client.export_ovpack(
+        client.export_ovpack(
             uri="viking://resources/my-project",
             to="./exports/my-project.ovpack",
             include_vectors=False,
         )
 
-        imported_uri = await client.import_ovpack(
+        imported_uri = client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
             on_conflict="fail",
             vector_mode="auto",
         )
         print(imported_uri)
-        print(await client.wait_processed(timeout=120))
-        print(await client.check_consistency(uri=imported_uri))
+        print(client.wait_processed(timeout=120))
+        print(client.check_consistency(uri=imported_uri))
     finally:
-        await client.close()
+        client.close()
 ```
 
 全量备份：
 
 ```python
-await client.backup_ovpack(
+client.backup_ovpack(
     to="./backups/openviking.ovpack",
     include_vectors=True,
 )
-await client.restore_ovpack(
+client.restore_ovpack(
     file_path="./backups/openviking.ovpack",
     on_conflict="overwrite",
     vector_mode="auto",

@@ -147,10 +147,10 @@ Supports Dense, Sparse, and Hybrid embedding modes.
 ### How do I initialize the client?
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 ```
 
 Embedding, VLM, storage, and other service configuration is managed by the OpenViking Server through `ov.conf`.
@@ -170,20 +170,20 @@ Embedding, VLM, storage, and other service configuration is managed by the OpenV
 
 ```python
 # Add single file
-await client.add_resource(
+client.add_resource(
     path="./document.pdf",
     parent="viking://resources",  # Store under this directory; the name comes from the source
     options={"reason": "Project technical documentation"},  # Used for L0/L1 summaries when no instruction is given, and for resource-linked memory extraction
 )
 
 # Add web page
-await client.add_resource(
+client.add_resource(
     path="https://example.com/api-docs",
     options={"reason": "API reference documentation"},
 )
 
 # Wait for processing to complete
-await client.wait_processed()
+client.wait_processed()
 ```
 
 ### What is the difference between `to` and `parent`? Which should I use?
@@ -220,13 +220,13 @@ Note: `processing_mode="vectors_only"` skips semantic processing, so the survivi
 
 ```python
 # find(): Simple direct semantic search
-results = await client.find(
+results = client.find(
     query="OAuth authentication flow",
     target_uri="viking://resources/",
 )
 
 # search(): Complex tasks requiring intent analysis
-results = await client.search(
+results = client.search(
     query="Help me implement user login functionality",
     session_id=session.session_id,
 )
@@ -244,21 +244,21 @@ Session management is a core capability of OpenViking, supporting conversation t
 from openviking_sdk import TextPart
 
 # Create session
-session_info = await client.create_session()
+session_info = client.create_session()
 session = client.session(session_id=session_info["session_id"])
 
 # Add conversation messages
-await session.add_message(
+session.add_message(
     role="user",
     parts=[TextPart(text="Help me analyze performance issues in this code")],
 )
-await session.add_message(
+session.add_message(
     role="assistant",
     parts=[TextPart(text="Let me analyze...")],
 )
 
 # Commit session to trigger memory extraction
-await session.commit()
+session.commit()
 ```
 
 ### What memory types does OpenViking support?
@@ -271,16 +271,16 @@ Memories are stored in the current User or Peer namespace; there is no current w
 
 ```python
 # List directory contents
-items = await client.ls(uri="viking://resources/")
+items = client.ls(uri="viking://resources/")
 
 # Read full content (L2)
-content = await client.read(uri="viking://resources/doc.md")
+content = client.read(uri="viking://resources/doc.md")
 
 # Get abstract (L0)
-abstract = await client.abstract(uri="viking://resources")
+abstract = client.abstract(uri="viking://resources")
 
 # Get overview (L1)
-overview = await client.overview(uri="viking://resources")
+overview = client.overview(uri="viking://resources")
 ```
 
 ## Retrieval Optimization
@@ -309,7 +309,7 @@ Each query runs one global vector search within its directory scope, permission 
 
 1. **Didn't wait for processing to complete**
    ```python
-   result = await client.add_resource(path="./doc.pdf", wait=True)
+   result = client.add_resource(path="./doc.pdf", wait=True)
    print(result)
    ```
    Use `wait=True` for a new import. To inspect an import already submitted, query its returned `task_id` instead of importing it again. Keep waiting while its status is `pending` or `running`; inspect the task details if it is `failed` or `cancelled`. A request timeout alone does not mean the background task failed. See [Async Tasks](../api/17-tasks.md).
@@ -333,8 +333,8 @@ Each query runs one global vector search within its directory scope, permission 
    Use the `task_id` returned by the import. `completed` means processing has finished; inspect the cause if the task is `failed` or `cancelled`.
    ```python
    # Check if resources exist
-   items = await client.ls(uri="viking://resources/")
-   task = await client.get_task("<task_id returned by the import>")
+   items = client.ls(uri="viking://resources/")
+   task = client.get_task("<task_id returned by the import>")
    print(task["status"] if task is not None else "Task not found or expired")
    ```
 
@@ -348,7 +348,7 @@ Each query runs one global vector search within its directory scope, permission 
 
 4. **Check L0 abstract quality**
    ```python
-   abstract = await client.abstract(uri="viking://resources/your-doc")
+   abstract = client.abstract(uri="viking://resources/your-doc")
    print(abstract)  # Confirm abstract accurately reflects content
    ```
 
@@ -358,7 +358,7 @@ Each query runs one global vector search within its directory scope, permission 
 
 1. **Ensure `commit()` was called**
    ```python
-   await session.commit()  # Triggers memory extraction
+   session.commit()  # Triggers memory extraction
    ```
 
 2. **Check VLM configuration**
@@ -371,7 +371,7 @@ Each query runs one global vector search within its directory scope, permission 
 
 4. **List the memory directory**
    ```python
-   memories = await client.ls(uri="viking://~/memories/")
+   memories = client.ls(uri="viking://~/memories/")
    ```
 
 ### Performance issues
@@ -381,7 +381,7 @@ Each query runs one global vector search within its directory scope, permission 
 1. **Locate the bottleneck**: Inspect queues, model latency, and storage time before changing concurrency
 2. **Set appropriate `batch_size`**: Adjust batch processing size in Embedding configuration
 3. **Use local storage**: Use `local` backend during development to reduce network latency
-4. **Async operations**: Fully utilize `AsyncHTTPClient`'s async capabilities
+4. **Async operations**: Use `AsyncHTTPClient` when your application already runs an event loop (FastAPI, agent frameworks); `SyncHTTPClient` wraps it for scripts and notebooks
 
 ## Deployment
 

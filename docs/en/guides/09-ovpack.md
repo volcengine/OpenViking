@@ -134,7 +134,7 @@ details include only one missing key to keep logs small.
 Python SDK:
 
 ```python
-report = await client.check_consistency(uri="viking://resources/my-project")
+report = client.check_consistency(uri="viking://resources/my-project")
 print(report["ok"], report["missing_records"])
 ```
 
@@ -206,40 +206,40 @@ After restoring content, register the remaining users with the same `user_id` va
 Use source credentials for export/backup and a separately configured target client for import/restore across deployments. The full restore examples below assume you have completed the target-account and overwrite checks above. Queue completion alone does not prove a successful index rebuild; inspect errors and run a consistency check.
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
 
-async def migrate_project():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
+def migrate_project():
+    client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+    client.initialize()
     try:
-        await client.export_ovpack(
+        client.export_ovpack(
             uri="viking://resources/my-project",
             to="./exports/my-project.ovpack",
             include_vectors=False,
         )
 
-        imported_uri = await client.import_ovpack(
+        imported_uri = client.import_ovpack(
             file_path="./exports/my-project.ovpack",
             parent="viking://resources/imported/",
             on_conflict="fail",
             vector_mode="auto",
         )
         print(imported_uri)
-        print(await client.wait_processed(timeout=120))
-        print(await client.check_consistency(uri=imported_uri))
+        print(client.wait_processed(timeout=120))
+        print(client.check_consistency(uri=imported_uri))
     finally:
-        await client.close()
+        client.close()
 ```
 
 Full backup:
 
 ```python
-await client.backup_ovpack(
+client.backup_ovpack(
     to="./backups/openviking.ovpack",
     include_vectors=True,
 )
-await client.restore_ovpack(
+client.restore_ovpack(
     file_path="./backups/openviking.ovpack",
     on_conflict="overwrite",
     vector_mode="auto",

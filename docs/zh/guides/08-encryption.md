@@ -58,32 +58,31 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 修改加密配置后重启服务，再对该服务运行示例。在运行脚本的环境中安装 [Python SDK](../api/01-overview.md#完全不依赖配置文件使用-python-sdk-客户端)。
 
 ```python
-import asyncio
 from pathlib import Path
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
 
-async def test():
+def test():
     # 启用认证时，将 OPENVIKING_API_KEY 设置为绑定租户身份的 user/admin key。
-    client = AsyncHTTPClient(url="http://localhost:1933")
+    client = SyncHTTPClient(url="http://localhost:1933")
     try:
-        await client.initialize()
+        client.initialize()
         sample = Path("./encrypted-sample.txt")
         sample.write_text("Hello, encrypted world!", encoding="utf-8")
-        imported = await client.add_resource(
+        imported = client.add_resource(
             path=str(sample),
             wait=True,
             timeout=120,
         )
-        results = await client.find(
+        results = client.find(
             query="encrypted", target_uri=imported["root_uri"]
         )
         print(f"找到 {len(results.get('resources', []))} 个资源")
     finally:
-        await client.close()
+        client.close()
 
 
-asyncio.run(test())
+test()
 ```
 
 示例会等待导入处理完成并检查检索；检索成功本身不能证明文件已加密。请按下方“验证加密”的文件内容检查步骤确认存储文件头。

@@ -50,29 +50,29 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 **Python SDK**
 
 ```python
-import asyncio
+import time
 
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
 try:
-    submitted = await client.add_resource("https://example.com/guide.md")
+    submitted = client.add_resource("https://example.com/guide.md")
     task_id = submitted["task_id"]
     print(f"Import task: {task_id}")
     while True:
-        task = await client.get_task(task_id)
+        task = client.get_task(task_id)
         if task is None:
             raise RuntimeError(f"Task {task_id} is no longer available")
         if task["status"] == "completed":
             break
         if task["status"] in {"failed", "cancelled"}:
             raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
-        await asyncio.sleep(2)
+        time.sleep(2)
     print(task["result"])
 finally:
-    await client.close()
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -231,7 +231,7 @@ ov task status uuid-xxx
 **Python SDK**
 
 ```python
-task = await client.cancel_task(task_id="uuid-xxx")
+task = client.cancel_task(task_id="uuid-xxx")
 print(task["status"])
 ```
 
@@ -340,19 +340,19 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-tasks = await client.list_tasks(
+tasks = client.list_tasks(
     task_type="session_commit",
     status="running",
     limit=20,
 )
 for task in tasks:
     print(task["task_id"], task["status"])
-await client.close()
+client.close()
 ```
 
 **TypeScript SDK**
