@@ -1,5 +1,9 @@
 # 数据加密
 
+<script setup>
+import EncryptionFlowDiagram from '../../.vitepress/theme/components/EncryptionFlowDiagram.vue'
+</script>
+
 OpenViking 支持静态数据加密，在写入存储前加密文件，并在授权读取时解密。不同 account 使用独立的账户密钥。
 
 ## 概述
@@ -137,9 +141,16 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 写流程
 
+<EncryptionFlowDiagram mode="write" />
+
+<details>
+<summary>文本版本</summary>
+
 ```text
 客户端明文 → RAGFS 加密层 → 后端密文
 ```
+
+</details>
 
 1. 用根密钥和 `account_id` 经 HKDF-SHA256 派生账户密钥（可在运行时缓存）。
 2. 为这次加密生成随机 File Key 和 nonce。
@@ -148,9 +159,16 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 读流程
 
+<EncryptionFlowDiagram mode="read" />
+
+<details>
+<summary>文本版本</summary>
+
 ```text
 后端文件 → 检查 OVE1 → 解封 File Key → 校验并解密内容 → 客户端明文
 ```
+
+</details>
 
 读取加密文件时，先用账户密钥解封 File Key，再校验并解密内容。没有 `OVE1` 标记的旧文件按明文读取。密钥错误或密文认证失败会报错，不会返回解密结果。
 
