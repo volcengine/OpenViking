@@ -116,7 +116,9 @@ Create `~/.openviking/ov.conf` under your home directory. Replace the example mo
   "rerank": {
     "provider": "vikingdb",
     "ak": "your-access-key",
-    "sk": "your-secret-key"
+    "sk": "your-secret-key",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028"
   },
   "storage": {
     "workspace": "./data",
