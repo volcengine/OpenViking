@@ -10,6 +10,23 @@ OpenViking is an open-source context database for AI agents, initiated and maint
 
 The Viking team develops vector retrieval, knowledge base, and memory management products. Its dozens of engineers work across distributed systems, machine learning, data engineering, and AI algorithms, and have run context engineering in commercial production. OpenViking applies that engineering experience to a context database developed with the open-source community.
 
+#### Core Technical Capabilities
+
+**Large-Scale Vector Retrieval System**
+- Supports real-time retrieval and similarity computation over hundreds of millions of vectors
+- Delivers millisecond-level latency to meet high-concurrency business scenarios
+- Supports hybrid retrieval strategies combining semantic similarity and keyword matching
+
+**Multimodal Content Understanding Engine**
+- Supports intelligent parsing for text, images, audio, video, and more
+- Achieves cross-modal semantic association and content understanding
+- Provides unified content abstraction and semantic representation
+
+**Distributed System Architecture Design**
+- Extensive experience building highly available, scalable distributed systems
+- Supports elastic scaling and automatic failure recovery
+- Balances data consistency and system performance
+
 This work involves three related problems: extracting searchable information from unstructured content, finding relevant context among many candidates, and retaining interaction experience for later tasks. OpenViking addresses these through [resource parsing and extraction](../concepts/06-extraction.md), [context retrieval](../concepts/07-retrieval.md), and [session and memory management](../concepts/08-session.md). These pages explain the implementation and conditions for use.
 
 ### Development History and Technical Evolution
