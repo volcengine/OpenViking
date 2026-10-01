@@ -36,7 +36,7 @@ After connecting, confirm the client can discover tools and read a permitted URI
 
 ## Why native OAuth
 
-Use OAuth when a client expects browser authorization and token refresh. Before native support, such clients needed the community [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker proxy, which translates OAuth into an API-key bearer. Native authorization removes that extra deployment and the proxy operator's access to the upstream API key. The first Studio sign-in still needs a registered user/admin API key; later approvals can reuse the Studio identity.
+Use OAuth when a client expects browser authorization and token refresh. The server handles the flow itself; no proxy sits between the client and the API key. The first Studio sign-in still needs a registered user/admin API key; later approvals can reuse the Studio identity.
 
 ---
 

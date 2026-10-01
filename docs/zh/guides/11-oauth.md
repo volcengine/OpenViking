@@ -33,7 +33,7 @@ OpenViking 提供原生 OAuth 授权，供支持其发现、动态注册和 PKCE
 
 ## 为什么需要原生 OAuth
 
-客户端需要浏览器授权和 token 刷新时，使用 OAuth。在原生支持之前，这类客户端需要部署社区的 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理，把 OAuth 翻译成 API Key bearer。原生流程省去了这个额外部署，代理运营方也不再能接触上游 API Key。首次登录 Studio 仍需已注册的 user/admin API Key，后续授权可以复用 Studio 身份。
+客户端需要浏览器授权和 token 刷新时，使用 OAuth。授权流程由服务端自己完成，客户端和 API Key 之间没有中间代理。首次登录 Studio 仍需已注册的 user/admin API Key，后续授权可以复用 Studio 身份。
 
 ---
 
