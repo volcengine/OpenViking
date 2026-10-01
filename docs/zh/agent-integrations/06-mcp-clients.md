@@ -43,7 +43,7 @@ claude mcp add --transport http openviking \
 
 ### ChatGPT
 
-通过开发者模式创建自定义 App，再完成 OAuth 授权，见 [OAuth 指南](../guides/11-oauth.md#chatgpt)。
+通过开发者模式创建自定义 App，再完成 OAuth 授权，见 [OAuth 指南](../guides/11-oauth.md#chatgpt-codex-plus-enterprise)。
 
 ### Codex
 

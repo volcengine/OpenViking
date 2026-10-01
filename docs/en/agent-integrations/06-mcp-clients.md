@@ -43,7 +43,7 @@ Add the service URL and API key shown above to the client's MCP configuration.
 
 ### ChatGPT
 
-Create a custom App in developer mode and complete OAuth authorization. See the [OAuth guide](../guides/11-oauth.md#chatgpt).
+Create a custom App in developer mode and complete OAuth authorization. See the [OAuth guide](../guides/11-oauth.md#chatgpt-codex-plus-enterprise).
 
 ### Codex
 
