@@ -32,6 +32,7 @@ from openviking.session.memory.utils.line_numbers import (
     every_line_has_line_numbers,
     strip_line_numbers,
 )
+from openviking_cli.utils import get_logger
 
 _PYTHON_FENCE_RE = re.compile(r"```python[ \t]*\r?\n(?P<code>[\s\S]*?)```", re.IGNORECASE)
 _PYTHON_FENCE_START_RE = re.compile(r"```python[ \t]*\r?\n", re.IGNORECASE)
@@ -1008,8 +1009,6 @@ class _PythonProgramCompiler:
                 self._error(node, "delete() accepts only replacement=")
             if not owner.existing:
                 self._error(node, "a memory created in this program cannot be deleted")
-            if self.schemas[owner.memory_type].operation_mode == "add_only":
-                self._error(node, "delete() is unavailable for the selected memory schemas")
             replacement = kwargs.get("replacement")
             if replacement is not None and not isinstance(replacement, _MemoryObject):
                 self._error(node, "delete replacement must be a memory object")
@@ -1019,6 +1018,14 @@ class _PythonProgramCompiler:
                 self._error(node, "delete replacement must have the same memory type")
             if replacement is owner:
                 self._error(node, "a memory cannot replace itself")
+            if self.schemas[owner.memory_type].operation_mode == "add_only":
+                # Ignore only the forbidden delete, preserving other valid operations and links.
+                self._warn(
+                    node,
+                    f"Skipping delete() for add_only memory: memory_type={owner.memory_type}, "
+                    f"page_id={owner.page_id}, binding={owner.name}",
+                )
+                return None
             owner.deleted = True
             owner.replacement = replacement
             return None
@@ -1442,6 +1449,10 @@ class _PythonProgramCompiler:
         while self.context.page_id_map.resolve(candidate) is not None:
             candidate += 1
         return candidate
+
+    @staticmethod
+    def _warn(node: ast.AST, message: str) -> None:
+        get_logger(__name__).warning("Line %s: %s", getattr(node, "lineno", 1), message)
 
     @staticmethod
     def _error(node: ast.AST, message: str, *, allow_tool_retry: bool = False) -> None:

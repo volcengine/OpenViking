@@ -3,6 +3,7 @@
 """Tests for JSON and restricted-Python memory extraction output protocols."""
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1303,7 +1304,8 @@ def test_python_field_edit_and_drop_are_standalone_statements(operation: str):
     assert "must be standalone statements" in error
 
 
-def test_python_delete_replacement_and_links_compile_with_page_id_remapping():
+@pytest.mark.parametrize("operation_mode", ["upsert", "add_only"])
+def test_python_delete_replacement_and_links_compile_with_page_id_remapping(operation_mode):
     duplicate = _existing_preference(
         "viking://user/alice/memories/preferences/duplicate.md",
         "duplicate",
@@ -1316,7 +1318,7 @@ def test_python_delete_replacement_and_links_compile_with_page_id_remapping():
         extra_fields={"name": "openviking"},
     )
     context = _context(
-        [_preference_schema(), _project_schema()],
+        [_preference_schema(operation_mode=operation_mode), _project_schema()],
         files=[duplicate, project],
         link_enabled=True,
     )
@@ -1338,10 +1340,12 @@ sdk.commit()
     assert payload["preferences"] == [
         {"page_id": 100, "topic": "editor", "content": "Use Neovim", "score": 1}
     ]
-    assert payload["delete_ids"] == [{"delete_page_id": 1, "replacement_page_id": 100}]
+    assert payload["delete_ids"] == (
+        [{"delete_page_id": 1, "replacement_page_id": 100}] if operation_mode == "upsert" else []
+    )
     assert payload["links"] == [
         {
-            "f": 100,
+            "f": 100 if operation_mode == "upsert" else 1,
             "t": 2,
             "link_type": "related_to",
             "weight": 0.5,
@@ -1454,7 +1458,7 @@ def test_python_rejects_invalid_or_unsafe_programs(program: str, message: str):
     assert message in error
 
 
-def test_python_rejects_delete_for_add_only_schema():
+def test_python_ignores_delete_for_add_only_schema(caplog, monkeypatch):
     memory_file = _existing_preference(
         "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
     )
@@ -1462,27 +1466,85 @@ def test_python_rejects_delete_for_add_only_schema():
     protocol = create_extraction_output_protocol("python")
     _bind(protocol, context)
 
-    operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
+    logger = logging.getLogger(
+        "openviking.session.memory.extraction_output_protocol.python_protocol"
+    )
+    monkeypatch.setattr(logger, "handlers", [caplog.handler])
+    with caplog.at_level("WARNING", logger=logger.name):
+        operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
 
-    assert operations is None
-    assert "delete() is unavailable" in error
+    assert error is None
+    assert operations.model_dump() == {"preferences": []}
+    assert any(
+        record.levelname == "WARNING"
+        and record.getMessage()
+        == "Line 1: Skipping delete() for add_only memory: "
+        "memory_type=preferences, page_id=1, binding=preferences_1"
+        for record in caplog.records
+    )
 
 
-def test_python_rejects_add_only_delete_when_another_schema_enables_deletes():
+def test_python_ignores_add_only_delete_and_keeps_other_operations():
     memory_file = _existing_preference(
         "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
     )
+    project = MemoryFile(
+        uri="viking://user/alice/memories/projects/obsolete.md",
+        memory_type="projects",
+        content="Obsolete project",
+        extra_fields={"name": "obsolete"},
+    )
     context = _context(
         [_preference_schema(operation_mode="add_only"), _project_schema()],
-        files=[memory_file],
+        files=[memory_file, project],
     )
     protocol = create_extraction_output_protocol("python")
     _bind(protocol, context)
 
-    operations, error = protocol.parse("preferences_1.delete()\nsdk.commit()", context)
+    operations, error = protocol.parse(
+        """
+sdk.create_preferences(topic="shell", content="Use zsh", score=1)
+preferences_1.delete()
+projects_1.delete()
+sdk.create_projects(name="active", content="Active project")
+sdk.commit()
+""",
+        context,
+    )
+
+    assert error is None
+    assert operations.model_dump() == {
+        "preferences": [{"page_id": 100, "topic": "shell", "content": "Use zsh", "score": 1}],
+        "projects": [{"page_id": 101, "name": "active", "content": "Active project"}],
+        "delete_ids": [{"delete_page_id": 2, "replacement_page_id": None}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        ("preferences_1.delete(1)", "delete() accepts only replacement="),
+        ("preferences_1.delete(force=True)", "delete() accepts only replacement="),
+        (
+            "preferences_1.delete(replacement='invalid')",
+            "delete replacement must be a memory object",
+        ),
+        ("preferences_1.delete(replacement=preferences_1)", "a memory cannot replace itself"),
+        ("missing.delete()", "unknown name"),
+    ],
+)
+def test_python_add_only_delete_still_validates_the_call(call, message):
+    memory_file = _existing_preference(
+        "viking://user/alice/memories/preferences/editor.md", "editor", "Use Vim"
+    )
+    context = _context([_preference_schema(operation_mode="add_only")], files=[memory_file])
+    protocol = create_extraction_output_protocol("python")
+    _bind(protocol, context)
+
+    operations, error = protocol.parse(f"{call}\nsdk.commit()", context)
 
     assert operations is None
-    assert "delete() is unavailable" in error
+    assert message in error
 
 
 def test_python_aliases_non_identifier_memory_type_instead_of_raising():
