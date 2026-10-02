@@ -1215,3 +1215,22 @@ def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_pr
     assert bob_marker.exists()
     commits = [c for c in backends["alice"].post.call_args_list if c.args[0].endswith("/commit")]
     assert len(commits) == 2
+
+
+def test_local_server_spawn_drops_unrelated_secrets(external_provider, monkeypatch):
+    _, _, module, _ = external_provider("profile-a")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "sentinel-bot-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "sentinel-embedding-key")
+    monkeypatch.setenv("PYTHONPATH", "/hermes/venv/site-packages")
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+
+    status, _ = module._start_local_openviking_server("http://127.0.0.1:1933")
+
+    assert status == module._LOCAL_SERVER_STARTED
+    (env,) = spawned
+    assert "TELEGRAM_BOT_TOKEN" not in env
+    assert "PYTHONPATH" not in env
+    assert env["OPENAI_API_KEY"] == "sentinel-embedding-key"
