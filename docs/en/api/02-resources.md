@@ -79,6 +79,12 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
   URL/File    Parser    TreeBuilder        AGFS       Summarizer/Vector
 ```
 
+#### Routing and waiting
+
+OpenViking first checks whether the source and request parameters qualify for Connector ingestion. Connector runs ingestion outside the standard pipeline. Otherwise, formats selected by [`parser_api`](../guides/01-configuration.md#parser-api) use the external Understanding parser; remaining formats use built-in parsers. External parsing replaces only the Parse stage and returns to TreeBuilder and the standard storage/semantic pipeline. Feishu documents already normalized to Markdown by an accessor bypass external parsing.
+
+Connector requires an exact `to` target and does not support `wait=true`. A `tos://` source cannot fall back to a built-in accessor. Git may fall back when Connector does not apply, except when Connector-only credentials were supplied. For supported standard-pipeline requests, `wait=true` waits for work belonging to this import, not unrelated work in the global queues; a timeout does not imply that the import was cancelled.
+
 #### Stage 1: Parse
 - Uses `UnifiedResourceProcessor` to parse content based on resource type
 - Supports multiple formats: documents (PDF/Markdown/Word), spreadsheets (Excel/PPT), code, media files, etc.
@@ -106,7 +112,8 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 - For Git repository sources with `wait=false`, OpenViking validates the repository, resolves the target URI, reserves the final `root_uri`, and returns before clone/parse/finalize completes.
 - The immediate response contains `status`, `root_uri`, and `task_id`; fetching, parsing, finalizing, and queue waiting continue in a persistent background task.
 - Poll `GET /api/v1/tasks/{task_id}` to inspect task state. Git resource import tasks use stages such as `queued`, `fetching`, `parsing`, `finalizing`, and `processing_queue`.
-- Other resource sources with `wait=false` finish fetching/parsing/finalizing before the response; their returned `task_id` tracks semantic and embedding queue completion only.
+- External Understanding imports can also return before parsing finishes: direct Feishu ingestion submits the URL, while HTTP file ingestion identifies and uploads the file before queueing the external response for follow-up. Poll the returned `task_id`; a direct Feishu import may not have a `root_uri` until the parsed title is known.
+- Ordinary imports through built-in parsers with `wait=false` finish fetching/parsing/finalizing before responding; their `task_id` tracks the remaining semantic and embedding work.
 
 ### Incremental Updates for Resources
 

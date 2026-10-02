@@ -317,3 +317,5 @@ collection.close()
 - 默认情况下，每次 upsert/delete 后仍由下一次查询同步重建；开启 `auto_background_rebuild` 后，dirty 期间查询走 native，连续写被合并为后台重建。
 - cuVS 索引不作为权威持久化数据；进程重启时会从 OpenViking 本地 store 重建，因此不受 cuVS 跨版本序列化格式变化影响。
 - `brute_force` 适合功能对齐和 ground truth；CAGRA 的 graph/search 参数需要在后续结合召回率、QPS、延迟和显存进行调优。
+
+GPU 索引本身不持久化。重启后，OpenViking 从本地存储的向量重新构建索引；插入、更新和删除会将其标记为 dirty。默认由下一次 dense 检索触发重建。显存感知自动模式下，`auto_background_rebuild` 将重建交给后台线程，可用的 GPU 索引就绪前使用 native 回退。即使本地向量存储已持久化，也需要计入重启和写入后的重建耗时。

@@ -346,3 +346,5 @@ collection.close()
 ## Current limits
 
 The native prefilter preserves scalar DSL, `date_time`, `geo_point`, and path-depth semantics. cuVS only handles pure dense queries; sparse/hybrid fallback and snapshot maintenance follow the behavior described above. Treat brute-force as the functional baseline. Tune CAGRA graph and search parameters against recall, throughput, latency, and GPU memory for your workload.
+
+The GPU index itself is not persisted. After a restart, OpenViking reconstructs it from locally stored vectors; inserts, updates, and deletes mark it dirty. By default, the next dense search rebuilds it. In memory-aware auto mode, `auto_background_rebuild` moves rebuilding to a background worker while queries use the native fallback until a usable GPU index is ready. Budget for rebuild latency after restarts and writes, even when the local vector store is persisted.

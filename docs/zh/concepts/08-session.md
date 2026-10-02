@@ -142,6 +142,8 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 在 `memory_policy.memory_types` 中，`experiences` 会启用完整的 Agent Evolution 流程，并自动激活 `cases` 和 `trajectories`。如果没有 `experiences`，显式传入的 `cases` 和 `trajectories` 会被静默忽略，不会报错。
 
+Agent Evolution 还要求生效的 `agent_evolution.enabled` 开关已开启。选择 `experiences` 后，流程将任务组织为 case，将执行记录为 trajectory，再提炼可复用的 experiences。经验使用情况和执行结果分布通过 [Agent Evolution API](../api/19-agent-evolution.md) 查询。`openviking/session/train/` 中的离线训练框架属于内部实现，不是公开训练 API。
+
 ### 提取流程
 
 ```

@@ -222,6 +222,8 @@ peer 是用户空间下的一段路径前缀——`viking://user/<you>/peers/<pe
 
 规则由 `peer.source` 决定。同一项配置在环境变量中写作 `OPENVIKING_PEER_SOURCE`，在 `ovcli.conf` 中写作 `plugin.peerSource` 或 `plugin.<harness>.peerSource`。
 
+远端身份只取 `origin`，不回退到 `upstream`，避免添加 upstream 时悄悄改变记忆空间。也不使用 root-commit SHA：Fork 共享祖先，浅克隆或新拉取的历史又会改变可见的根提交。Git 仓库没有 `origin` 时使用仓库根路径。需要多个仓库共享记忆，或希望移动目录后身份不变时，应显式配置 `peer.id`。非 Git 目录默认仍不派生 peer。
+
 #### 让一个目录拥有独立记忆
 
 在该目录下创建 `.openviking/config.json`：

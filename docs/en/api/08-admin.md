@@ -518,8 +518,7 @@ not return business-resolved defaults. After persistence, the new
 configuration is published and matching in-process consumers are awaited.
 Consumer failures are logged without rolling back the persisted override, so
 a successful response confirms the configuration update but does not certify
-that every derived client has applied it. The current business integrations
-are documented in the [runtime configuration design](../../design/runtime-configuration-design.md).
+that every derived client has applied it. See [runtime configuration source and reload behavior](../guides/01-configuration.md#runtime-configuration-source).
 
 #### Account Configuration Reference
 

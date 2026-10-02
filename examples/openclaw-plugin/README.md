@@ -319,17 +319,9 @@ The plugin operates exclusively in remote mode as a pure HTTP client:
 
 The OpenViking service must be deployed and running independently before the plugin can connect to it.
 
-## Relationship to the Older Design Draft
+## Context lifecycle reference
 
-The repo also contains a more future-looking design draft at `docs/design/openclaw-context-engine-refactor.md`. It is important not to conflate the two:
-
-- this README describes current implemented behavior
-- the older draft discusses a stronger future move into context-engine-owned lifecycle control
-- in the current version, the main automatic recall path lives in `assemble()`: preflight rebuilds history, transformContext injects long-term memories
-- in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
-- in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
-
-That distinction matters, otherwise the future design draft is easy to misread as already shipped behavior.
+For the current assemble, recall, capture, and compaction behavior, see the [OpenClaw integration guide](../../docs/en/agent-integrations/03-openclaw.md#how-assemble-builds-context). The guide also explains the retained `agentExperience` settings and their current limits.
 
 ## Operator and Debugging Surfaces
 

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type DefaultTheme } from 'vitepress'
-import { titleFromMarkdown, sidebarSection, localizedSectionSidebarItems, localizedGroupedSidebarItems, localizedReferenceSidebarItems, localizedAboutSidebarItems, designSidebar } from './docs-navigation'
+import { titleFromMarkdown, sidebarSection, localizedSectionSidebarItems, localizedGroupedSidebarItems, localizedReferenceSidebarItems, localizedAboutSidebarItems } from './docs-navigation'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
@@ -228,8 +228,8 @@ export default defineConfig({
   description: 'Open-source context database for AI Agents',
   cleanUrls: true,
   lastUpdated: true,
-  // The existing Markdown corpus links to examples, bot docs, localhost snippets,
-  // and historical design notes that are outside the VitePress page tree.
+  // The existing Markdown corpus links to examples, bot docs, and localhost
+  // snippets that are outside the VitePress page tree.
   ignoreDeadLinks: true,
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
@@ -315,8 +315,7 @@ export default defineConfig({
           '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/faq/': [sidebarSection('en/faq', 'FAQ', false)],
-          '/en/about/': localizedAboutSidebarItems('en'),
-          '/design/': designSidebar
+          '/en/about/': localizedAboutSidebarItems('en')
         }
       }
     },

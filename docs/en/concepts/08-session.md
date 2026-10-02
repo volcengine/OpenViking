@@ -142,6 +142,8 @@ OpenViking includes memory types such as `profile`, `preferences`, `entities`, `
 
 Within `memory_policy.memory_types`, `experiences` enables the complete Agent Evolution pipeline and automatically activates `cases` and `trajectories`. If `experiences` is absent, explicitly supplied `cases` and `trajectories` entries are ignored without an error.
 
+Agent Evolution also requires the effective `agent_evolution.enabled` switch. With `experiences` selected, the flow organizes the task as a case, records its execution as a trajectory, and derives reusable experiences. Query experience usage and execution outcome distributions through the [Agent Evolution API](../api/19-agent-evolution.md). The offline training framework under `openviking/session/train/` is an internal implementation, not a public training API.
+
 ### Extraction Flow
 
 ```

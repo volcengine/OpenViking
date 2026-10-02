@@ -118,6 +118,26 @@ OV 无数据、无归档且消息数少于宿主输入、转换后为空或读�
 
 这里的 **session commit** 负责会话归档和记忆处理，与保存资源文件版本的 [snapshot commit](../guides/15-snapshot.md) 是不同操作。
 
+## Agent experience 召回配置
+
+插件配置仍接受 `agentExperience`，默认值如下：
+
+```json
+{
+  "agentExperience": {
+    "enabled": false,
+    "recallLimit": 3,
+    "scoreThreshold": 0.35,
+    "maxInjectedChars": 6000,
+    "minQueryChars": 12
+  }
+}
+```
+
+这些字段仍在配置 Schema 中，但当前 assemble 链路不读取它们。召回使用统一的 `searchContext` 路径，以及通用的 `autoRecall`、`recallLimit`、`recallScoreThreshold` 和 `recallMaxInjectedChars` 配置。设置 `agentExperience.enabled` 不会启用独立的经验检索，也不会生成单独的经验区块。
+
+代码保留的 `shouldRecallAgentExperience` 函数会对执行、写操作、失败、工程对象等词，以及“经验”“踩坑”“best practice”“pitfall”等意图词打分，但当前召回链路没有调用它。不能把这些关键词规则和 `minQueryChars` 当作生效的召回控制项。注入内容使用 `<openviking-context>` 包裹；捕获用户文本时会剥离该标记及其内容，避免把召回材料再次当作用户输入保存。
+
 ## 验证
 
 ```bash

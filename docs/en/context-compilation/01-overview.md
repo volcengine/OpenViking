@@ -28,6 +28,14 @@ ov compile \
 
 The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` to check progress and `ov task cancel <id>` to stop it. The full field reference, task lifecycle, and HTTP API are in the [Agent Runtime API](../api/23-agent-runtime.md).
 
+## Use Web Studio
+
+Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. Playground's terminal also supports `compile` and `task`; it can hand parameters to the form.
+
+Task-list cursors are signed with a process-local key and bound to the caller and filters. Restarting the service invalidates old cursors; refresh the list to start again. A cursor from one replica is not portable to another. Pagination scans stored task records rather than using an index, so read cost grows with retained history.
+
+For HTTP submission retries, reuse the same `Idempotency-Key` and request parameters; a changed request with the same key returns `409`. Recovery lasts only as long as the task record: completed/cancelled records expire 24 hours after their last update, failed records after 7 days. This is not permanent submission history or a cross-instance exactly-once guarantee. See [Agent Runtime](../api/23-agent-runtime.md) for submission recovery and [Tasks](../api/17-tasks.md) for task operations.
+
 ## Swap the Skill, get a different output
 
 Compile itself does not decide *what* to compile into — the Skill does. The same sources, paired with different Skills, produce completely different knowledge artifacts. Here are the example Skills we ship; the first two also come with a visualization script you can run as-is:

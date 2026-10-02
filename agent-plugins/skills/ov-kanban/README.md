@@ -34,10 +34,33 @@ viking://agent/kanban/<board>/<id>.md            task
 viking://agent/kanban/<board>/archive/<id>.md    folded detail
 ```
 
-Servers that reject writes under `viking://agent` use
-`viking://resources/kanban`. Design notes, the mapping to PowerContext and
-LoopX, and the rehearsal record are in
-[docs/design/ov-kanban.md](../../../docs/design/ov-kanban.md).
+The skill and `loop.sh` probe `viking://agent/kanban` with `ov stat` / `ov mkdir`.
+Servers that reject that location use `viking://resources/kanban` instead.
+Set `OV_KANBAN_ROOT` to choose a root explicitly. The task protocol does not
+depend on which root is used; a board's URI and ACL define its boundary.
+
+## Design choices
+
+The task file is the handoff: frontmatter records `id`, `status`, `owner`,
+`board`, and `updated`; the body holds Goal, Context, Decisions, Progress,
+Next, Questions, and Log. There is no separate handoff object or status store.
+Replaced plans and decisions, older Log entries, and evidence longer than one
+line move verbatim to the append-only archive. Keep the latest 10 Log entries
+in the task, but archive the older entries before removing them.
+
+| Choice | Reason and limit |
+| --- | --- |
+| One mutable task plus an append-only archive | Replaces separate revision, acknowledgement, and outcome objects. Claiming is recorded in Log; completion is status plus verified Progress. |
+| Any CLI agent executes the task; OpenViking stores it | No separate execution kernel, capability/provider hierarchy, or extension runtime is needed. |
+| A loop bounded by `max_ticks` | Each turn must write back; `needs_user` tasks stop for input. Scheduling, quota management, and self-repair are outside this protocol. |
+| `owner` + `updated`, with a two-hour stale-claim convention | OpenViking writes do not provide compare-and-set. This is coordination by convention, not an atomic lease; concurrent claims can collide. |
+| URI and ACL as the board boundary | A second opaque scope ID would duplicate the existing address and permission model. |
+| Frontmatter queried with `ov grep` | Mirroring status and owner into retrieval tags would require another write and could drift out of sync. |
+| CLI board views | A separate dashboard or Lark projection is deferred until needed. Experience extraction continues through OpenViking's existing `remember` path, outside the task protocol. |
+
+The name `ov-kanban` distinguishes this board from `ov task`, which manages
+server-side asynchronous jobs. A board is the task container; “scope” is
+reserved for the planned repository/directory/branch matching rules.
 
 ## Roadmap
 
@@ -48,4 +71,4 @@ LoopX, and the rehearsal record are in
 | Recall on session start | The agent reads the board when the skill triggers. | Hook plugins inject the board view of matching boards at session start. Depends on scoped kanban. |
 | Claim-aware loop | `loop.sh` counts every `open` or `in_progress` task as runnable, so a tick can find nothing to claim. | Count `open` tasks, stale claims, and the caller's own claims. |
 | Atomic claim | `owner` + `updated` with a 2-hour convention; two agents can claim the same task at once. | Compare-and-set on write, once OpenViking `write` supports it. |
-| `ov compile` | Not supported: compile rejects kanban targets and file sources. | `ov compile --from <board> --to <board> --skill ov-kanban` runs one turn on the server. Blockers are listed in the design doc. |
+| `ov compile` | Not supported: compile rejects kanban targets and file sources. | `ov compile --from <board> --to <board> --skill ov-kanban` runs one turn on the server. It also needs an output tool that rewrites task files in place; the existing compile agent submits a wiki bundle. |

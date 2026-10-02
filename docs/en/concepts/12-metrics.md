@@ -555,4 +555,3 @@ Example:
 - [Data Encryption](./10-encryption.md) - storage-layer encryption and isolation
 - [Metrics API](../api/09-metrics.md) - `/metrics` endpoint usage
 - [VikingBot Feedback Observability Design](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
-- [Metrics Design](../../design/metric-design.md) - metrics system design details

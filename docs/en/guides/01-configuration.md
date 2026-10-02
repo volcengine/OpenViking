@@ -627,6 +627,18 @@ Get your API key at https://dashscope.console.aliyun.com/api-key
 
 Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`, `CODE_RETRIEVAL_QUERY`, `QUESTION_ANSWERING`, `FACT_VERIFICATION`.
 
+#### Local provider (`local`)
+
+When no `dense`, `sparse`, or `hybrid` embedding is configured (including when `embedding` is omitted), OpenViking selects `dense: {"provider": "local", "model": "bge-small-zh-v1.5-f16"}`. This GGUF model produces 512-dimensional vectors and requires no API key.
+
+Install the local inference dependency:
+
+```bash
+pip install "openviking[local-embed]"
+```
+
+On first use, OpenViking downloads the model to `~/.cache/openviking/models` unless the file is already cached. Set `embedding.dense.cache_dir` to change the cache directory, or `embedding.dense.model_path` to use an existing GGUF file without downloading it. A missing explicit `model_path` is an error; it does not trigger a download. This model's dimension is fixed at 512.
+
 #### Sparse Embedding
 
 > **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-251215`.
@@ -994,6 +1006,26 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 | `mineru_bodys` | dict | MinerU API multipart form fields |
 
 **MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+
+### External parser API (`parser_api`) {#parser-api}
+
+The top-level `parser_api` section routes selected formats to the external Understanding files/responses API. It replaces the Parser stage; TreeBuilder, persistence, and semantic processing remain in OpenViking. See [Resource processing](../api/02-resources.md#resource-processing-pipeline) for routing and asynchronous behavior.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enable` | `false` | Enable external parsing. |
+| `extensions` | `[]` | File extensions to route externally; normalized to lowercase without the leading dot. |
+| `host` | `""` | API host including scheme, such as `https://parser.example.com`; required when enabled. |
+| `api_key` | `""` | External API credential; required when enabled. |
+| `enable_feishu_url` | `false` | Allow direct Feishu URL parsing when credentials are available. Feishu documents already normalized to Markdown by the accessor bypass external parsing; file attachments still use extension routing. |
+| `enable_resumable_upload` | `false` | Enable resumable uploads. |
+| `upload_simple_max_bytes` | `536870912` (512 MiB) | Simple-upload size threshold. |
+| `upload_part_size_bytes` | `8388608` (8 MiB) | Resumable-upload part size. |
+| `http_timeout_seconds` | `10.0` | Timeout for an individual HTTP request. |
+| `response_timeout_seconds` | `1800` | Timeout while waiting for the parsing response. |
+| `poll_interval_ms` | `3000` | Response polling interval. |
+
+All size, timeout, and polling values must be greater than zero.
 
 ### rerank
 
@@ -1733,6 +1765,12 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section above |
 
+#### Memory links (`memory.link_enabled`)
+
+`memory.link_enabled` defaults to `false`. When enabled, extraction resolves temporary page IDs into URIs and stores links in memory metadata. Each link contains `from_uri`, `to_uri`, `link_type` (default `related_to`), `weight` (default `0.5`, extraction clamps it to 0–1), `match_text` (a word from the conversation, or `null`), `description`, and `created_at`.
+
+`link_type` is a relation label rather than a closed enum. Extraction normalizes it to lowercase snake_case with one to three alphabetic words; invalid labels fall back to `related_to`. These links describe relationships between memories; the current retrieval pipeline does not traverse them or use their weights for ranking.
+
 ### ovcli.conf
 
 You can edit this file by hand, or generate it interactively with `ov config`. If you maintain configurations for multiple servers, switch between them with `ov config switch`.
@@ -1846,6 +1884,39 @@ Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including o
 
 `user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `server.agent_evolution.enabled` supplies the startup default. Runtime resolution is Account override > Cluster runtime override > that startup value. Use the Admin settings APIs for changes without restarting; editing `ov.conf` directly takes effect after restart.
 
+### Runtime configuration source {#runtime-configuration-source}
+
+The top-level `runtime_config` section selects the source of runtime settings at startup; it is not nested under `server`.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `source` | `"file"` | `file` stores settings through AGFS; `memory` keeps them only in this process; a registered source name selects a custom implementation. |
+| `module` | `null` | Optional Python module imported to register a custom source. Sources can also register through the `openviking.config_source` entry-point group. |
+| `params` | `{}` | Parameters passed to the custom source factory as `ConfigSourceContext.params`. |
+
+A custom source implements `ConfigSource.load(scope)`, `update(scope, mutate)`, and `delete(scope)`. It must guard read-modify-write against concurrent updates, including calls from different threads or event loops. The mutation callback can be retried and must have no side effects.
+
+The file source stores Account settings at `/local/{account_id}/_system/setting.json` and Cluster settings at `/local/_system/runtime_config/cluster.json` in AGFS. It retains the previous bytes as `setting.backup.json` and `cluster.backup.json` beside those files and can read the backup if the primary file is missing or invalid. Existing Account settings keep their original path.
+
+The manager polls the Cluster and cached Accounts every 30 seconds. Accounts unused for 24 hours are evicted from the cache and stop being polled; their persisted settings remain. A refresh failure keeps the last valid configuration. Admin settings GET returns the stored override, not a merged effective configuration or proof that every derived client has switched. Use the [Admin API](../api/08-admin.md) to update settings; see [Reload boundary](#reload-boundary) for consumer behavior.
+
+### Tool output externalization {#tool-output-externalization}
+
+`server.tool_output_externalization` moves oversized session tool outputs to the session's `tool-results/` store and leaves a preview stub plus `tool_output_ref`. Retrieve the full output through the session tool-result read, search, and list APIs in [Session management](../api/05-sessions.md).
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Enable externalization. |
+| `threshold_chars` | `20000` | Externalize an individual output above this character count. |
+| `preview_chars` | `2000` | Preview character target for one output. |
+| `assistant_turn_inline_budget_chars` | `100000` | Inline budget across tool outputs in one assistant turn. |
+| `assistant_turn_preview_budget_chars` | `10000` | Budget used to allocate previews across the turn. |
+| `min_preview_chars` | `1000` | Lower bound when allocating per-output previews. |
+| `aggregate_selection_strategy` | `"largest_first"` | Only supported strategy: select larger outputs first when reducing the turn's inline size. |
+| `failure_mode` | `"preserve_raw"` | On storage failure: `preserve_raw` keeps the original output, `reject` raises an error, and `preview_only` keeps only a preview without a recoverable reference. |
+
+The budgets guide output selection and preview allocation; preview metadata and the minimum preview size can prevent a strict cap. With `preserve_raw`, failed writes can also leave the turn above its budget.
+
 ### Usage Reporter
 
 The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in file log sink writes each event as one flat JSON object to a dedicated hourly rotating file:
@@ -1886,6 +1957,18 @@ Each line has the following form:
 ```
 
 `event_time` is UTC. `tenant_id` combines the deployment resource ID, event account, user, and Experience URI. `memory.recalled` maps to `experience.recall.count`, while `memory.injected` maps to `experience.inject.count`. `object_id` is the stable Usage Event ID. Downstream consumers must deduplicate by the composite `(tenant_id, object_id)` key rather than by `object_id` globally. Aggregate usage with `sum(count)` after filtering by `tenant_id`, `event_name`, and the desired `event_time` range. File collection and downstream delivery remain best-effort.
+
+#### Custom sink
+
+Add a sink entry under `server.usage_reporter.sinks`:
+
+```json
+{"type": "custom", "class_path": "my_app.usage.MySink", "config": {}}
+```
+
+The class must be importable by the server. `config` is passed as keyword arguments to its constructor. Implement `async def write(self, *, events: list[UsageEvent]) -> None`; `UsageEvent` is defined in `openviking.usage_reporter.models` and exposes `event_id` and `to_dict()`. The input is a list of events, not the flat `file_log` JSON rows.
+
+Delivery is best-effort: sink errors and timeouts are logged, and phase-2 replay can send an event again. A custom sink must define its own retry and deduplication policy. If it emits the file-log schema, use `object_id = event.event_id` and deduplicate by `(tenant_id, object_id)` within the deployment/account/user/resource scope described above. This is not an exactly-once delivery contract.
 
 Supported add target URIs:
 

@@ -28,6 +28,14 @@ ov compile \
 
 命令会立即返回一个 `cmp_...` 任务 ID，之后用 `ov task status <id>` 查看进度、用 `ov task cancel <id>` 取消。完整的字段说明、任务生命周期和 HTTP 接口见 [Agent Runtime API](../api/23-agent-runtime.md)。
 
+## 使用 Web Studio
+
+Studio 提供 `/compile` 列表、`/compile/new` 新建表单和 `/compile/tasks/<task_id>` 任务详情页。可以选择并预览 Skill、浏览来源目录、提交多个来源、查看或取消任务，以及打开产物目录。Playground 终端也支持 `compile` 和 `task`，并可将参数带入表单。
+
+任务列表游标使用进程内密钥签名，并绑定调用者和筛选条件。服务重启后旧游标失效，刷新列表即可重新开始。一个副本签发的游标不能直接用于另一个副本。分页扫描已存储的任务记录，不依赖索引，读取成本仍随保留的历史数量增长。
+
+重试 HTTP 提交时，复用相同的 `Idempotency-Key` 和请求参数；同一 Key 对应的参数变化时返回 `409`。提交恢复只在任务记录保留期间有效：完成或取消的记录在最后一次更新后保留 24 小时，失败记录保留 7 天。这不是永久提交历史，也不保证跨实例 exactly-once。提交恢复见 [Agent Runtime](../api/23-agent-runtime.md)，任务操作见[任务管理](../api/17-tasks.md)。
+
 ## 换个 Skill，就换一种产物
 
 Compile 本身不规定「编译成什么」——那由 Skill 决定。同一批来源，配不同的 Skill，就能得到形态完全不同的知识产物。下面是我们提供的示例 Skill，前两个还各自配了一个可视化脚本，可以直接照着跑：

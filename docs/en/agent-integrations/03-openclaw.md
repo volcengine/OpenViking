@@ -118,6 +118,26 @@ The history branch falls back to host messages when OV has no data, has fewer me
 
 A **session commit** archives conversation and processes memory. It is separate from a [snapshot commit](../guides/15-snapshot.md), which versions resource files.
 
+## Agent experience recall configuration
+
+The plugin still accepts `agentExperience` in its plugin configuration with these defaults:
+
+```json
+{
+  "agentExperience": {
+    "enabled": false,
+    "recallLimit": 3,
+    "scoreThreshold": 0.35,
+    "maxInjectedChars": 6000,
+    "minQueryChars": 12
+  }
+}
+```
+
+These fields remain in the configuration schema, but the current assemble path does not consume them. Recall uses the shared `searchContext` path and the general `autoRecall`, `recallLimit`, `recallScoreThreshold`, and `recallMaxInjectedChars` settings. Setting `agentExperience.enabled` does not enable a separate experience search or a separate experience section.
+
+The retained `shouldRecallAgentExperience` helper scores execution, write, failure, and engineering terms, plus intent words such as “经验”, “踩坑”, “best practice”, and “pitfall”. It has no caller in the current recall path. Its keyword rules and `minQueryChars` must not be treated as active recall controls. Injected context uses `<openviking-context>`; capture strips that wrapper and its content before saving user text, so recalled material is not captured again as user input.
+
 ## Verify
 
 ```bash

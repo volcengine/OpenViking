@@ -72,6 +72,12 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 ```
 
+#### 路由与等待
+
+OpenViking 先检查来源和请求参数是否满足 Connector 接入条件。Connector 在标准流水线之外完成导入。其余请求中，[`parser_api`](../guides/01-configuration.md#parser-api) 选中的格式交给外部 Understanding 解析，剩余格式使用内置 Parser。外部解析只替换 Parse 阶段，结果仍进入 TreeBuilder 和后续存储、语义处理。已经由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析。
+
+Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；等待超时不代表导入已取消。
+
 #### 阶段 1：源解析 (Parse)
 - 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
 - 支持多种格式：文档（PDF/Markdown/Word）、表格（Excel/PPT）、代码、媒体文件等
@@ -99,7 +105,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 对 Git 仓库来源使用 `wait=false` 时，OpenViking 会先校验仓库、解析目标 URI、预占最终 `root_uri`，然后在 clone/parse/finalize 完成前返回。
 - 立即响应包含 `status`、`root_uri` 和 `task_id`；抓取、解析、finalize 以及队列等待会在持久化后台任务中继续执行。
 - 可通过 `GET /api/v1/tasks/{task_id}` 查询任务状态。Git 资源导入任务的阶段包括 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`。
-- 其他资源来源使用 `wait=false` 时，会在响应前完成抓取/解析/finalize；返回的 `task_id` 只用于跟踪 semantic 和 embedding 队列完成情况。
+- 外部 Understanding 导入也可能在解析完成前返回：飞书直达路径提交 URL；HTTP 文件路径先识别类型并上传文件，再将外部响应交给后台处理。通过返回的 `task_id` 查询进度；飞书直达导入可能要等解析标题确定后才有 `root_uri`。
+- 使用内置 Parser 的普通导入在 `wait=false` 时仍会先完成抓取、解析和 finalize，再返回响应；其 `task_id` 跟踪剩余的语义和 embedding 工作。
 
 ### 资源的增量更新
 

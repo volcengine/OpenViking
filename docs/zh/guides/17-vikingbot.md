@@ -251,6 +251,20 @@ Gateway 默认只监听 `127.0.0.1`。如果改为 `0.0.0.0` 或其他非 localh
 
 聊天平台的凭证和权限配置见 [VikingBot 渠道配置](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/concepts/05-channel.md)。
 
+## 通过 Web Studio 管理
+
+打开 Web Studio 的 `/vikingbot` 页面，可使用网页对话或管理 Server 受管 Bot 的飞书连接。渠道管理和飞书历史仅允许 ROOT 访问，并按 Studio 当前选择的 account 隔离；Account ADMIN Key 不具备该权限。Studio 使用 `GET /api/v1/admin/bot/capabilities`，以及 `/api/v1/admin/accounts/{account_id}/bot` 下的连接、会话、验证和接入任务接口。
+
+飞书扫码接入分三步：
+
+1. 选择同账户普通用户作为连接的运行身份。服务端绑定可用凭证，浏览器无需接收该用户的 API Key。
+2. 飞书扫码，创建应用、配置权限和事件并提交发布。已有应用可改用手动凭证配置。
+3. 将机器人加入群，验证消息接收和回复。发送 API 接受回复不代表群内可见，接入时仍需在群里确认。
+
+连接和捕获的消息保存在 Bot 数据目录的 `studio.sqlite3`，文件权限为 `0600`。数据库含应用和绑定用户的凭证，备份需按服务端配置处理。Studio 管理的飞书会话只开放绑定身份允许的 OpenViking 查询和记忆工具；Shell、本地文件、定时任务和未批准的 MCP 工具不可用。
+
+暂停连接保留历史。删除连接会移除本地记录，不会删除飞书应用或飞书中的消息。飞书历史在 Studio 中只读，从该 Studio 连接捕获的消息开始；不会自动迁入 `ov.conf` 中已有的渠道及其旧历史。同一连接暂停恢复或重启后保留上下文；删除并重建连接会创建新的上下文。
+
 ## 更多文档
 
 - [VikingBot 完整使用说明](https://github.com/volcengine/OpenViking/blob/main/bot/README_CN.md)

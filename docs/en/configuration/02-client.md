@@ -225,6 +225,8 @@ A peer is a path prefix under your own user space — `viking://user/<you>/peers
 
 `peer.source` decides the rule. The same setting is spelled `OPENVIKING_PEER_SOURCE` in the environment and `plugin.peerSource` or `plugin.<harness>.peerSource` in `ovcli.conf`.
 
+Remote identity comes only from `origin`; there is no fallback to `upstream`, because adding an upstream remote must not silently change the memory namespace. Root-commit hashes are not used either: forks share ancestry, and shallow clones or newly fetched histories can change which roots are visible. Without `origin`, a Git repository uses its root path. Use an explicit `peer.id` when repositories should share memories or when path-based identity must survive a move. Non-Git directories still have no derived peer by default.
+
 #### Give a Directory Its Own Peer
 
 Create `.openviking/config.json` in the directory:

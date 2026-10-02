@@ -432,7 +432,7 @@ PATCH 会先做结构校验，再构造合并后的配置：未知路径和运�
 
 两个 GET 接口只返回目标作用域持久化的配置，不返回业务解析后的默认值。配置持久化后会发布新配置并等待
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
-配置层更新成功，不保证所有派生客户端都已完成切换。当前业务接入状态见[运行时配置设计](../../design/runtime-configuration-design.md)。
+配置层更新成功，不保证所有派生客户端都已完成切换。配置存储和重载行为见[运行时配置来源与重载行为](../guides/01-configuration.md#runtime-configuration-source)。
 
 #### Account Configuration 接口参考
 

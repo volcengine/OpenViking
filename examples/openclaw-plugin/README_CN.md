@@ -360,17 +360,9 @@ Recall trace 默认关闭。可通过插件配置 `traceRecall`、`traceRecallPe
 
 OpenViking 服务需要独立部署并运行，插件才能连接到它。
 
-## 与旧设计稿的关系
+## 上下文生命周期参考
 
-仓库里还有一份更偏"未来演进方向"的设计稿：`docs/design/openclaw-context-engine-refactor.md`。阅读时需要区分两者的口径：
-
-- 本文描述的是当前实现已经落地的行为。
-- 旧设计稿讨论的是"进一步把更多主链路迁入 context-engine 生命周期"的目标态。
-- 当前版本里，自动 recall 的主入口已经迁到 `assemble()`：preflight 重建历史，transformContext 注入长期记忆。
-- 当前版本里，`afterTurn()` 已经负责增量写入 OpenViking session，但它仍然依赖阈值触发异步 commit。
-- 当前版本里，`compact()` 已经走 `commit(wait=true)`，但它的职责仍以"同步提交 + 结果回读"为主，而不是承载一切上层编排。
-
-这段区分很重要，否则很容易把未来设计误读成现状。
+当前 assemble、召回、捕获和压缩行为见 [OpenClaw 接入指南](../../docs/zh/agent-integrations/03-openclaw.md#assemble-如何组装上下文)。指南也说明了保留的 `agentExperience` 配置及其当前限制。
 
 ## 运维与调试入口
 
