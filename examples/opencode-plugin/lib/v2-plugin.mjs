@@ -1,5 +1,5 @@
 import { isRecallEnabled } from "./shared/recall-core.mjs"
-import { createOpenVikingV2McpConfig } from "./mcp-config.mjs"
+import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
 import { log } from "./utils.mjs"
 
@@ -37,12 +37,19 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
+    let registered = false
     await ctx.mcp.transform((editor) => {
       const current = editor.get?.("openviking")
       if (current?.disabled === true) return
       editor.set("openviking", createOpenVikingV2McpConfig(pluginRoot))
+      registered = true
     })
     log("INFO", "mcp", "Registered OpenViking MCP server for OpenCode v2")
+    if (registered && ctx?.skill?.transform) {
+      await ctx.skill.transform((draft) => {
+        draft.source({ type: "directory", path: openVikingSkillsDir(pluginRoot) })
+      })
+    }
   } else if (!config.mcp.enabled) {
     log("INFO", "mcp", "Skipped bundled MCP registration in hook-only mode")
   }

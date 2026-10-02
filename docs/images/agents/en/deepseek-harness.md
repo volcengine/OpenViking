@@ -29,7 +29,7 @@ The installer asks for the harness and OpenViking credentials:
 | Package reported missing from npm | pnpm rejects releases younger than 24 hours by default; wait and retry, or add the exact version to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` |
 | Recall returns no history | Run `curl http://localhost:1933/health` to confirm the server is healthy, then check the endpoint and make sure the prompt is at least 3 characters long |
 | OpenViking returns 401 / 403 | Check the API key; trusted-mode deployments must also check `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
-| Memories from other projects appear | Set `OPENVIKING_RECALL_PEER_SCOPE=actor` |
+| Memories from other projects appear | Set `OPENVIKING_RECALL_PEER_SCOPE=actor` to limit peer memories to the active peer; user-level memories remain shared |
 | Nothing committed after a crash | Commits run at the token threshold and session teardown; queued writes replay at the next session start |
 
 ## References

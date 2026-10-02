@@ -1,6 +1,6 @@
 # Multi-Write Storage
 
-Multi-write storage lets OpenViking use one primary storage backend together with multiple backup backends under a unified filesystem abstraction. It is suitable for high availability, cross-region replicas, read acceleration, and storage migration.
+Multi-write storage lets OpenViking use one primary storage backend together with multiple backup backends under a unified filesystem abstraction. It supports replicas (including cross-region replicas), configurable read routing, and storage migration; it does not automatically promote a backup to primary.
 
 From the API user's point of view, interfaces such as `read()`, `write()`, `ls()`, and `stat()` do not change. Multi-write logic lives inside RAGFS, so callers do not need to care which underlying backend ultimately stores a file.
 
@@ -38,9 +38,9 @@ Multi-write supports two consistency modes.
 | Async multi-write | `async` | Return as soon as the primary write succeeds; backups sync in the background | Low-latency writes, eventual consistency |
 | Sync multi-write | `sync` | Wait for backup acknowledgements after the primary write succeeds | Stronger write confirmation when extra latency is acceptable |
 
-In async mode, backups may lag behind the primary for a short time. In sync mode, `write_ack_count` and `write_ack_timeout_ms` control how many backup acknowledgements are required and how long the system waits.
+In async mode, backups may lag behind the primary; recovery depends on backend availability and retry outcomes. In sync mode, `write_ack_count` and `write_ack_timeout_ms` control how many backup acknowledgements are required and how long the system waits.
 
-Even in sync mode, backups that timed out or did not confirm are still retried in the background.
+If sync mode fails to reach the required acknowledgement count, the call returns an error even though the primary may already have committed; that write is not automatically rolled back. Backups that did not acknowledge are still retried in the background; to inspect sync state, see the [Multi-Write Storage Guide](../guides/13-multi-write-storage.md).
 
 ## Read Path
 
@@ -113,14 +113,14 @@ Multi-write only handles new writes after it is enabled. It does not automatical
 
 Recommended migration flow:
 
-1. Use OVPack or another controlled process for a full data migration.
+1. Pause writes or arrange a verifiable incremental catch-up window, then migrate existing data with OVPack or another controlled process.
 2. Validate the target backend data.
 3. Enable the multi-write configuration.
-4. Let future new writes and updates continue to replicate through multi-write.
+4. Catch up changes made during migration and verify sync state before resuming writes; multi-write replicates subsequent additions and updates.
 
 ## Limitations
 
-- In async mode, backups may lag temporarily.
+- In async mode, backups may lag; reads from them cannot assume the latest write is visible.
 - Historical files that existed before multi-write was enabled need a separate migration or backfill process.
 - Redirected files rely on internal metadata to reconstruct the directory view.
 - Concurrent writes from multiple processes to the same primary backend still need future distributed metadata locking.

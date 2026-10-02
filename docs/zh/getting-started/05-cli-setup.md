@@ -13,7 +13,7 @@ CLI 会持续演进。请把 `ov --help` 和 `ov <command> --help` 作为当前�
 
 ## 本文配置什么
 
-CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
+CLI 默认使用 `~/.openviking/ovcli.conf`。若设置了 `OPENVIKING_CLI_CONFIG_FILE`，普通命令读取该变量指定的文件；命名配置管理仍操作默认目录，切换后需确认实际生效的路径。
 
 创建命名配置时，`ov` 会把配置保存为 `~/.openviking/ovcli.conf.<name>`。切换配置时，`ov` 会把选中的已保存配置复制到 `~/.openviking/ovcli.conf`。
 
@@ -53,7 +53,7 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 - 本地无鉴权服务通常不需要 API Key。
 - 除非用户选择本地自定义配置，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
 
-> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在下面的 `ov config validate`、`ov health` 和 `ov status` 检查之前先运行 `ov language <code>`。
+> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。当前源码中的 help 请求、`ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 可跳过语言设置，因此请在下面的 `ov config validate`、`ov health` 和 `ov status` 检查之前先运行 `ov language <code>`。
 
 ## 开始前
 
@@ -120,7 +120,7 @@ OpenViking CLI 配置可以包含 user key、root key，或同时包含两者。
 
 - User key：用于普通数据命令，例如 `ov add-resource`、`ov find` 和 `ov tree`。服务端会从 key 推导身份，所以通常不需要传 `--account` 或 `--user`。这是大多数用户需要的方式。
 - Root key：用于管理操作和需要 `--sudo` 的命令。`api_key` 模式下，即使传入 `--account` 和 `--user`，root key 也不能访问租户数据。只有 `trusted` 服务端接受 root key 认证的数据请求通过这些 header 指定身份。
-- User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key，并带上配置中的 account 和 user。
+- User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key。API key 模式不要额外配置 `account` 或 `user`。
 
 ## 手动配置
 
@@ -159,13 +159,13 @@ ov config switch
 1. 除非用户已经明确说明，先询问用户要连接哪种目标：OpenViking Service（火山引擎云）、远程自定义，还是本地自定义。
 2. 不要根据已有配置、active 配置、本地文件、默认端口或正在运行的服务推断用户想要的 setup。
 3. 切换配置、替换配置、探测本地服务、启动服务端或写入数据前，都要先询问用户。
-4. 在选择命令前，运行 `ov --help`、`ov config --help` 和相关 config 子命令的帮助。
+4. 在选择命令前，运行 `ov --help`、`ov config --help` 和相关 config 子命令的帮助。如果还没有保存显示语言，运行 `ov language <code>`。
 5. 如果你具备长期记忆能力，并且用户允许，可以记录当前 `ov --help` 命令面的简要摘要。不要记录 API Key 或其他密钥。
 6. 当必需信息明确时，使用非交互式 `ov config` 命令。
 7. Agent 配置时始终传 `--name`，这样重试会命中同一个 saved config。
 8. 如果 Agent 已经通过可信渠道拿到 API Key，使用 `--api-key-stdin` 或 `--root-api-key-stdin`，并且只把 key 内容写入 stdin。只有当环境变量已经存在时，才使用 `--api-key-env` 或 `--root-api-key-env`。不要要求用户额外打开一个 shell 只为了给 Agent export 一个 key。
 9. 使用 `-o json`，并根据 JSON 结果和进程退出码分支处理。
-10. 使用 `ov config validate` 校验 active 配置，然后运行 `ov health` 和 `ov status`。
+10. 使用 `ov config validate` 校验 active 配置，然后运行 `ov health` 和 `ov status`。要检查结果内容，退出码为 0 不代表服务健康。
 11. 如果非交互式配置因为信息缺失、鉴权不明确或终端输入更安全而失败，请引导用户使用 `ov config` 交互式向导。
 
 ### 查看当前安装的 CLI
@@ -307,7 +307,7 @@ ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-a
 如果用户同时拥有 user key 和 root key，可以把两者放在同一个配置里：
 
 ```bash
-ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
+ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --activate -o json
 ```
 
 这样普通命令使用 user key，需要 `--sudo` 的命令使用 root key。因为一个命令只有一个 stdin 流，第二个 key 必须来自已经存在的环境变量。如果两个 key 都不在环境变量中，请使用 `ov config` 并引导用户完成交互式流程。
@@ -375,7 +375,7 @@ ov status
 
 如果验证命令提示 OpenViking 需要显示语言，请运行 `ov language en`；如果用户希望使用中文，则运行 `ov language zh-CN`，然后重新验证。
 
-`ov status` 包含更宽泛的服务端和数据诊断。如果 `ov config validate` 和 `ov health` 通过，`ov status` 中的 warning 不一定代表 CLI 配置失败。
+`ov status` 包含更宽泛的服务端和数据诊断。先确认 `ov config validate` 成功，并检查 `ov health` 返回的 `healthy` 值。当前 `ov health` 和表格模式的 `ov status` 可能在报告异常时仍以 0 退出，自动化应解析结果内容。`ov status` 中与连接无关的 warning 不一定代表 CLI 配置失败。
 
 ## 学习其他 CLI 命令
 
@@ -387,7 +387,7 @@ ov config --help
 ov add-resource --help
 ```
 
-Agent 在运行不熟悉的命令前，应该重新查看帮助。如果 Agent 为用户维护长期记忆，并且用户允许，可以记录当前命令面的简要摘要，方便之后继续工作。不要记录密钥、原始配置文件或私有服务详情，除非用户明确要求。
+运行不熟悉的命令前查看对应帮助，尤其是导入目标、异步等待和删除参数。
 
 ## 凭证安全
 
@@ -469,7 +469,7 @@ ov config
 
 CLI 配置完成后，使用 `ov --help` 和 `ov <command> --help` 继续了解其他命令。
 
-添加资源会把数据写入 active OpenViking 服务端。如果你想做一个小演示，请选择你愿意存入服务端的资源。Agent 运行这类演示命令前，必须先征得用户同意。
+添加资源会把数据写入 active OpenViking 服务端。如果你想做一个小演示，请选择你愿意存入服务端的资源。Agent 运行这类演示命令前，必须先征得用户同意。单纯验证连接无需写入资源。
 
 ```bash
 ov add-resource https://github.com/volcengine/OpenViking

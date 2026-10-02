@@ -4,66 +4,52 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 
 ## System Overview
 
+<ArchitectureDiagram />
+
+<details>
+<summary>Text version</summary>
+
+```text
+CLI / SDK / HTTP client
+          |
+      HTTP Server
+          |
+      Service Layer
+          |
+   +------+------+----------------+
+   |             |                |
+Retrieval     Sessions       Resource / Skill import
+   |             |                |
+   |       Memory extraction  Parse / Semantic queues
+   |             |                |
+   +-------------+----------------+
+                 |
+             VikingFS
+           /          \
+      RAGFS         Vector index
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                        OpenViking System Architecture                       │
-├────────────────────────────────────────────────────────────────────────────┤
-│                                                                            │
-│                              ┌─────────────┐                               │
-│                              │   Client    │                               │
-│                              │ (OpenViking)│                               │
-│                              └──────┬──────┘                               │
-│                                     │ delegates                            │
-│                              ┌──────▼──────┐                               │
-│                              │   Service   │                               │
-│                              │    Layer    │                               │
-│                              └──────┬──────┘                               │
-│                                     │                                      │
-│           ┌─────────────────────────┼─────────────────────────┐            │
-│           │                         │                         │            │
-│           ▼                         ▼                         ▼            │
-│    ┌─────────────┐          ┌─────────────┐          ┌─────────────┐      │
-│    │  Retrieve   │          │   Session   │          │    Parse    │      │
-│    │  (Context   │          │  (Session   │          │  (Context   │      │
-│    │  Retrieval) │          │  Management)│          │  Extraction)│      │
-│    │ search/find │          │ add         │          │ Doc parsing │      │
-│    │ Intent      │          │ commit      │          │ L0/L1/L2    │      │
-│    │ Rerank      │          │ commit      │          │ Tree build  │      │
-│    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │
-│           │                        │                        │             │
-│           │                        │ Memory extraction      │             │
-│           │                        ▼                        │             │
-│           │                 ┌─────────────┐                 │             │
-│           │                 │ Compressor  │                 │             │
-│           │                 │ Compress/   │                 │             │
-│           │                 │ Deduplicate │                 │             │
-│           │                 └──────┬──────┘                 │             │
-│           │                        │                        │             │
-│           └────────────────────────┼────────────────────────┘             │
-│                                    ▼                                      │
-│    ┌─────────────────────────────────────────────────────────────────┐    │
-│    │                         Storage Layer                            │    │
-│    │               AGFS (File Content)  +  Vector Index               │    │
-│    └─────────────────────────────────────────────────────────────────┘    │
-│                                                                            │
-└────────────────────────────────────────────────────────────────────────────┘
-```
+
+</details>
 
 ## Core Modules
 
+<div class="module-table">
+
 | Module | Responsibility | Key Capabilities |
 |--------|----------------|------------------|
-| **Client** | Unified entry | Provides all operation interfaces, delegates to Service layer |
+| **Client** | Unified entry | Sends supported SDK/CLI operations to the HTTP API |
 | **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, PackService, DebugService |
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), global retrieval (HierarchicalRetriever), Rerank |
-| **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
+| **Session** | Session management | Message recording, usage tracking, session archiving, triggering memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
-| **Compressor** | Memory compression | Schema-driven memory extraction and LLM deduplication decisions |
-| **Storage** | Storage layer | VikingFS virtual filesystem, vector index, AGFS integration |
+| **Memory** | Memory extraction | Schema-driven extraction by MemoryType (ExtractLoop), LLM merge and deduplication written back as patches (MemoryUpdater); orchestrated by `SessionCompressorV3` |
+| **Storage** | Storage layer | VikingFS virtual filesystem, vector index, RAGFS integration |
+
+</div>
 
 ## Service Layer
 
-The Service layer decouples business logic from the transport layer, enabling reuse across HTTP Server and CLI:
+The Service layer decouples business logic from the transport layer. The CLI and SDKs reach it through the HTTP Server:
 
 | Service | Responsibility | Key Methods |
 |---------|----------------|-------------|
@@ -80,21 +66,22 @@ OpenViking uses a dual-layer storage architecture separating content from index 
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
-| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
-| **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
+| **RAGFS** | Content storage | L0/L1/L2 full content, multimedia files |
+| **Vector Index** | Index storage | URIs, vectors, metadata, and text used for retrieval, including abstracts |
 
 ## Data Flow Overview
 
 ### Adding Context
 
 ```
-Input → Parser → TreeBuilder → AGFS → SemanticQueue → Vector Index
+Input → Parser → TreeBuilder → ResourceProcessor → RAGFS → SemanticQueue → Vector Index
 ```
 
-1. **Parser**: Parse documents, create file and directory structure (no LLM calls)
-2. **TreeBuilder**: Move temp directory to AGFS, enqueue for semantic processing
-3. **SemanticQueue**: Async bottom-up L0/L1 generation
-4. **Vector Index**: Build index for semantic search
+1. **Parser**: Parse source documents into files and directories; model use depends on the selected parser
+2. **TreeBuilder**: Resolve the target URI and retain temporary artifact references
+3. **ResourceProcessor**: Persist content in RAGFS and enqueue semantic processing
+4. **SemanticQueue**: Async bottom-up L0/L1 generation
+5. **Vector Index**: Build index for semantic search
 
 ### Retrieving Context
 
@@ -110,14 +97,14 @@ Query → Intent Analysis → Global Retrieval → Rerank → Results
 ### Session Commit
 
 ```
-Messages → Compress → Archive → Memory Extraction → Storage
+Messages → Archive Boundary → Archive → Memory Extraction → Storage
 ```
 
 1. **Messages**: Accumulate conversation messages and usage records
-2. **Compress**: Keep recent N rounds, archive older messages
+2. **Archive Boundary**: Split archived and retained messages according to the commit parameters; by default, archive all current messages
 3. **Archive**: Generate L0/L1 for history segments
 4. **Memory Extraction**: Extract memories from messages according to the memory policy and MemoryType schemas
-5. **Storage**: Write to AGFS + vector index
+5. **Storage**: Write to RAGFS + vector index
 
 ## Deployment Mode
 
@@ -127,13 +114,16 @@ For team sharing, production deployment, and cross-language integration:
 
 ```python
 # Python SDK connects to OpenViking Server
-client = SyncHTTPClient(url="http://localhost:1933", api_key="xxx")
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 ```
 
 ```bash
 # Or use curl / any HTTP client
 curl http://localhost:1933/api/v1/search/find \
-  -H "X-API-Key: xxx" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
   -d '{"query": "how to use openviking"}'
 ```
 
@@ -146,10 +136,10 @@ curl http://localhost:1933/api/v1/search/find \
 
 | Principle | Description |
 |-----------|-------------|
-| **Pure Storage Layer** | Storage only handles AGFS operations and basic vector search; Rerank is in retrieval layer |
+| **Pure Storage Layer** | Storage only handles RAGFS operations and basic vector search; Rerank is in retrieval layer |
 | **Three-Layer Information** | L0/L1/L2 enables progressive detail loading, saving token consumption |
 | **Two-Stage Retrieval** | Vector search recalls candidates + Rerank improves accuracy |
-| **Single Data Source** | All content read from AGFS; vector index only stores references |
+| **Single Data Source** | RAGFS holds source files; vector records retain the text and metadata needed for retrieval |
 
 ## Related Documents
 
@@ -162,6 +152,6 @@ curl http://localhost:1933/api/v1/search/find \
 - [Session Management](./08-session.md) - Session and memory management
 - [Transaction Model](./09-transaction.md) - Write and consistency model
 - [Data Encryption](./10-encryption.md) - At-rest encryption and key architecture
-- [Multi-Tenant](./11-multi-tenant.md) - Account / user / agent isolation model
+- [Multi-Tenant](./11-multi-tenant.md) - Account, user, and peer isolation model
 - [Metrics](./12-metrics.md) - `/metrics` usage and key metric explanations
 - [Privacy Configs and Skill Privacy Extraction/Restore](./13-privacy.md) - Versioning, placeholder extraction, and read-time restore

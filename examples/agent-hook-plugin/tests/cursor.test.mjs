@@ -32,6 +32,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "hosts/cursor/rules/openviking-memory.mdc",
     "hosts/cursor/skills/openviking-memory/SKILL.md",
     "hosts/cursor/skills/openviking-skills/SKILL.md",
+    "hosts/cursor/skills/ov-experience-memory/SKILL.md",
   ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }

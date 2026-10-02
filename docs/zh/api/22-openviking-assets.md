@@ -1,9 +1,9 @@
 # OpenViking Assets Resolver
 
 OpenViking Assets Resolver 用于解析并校验
-[`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest——既支持在
+[`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest。支持在
 `catalog` 字段中直接定义资产的单文件 Manifest，也支持搭配单独 Catalog 文件的
-Manifest——并返回可供客户端执行的标准化资产计划。它不会克隆仓库、创建资源或启动
+Manifest，并返回可供客户端执行的标准化资产计划。它不会克隆仓库、创建资源或启动
 同步任务。
 
 通常应直接使用 `ov add-resource --manifest <file>`；CLI 会自动调用 Resolver 和
@@ -105,7 +105,7 @@ POST /api/v1/openviking-assets/preflight
 ```
 
 该接口在 OpenViking Server 的实际运行环境执行只读 `git ls-remote`，校验仓库和可选 ref
-是否可读。它不会克隆仓库、创建资源或启动任务。Manifest 模式在 dry-run 和正式提交之前
+是否可读。指定 `commit` 时只验证仓库的 HEAD 可读；精确 SHA 是否存在并可获取，由正式导入时的 fetch/checkout 校验。它不会克隆仓库、创建资源或启动任务。Manifest 模式在 dry-run 和正式提交之前
 都会调用该接口。
 
 ### 请求体
@@ -116,6 +116,7 @@ POST /api/v1/openviking-assets/preflight
 | `connector` | string | 是 | 当前必须是 `git` |
 | `repo_url` | string | 是 | Git clone URL |
 | `branch` | string | 否 | 要验证的 branch 或 tag；省略时验证远端 `HEAD` |
+| `commit` | string | 否 | 完整的 40 位十六进制 commit SHA，与 `branch` 互斥 |
 | `auth_config.username` | string | 否 | HTTP Basic 用户名，默认 `oauth2` |
 | `auth_config.token` | string | 否 | 一次性 Git token，不持久化 |
 

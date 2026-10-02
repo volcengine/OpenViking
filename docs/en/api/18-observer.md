@@ -172,7 +172,7 @@ The field describes only a pure-dense vector score. Sparse fusion, time decay, r
 
 #### 1. API Implementation Overview
 
-Get aggregated model subsystem status (VLM, embedding, rerank). Checks if each model provider is healthy and available.
+Get the current account’s VLM and embedding configuration and token-usage information. `is_healthy` is true when the observer resolves that account’s model information without an error; it does not probe every provider. Use `/ready` for the embedding connectivity probe and inspect actual request errors for other models.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP route
@@ -236,7 +236,7 @@ ov observer models
     "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
+    "status": "Account: default\nEmbedding dimension: 1024\nNo model usage data available."
   }
 }
 ```
@@ -252,7 +252,6 @@ Get distributed lock system status.
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_lock` - HTTP route
 - `openviking/service/debug_service.py:ObserverService.lock` - Core implementation
-- `openviking/storage/observers/lock_observer.py` - Lock observer
 - `crates/ov_cli/src/commands/observer.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -294,7 +293,7 @@ The public SDKs and CLI do not currently expose a lock-specific observer method.
 
 #### 1. API Implementation Overview
 
-Get retrieval quality metrics.
+Get recorded query counts, result counts, scores, rerank use, and latency. These are diagnostic statistics, not a relevance evaluation. Empty results are valid and do not make the component unhealthy.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_retrieval` - HTTP route
@@ -396,7 +395,7 @@ ov observer filesystem
 
 #### 1. API Implementation Overview
 
-Get overall system status, including all components (queue, vikingdb, models, lock, retrieval).
+Get overall system status, including all components (queue, vikingdb, models, lock, retrieval, filesystem).
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_system` - HTTP route
@@ -485,6 +484,12 @@ ov observer system
       },
       "retrieval": {
         "name": "retrieval",
+        "is_healthy": true,
+        "has_errors": false,
+        "status": "..."
+      },
+      "filesystem": {
+        "name": "filesystem",
         "is_healthy": true,
         "has_errors": false,
         "status": "..."

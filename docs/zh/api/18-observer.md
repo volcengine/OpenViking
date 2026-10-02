@@ -172,7 +172,7 @@ ov observer vikingdb
 
 #### 1. API 实现介绍
 
-获取模型子系统的聚合状态（VLM、embedding、rerank）。检查各模型提供者是否健康可用。
+获取当前账号的 VLM、Embedding 配置和 token 用量信息。观察器解析账号模型信息时未发生错误，`is_healthy` 才为 true；它不会逐一探测提供者是否可达。Embedding 连通性可查看 `/ready`，其他模型应结合实际请求错误排查。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP 路由
@@ -236,7 +236,7 @@ ov observer models
     "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
+    "status": "Account: default\nEmbedding dimension: 1024\nNo model usage data available."
   }
 }
 ```
@@ -252,7 +252,6 @@ ov observer models
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_lock` - HTTP 路由
 - `openviking/service/debug_service.py:ObserverService.lock` - 核心实现
-- `openviking/storage/observers/lock_observer.py` - 锁观察者
 - `crates/ov_cli/src/commands/observer.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -294,7 +293,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
 
 #### 1. API 实现介绍
 
-获取检索质量指标。
+获取已记录的查询次数、结果数、分数、Rerank 使用情况和延迟。这些数据用于诊断，不能直接衡量结果相关性；空结果也是有效结果，不会使该组件被判定为不健康。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_retrieval` - HTTP 路由
@@ -396,7 +395,7 @@ ov observer filesystem
 
 #### 1. API 实现介绍
 
-获取整体系统状态，包括所有组件（queue、vikingdb、models、lock、retrieval）。
+获取整体系统状态，包括所有组件（queue、vikingdb、models、lock、retrieval、filesystem）。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_system` - HTTP 路由
@@ -485,6 +484,12 @@ ov observer system
       },
       "retrieval": {
         "name": "retrieval",
+        "is_healthy": true,
+        "has_errors": false,
+        "status": "..."
+      },
+      "filesystem": {
+        "name": "filesystem",
         "is_healthy": true,
         "has_errors": false,
         "status": "..."

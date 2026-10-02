@@ -143,7 +143,9 @@ export const KNOBS = [
   // conversation extracts noticeably worse.
   { name: "captureAssistantTurns", type: "bool", default: true, env: "OPENVIKING_CAPTURE_ASSISTANT_TURNS", capability: "capture" },
   { name: "captureLastAssistantOnStop", type: "bool", default: true, env: "OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP", capability: "capture" },
-  { name: "captureToolResults", type: "bool", default: false, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
+  // dsh is the only reader. Its Experience usage records need the completed
+  // tool results, so it captures them by default.
+  { name: "captureToolResults", type: "bool", default: false, harness: { dsh: true }, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },

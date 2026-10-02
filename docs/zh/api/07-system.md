@@ -8,7 +8,7 @@ OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多�
 
 #### 1. API 实现介绍
 
-基础健康检查端点，无需认证。返回服务版本号和健康状态。如果提供认证信息，还会返回认证模式和身份信息。
+基础存活检查，无需认证。返回版本号、健康状态和认证模式。提供凭据后会尝试解析身份，成功时补充身份字段；凭据无效时返回认证错误。
 
 Trusted 模式下，完整的 `X-OpenViking-Account` 和 `X-OpenViking-User` 请求头会触发身份解析，
 包括省略 `root_api_key` 的 localhost 部署。配置了 Root 密钥的服务继续校验认证请求中的密钥。
@@ -188,7 +188,6 @@ curl -X GET http://localhost:1933/ready
 
 **代码入口**:
 - `openviking/server/routers/system.py:system_status` - HTTP 路由
-- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.get_status` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -301,11 +300,11 @@ ov system consistency viking://resources/my-project
 {
   "status": "ok",
   "result": {
-	    "ok": false,
-	    "expected_count": 3,
-	    "missing_record_count": 1,
-	    "missing_records_truncated": false,
-	    "missing_records": [
+    "ok": false,
+    "expected_count": 3,
+    "missing_record_count": 1,
+    "missing_records_truncated": false,
+    "missing_records": [
       {
         "uri": "viking://resources/my-project/README.md",
         "path": "README.md",
@@ -323,7 +322,7 @@ ov system consistency viking://resources/my-project
 
 #### 1. API 实现介绍
 
-等待所有异步处理（embedding、语义生成）完成。该方法会阻塞直到所有队列中的任务处理完毕或超时。
+等待处理队列排空，或在超时后结束。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
 
 **代码入口**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP 路由
@@ -358,12 +357,9 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
 **Python SDK**
 
 ```python
-# 添加资源
-client.add_resource(path="./docs/")
-
-# 等待所有处理完成
+# 等待当前处理队列排空
 status = client.wait_processed(timeout=60.0)
-print(f"Processing complete: {status}")
+print(status)  # 检查各队列的 error_count 和 errors
 ```
 
 **TypeScript SDK**

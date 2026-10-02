@@ -144,13 +144,13 @@ ov overview viking://resources/docs/
 | uri | str | 是 | - | Viking URI（如 `viking://resources/docs/api.md`）或 32 字符十六进制向量记录 `id`（由 `stat()` 返回） |
 | offset | int | 否 | 0 | 起始行号（0 开始） |
 | limit | int | 否 | -1 | 读取的行数，`-1` 表示读到结尾 |
-| raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容（仅 HTTP API，Python SDK 暂未暴露）。 |
+| raw | bool | 否 | false | 返回未过滤 MEMORY_FIELDS 的原始存储内容；Python 中使用 `client.read_raw(uri)` 读取此格式。 |
 
 **说明**
 
-- `read()` 只接受文件 URI。传入已存在的目录 URI 时返回 `INVALID_ARGUMENT`（`400`），而不是 `NOT_FOUND`。该错误会携带结构化的 `details` 字段——`details.expected` 为 `"file"`，`details.actual` 为 `"directory"`，`details.resource` 为出错的 URI（HTTP 路径上会带上）——客户端据此即可以编程方式判断"文件 vs 目录"不匹配（例如回退到 `list`），而无需对错误消息做字符串匹配。
+- `read()` 只接受文件 URI。传入已存在的目录时返回 `INVALID_ARGUMENT`（HTTP `400`）。HTTP 响应的 `details` 包含 `expected: "file"`、`actual: "directory"` 和目标 `resource` URI，客户端可据此改用目录列表接口，无需解析错误消息。
 - 除 Viking URI 外，还可以传入 `stat()` 返回的 32 字符十六进制文件 `id`。服务端通过向量索引查找对应 URI 并执行相同的权限校验。由于索引是异步生成的，新返回的 ID 可能暂时无法解析；对应向量记录被删除后，按 ID 查询也会失败。这两种情况下，服务端都会返回 `NOT_FOUND`，并提示数据可能尚未索引或已经删除。
-- 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
+- 公开 URI 参数接受 `resources`、`user` 和 `agent` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}/messages.jsonl`，也可以使用向后兼容的 `viking://session/{session_id}/messages.jsonl` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
 
 **Python SDK**
@@ -296,13 +296,13 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 
 ```bash
 ov write viking://resources/docs/api.md \
-  --content "# Updated API\n\nFresh content." \
+  --content $'# Updated API\n\nFresh content.' \
   --tags team=search,env=prod \
   --tag-mode replace
 ```
 
 
-**响应**
+**`wait=true` 且刷新完成时的响应**
 
 ```json
 {
@@ -386,8 +386,34 @@ result = client.batch_write(
             "mode": "upsert",
         },
     ],
-    wait=False,
+    wait=True,
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+const result = await client.batchWrite("viking://resources/wiki", [
+  {
+    uri: "viking://resources/wiki/new.md",
+    content: "# New page\n",
+    mode: "upsert",
+  },
+]);
+console.log(result);
+```
+
+**Go SDK**
+
+```go
+content := "# New page\n"
+result, err := client.BatchWrite(ctx, "viking://resources/wiki", []openviking.BatchWriteOperation{
+    {URI: "viking://resources/wiki/new.md", Content: &content, Mode: "upsert"},
+}, nil)
+if err != nil {
+    return err
+}
+fmt.Println(result)
 ```
 
 **HTTP API**
@@ -409,11 +435,11 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
         "mode": "upsert"
       }
     ],
-    "wait": false
+    "wait": true
   }'
 ```
 
-**响应**
+**`wait=true` 且刷新完成时的响应**
 
 ```json
 {
@@ -436,7 +462,7 @@ curl -X POST http://localhost:1933/api/v1/content/batch-write \
 }
 ```
 
-TypeScript、Go SDK 和 CLI 当前不直接暴露 batch write。
+CLI 当前不直接提供批量写入命令。
 
 ---
 
@@ -447,6 +473,38 @@ TypeScript、Go SDK 和 CLI 当前不直接暴露 batch write。
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `uri` | string | 是 | 要下载的文件 URI |
+
+**Python SDK**
+
+```python
+from pathlib import Path
+
+Path("logo.png").write_bytes(
+    client.download_bytes("viking://resources/images/logo.png")
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+import { writeFile } from "node:fs/promises";
+
+const bytes = await client.downloadBytes("viking://resources/images/logo.png");
+await writeFile("logo.png", bytes);
+```
+
+**Go SDK**
+
+```go
+// Requires the os package.
+data, err := client.DownloadBytes(ctx, "viking://resources/images/logo.png")
+if err != nil {
+    return err
+}
+if err := os.WriteFile("logo.png", data, 0600); err != nil {
+    return err
+}
+```
 
 **HTTP API**
 
@@ -479,7 +537,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 <binary body>
 ```
 
-`ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。Python、TypeScript 和 Go SDK 当前没有独立的原始字节下载方法。
+`ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。
 
 ---
 
@@ -699,8 +757,7 @@ POST /api/v1/content/reindex
 ```bash
 curl -X POST http://localhost:1933/api/v1/content/reindex \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
+  -H "X-API-Key: your-admin-key" \
   -d '{
     "uri": "viking://resources",
     "mode": "vectors_only",
@@ -747,8 +804,7 @@ ov reindex viking://user/default/skills --mode semantic_and_vectors --wait false
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/tasks/task_xxx \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default"
+  -H "X-API-Key: your-admin-key"
 ```
 
 Reindex 后台任务的 `task_type` 为 `admin_reindex`，`resource_id` 等于请求中的 `uri`，也可以这样列出：

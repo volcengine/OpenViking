@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
-import { createOpenVikingMcpConfig, createOpenVikingV2McpConfig, injectOpenVikingMcpConfig } from "../lib/mcp-config.mjs"
+import { createOpenVikingMcpConfig, createOpenVikingV2McpConfig, injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "../lib/mcp-config.mjs"
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 
@@ -33,6 +33,20 @@ test("injectOpenVikingMcpConfig leaves OpenCode MCP config untouched in hook-onl
   assert.deepEqual(config, {
     mcp: { external: { type: "remote", url: "https://example.com/mcp" } },
   })
+})
+
+test("injectOpenVikingSkillPaths appends the bundled skills directory once", () => {
+  const config = { skills: { paths: [".opencode/skills"] } }
+
+  assert.equal(injectOpenVikingSkillPaths(config, "/tmp/openviking-plugin"), true)
+  injectOpenVikingSkillPaths(config, "/tmp/openviking-plugin")
+  assert.deepEqual(config.skills.paths, [".opencode/skills", "/tmp/openviking-plugin/skills"])
+})
+
+test("OpenCode plugin adds its skills only after registering the MCP server", async () => {
+  const source = await readFile(join(testDir, "../index.mjs"), "utf8")
+
+  assert.match(source, /if \(injected\) injectOpenVikingSkillPaths\(opencodeConfig, pluginRoot\)/)
 })
 
 test("OpenCode plugin keeps tools on MCP rather than native tool hook", async () => {

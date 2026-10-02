@@ -114,7 +114,7 @@ POST /api/v1/openviking-assets/preflight
 
 This endpoint runs read-only `git ls-remote` in the OpenViking Server execution
 environment to verify that a repository and optional ref are readable. It does
-not clone the repository, create a resource, or start a task. Manifest mode
+not clone the repository, create a resource, or start a task. With `commit`, preflight checks repository access through HEAD; the import pipeline verifies that exact SHA during fetch/checkout. Manifest mode
 calls it during both dry-run and pre-submission validation.
 
 ### Request body
@@ -125,6 +125,7 @@ calls it during both dry-run and pre-submission validation.
 | `connector` | string | Yes | Must currently be `git` |
 | `repo_url` | string | Yes | Git clone URL |
 | `branch` | string | No | Branch or tag to verify; the remote `HEAD` is checked when omitted |
+| `commit` | string | No | Full 40-character hexadecimal commit SHA; mutually exclusive with `branch` |
 | `auth_config.username` | string | No | HTTP Basic username; defaults to `oauth2` |
 | `auth_config.token` | string | No | One-shot Git token; never persisted |
 

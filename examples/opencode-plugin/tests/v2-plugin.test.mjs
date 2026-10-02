@@ -31,10 +31,15 @@ function runtimeFixture(overrides = {}) {
 function contextFixture(messages = []) {
   const hooks = {}
   const registered = []
+  const skillSources = []
   return {
     hooks,
     registered,
+    skillSources,
     ctx: {
+      skill: {
+        transform: async (callback) => callback({ source: (source) => skillSources.push(source), list: () => skillSources }),
+      },
       location: { directory: "/tmp/project" },
       mcp: {
         transform: async (callback) => callback({
@@ -54,9 +59,10 @@ function contextFixture(messages = []) {
 
 test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
   const { runtime } = runtimeFixture()
-  const { ctx, hooks, registered } = contextFixture()
+  const { ctx, hooks, registered, skillSources } = contextFixture()
   const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
 
+  assert.deepEqual(skillSources, [{ type: "directory", path: "/tmp/ov/skills" }])
   assert.equal(registered[0][0], "openviking")
   assert.equal(registered[0][1].type, "local")
   assert.equal(registered[0][1].codemode, false)

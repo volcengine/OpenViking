@@ -61,21 +61,28 @@ enum CustomEditKeyAction {
     ClearAllKeys,
 }
 
+// The OpenViking mark (one sail + one slash, read as `//`), rasterized from the
+// brand kit's 24-grid mark (`mark-24-*.svg`, the size the brand manual assigns
+// to terminals) into braille: each cell is 2x4 dots, so with a ~1:2 terminal
+// cell every dot is square and the mark keeps its proportions. The ink spans
+// 12 rows (48 dots, 8/3 dots per grid unit); E tapered slash uses 25% coverage so its fine tip survives; a dot is inked when a quarter
+// of it falls inside the mark. Blank first and last rows keep the art centered
+// against the status details.
 const OV_LOGO_LINES: [&str; 14] = [
     "",
-    "             ⢻⣶⣄",
-    "             ⠈⣿⣿⣟⢦⡀",
-    "              ⣿⣿⣿⡌⢻⣦⡀",
-    "              ⣿⣿⣿⣧ ⠹⣿⣦⡀",
-    "             ⢀⣿⣿⣿⣿  ⢹⣿⣷⡀",
-    "             ⣼⣿⣿⣿⡟  ⠈⣿⣿⣷",
-    "           ⢀⣼⣿⣿⣿⣿⣁⣀⣤⣤⣿⣿⣿⡄  ⡀",
-    "          ⢀⣾⡿⠿⠛⢛⣿⣿⣿⣿⣿⣿⣿⣿⡇⢀⣼⠃",
-    "             ⢀⣰⣿⣿⣿⣿⣿⠿⠟⠛⠋⣡⣿⠇",
-    "   ⠠⣶⣾⣿⣿⣿⣶⣤⣀ ⠾⠟⠛⠉⠉   ⣀⣤⣾⡿⠃",
-    "     ⠙⢿⣿⣿⣿⣿⣿⣿⣷⣶⣶⣶⣶⣶⣿⣿⣿⡿⠟⠁",
-    "       ⠈⠛⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠉",
-    "            ⠈⠉⠉⠉⠁",
+    "                     ⢀⡔   ⣰⡇",
+    "                    ⣠⠏  ⢀⣼⣿⡇",
+    "                  ⣠⡾⠃  ⢠⣾⣿⣿⡇",
+    "                ⢀⣾⡟⠁  ⣰⣿⣿⣿⣿⡇",
+    "              ⢀⣴⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⡇",
+    "             ⣴⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⡇",
+    "           ⣠⣾⣿⡟⠁  ⣰⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "         ⣠⣾⣿⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "       ⢀⣴⣿⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "     ⢀⣴⣿⣿⣿⡟⠁  ⣰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "    ⣠⣿⣿⣿⣿⠏  ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "  ⣠⣾⣿⣿⣿⡿⠃  ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
+    "",
 ];
 
 // Full mode needs enough height for the standalone wordmark, logo art,
@@ -631,95 +638,16 @@ fn styled_wordmark_line(_index: usize, line: &str) -> String {
 }
 
 fn styled_wordmark_line_for_color_level(line: &str, color_level: theme::ColorLevel) -> String {
-    let width = wordmark_width().max(1);
-    let mut rendered = String::new();
-
-    for (column, ch) in line.chars().enumerate() {
-        if ch.is_whitespace() {
-            rendered.push(ch);
-        } else {
-            let rgb = header_display_rgb(wordmark_gradient_color(column, width), color_level);
-            rendered.push_str(&theme::style_rgb_for_level(
-                ch.to_string(),
-                rgb,
-                true,
-                color_level,
-            ));
-        }
-    }
-
-    rendered
-}
-
-pub(crate) fn wordmark_gradient_color(column: usize, width: usize) -> Rgb {
-    wordmark_gradient_color_for_theme(theme::active_theme(), column, width)
-}
-
-fn wordmark_gradient_color_for_theme(palette: theme::CliTheme, column: usize, width: usize) -> Rgb {
-    if width <= 1 {
-        return palette.wordmark_start;
-    }
-
-    let ratio = column as f32 / (width - 1) as f32;
-    if ratio <= 0.56 {
-        interpolate_rgb(palette.wordmark_start, palette.wordmark_mid, ratio / 0.56)
-    } else {
-        interpolate_rgb(
-            palette.wordmark_mid,
-            palette.wordmark_end,
-            (ratio - 0.56) / 0.44,
-        )
-    }
-}
-
-fn interpolate_rgb(start: Rgb, end: Rgb, ratio: f32) -> Rgb {
-    let ratio = ratio.clamp(0.0, 1.0);
-    Rgb(
-        interpolate_channel(start.0, end.0, ratio),
-        interpolate_channel(start.1, end.1, ratio),
-        interpolate_channel(start.2, end.2, ratio),
-    )
-}
-
-fn interpolate_channel(start: u8, end: u8, ratio: f32) -> u8 {
-    (start as f32 + (end as f32 - start as f32) * ratio).round() as u8
-}
-
-fn tagline_ice_color_for_theme(palette: theme::CliTheme, column: usize, width: usize) -> Rgb {
-    if width <= 1 {
-        return palette.tagline_start;
-    }
-
-    let midpoint = width / 2;
-    if column <= midpoint {
-        let ratio = if midpoint == 0 {
-            0.0
-        } else {
-            column as f32 / midpoint as f32
-        };
-        interpolate_rgb(palette.tagline_start, palette.tagline_mid, ratio)
-    } else {
-        let tail_width = (width - 1).saturating_sub(midpoint).max(1);
-        let ratio = (column - midpoint) as f32 / tail_width as f32;
-        interpolate_rgb(palette.tagline_mid, palette.tagline_end, ratio)
-    }
+    theme::style_theme_color_for_level(line, theme::active_theme().wordmark, true, color_level)
 }
 
 fn tagline_texture_color(column: usize, width: usize) -> Rgb {
-    let palette = theme::active_theme();
-    let base = tagline_ice_color_for_theme(palette, column, width);
-    let ratio = if width <= 1 {
-        0.0
-    } else {
-        column as f32 / (width - 1) as f32
-    };
-    let center_glow = (1.0 - (ratio - 0.5).abs() * 2.0).clamp(0.0, 1.0);
-
-    mix_rgb(base, palette.wordmark_start, center_glow * 0.18)
+    tagline_color_for_theme(theme::active_theme(), column, width)
 }
 
-fn mix_rgb(base: Rgb, overlay: Rgb, amount: f32) -> Rgb {
-    interpolate_rgb(base, overlay, amount)
+// Solid deep teal is readable on both light and dark terminal backgrounds.
+fn tagline_color_for_theme(palette: theme::CliTheme, _column: usize, _width: usize) -> Rgb {
+    palette.brand_title.rgb_fallback()
 }
 
 fn styled_tagline(text: &str) -> String {
@@ -1603,29 +1531,12 @@ fn logo_glass_color_for_theme(
 
 fn logo_glass_color_for_theme_with_height(
     palette: theme::CliTheme,
-    column: usize,
-    row: usize,
-    width: usize,
-    logo_height: usize,
+    _column: usize,
+    _row: usize,
+    _width: usize,
+    _logo_height: usize,
 ) -> Rgb {
-    if width <= 1 {
-        return palette.wordmark_start;
-    }
-
-    let column_ratio = column as f32 / (width - 1) as f32;
-    let row_height = logo_height.saturating_sub(1).max(1);
-    let row_ratio = row as f32 / row_height as f32;
-    let ratio = (column_ratio * 0.4 + row_ratio * 0.6).clamp(0.0, 1.0);
-
-    if ratio <= 0.46 {
-        interpolate_rgb(palette.wordmark_start, palette.wordmark_mid, ratio / 0.46)
-    } else {
-        interpolate_rgb(
-            palette.wordmark_mid,
-            palette.logo_end,
-            (ratio - 0.46) / 0.54,
-        )
-    }
+    palette.mark
 }
 
 fn styled_detail_to_width(detail: &StatusBoxDetail, width: usize) -> String {
@@ -6207,7 +6118,7 @@ impl Drop for RawPrompt {
 mod tests {
     use super::{
         COMPACT_STATUS_DETAIL_WIDTH, CustomKeyMode, FULL_STATUS_BOX_MIN_ROWS, IdentityMode,
-        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, Rgb, RootAccountSummary,
+        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, RootAccountSummary,
         RootUserSummary, StatusBoxFrame, StatusBoxMode, StatusBoxRuntime, account_tree_labels,
         active_config_index, active_delete_block_helper_lines, active_summary_lines,
         active_summary_render_parts, add_config_name_label, add_generated_config_name_helper_lines,
@@ -6230,12 +6141,12 @@ mod tests {
         status_box_lines, status_box_lines_with_runtime, status_box_lines_with_runtime_width,
         status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
         styled_wordmark_line_for_color_level, switch_validation_error_lines,
-        tagline_ice_color_for_theme, user_key_from_response, user_key_redirect_labels,
+        tagline_color_for_theme, user_key_from_response, user_key_redirect_labels,
         user_management_config_context, user_management_config_from_server_url,
         user_management_config_name_choice_labels, user_management_server_url_helper_lines,
         user_tree_labels, validate_config_name, validate_config_name_change, validate_draft,
-        validate_new_config_name, validate_new_user_id, wizard_header_lines,
-        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
+        validate_new_config_name, validate_new_user_id, wizard_header_lines, wordmark_lines,
+        wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
@@ -6674,43 +6585,89 @@ mod tests {
     }
 
     #[test]
-    fn status_box_uses_filled_logo_instead_of_outline_sail() {
+    fn status_box_renders_the_sail_and_slash_mark() {
         let lines = status_box_lines(None, &[], "~/.openviking");
         let text = lines.join("\n");
 
-        assert!(text.contains("⣿⣿⣿⣧ ⠹⣿⣦⡀"));
-        assert!(text.contains("⢀⣾⡿⠿⠛⢛⣿⣿⣿⣿⣿⣿⣿⣿⡇⢀⣼⠃"));
-        assert!(text.contains("⠠⣶⣾⣿⣿⣿⣶⣤⣀ ⠾⠟⠛⠉⠉   ⣀⣤⣾⡿⠃"));
-        assert!(!text.contains("████ ▓▓▓▓"));
+        assert!(
+            text.contains(OV_LOGO_LINES[1].trim()),
+            "sail tip should render"
+        );
+        assert!(
+            text.contains(OV_LOGO_LINES[12].trim()),
+            "flat base should render"
+        );
+        assert!(
+            !text.contains("⠾⠟⠛⠉⠉"),
+            "the retired two-sail boat and wave art should be gone"
+        );
         assert!(!text.contains("/\\"));
-        assert!(!text.contains("/____\\"));
     }
-
     #[test]
-    fn status_box_logo_uses_faceted_sails_with_negative_space() {
-        let logo = OV_LOGO_LINES.join("\n");
-        let split_rows = OV_LOGO_LINES
-            .iter()
-            .filter(|line| visible_group_count(line) >= 2)
-            .count();
+    fn status_box_logo_reads_as_tapered_slash_then_upright_sail() {
+        let ink_rows = &OV_LOGO_LINES[1..OV_LOGO_LINES.len() - 1];
 
+        // Same row budget and width as the art it replaces, so the full
+        // status box layout does not move.
         assert_eq!(OV_LOGO_LINES.len(), 14);
         assert!(ov_logo_width() <= 28);
+        assert_eq!(OV_LOGO_LINES[0], "", "top row is breathing room");
+        assert_eq!(OV_LOGO_LINES[13], "", "bottom row is breathing room");
+
+        let mast = display_width(ink_rows[0]);
+        let mut previous_start = usize::MAX;
+        let mut previous_sail = 0;
+        let mut previous_slash = 0;
+        for line in ink_rows {
+            // Every ink row is two strokes, the slash and the sail, separated
+            // by the brand's slash-to-sail gap: that pair is what reads as `//`.
+            assert_eq!(
+                visible_group_count(line),
+                2,
+                "{line:?} should be `/` + sail"
+            );
+            let (slash, sail) = line
+                .trim_start()
+                .split_once(' ')
+                .expect("gap between strokes");
+            let sail = sail.trim_start();
+            assert!(
+                line.contains("  "),
+                "{line:?} should keep open space between slash and sail"
+            );
+            assert!(
+                slash
+                    .chars()
+                    .map(|ch| (ch as u32 - 0x2800).count_ones())
+                    .sum::<u32>()
+                    >= previous_slash,
+                "{line:?} E slash should widen from its fine tip toward the base"
+            );
+
+            // Upright mast: the sail's vertical edge sits in one column.
+            assert_eq!(
+                display_width(line),
+                mast,
+                "{line:?} mast should be vertical"
+            );
+            // Both strokes lean forward: each row starts left of the one above
+            // and the sail widens toward its flat base.
+            let start = display_width(line) - display_width(line.trim_start());
+            assert!(start < previous_start, "{line:?} should step left");
+            assert!(
+                display_width(sail) >= previous_sail,
+                "{line:?} sail should widen"
+            );
+            previous_start = start;
+            previous_sail = display_width(sail);
+            previous_slash = slash
+                .chars()
+                .map(|ch| (ch as u32 - 0x2800).count_ones())
+                .sum::<u32>();
+        }
         assert!(
-            logo.contains('⣿'),
-            "logo should use high-detail filled facets"
-        );
-        assert!(logo.contains('⠿'), "logo should include sharp cut facets");
-        assert!(logo.contains("⣿⣿⣿⣧ ⠹⣿⣦⡀"));
-        assert!(logo.contains("⢀⣾⡿⠿⠛⢛⣿⣿⣿⣿⣿⣿⣿⣿⡇⢀⣼⠃"));
-        assert!(logo.contains("⠠⣶⣾⣿⣿⣿⣶⣤⣀ ⠾⠟⠛⠉⠉   ⣀⣤⣾⡿⠃"));
-        assert!(
-            split_rows >= 5,
-            "logo should preserve visible internal gaps"
-        );
-        assert!(
-            !logo.contains("████████████████"),
-            "logo should not collapse into a solid block"
+            ink_rows[ink_rows.len() - 1].contains("⣿⣿⣿⣿"),
+            "the base should be a flat, fully inked edge"
         );
     }
 
@@ -6748,19 +6705,19 @@ mod tests {
     }
 
     #[test]
-    fn wordmark_preserves_original_standalone_block_art() {
+    fn wordmark_keeps_all_caps_block_art_at_the_status_box_width() {
+        // The brand wordmark is mixed-case "OpenViking" in Geist; block glyphs
+        // have no lowercase, so the terminal keeps the all-caps block letters.
+        // Their width also sets the full status box width.
         let width = wordmark_width();
 
-        assert_eq!(
-            width, 81,
-            "wordmark should preserve the original standalone width"
-        );
+        assert_eq!(width, 81, "wordmark width drives the status box layout");
+        assert_eq!(status_box_width(), width);
         assert!(
             wordmark_lines().iter().any(|line| line.contains("████")),
-            "wordmark should preserve block-art styling"
+            "wordmark should keep block-art styling"
         );
     }
-
     #[test]
     fn wordmark_visible_edges_are_consistent() {
         let wordmark = wordmark_lines();
@@ -6793,37 +6750,37 @@ mod tests {
     }
 
     #[test]
-    fn wordmark_gradient_runs_pearl_jade() {
-        let width = wordmark_width();
-        let palette = theme::active_theme();
+    fn wordmark_follows_the_terminal_foreground() {
+        // Brand rule: light artwork on dark backgrounds, dark artwork on
+        // light ones. The default foreground gives Paper-on-Ink or
+        // Ink-on-Paper without guessing the terminal background.
+        assert_eq!(theme::active_theme().wordmark, ThemeColor::DefaultFg);
 
-        assert_eq!(
-            wordmark_gradient_color_for_theme(palette, 0, width),
-            palette.wordmark_start
-        );
-        assert_eq!(
-            wordmark_gradient_color_for_theme(palette, width - 1, width),
-            palette.wordmark_end
-        );
-        let middle = wordmark_gradient_color_for_theme(palette, width / 2, width);
+        let line = wordmark_lines()[0];
+        let rendered = styled_wordmark_line_for_color_level(line, theme::ColorLevel::TrueColor);
+        assert_eq!(rendered, format!("\u{1b}[1;39m{line}\u{1b}[0m"));
         assert!(
-            middle.0 < palette.wordmark_start.0 && middle.1 < palette.wordmark_start.1,
-            "wordmark should visibly darken across the line"
+            !rendered.contains("38;2;"),
+            "wordmark must not hardcode a color"
         );
     }
-
     #[test]
-    fn wordmark_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
-        let rendered =
-            styled_wordmark_line_for_color_level(wordmark_lines()[0], theme::ColorLevel::Ansi256);
+    fn wordmark_needs_no_palette_fallback_without_truecolor() {
+        let line = wordmark_lines()[0];
 
-        assert!(rendered.contains("\u{1b}[1;38;5;"));
-        assert!(!rendered.contains("38;2;"));
-        assert_eq!(ansi256_indexes(&rendered), vec![30]);
+        for level in [theme::ColorLevel::Ansi256, theme::ColorLevel::Ansi16] {
+            let rendered = styled_wordmark_line_for_color_level(line, level);
+            assert_eq!(rendered, format!("\u{1b}[1;39m{line}\u{1b}[0m"));
+            assert!(ansi256_indexes(&rendered).is_empty());
+        }
+        assert_eq!(
+            styled_wordmark_line_for_color_level(line, theme::ColorLevel::NoColor),
+            line,
+            "NO_COLOR should print the plain block letters"
+        );
     }
-
     #[test]
-    fn logo_uses_stable_teal_ansi256_fallback_when_truecolor_is_unavailable() {
+    fn logo_uses_stable_deep_teal_ansi256_fallback_when_truecolor_is_unavailable() {
         let rendered = styled_logo_to_width_for_color_level(
             OV_LOGO_LINES[8],
             ov_logo_width(),
@@ -6837,24 +6794,23 @@ mod tests {
     }
 
     #[test]
-    fn tagline_ice_color_runs_pearl_jade() {
+    fn tagline_is_solid_deep_teal() {
         let width = display_width("Context Database for AI Agents");
         let palette = theme::active_theme();
 
         assert_eq!(
-            tagline_ice_color_for_theme(palette, 0, width),
-            palette.tagline_start
+            tagline_color_for_theme(palette, 0, width),
+            theme::BRAND_DEEP_TEAL
         );
         assert_eq!(
-            tagline_ice_color_for_theme(palette, width / 2, width),
-            palette.tagline_mid
+            tagline_color_for_theme(palette, width - 1, width),
+            theme::BRAND_DEEP_TEAL
         );
         assert_eq!(
-            tagline_ice_color_for_theme(palette, width - 1, width),
-            palette.tagline_end
+            tagline_color_for_theme(palette, width / 2, width),
+            theme::BRAND_DEEP_TEAL
         );
     }
-
     fn ansi256_indexes(rendered: &str) -> Vec<u8> {
         let mut indexes = Vec::new();
         let mut rest = rendered;
@@ -6875,48 +6831,32 @@ mod tests {
     }
 
     #[test]
-    fn status_box_border_uses_pearl_jade() {
+    fn status_box_border_uses_brand_deep_teal() {
         assert_eq!(
             theme::active_theme().border,
-            ThemeColor::TrueColor(Rgb(0, 128, 128))
+            ThemeColor::TrueColor(theme::BRAND_DEEP_TEAL)
         );
     }
-
     #[test]
-    fn status_box_footer_version_uses_pearl_jade_accent() {
+    fn status_box_footer_version_uses_brand_deep_teal() {
         assert_eq!(
             theme::active_theme().version,
-            ThemeColor::TrueColor(Rgb(0, 128, 128))
+            ThemeColor::TrueColor(theme::BRAND_DEEP_TEAL)
         );
     }
-
     #[test]
-    fn status_box_logo_uses_diagonal_pearl_jade_gradient() {
+    fn status_box_logo_is_solid_deep_teal() {
         let width = ov_logo_width();
         let palette = theme::active_theme();
-
-        assert_eq!(
-            logo_glass_color_for_theme(palette, 0, 0, width),
-            palette.wordmark_start
-        );
-        assert_eq!(
-            logo_glass_color_for_theme(palette, width - 1, 13, width),
-            palette.logo_end
-        );
-        let middle = logo_glass_color_for_theme(palette, width / 2, 7, width);
-        assert!(
-            middle.1 > palette.logo_end.1 && middle.1 < palette.wordmark_start.1,
-            "logo middle should sit between the light and dark gradient stops"
-        );
-
-        let upper = logo_glass_color_for_theme(palette, width / 2, 1, width);
-        let lower = logo_glass_color_for_theme(palette, width / 2, 12, width);
-        assert!(
-            lower.0 < upper.0 && lower.1 < upper.1 && lower.2 < upper.2,
-            "logo should darken from top-left toward bottom-right"
-        );
+        for row in 0..OV_LOGO_LINES.len() {
+            for column in 0..width {
+                assert_eq!(
+                    logo_glass_color_for_theme(palette, column, row, width),
+                    theme::BRAND_DEEP_TEAL
+                );
+            }
+        }
     }
-
     #[test]
     fn active_summary_hides_url_and_shows_kind() {
         let config = Config {

@@ -2,7 +2,7 @@ import { dirname } from "path"
 import { fileURLToPath } from "url"
 import { createOpenVikingRuntime } from "./lib/plugin-runtime.mjs"
 import { startV2Plugin } from "./lib/v2-plugin.mjs"
-import { injectOpenVikingMcpConfig } from "./lib/mcp-config.mjs"
+import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp-config.mjs"
 import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
 import { log } from "./lib/utils.mjs"
 
@@ -29,6 +29,7 @@ function v1Hooks(runtime) {
   return {
     config: async (opencodeConfig) => {
       const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot, config.mcp.enabled)
+      if (injected) injectOpenVikingSkillPaths(opencodeConfig, pluginRoot)
       const hookOnly = !config.mcp.enabled
       log(
         injected || hookOnly ? "INFO" : "WARN",

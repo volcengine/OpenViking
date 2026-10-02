@@ -12,24 +12,32 @@ OpenViking 使用全局向量检索，并可在召回完成后对候选结果执
 
 | 特性 | find() | search() |
 |------|--------|----------|
-| 会话上下文 | 不需要 | 需要 |
-| 意图分析 | 不使用 | 使用 LLM 分析 |
-| 查询数量 | 单一查询 | 0-5 个 TypedQuery |
-| 延迟 | 低 | 较高 |
+| 会话上下文 | 不使用 | 可选，传入 `session_id` 时使用 |
+| 意图分析 | 不使用 | 有会话内容且启用时使用 LLM |
+| 查询数量 | 单一查询 | 零个或多个 TypedQuery |
+| 延迟 | 通常较低 | 取决于意图分析、查询数量和是否 Rerank |
 | 适用场景 | 简单查询 | 复杂任务 |
+
+`search` 的 `limit` 用于每条规划查询；多条查询合并后的总数可能超过它，当前也不保证跨查询去重。
 
 ### 使用示例
 
+以下示例使用已配置的同步 Python SDK 客户端 `client`。
+
 ```python
 # find(): 简单查询
-results = await client.find(
+results = client.find(
     query="OAuth 认证",
     target_uri="viking://resources/",
 )
 
 # search(): 复杂任务（需要会话上下文）
-session_info = await client.create_session()
-results = await client.search(
+session_info = client.create_session()
+client.add_message(
+    session_id=session_info["session_id"], role="user",
+    content="我们正在为项目设计 OAuth 登录流程。",
+)
+results = client.search(
     query="帮我创建一个 RFC 文档",
     session_id=session_info["session_id"],
 )
@@ -37,7 +45,7 @@ results = await client.search(
 
 ## 意图分析
 
-IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query-planner) 配置项单独指定，未设置时回退到 `vlm`。
+当 `retrieval.enable_intent=true` 且会话包含摘要或消息时，IntentAnalyzer 使用 LLM 分析查询意图，生成零个或多个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query-planner) 配置项单独指定，未设置时回退到 `vlm`。
 
 ### 输入
 
@@ -99,6 +107,8 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 
 ## 检索结果
 
+以下是服务端内部类型的字段节选；HTTP/SDK 响应字段以[检索 API](../api/06-retrieval.md)为准。
+
 ### MatchedContext
 
 ```python
@@ -106,7 +116,7 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 class MatchedContext:
     uri: str                # 资源 URI
     context_type: ContextType
-    is_leaf: bool           # 是否文件
+    level: int              # 0=摘要，1=概览，2=详情
     abstract: str           # L0 摘要
     score: float            # 最终分数
 ```

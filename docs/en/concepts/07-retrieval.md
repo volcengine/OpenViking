@@ -12,24 +12,32 @@ Query → Intent Analysis (optional) → Global Vector Search → Rerank (option
 
 | Feature | find() | search() |
 |---------|--------|----------|
-| Session context | Not needed | Required |
-| Intent analysis | Not used | LLM analysis |
-| Query count | Single query | 0-5 TypedQueries |
-| Latency | Low | Higher |
+| Session context | Not used | Optional; used when `session_id` is supplied |
+| Intent analysis | Not used | Uses an LLM when session content exists and intent analysis is enabled |
+| Query count | Single query | zero or more TypedQueries |
+| Latency | Usually lower | Depends on intent analysis, query count, and reranking |
 | Use case | Simple queries | Complex tasks |
+
+For `search`, `limit` applies to each planned query. Merged results may exceed it, and the current implementation does not guarantee deduplication across queries.
 
 ### Usage Examples
 
+These examples use a configured synchronous Python SDK client named `client`.
+
 ```python
 # find(): Simple query
-results = await client.find(
+results = client.find(
     query="OAuth authentication",
     target_uri="viking://resources/",
 )
 
 # search(): Complex task (needs session context)
-session_info = await client.create_session()
-results = await client.search(
+session_info = client.create_session()
+client.add_message(
+    session_id=session_info["session_id"], role="user",
+    content="We are designing the OAuth login flow for this project.",
+)
+results = client.search(
     query="Help me create an RFC document",
     session_id=session_info["session_id"],
 )
@@ -37,7 +45,7 @@ results = await client.search(
 
 ## Intent Analysis
 
-IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries. The model used for this stage is separately configurable via the [`query_planner`](../guides/01-configuration.md#query-planner) config, falling back to `vlm` when unset.
+When `retrieval.enable_intent=true` and the session contains a summary or messages, IntentAnalyzer uses an LLM to analyze query intent and generate zero or more TypedQueries. The model used for this stage is separately configurable via the [`query_planner`](../guides/01-configuration.md#query-planner) config, falling back to `vlm` when unset.
 
 ### Input
 
@@ -99,6 +107,8 @@ See [rerank configuration](../guides/01-configuration.md#rerank) for supported p
 
 ## Retrieval Results
 
+The following excerpts show server-internal types. For HTTP/SDK response fields, see the [Retrieval API](../api/06-retrieval.md).
+
 ### MatchedContext
 
 ```python
@@ -106,7 +116,7 @@ See [rerank configuration](../guides/01-configuration.md#rerank) for supported p
 class MatchedContext:
     uri: str                # Resource URI
     context_type: ContextType
-    is_leaf: bool           # Whether file
+    level: int              # 0=abstract, 1=overview, 2=detail
     abstract: str           # L0 abstract
     score: float            # Final score
 ```

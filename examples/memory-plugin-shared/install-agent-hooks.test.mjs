@@ -391,6 +391,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.ok(cursorServers["third-party"]);
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
+    assert.match(readFileSync(join(home, ".cursor", "skills", "ov-experience-memory", "SKILL.md"), "utf8"), /OpenViking Experience Memory/);
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
     assert.ok(existsSync(join(shared, "batch-send.mjs")));

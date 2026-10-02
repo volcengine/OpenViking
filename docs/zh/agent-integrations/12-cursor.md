@@ -6,7 +6,7 @@
 
 前置条件：macOS 或 Linux、Node.js 18+，并建议使用最新稳定版 Cursor。安装过程中会引导配置 OpenViking 连接信息。
 
-安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
+安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -20,6 +20,7 @@ curl -fsSL https://openviking.ai/install | bash
 - 生命周期 Hook：自动加载画像、按问题召回、捕获对话、提交会话并保护 `viking://` URI。
 - OpenViking MCP Server：提供 `search`、`read`、`remember`、`add_skill` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
 - always-on Rule 和 `openviking-memory` Skill：告诉 Agent 如何使用已注入的上下文和记忆工具；另有 `openviking-skills` Skill，讲如何查找、使用、创建（`add_skill`）、共享和迁移存放在 OpenViking 里的 skill。
+- `ov-experience-memory` Skill：让 Agent 在执行类任务前检索并应用以往任务的 Experience。Cursor 只捕获文本，所以这里该 Skill 只负责检索和应用 Experience，它的读取不会关联回所用的 Experience。
 
 ## 验证
 
@@ -27,7 +28,7 @@ curl -fsSL https://openviking.ai/install | bash
 2. 打开 **Cursor Settings → Hooks**，确认 OpenViking 生命周期 Hook 执行了 `scripts/hook.mjs`，URI 保护 Hook 执行了 `scripts/uri-guard.mjs`。
 3. 查看 `beforeSubmitPrompt` 输出，确认存在 `additional_context`；这表示当前问题的召回结果已直接交给 Agent，无需先调用 MCP。
 4. 打开 **Cursor Settings → Tools & MCPs**，确认 `openviking` 已连接。
-5. 告诉 Cursor 一个临时偏好，等待本轮回复完成；新建会话后询问该偏好，确认捕获和跨会话召回均生效。
+5. 告诉 Cursor 一个测试偏好，正常结束会话，并在 Hook 日志中确认捕获和提交。等待记忆提取完成后，在同一工作区新建会话并询问该偏好。
 
 ## 工作原理
 

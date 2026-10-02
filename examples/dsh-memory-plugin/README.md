@@ -185,7 +185,7 @@ The profile's `cordis.patch.yml` can also carry plugin config:
     endpoint: http://127.0.0.1:1933
     recallMaxTokens: 2000
     scoreThreshold: 0.35
-    captureToolResults: false
+    captureToolResults: true
     skipSubagentSessions: true
     commitTokenThreshold: 20000
     mcpToolCallTimeoutMs: 60000

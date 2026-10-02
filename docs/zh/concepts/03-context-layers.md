@@ -1,6 +1,6 @@
 # 上下文层级（L0/L1/L2）
 
-OpenViking 使用三层信息模型，在检索效率、导航能力和原始内容完整性之间取得平衡。
+OpenViking 用摘要和概览定位内容，需要细节时再读取正文。这三个层级分别称为 L0、L1 和 L2。
 
 ## 概览
 
@@ -50,11 +50,11 @@ L1 提供更完整的目录摘要和导航信息，用于 Rerank 和决定是否
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
+资源目录生成语义摘要时，L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
 
 ## L2：详情
 
-L2 是原始文件或解析后的完整内容，只在需要时加载，并保留源格式和结构。
+L2 是原始文件或解析后的正文，按需加载。格式取决于导入方式，例如 PDF 可被解析为 Markdown，并不一定保留源文件格式。
 
 ```python
 content = client.read(uri="viking://resources/docs/auth/oauth.md")
@@ -146,7 +146,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 - `unsampled_entries`：未采样的直接子项数，满足 `sampled + unsampled = total`。
 - `pending_child_changes`：尚未反映到当前正文中的直接子项变化事件数（同一子项重复变化会分别计数）。
 
-当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
+当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，减少采样变化带来的正文差异；模型重新生成的正文仍可能不同。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 

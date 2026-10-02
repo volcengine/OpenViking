@@ -1,0 +1,152 @@
+[
+  {
+    "name": "blog",
+    "lang": "zh",
+    "faces": {
+      ".b-p": [
+        {
+          "familyName": "LXGW Neo XiHei Screen Full",
+          "postScriptName": "LXGWNeoXiHeiScreenFull",
+          "isCustomFont": true,
+          "glyphCount": 48
+        },
+        {
+          "familyName": "IBM Plex Sans",
+          "postScriptName": "IBMPlexSans",
+          "isCustomFont": true,
+          "glyphCount": 31
+        }
+      ],
+      ".b-h2": [
+        {
+          "familyName": "Noto Serif SC ExtraLight",
+          "postScriptName": "NotoSerifSCExtraLight-Bold",
+          "isCustomFont": true,
+          "glyphCount": 15
+        }
+      ],
+      ".b-code": [
+        {
+          "familyName": "OV Code",
+          "postScriptName": "OVCode-Regular",
+          "isCustomFont": true,
+          "glyphCount": 17
+        }
+      ]
+    },
+    "fontRequests": 42,
+    "overflow": false
+  },
+  {
+    "name": "blog",
+    "lang": "en",
+    "faces": {
+      ".b-p": [
+        {
+          "familyName": "IBM Plex Sans",
+          "postScriptName": "IBMPlexSans",
+          "isCustomFont": true,
+          "glyphCount": 160
+        }
+      ],
+      ".b-h2": [
+        {
+          "familyName": "Source Serif 4 Variable",
+          "postScriptName": "SourceSerif4Variable-Roman",
+          "isCustomFont": true,
+          "glyphCount": 49
+        }
+      ]
+    },
+    "fontRequests": 7,
+    "overflow": false
+  },
+  {
+    "name": "docs",
+    "lang": "zh",
+    "faces": {
+      ".vp-doc p": [
+        {
+          "familyName": "OV Code",
+          "postScriptName": "OVCode-Regular",
+          "isCustomFont": true,
+          "glyphCount": 2
+        },
+        {
+          "familyName": "LXGW Neo XiHei Screen Full",
+          "postScriptName": "LXGWNeoXiHeiScreenFull",
+          "isCustomFont": true,
+          "glyphCount": 54
+        },
+        {
+          "familyName": "IBM Plex Sans",
+          "postScriptName": "IBMPlexSans",
+          "isCustomFont": true,
+          "glyphCount": 21
+        }
+      ],
+      ".vp-doc h1": [
+        {
+          "familyName": "Source Serif 4 Variable",
+          "postScriptName": "SourceSerif4Variable-Roman",
+          "isCustomFont": true,
+          "glyphCount": 1
+        },
+        {
+          "familyName": "Noto Serif SC ExtraLight",
+          "postScriptName": "NotoSerifSCExtraLight-Bold",
+          "isCustomFont": true,
+          "glyphCount": 4
+        }
+      ],
+      ".vp-doc :not(pre)>code": [
+        {
+          "familyName": "OV Code",
+          "postScriptName": "OVCode-Regular",
+          "isCustomFont": true,
+          "glyphCount": 2
+        }
+      ]
+    },
+    "fontRequests": 25,
+    "overflow": false
+  },
+  {
+    "name": "docs",
+    "lang": "en",
+    "faces": {
+      ".vp-doc p": [
+        {
+          "familyName": "OV Code",
+          "postScriptName": "OVCode-Regular",
+          "isCustomFont": true,
+          "glyphCount": 2
+        },
+        {
+          "familyName": "IBM Plex Sans",
+          "postScriptName": "IBMPlexSans",
+          "isCustomFont": true,
+          "glyphCount": 199
+        }
+      ],
+      ".vp-doc h1": [
+        {
+          "familyName": "Source Serif 4 Variable",
+          "postScriptName": "SourceSerif4Variable-Roman",
+          "isCustomFont": true,
+          "glyphCount": 12
+        }
+      ],
+      ".vp-doc :not(pre)>code": [
+        {
+          "familyName": "OV Code",
+          "postScriptName": "OVCode-Regular",
+          "isCustomFont": true,
+          "glyphCount": 2
+        }
+      ]
+    },
+    "fontRequests": 8,
+    "overflow": false
+  }
+]

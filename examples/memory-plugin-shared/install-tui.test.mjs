@@ -100,7 +100,7 @@ printf '%s:%s\\n' "$HAVE_TRAE" "$SELECTED_HARNESSES"
 `);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "1:trae");
+  assert.equal(result.stdout.trim(), "1:trae,cli");
 });
 
 test("TRAE CLI configuration does not auto-select the TRAE CLI harness", (t) => {
@@ -121,7 +121,7 @@ printf '%s\\n' "$SELECTED_HARNESSES"
 `);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "trae");
+  assert.equal(result.stdout.trim(), "trae,cli");
 });
 
 test("TraeCode CLI 2.0 command aliases use the Codex-format selection", (t) => {
@@ -153,7 +153,7 @@ printf '%s:%s:%s\\n' "$SELECTED_HARNESSES" "$detected" "$label"
 `);
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), "codex,trae:yes:TraeCode CLI 2.0", command);
+    assert.equal(result.stdout.trim(), "codex,trae,cli:yes:TraeCode CLI 2.0", command);
   }
 });
 

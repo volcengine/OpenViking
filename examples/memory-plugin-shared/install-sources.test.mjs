@@ -49,6 +49,9 @@ function installEnv(home, bin, extraEnv) {
   return {
     ...process.env,
     HOME: home,
+    CODEX_HOME: "",
+    CODEX_CONFIG_FILE: "",
+    CLAUDE_CONFIG_DIR: "",
     PATH: `${bin}:${process.env.PATH}`,
     OPENVIKING_HOME: join(home, ".openviking"),
     OPENVIKING_DOWNLOAD_BASE: `file://${tosBase}`,
@@ -256,6 +259,39 @@ case "$*" in
 esac
 exit 0
 `);
+}
+
+for (const inheritedKey of ["CODEX_HOME", "CODEX_CONFIG_FILE"]) {
+  test(`Codex fixtures ignore inherited ${inheritedKey}`, () => {
+    const home = mkdtempSync(join(work, "home-"));
+    const bin = join(home, "bin");
+    const fake = join(home, "fake-codex");
+    mkdirSync(bin);
+    mkdirSync(fake);
+    writeFakeCodex(bin, fake);
+    const callerHome = mkdtempSync(join(work, "caller-codex-"));
+    const callerConfig = join(callerHome, inheritedKey === "CODEX_HOME" ? "config.toml" : "outside.toml");
+    const original = "# Caller configuration must stay untouched.\n";
+    writeFileSync(callerConfig, original);
+    const saved = { CODEX_HOME: process.env.CODEX_HOME, CODEX_CONFIG_FILE: process.env.CODEX_CONFIG_FILE };
+    let result;
+    try {
+      delete process.env.CODEX_HOME;
+      delete process.env.CODEX_CONFIG_FILE;
+      process.env[inheritedKey] = inheritedKey === "CODEX_HOME" ? callerHome : callerConfig;
+      result = run(home, bin, [
+        "--harness", "codex", "--lang", "en", "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+      ]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(readFileSync(callerConfig, "utf8"), original);
+    assert.match(readFileSync(join(home, ".codex", "config.toml"), "utf8"), /\[plugins\."openviking-memory@openviking"\]\nenabled = true/);
+  });
 }
 
 // The fake leaves no plugin cache behind, which validation has to tolerate.

@@ -4,7 +4,7 @@ This page explains OpenViking privacy configs and how they work with skill write
 
 ## Goal
 
-Privacy configs separate sensitive values (such as `api_key`, `token`, `base_url`) from skill body content so plaintext is not permanently stored in `SKILL.md`, while keeping full version management and rollback.
+Privacy configs separate sensitive values (such as `api_key`, `token`, `base_url`) from skill body content to reduce plaintext storage of recognized values in `SKILL.md`, with version lookup and switching. Extraction relies on a model and replaces only recognized, matched spans; it does not guarantee discovery of every sensitive value.
 
 Core goals:
 
@@ -24,7 +24,7 @@ Privacy configs are keyed by `category + target_key`.
 Storage layout in user space:
 
 ```
-viking://user/{user_space}/privacy/{category}/{target_key}/
+viking://user/{user_id}/privacy/{category}/{target_key}/
 ├── .meta.json                 # metadata (active_version/latest_version/labels, etc.)
 ├── current.json               # active version snapshot
 └── history/
@@ -45,11 +45,13 @@ viking://user/{user_space}/privacy/{category}/{target_key}/
 - If `values` is identical to current `values`, no new version is created
 - Otherwise a new version is created and activated
 - New keys are allowed (no unknown-key rejection)
+- `values` is a full snapshot, not a patch; omitted old keys are absent from the new version
 
 ### activate
 
 - Sets a historical version as active (writes back to `current.json`)
 - Updates `active_version` in `.meta.json`
+- Does not rotate or revoke credentials at an external service; it only selects the values OpenViking uses
 
 ---
 
@@ -74,7 +76,7 @@ add_skill
 3. **Block mapping captured**:
    - `original_content_blocks`
    - `replacement_content_blocks`
-4. **Persisted content**: stored `SKILL.md` contains placeholders, not plaintext values.
+4. **Persisted content**: matched spans become placeholders; unmatched content remains unchanged. This processes the skill body, not every attached file.
 
 ---
 
@@ -118,6 +120,8 @@ Current matching is suffix-based: `/skills/{name}/SKILL.md`, so it supports user
 
 ---
 
+`read` returns restored values, and extra-config notices also include values. Privacy APIs and historical snapshots can return full values as well. This feature does not redact responses or encrypt storage; see [Storage Encryption](./10-encryption.md) for encryption.
+
 ## Relationship with CLI/API
 
 - Management plane: Privacy API/CLI for versions (query, write, rollback)
@@ -129,10 +133,10 @@ Common commands:
 ```bash
 ov privacy categories
 ov privacy list skill
-ov privacy skill <target_key>
-ov privacy upsert skill <target_key> --values-json '{"api_key":"..."}'
-ov privacy activate skill <target_key> <version>
-ov read viking://user/default/skills/<target_key>/SKILL.md
+ov privacy skill search-web
+ov privacy upsert skill search-web --values-json '{"api_key":"..."}'
+ov privacy activate skill search-web 1
+ov read viking://~/skills/search-web/SKILL.md
 ```
 
 ---
@@ -140,7 +144,7 @@ ov read viking://user/default/skills/<target_key>/SKILL.md
 ## Benefits
 
 - Reduces plaintext sensitive data exposure in skill content
-- Versioning supports key rotation and fast rollback
+- Version history supports configuration changes after external credential rotation
 - Transparent to callers: `read` returns restored executable skill text
 - Notice block improves troubleshooting when config is incomplete or over-provisioned
 

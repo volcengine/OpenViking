@@ -2,32 +2,48 @@
 .dark { --vp-c-divider: #e9ece71c; }
 .VPHome { margin-bottom: 0 !important; }
 .VPNavBarTitle .title { font-size: 16px; letter-spacing: -.035em; }
-.VPNavBarTitle .logo { width: 27px; height: 27px; object-fit: contain; }
+.VPNavBarTitle .logo { width: 160px; height: auto; aspect-ratio: 500.05 / 92.94; object-fit: contain; margin-right: 0; }
 .VPNavBarTitle .title::after { content: ' / docs'; font-family: var(--vp-font-family-mono); font-size: 11px; color: var(--vp-c-text-2); margin-left: 10px; letter-spacing: 0; font-weight: 400; }
-.VPNavBarMenuLink { font-size: 12px !important; }
-.ov-docs-search-trigger { border-radius: 5px; height: 34px; min-width: 155px; background: transparent; font-size: 12px; }
+.VPNavBarMenuLink { font-size: 14px !important; }
+.ov-docs-search-trigger { border-radius: 5px; height: 34px; min-width: 155px; background: transparent; font-size: 14px; }
 .ov-docs-search-trigger kbd { font-size: 10px; min-width: 38px; border: 0; background: var(--vp-c-bg-alt); }
-.doc-breadcrumb { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin-bottom: 22px; font-size: 11px; line-height: 1.6; color: var(--vp-c-text-2); }
+.doc-breadcrumb { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin-bottom: 22px; font-size: 13px; line-height: 1.6; color: var(--vp-c-text-2); }
 .doc-breadcrumb a:hover { color: var(--vp-c-brand-1); }
 .doc-breadcrumb [aria-current] { color: var(--vp-c-text-1); }
 .doc-breadcrumb > span:not([aria-current]) { opacity: .4; }
-.sidebar-home-link { display: block; padding: 8px 0 22px; margin-bottom: 5px; font-size: 12px; color: var(--vp-c-text-2); border-bottom: 1px solid var(--vp-c-divider); }
+.sidebar-home-link { display: block; padding: 8px 0 22px; margin-bottom: 5px; font-size: 14px; color: var(--vp-c-text-2); border-bottom: 1px solid var(--vp-c-divider); }
 .sidebar-home-link:hover { color: var(--vp-c-brand-1); }
-.VPSidebarItem.level-0 > .item .text { font-size: 12px; letter-spacing: .01em; }
-.VPSidebarItem.level-1 > .item .text { font-size: 12px; }
+.VPSidebarItem.level-0 > .item .text { font-size: 14px; letter-spacing: 0; }
+.VPSidebarItem.level-1 > .item .text { font-size: 14px; }
 .VPSidebarItem.is-active > .item > .link { background: var(--vp-c-brand-soft); border-radius: 4px; padding-inline: 8px; margin-inline: -8px; }
-.vp-doc h1 { font-size: 36px; line-height: 1.2; letter-spacing: -.045em; font-weight: 600; }
-.vp-doc h2 { font-weight: 500; letter-spacing: -.025em; padding-top: 28px; margin-top: 44px; }
+/* Proportional text for reading; editorial headings; monospace stays in code. */
+.vp-doc { font-size: 18px; line-height: 1.8; }
+.vp-doc h1, .vp-doc h2, .vp-doc h3, .vp-doc h4 {
+  font-family: var(--vp-font-family-display);
+  font-optical-sizing: auto;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.vp-doc h1 { font-size: 38px; line-height: 1.25; }
+.vp-doc h2 { font-size: 28px; line-height: 1.4; padding-top: 24px; margin-top: 40px; }
+.vp-doc h3 { font-size: 23px; line-height: 1.5; }
 .vp-doc p, .vp-doc li { line-height: 1.85; }
-.vp-doc p { color: var(--vp-c-text-2); }
+.vp-doc p { color: var(--vp-c-text-1); }
+.vp-doc table { font-size: 16px; line-height: 1.65; }
+.vp-doc blockquote > p { font-size: 17px; }
+.vp-doc a { text-underline-offset: .18em; text-decoration-thickness: 1px; }
+.vp-doc div[class*='language-'] code { font-size: 14px; line-height: 1.75; }
+.vp-doc :not(pre) > code { font-size: .84em; }
+.VPDocAsideOutline .outline-link { font-size: 14px; }
+
 .vp-doc p strong { color: var(--vp-c-text-1); }
 .vp-doc div[class*='language-'] { border: 1px solid var(--vp-c-divider); border-radius: 6px; }
 .vp-doc :not(pre) > code { border-radius: 3px; }
 .VPDocFooter .pager-link { border-radius: 6px; }
 .VPFooter { background: var(--vp-c-bg-alt); }
 .VPFooter .message, .VPFooter .copyright { font-size: 11px; }
-@media (min-width: 960px) { .VPDoc .content-container { max-width: 800px !important; } }
-@media (max-width: 767px) { .VPNavBarTitle .title::after { display: none; } .ov-docs-search-trigger { min-width: 58px; width: 58px; } .vp-doc h1 { font-size: 29px; } .doc-breadcrumb { font-size: 10px; } }
+@media (min-width: 960px) { .VPDoc .content-container { max-width: 760px !important; } }
+@media (max-width: 767px) { .VPNavBarTitle .title::after { display: none; } .ov-docs-search-trigger { min-width: 58px; width: 58px; } .vp-doc { font-size: 17px; } .vp-doc h1 { font-size: 31px; } .vp-doc h2 { font-size: 25px; } .doc-breadcrumb { font-size: 12px; } }
 
 /* Use identical geometry before hydration and on every route. VitePress adds
    .has-sidebar after rendering; it must not reposition the header children. */
@@ -74,7 +90,7 @@
 }
 @media (max-width: 374px) {
   .VPNav .VPNavBarTitle .title { font-size: 13px; }
-  .VPNav .VPNavBarTitle .logo { width: 21px; height: 21px; margin-right: 5px; }
+  .VPNav .VPNavBarTitle .logo { width: 112px; height: auto; margin-right: 0; }
   .VPNav .VPNavBar .content-body { gap: 5px; }
   .VPNav .ov-docs-search-trigger { width: 43px; min-width: 43px; padding: 0 4px; }
 }

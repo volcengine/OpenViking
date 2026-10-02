@@ -2,15 +2,16 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-dark.png">
+    <img alt="OpenViking" src="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-light.png" width="300" height="56">
   </picture>
 </a>
 
-### OpenViking: The Context Database for AI Agents
+### The Context Database for AI Agents
 
-English / [中文](README_CN.md) / [日本語](README_JA.md)
+English / [中文](docs/repository/README_CN.md) / [日本語](docs/repository/README_JA.md)
 
-<a href="https://www.openviking.ai">Website</a> · <a href="https://openviking.ai/studio">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">Docs</a>
+<a href="https://www.openviking.ai">Website</a> · <a href="https://openviking.ai/studio">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">Docs</a> · <a href="https://blog.openviking.ai/">Blog</a>
 
 <p>
   <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
@@ -121,18 +122,51 @@ The memory evaluation used [Doubao 2.0 Pro](https://console.volcengine.com/ark/r
 
 ## Quick start
 
-Requires Python 3.10+ and access to an embedding model and a VLM (cloud or local).
+Set up an OpenViking server first; if you already have one, skip to [Use it with your agent](#use-it-with-your-agent). Deploying your own needs uv, Python 3.10+ and a model provider with an embedding model and a VLM.
 
-```bash
-pip install openviking --upgrade
-openviking-server init      # configure providers and models
-openviking-server doctor    # check configuration and connectivity
-openviking-server           # start the server
+<details open>
+<summary><strong>Let your agent deploy it</strong></summary>
+
+```text
+Follow this guide to install and start an OpenViking Server for me:
+
+https://docs.openviking.ai/en/getting-started/04-setup-for-agent
+
+Ask me for the model provider, the models, the workspace directory and whether
+other machines need to reach the server; don't guess. When you ask for the model
+API key, tell me how to hand it over if I'd rather not paste it into this chat,
+and never repeat it back.
+
+When it's running, tell me the server's address and whether auth is turned on.
 ```
 
-`init` writes `~/.openviking/ov.conf`. Supported options include Volcengine, OpenAI, Codex OAuth, Kimi, GLM, and local Ollama. See the [configuration guide](https://docs.openviking.ai/en/guides/01-configuration) for provider setup and the [quick start docs](https://docs.openviking.ai/en/getting-started/02-quickstart) for platform instructions.
+Your agent will first ask which model provider to use and for its API key.
 
-The package includes the `ov` CLI. In another terminal, import a repository and search it:
+</details>
+
+<details>
+<summary><strong>Deploy it yourself</strong></summary>
+
+Install OpenViking and run the setup wizard, which configures the models:
+
+```bash
+uv tool install openviking --upgrade && openviking-server init
+```
+
+`init` writes `~/.openviking/ov.conf` and supports Volcengine, OpenAI, Codex OAuth, Kimi, GLM and local Ollama; see the [configuration guide](https://docs.openviking.ai/en/guides/01-configuration). The server runs in the foreground, so keep this terminal open.
+
+</details>
+
+<details>
+<summary><strong>Use OpenViking Service (hosted by Volcengine)</strong></summary>
+
+The same OpenViking service, run for you by Volcengine. The first 50 files are free. Activate it on the [Volcengine product page](https://www.volcengine.com/product/openviking-service), then create an API key in the console under User Management → API Key. The server address is `https://api.vikingdb.cn-beijing.volces.com/openviking`; you'll need it and the API key when you connect your agent.
+
+</details>
+
+### Explore with the CLI
+
+The `openviking` package includes the `ov` CLI. With the server running, import a repository and search it:
 
 ```bash
 ov status
@@ -151,7 +185,62 @@ Build your own integration with the [Python](sdk/python/README.md), [Go](sdk/go/
 
 ## Use it with your agent
 
-Connect your agent to OpenViking for cross-session memory. Choose a native integration for automatic recall and session capture, or use MCP to give your agent memory and context tools.
+Connect your coding agent to OpenViking for cross-session memory. The memory plugin installer covers Claude Code, Codex, Cursor, TRAE, OpenCode and more, and detects which ones you have.
+
+<details open>
+<summary><strong>Let your agent install it</strong></summary>
+
+```text
+Install the OpenViking memory plugin for me by running:
+
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+
+<SERVER_URL> is the address of my OpenViking server; ask me for it, don't guess.
+If the server has auth turned on, it needs a user key (a root key can't read or
+write memories): check whether one is already saved; if not, ask me for it and
+pass it with --api-key, and tell me how to hand it over if I'd rather not paste
+it into this chat. Never repeat the key back. If auth is off, add --api-key ''
+so an earlier saved key isn't reused.
+
+The script needs network access and writes to my home directory; if a sandbox
+blocks it, ask me to approve running it outside the sandbox.
+
+When it finishes, tell me which tools it installed into and the next steps for
+each, then ask whether I want it in any other tool.
+```
+
+Have your server's address ready, plus its API key if it has auth turned on.
+
+</details>
+
+<details>
+<summary><strong>Install it yourself</strong></summary>
+
+Run the installer, then pick the tools and a server when asked: Self-hosted / local for a server on this machine, Volcengine OpenViking Cloud for OpenViking Service, or Custom URL for any other address. If auth is on, enter a user key, not the root key.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+</details>
+
+Then restart your agent. The installer ends with the next steps for each tool, for example:
+
+```text
+  Claude Code
+    Next: restart Claude Code
+    ⋮
+    Verify: run /openviking-memory:ov in a session
+```
+
+On its first start Codex stops at `Hooks need review`; choose `Trust all and continue`.
+
+Try it: ask it to remember one of your preferences, then ask about it in a new session a little later. Memories are processed in the background, so it's normal not to find one right after you say it.
+
+The installer needs macOS or Linux, Node.js 18+ and curl, no sudo. On Windows, use the [desktop app](#desktop-app-beta).
+
+Setup guides for each integration:
 
 <table>
 <tbody>

@@ -9,6 +9,7 @@ const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
 const base = configuredBase === '//' ? '/' : configuredBase
+const ogImageUrl = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}og-image.png`
 const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
 const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
 const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
@@ -57,7 +58,7 @@ const navLabels = {
 const enNav: DefaultTheme.NavItem[] = [
   { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
-  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration|context-compilation)/' },
+  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|context-compilation)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
@@ -66,7 +67,7 @@ const enNav: DefaultTheme.NavItem[] = [
 const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
   { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
-  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration|context-compilation)/' },
+  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|context-compilation)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
@@ -82,7 +83,7 @@ function collectAllMdFiles(
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
-      if (ignored.has(entry)) continue
+      if (ignored.has(entry) || (dir === srcDir && entry === 'repository')) continue
       const abs = path.join(dir, entry)
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
@@ -231,10 +232,18 @@ export default defineConfig({
   // The existing Markdown corpus links to examples, bot docs, and localhost
   // snippets that are outside the VitePress page tree.
   ignoreDeadLinks: true,
+  // Repository translations and maintainer guides are browsed on GitHub.
+  srcExclude: ['repository/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
-    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: `${base}apple-touch-icon.png` }],
+    ['meta', { property: 'og:image', content: ogImageUrl }],
+    ['meta', { property: 'og:image:width', content: '1200' }],
+    ['meta', { property: 'og:image:height', content: '630' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:image', content: ogImageUrl }],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
   ],
@@ -283,14 +292,15 @@ export default defineConfig({
     ]
   },
   themeConfig: {
-    logo: '/ov-logo.png',
+    siteTitle: false,
+    logo: { light: '/brand-lockup-light.svg', dark: '/brand-lockup-dark.svg', alt: 'OpenViking' },
     logoLink: base,
     nav: enNav,
     socialLinks: [
       { icon: 'github', link: githubRepositoryUrl }
     ],
     footer: {
-      message: 'Open source under the AGPL-3.0 License.',
+      message: `Open source under the AGPL-3.0 License. <a href="${base}font-licenses.html">Font licenses</a>`,
       copyright: 'Copyright OpenViking contributors'
     }
   },
@@ -309,10 +319,9 @@ export default defineConfig({
           '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/configuration/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
           '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
-          '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
+          '/en/guides/': localizedGroupedSidebarItems('en', ['guides']),
           '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
-          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
-          '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration']),
+          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides']),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/faq/': [sidebarSection('en/faq', 'FAQ', false)],
           '/en/about/': localizedAboutSidebarItems('en')
@@ -332,10 +341,9 @@ export default defineConfig({
           '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/configuration/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
           '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
-          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
+          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides']),
           '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
-          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
-          '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration']),
+          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides']),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/faq/': [sidebarSection('zh/faq', '常见问题', false)],
           '/zh/about/': localizedAboutSidebarItems('zh')

@@ -16,4 +16,4 @@
 - 继续完善分布式存储。
 - 接入更多 Agent 框架。
 
-提案与范围讨论见 [GitHub issues](https://github.com/volcengine/OpenViking/issues)，参与开发见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
+提案与范围讨论见 [GitHub issues](https://github.com/volcengine/OpenViking/issues)，参与开发见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/docs/repository/CONTRIBUTING_CN.md)。

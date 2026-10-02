@@ -10,7 +10,7 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { createLogger } from "./shared/debug-log.mjs";
@@ -38,6 +38,12 @@ export default async function (pi: ExtensionAPI) {
   // Shared key (`shared/config-schema.mjs`), already honoured by opencode: the
   // MCP tool surface is off, while recall, sync and takeover carry on.
   const mcpEnabled = (config as any).mcpEnabled !== false;
+
+  // Installed as an extension rather than a package, so pi does not scan
+  // skills/ on its own. The skills teach the MCP tools, so they follow them.
+  if (mcpEnabled) {
+    pi.on("resources_discover", async () => ({ skillPaths: [join(EXTENSION_DIR, "skills")] }));
+  }
 
   // Env overrides
 

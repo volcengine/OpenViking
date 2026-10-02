@@ -1,8 +1,14 @@
 import { docsLanguageEntry } from './language-entry.js'
 import { createLanguagePreference } from './language-preference.js'
 import { h, defineAsyncComponent } from 'vue'
-import DefaultTheme, { VPButton } from 'vitepress/theme'
+import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
+import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'
+import MemoryExtractionDiagram from './components/MemoryExtractionDiagram.vue'
+import PathLockDiagram from './components/PathLockDiagram.vue'
+import StorageLayersDiagram from './components/StorageLayersDiagram.vue'
+import VikingBotOverviewDiagram from './components/VikingBotOverviewDiagram.vue'
 import LocaleSwitch from './components/LocaleSwitch.vue'
 import { useData, withBase } from 'vitepress'
 import type { EnhanceAppContext } from 'vitepress'
@@ -256,7 +262,7 @@ export default {
         h(CopyMarkdownButton)
       ])],
       'sidebar-nav-before': () => h('a', { class: 'sidebar-home-link', href: withBase(zh ? '/zh/' : '/en/') }, zh ? '← 文档首页' : '← Documentation home'),
-      'doc-after': () => h(ApiExampleTabsEnhancer),
+      'doc-after': () => [h(ApiExampleTabsEnhancer), h('p', { class: 'font-license-link' }, [h('a', { href: withBase('/font-licenses.html') }, zh ? '字体许可' : 'Font licenses')])],
       'nav-bar-content-before': () => h(OpenVikingSearch),
       'nav-bar-content-after': () => h(LocaleSwitch),
       'nav-screen-content-after': () => h(LocaleSwitch)
@@ -264,6 +270,12 @@ export default {
   },
   enhanceApp({ app, router }: EnhanceAppContext) {
     app.component('VPButton', VPButton)
+    app.component('ArchitectureDiagram', ArchitectureDiagram)
+    app.component('IngestionPipelineDiagram', IngestionPipelineDiagram)
+    app.component('MemoryExtractionDiagram', MemoryExtractionDiagram)
+    app.component('PathLockDiagram', PathLockDiagram)
+    app.component('StorageLayersDiagram', StorageLayersDiagram)
+    app.component('VikingBotOverviewDiagram', VikingBotOverviewDiagram)
     app.component('DocsHome', defineAsyncComponent(() => import('./components/DocsHome.vue')))
     if (import.meta.env.SSR || typeof window === 'undefined') return
 

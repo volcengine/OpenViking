@@ -34,7 +34,7 @@ test("the bundled skill stays readable without watching the installed package", 
   }, buildSkillsConfig());
   try {
     const candidates = await provider.list({ cwd: "/workspace" });
-    assert.deepEqual(candidates.map(candidate => candidate.name).sort(), ["openviking-memory", "openviking-skills"]);
+    assert.deepEqual(candidates.map(candidate => candidate.name).sort(), ["openviking-memory", "openviking-skills", "ov-experience-memory"]);
     for (const candidate of candidates) {
       assert.equal(candidate.source, "bundled", candidate.name);
       assert.equal(candidate.provider, "openviking", candidate.name);

@@ -13,26 +13,7 @@ VikingBot 是 OpenViking 提供的多渠道 AI Agent。OpenViking 负责统一�
 
 ## 系统概览
 
-```text
-CLI / Feishu / Slack / Telegram / Discord / Email / HTTP API
-                              │
-                              ▼
-                    Channel + MessageBus
-                              │
-                              ▼
-                         AgentLoop
-                 上下文 → 模型 → 工具 → 模型
-                    │                   │
-          ┌─────────┴─────────┐         ▼
-          ▼                   ▼       回复与事件
-  OpenViking Context     Tools / Skills
-  Resource / Memory      Files / Shell / Web
-  Experience / Session   MCP / Cron / Subagent
-          │                   │
-          └─────────┬─────────┘
-                    ▼
-             Session 同步与经验沉淀
-```
+<VikingBotOverviewDiagram />
 
 所有入口最终使用同一套 AgentLoop。渠道差异被转换为统一消息，模型和工具无需感知消息来自命令行、飞书还是 HTTP API。
 
@@ -114,7 +95,7 @@ VikingBot 根据当前可信 `actor_peer_id` 读取 Peer Profile，并按类型�
 - `entities`：人、项目和组织等实体信息；
 - `preferences`：用户偏好、习惯和约束。
 
-这使不同用户共享同一个 Gateway 时，仍能使用各自隔离的上下文。
+隔离范围取决于 OpenViking 连接身份。`actor_peer_id` 限制同一 user 下的 peer 集合；如果多个聊天用户共用一个 user key，该用户自己的记忆和共享资源仍可见。独立用户隔离需要不同的 user 身份。
 
 ### Experience：可复用任务经验
 

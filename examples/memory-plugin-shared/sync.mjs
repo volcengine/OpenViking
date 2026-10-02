@@ -106,6 +106,16 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
+    committed: true,
+  },
   // The harnesses that bundle skills. agent-plugins has no hooks, so no
   // session-start catalog: there the skill is the only way the model learns
   // that the skills in OpenViking exist.
@@ -134,9 +144,20 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "agent-plugins", "skills"),
     committed: true,
   },
-  // The harnesses that ship the experience workflow today. agent-plugins has
-  // no hooks and so no session capture: its copy only retrieves and applies
-  // Experience, and its reads feed no trajectory back to the server.
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
+    committed: true,
+  },
+  // The harnesses that ship the experience workflow today. Where capture sends
+  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
+  // the copy only retrieves and applies Experience, and its reads feed no
+  // trajectory back to the server.
   {
     skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
@@ -150,6 +171,26 @@ export const SKILL_TARGETS = [
   {
     skill: "ov-experience-memory",
     dir: join(ROOT, "agent-plugins", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
     committed: true,
   },
 ];

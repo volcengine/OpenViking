@@ -1,10 +1,10 @@
 # Example: Knowledge Distillation
 
-**Distill** one or more knowledge bases or document collections into topic-organized, evidence-grounded high-level knowledge: cross-source findings, trends, changes, drivers, comparisons, implications, and uncertainties.
+Extract conclusions from one or more knowledge bases, organize them by topic, and retain source references and uncertainties.
 
-Typical uses: distill a knowledge base, compare multiple collections, or derive higher-order insights such as "changes across financial reports."
+For example, compare financial reports to analyze changes in revenue, profitability, and risk over time.
 
-The output is a shallow, topic-organized artifact tree where each topic directory is a durable semantic area and each page is one independently useful high-level conclusion:
+The output uses one directory per topic and one page per conclusion:
 
 ```text
 revenue-quality/
@@ -20,19 +20,21 @@ risk/
 
 Skill source: [examples/compile/ov-compile-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-distillation)
 
+Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
+
 ## Step 1: Prepare the sources
 
 ```bash
-ov add-resource ./finance-reports --to viking://resources/finance-reports
+ov add-resource ./finance-reports --to viking://resources/finance-reports --wait
 ov ls -r viking://resources/finance-reports
 ```
 
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation
+ov add-skill examples/compile/ov-compile-skills/knowledge-distillation -p viking://agent/skills --wait
 ov skills list
-# → viking://agent/skills/knowledge-distillation  (or viking://user/<user_name>/skills/knowledge-distillation)
+# → viking://agent/skills/knowledge-distillation
 ```
 
 ## Step 3: Run compile
@@ -66,7 +68,7 @@ ov task cancel cmp_01abc      # cooperative cancel
 
 ## Step 4: Inspect the output
 
-Read the topic tree first, then drill into a specific conclusion page:
+List the output first, then read a generated conclusion page. The filename below is illustrative:
 
 ```bash
 ov tree viking://resources/finance-insights

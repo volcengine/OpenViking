@@ -29,7 +29,7 @@ curl -fsSL https://openviking.ai/install | bash
 | 安装时提示包不在 npm registry 中 | pnpm 默认拒绝发布不满 24 小时的版本；可稍后重试，或把精确版本加入 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` |
 | 无法召回历史记忆 | 先执行 `curl http://localhost:1933/health` 确认服务端正常；再检查端点配置，并确认 prompt 不少于 3 个字符 |
 | OpenViking 返回 401 / 403 | 检查 API Key；可信模式部署还需检查 `OPENVIKING_ACCOUNT` 与 `OPENVIKING_USER` |
-| 召回结果混入其他项目的记忆 | 设置 `OPENVIKING_RECALL_PEER_SCOPE=actor` |
+| 召回结果混入其他项目的记忆 | 设置 `OPENVIKING_RECALL_PEER_SCOPE=actor`，将 peer 记忆限定为当前 peer；用户级记忆仍会共享 |
 | 异常退出后没有 commit | commit 由 token 阈值和会话 teardown 触发；排队的写入会在下次会话开始时重放 |
 
 ## 参考

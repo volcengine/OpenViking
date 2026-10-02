@@ -6,16 +6,16 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 
 ### Watch Management（监控任务管理）
 
-列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
+列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval > 0` 创建的监控任务。REST（`/api/v1/watches`）和 `ov task watch` 提供完整管理操作；MCP 提供 `list_watches` 和 `cancel_watch`，用于列出和删除 Watch。
 
 #### 1. API 实现介绍
 
-此控制面封装了 `WatchManager` 原语，未改动任何服务端行为。每个端点和 CLI 命令都支持通过 `task_id`（路径）或 `to_uri`（查询参数）定位目标任务，两种键可以互换；如果同时提供，二者必须指向同一任务，否则返回 400。
+通过 `task_id` 定位任务，或通过 `to_uri` 查找唯一可访问的任务。多个 Connector Watch 可以共享目标；此时按 URI 操作会返回 `409 Conflict`，需要改用 `task_id`。同时提供两个参数时，它们必须指向同一任务，否则返回 `400`。
 
 **操作**：
 - **列出**（`GET /api/v1/watches`）— 返回 `{tasks, total}`；可传 `?active_only=true` 过滤；传 `?to_uri=...` 时降级为单任务查找
 - **查看**（`GET /api/v1/watches/{task_id}`）— 查看单个任务；可选 `?to_uri=` 做跨键一致性校验
-- **更新**（`PATCH /api/v1/watches/{task_id}` 或 `PATCH /api/v1/watches?to_uri=...`）— 部分更新 `watch_interval`、`is_active`、`reason`、`instruction`。`is_active` 与 `watch_interval` 正交：翻转 `is_active` 可在不丢失配置周期的前提下暂停/恢复任务。
+- **更新**（`PATCH /api/v1/watches/{task_id}` 或 `PATCH /api/v1/watches?to_uri=...`）— 部分更新 `watch_interval`、`is_active`、`reason`、`instruction`。`is_active` 与 `watch_interval` 独立：修改 `is_active` 可在不丢失配置周期的前提下暂停/恢复任务。
 - **删除**（`DELETE /api/v1/watches/{task_id}` 或 `DELETE /api/v1/watches?to_uri=...`）
 - **触发**（`POST /api/v1/watches/{task_id}/trigger` 或 `POST /api/v1/watches/trigger?to_uri=...`）— 触发即返回（fire-and-forget），重新摄取在后台异步执行
 
@@ -64,6 +64,8 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
 ```
 
 **Python SDK**
+
+以下使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时，每次调用都需加 `await`。
 
 ```python
 watches = client.list_watches(active_only=True)
@@ -202,14 +204,14 @@ ov task watch rm viking://resources/guide.md
 `scheduled=true` 只表示后台执行已调度，不表示重新摄取已经完成；应再次查看任务，直到
 `last_execution_time` 更新，并检查 `last_status` 和 `last_error`。
 
-**MCP**（Agent 控制面——仅最小闭包）
+**MCP**
 
 ```text
 list_watches()                                            # 每个任务一行；只暴露 URI，不暴露 task_id
 cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 ```
 
-暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
+删除 Watch 会移除定时任务，已导入的资源保留。MCP 只提供列出和删除 Watch。创建 Watch 时，使用 [`add_resource`](02-resources.md#add-resource) 并设置 `watch_interval`；暂停、恢复、触发和调整已有 Watch 的周期使用 CLI 或 REST。重复导入不会更新已有 Watch。
 
 ---
 
