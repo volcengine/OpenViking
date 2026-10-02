@@ -262,7 +262,8 @@ export default {
         h(CopyMarkdownButton)
       ])],
       'sidebar-nav-before': () => h('a', { class: 'sidebar-home-link', href: withBase(zh ? '/zh/' : '/en/') }, zh ? '← 文档首页' : '← Documentation home'),
-      'doc-after': () => [h(ApiExampleTabsEnhancer), h('p', { class: 'font-license-link' }, [h('a', { href: withBase('/font-licenses.html'), target: '_self' }, zh ? '字体许可' : 'Font licenses')])],
+      'sidebar-nav-after': () => h('a', { class: 'sidebar-font-license-link', href: withBase('/font-licenses.html'), target: '_self' }, zh ? '字体许可' : 'Font licenses'),
+      'doc-after': () => h(ApiExampleTabsEnhancer),
       'nav-bar-content-before': () => h(OpenVikingSearch),
       'nav-bar-content-after': () => h(LocaleSwitch),
       'nav-screen-content-after': () => h(LocaleSwitch)

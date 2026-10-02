@@ -13,6 +13,8 @@
 .doc-breadcrumb > span:not([aria-current]) { opacity: .4; }
 .sidebar-home-link { display: block; padding: 8px 0 22px; margin-bottom: 5px; font-size: 14px; color: var(--vp-c-text-2); border-bottom: 1px solid var(--vp-c-divider); }
 .sidebar-home-link:hover { color: var(--vp-c-brand-1); }
+.sidebar-font-license-link { display: block; margin-top: 24px; padding: 12px 0 24px; border-top: 1px solid var(--vp-c-divider); font-size: 12px; line-height: 18px; color: var(--vp-c-text-3); transition: color 0.25s; }
+.sidebar-font-license-link:hover { color: var(--vp-c-text-2); }
 .VPSidebarItem.level-0 > .item .text { font-size: 14px; letter-spacing: 0; }
 .VPSidebarItem.level-1 > .item .text { font-size: 14px; }
 .VPSidebarItem.is-active > .item > .link { background: var(--vp-c-brand-soft); border-radius: 4px; padding-inline: 8px; margin-inline: -8px; }
