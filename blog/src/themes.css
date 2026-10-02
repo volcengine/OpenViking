@@ -287,8 +287,9 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 
 .b-topbar { position: sticky; top: 0; z-index: 50; background: color-mix(in oklab, var(--th-bg) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--th-line); }
 .b-topbar__inner { max-width: 1280px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; gap: 24px; }
-.b-brand { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; color: inherit; text-decoration: none; }
-.b-brand__lockup { width: 160px; height: auto; aspect-ratio: 500.05 / 92.94; flex: 0 0 auto; }
+.b-brand { display: flex; align-items: center; min-height: 36px; gap: 10px; cursor: pointer; user-select: none; color: inherit; text-decoration: none; }
+/* Match the website and docs headers without changing the official artwork. */
+.b-brand__lockup { width: 136px; height: auto; aspect-ratio: 500.05 / 92.94; flex: 0 0 auto; }
 
 .b-brand__sub { font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.1em; color: var(--th-mute); margin-left: 4px; }
 .b-topbar__nav { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -301,12 +302,15 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 @media (max-width: 720px) {
   .b-topbar__inner { padding: 10px 16px; gap: 10px; flex-wrap: nowrap; justify-content: space-between; }
   .b-brand { min-width: 0; max-width: calc(100% - 112px); flex: 0 1 auto; }
-  .b-brand__lockup { width: 160px; height: auto; aspect-ratio: 500.05 / 92.94; flex: 0 0 auto; }
   .b-brand__sub { display: none; }
   .b-topbar__nav { margin-left: 0; gap: 6px; flex: 0 0 auto; }
   .b-seg { flex: 0 0 auto; }
   .b-seg button { padding: 5px 9px; font-size: 10px; }
   .b-mode-toggle { width: 34px; height: 34px; }
+}
+
+@media (max-width: 374px) {
+  .b-brand__lockup { width: 112px; }
 }
 
 /* hero */
