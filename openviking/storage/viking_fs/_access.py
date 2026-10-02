@@ -35,7 +35,7 @@ from openviking.storage.acl import (
 )
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
+    IdentityDeletingError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -406,7 +406,7 @@ class _AccessMixin:
     def _ensure_identity_not_deleting(self, ctx: RequestContext) -> None:
         guard = getattr(self, "_deletion_guard", None)
         if ctx.role != Role.ROOT and guard is not None and guard(ctx.account_id, ctx.user.user_id):
-            raise FailedPreconditionError("Identity deletion is in progress")
+            raise IdentityDeletingError("Identity deletion is in progress")
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
