@@ -30,6 +30,11 @@ from dataclasses import dataclass
 OLLAMA_DEFAULT_HOST = "localhost"
 OLLAMA_DEFAULT_PORT = 11434
 
+# Ollama serves its OpenAI-compatible surface under this prefix; the native API
+# lives under ``/api``. Nothing else is routed, so a request to ``/embeddings``
+# is answered with a plain-text ``404 page not found``.
+OLLAMA_OPENAI_PATH = "/v1"
+
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 # ---------------------------------------------------------------------------
@@ -67,6 +72,33 @@ def parse_ollama_url(api_base: str | None) -> tuple[str, int]:
         return host, port
     except Exception:
         return OLLAMA_DEFAULT_HOST, OLLAMA_DEFAULT_PORT
+
+
+def normalize_ollama_openai_base(api_base: str | None) -> str:
+    """Return an *api_base* an OpenAI-compatible client can actually call.
+
+    The OpenAI client appends ``/embeddings`` to whatever base URL it is given,
+    so a bare ``http://127.0.0.1:11434`` — the form the configuration guide
+    shows — resolves to ``/embeddings`` and Ollama answers ``404 page not
+    found``. Append ``/v1`` when the base carries no path of its own; leave any
+    explicit path alone, so ``.../v1`` (what the setup wizard writes) and a
+    reverse-proxy prefix both keep working.
+    """
+    default = f"http://{OLLAMA_DEFAULT_HOST}:{OLLAMA_DEFAULT_PORT}{OLLAMA_OPENAI_PATH}"
+    if not api_base:
+        return default
+    base = api_base.strip().rstrip("/")
+    if not base:
+        return default
+    try:
+        # A base without a scheme ("host:11434") parses as scheme+path, so give
+        # urlparse a netloc to work with before asking whether a path is set.
+        parsed = urllib.parse.urlparse(base if "://" in base else "//" + base)
+    except Exception:
+        return base
+    if parsed.path:
+        return base
+    return base + OLLAMA_OPENAI_PATH
 
 
 # ---------------------------------------------------------------------------
