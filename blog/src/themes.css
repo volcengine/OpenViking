@@ -444,6 +444,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-footer__icons { display: flex; gap: 16px; align-items: center; }
 .b-footer__icons a { color: var(--th-mute); transition: color 0.15s; display: inline-flex; }
 .b-footer__icons a:hover { color: var(--th-ink); }
+.b-footer__link { color: inherit; text-decoration: none; text-underline-offset: 2px; transition: color 0.15s; }
+.b-footer__link:hover { color: var(--th-ink); text-decoration: underline; }
 
 /* ===========================================================
    KAMI — 纸 (light)
