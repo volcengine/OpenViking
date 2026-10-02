@@ -12,6 +12,7 @@ from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.server.identity import RequestContext
 from openviking.service.task_processing_time import pause_task_processing, processing_owner
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -126,6 +127,7 @@ class SemanticTreeScheduler:
             task.add_done_callback(self._workers.discard)
             self._workers.add(task)
 
+    @without_request_cache
     async def _worker(self) -> None:
         while True:
             try:
