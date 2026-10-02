@@ -2,19 +2,17 @@
 
 import asyncio
 import re
-from typing import Any
 
 from loguru import logger
-from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
+from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.web.async_client import AsyncWebClient
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import SlackChannelConfig
-from vikingbot.channels.utils import extract_image_paths, read_image_file
 
 
 class SlackChannel(BaseChannel):
@@ -82,16 +80,38 @@ class SlackChannel(BaseChannel):
             logger.warning("Slack client not running")
             return
         try:
+            from io import BytesIO
+
             slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
             thread_ts = slack_meta.get("thread_ts")
             channel_type = slack_meta.get("channel_type")
             # Only reply in thread for channel/group messages; DMs don't use threads
             use_thread = thread_ts and channel_type != "im"
-            await self._web_client.chat_postMessage(
-                channel=msg.session_key.chat_id,
-                text=msg.content or "",
-                thread_ts=thread_ts if use_thread else None,
-            )
+            thread_kw = {"thread_ts": thread_ts} if use_thread else {}
+            cleaned, send_images = await self._extract_send_images(msg.content)
+            if len(send_images) == 1:
+                filename, image_bytes = send_images[0]
+                await self._web_client.files_upload_v2(
+                    channel=msg.session_key.chat_id,
+                    filename=filename,
+                    file=BytesIO(image_bytes),
+                    **thread_kw,
+                )
+            elif send_images:
+                await self._web_client.files_upload_v2(
+                    channel=msg.session_key.chat_id,
+                    file_uploads=[
+                        {"filename": filename, "file": BytesIO(image_bytes)}
+                        for filename, image_bytes in send_images
+                    ],
+                    **thread_kw,
+                )
+            if cleaned:
+                await self._web_client.chat_postMessage(
+                    channel=msg.session_key.chat_id,
+                    text=cleaned,
+                    **thread_kw,
+                )
         except Exception as e:
             logger.exception(f"Error sending Slack message: {e}")
 
