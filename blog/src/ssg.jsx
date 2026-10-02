@@ -57,6 +57,16 @@ export function getPageMeta({ route, lang = 'en' }) {
   const siteName = pickLocale({ en: 'OpenViking Blog', zh: 'OpenViking 博客' }, lang);
   const canonicalPath = buildPath(route, {});
 
+  if (route.name === 'notFound' || (route.name === 'post' && !getPostBySlug(route.slug))) {
+    const S = SHELL_STRINGS[lang] || SHELL_STRINGS.en;
+    return {
+      lang,
+      type: 'notFound',
+      title: `404 — ${S.notFoundLabel} | ${siteName}`,
+      description: S.notFoundBody,
+    };
+  }
+
   if (route.name === 'post') {
     const post = getPostBySlug(route.slug);
     const effectiveLang = effectiveLangForPost(post, lang);

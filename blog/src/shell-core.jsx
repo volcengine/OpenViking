@@ -4,48 +4,8 @@ export const languagePreference = createLanguagePreference();
 
 /* ---------- pathname router ---------- */
 
-function queryObject(queryPart = '') {
-  const search = new URLSearchParams(queryPart.replace(/^\?/, ''));
-  const query = {};
-  for (const [k, v] of search.entries()) query[k] = v;
-  return query;
-}
-
-export function parsePath(pathname = '/', search = '') {
-  const raw = pathname || '/';
-  const pathPart = raw.startsWith('/') ? raw : `/${raw}`;
-  const segs = pathPart.split('/').filter(Boolean);
-  const query = queryObject(search);
-  let route = { name: 'index' };
-  if (segs[0] === 'post' && segs[1]) route = { name: 'post', slug: segs[1] };
-  return { route, query, raw: `${pathPart}${search || ''}` };
-}
-
-export function parseHash(hash) {
-  const raw = (hash || '').replace(/^#/, '') || '/';
-  const [pathPart, queryPart = ''] = raw.split('?');
-  return parsePath(pathPart || '/', queryPart ? `?${queryPart}` : '');
-}
-
-export function parseBrowserLocation(loc = window.location) {
-  if (loc.hash?.startsWith('#/')) return parseHash(loc.hash);
-  return parsePath(loc.pathname, loc.search);
-}
-
-export function buildPath(route, query = {}) {
-  let path = '/';
-  if (route.name === 'post') path = `/post/${route.slug}/`;
-  const search = new URLSearchParams();
-  Object.entries(query || {}).forEach(([k, v]) => {
-    if (v != null && v !== '') search.set(k, v);
-  });
-  const qs = search.toString();
-  return `${path}${qs ? '?' + qs : ''}`;
-}
-
-export function postPath(slug, query) {
-  return buildPath({ name: 'post', slug }, query);
-}
+export { parsePath, parseHash, parseBrowserLocation, buildPath, postPath } from './routes.js';
+import { parsePath, parseHash, parseBrowserLocation, buildPath } from './routes.js';
 
 function parseHref(href, fallbackRoute) {
   if (href.startsWith('#/')) return parseHash(href);
@@ -62,7 +22,7 @@ export function useSiteRouter() {
   useEffect(() => {
     if (location.hash.startsWith('#/')) {
       const next = parseHash(location.hash);
-      history.replaceState(null, '', buildPath(next.route, next.query));
+      history.replaceState(null, '', window.location.origin + buildPath(next.route, next.query));
       setState(next);
     }
 
@@ -83,7 +43,7 @@ export function useSiteRouter() {
     }
 
     const path = buildPath(next.route, next.query);
-    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
+    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', window.location.origin + path);
     setState({ ...next, raw: path });
   }, [state]);
 
@@ -91,7 +51,8 @@ export function useSiteRouter() {
     const next = { ...state.query, ...patch };
     Object.keys(next).forEach(k => { if (next[k] == null || next[k] === '') delete next[k]; });
     const path = buildPath(state.route, next) + (location.hash.startsWith('#/') ? '' : location.hash);
-    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
+    // Unknown paths can start with //; keep history updates on this origin.
+    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', window.location.origin + path);
     setState({ route: state.route, query: next, raw: path });
   }, [state]);
 
@@ -131,8 +92,13 @@ export const SHELL_STRINGS = {
     prev: 'Previous',
     next: 'Next',
     relatedTitle: 'Continue reading',
-    notFoundTitle: 'Nothing here',
-    notFoundBody: 'That essay does not exist. It may have been a dream.',
+    notFoundTitle: 'A page out of place.',
+    notFoundBody: 'We couldn’t find this page. The link may have changed, or the address may be incomplete.',
+    notFoundLabel: 'Page not found',
+    notFoundHome: 'Back to all essays',
+    notFoundRead: 'A good place to pick up',
+    notFoundNote: 'There’s more to the story.',
+    notFoundDocs: 'Explore the docs',
     langLabel: 'Language',
     followBrowser: 'Follow browser',
     themeLabel: 'Theme',
@@ -164,8 +130,13 @@ export const SHELL_STRINGS = {
     prev: '上一篇',
     next: '下一篇',
     relatedTitle: '继续阅读',
-    notFoundTitle: '此处空空如也',
-    notFoundBody: '这篇文章不存在,也许只是一场梦。',
+    notFoundTitle: '这一页，没找到。',
+    notFoundBody: '链接可能已经更改，也可能是地址少了几个字。回到文章列表，接着读吧。',
+    notFoundLabel: '页面未找到',
+    notFoundHome: '返回所有文章',
+    notFoundRead: '不妨从这篇开始',
+    notFoundNote: '故事还在继续。',
+    notFoundDocs: '浏览文档',
     langLabel: '语言',
     followBrowser: '跟随浏览器',
     themeLabel: '主题',

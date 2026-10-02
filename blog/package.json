@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vite build --ssr src/ssg.jsx --outDir dist-ssr && node scripts/render-static.mjs",
+    "build": "vite build && vite build --ssr src/ssg.jsx --outDir dist-ssr && node scripts/render-static.mjs && npm run check:404",
+    "check:404": "node scripts/check-404.mjs",
     "preview": "vite preview",
     "test": "node --test src/*.test.js"
   },

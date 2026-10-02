@@ -66,6 +66,11 @@ function jsonLd(meta) {
 }
 
 function managedHead(meta) {
+  // An error page must not advertise the home page as its canonical URL or
+  // publish Blog/Article structured data, even before JavaScript runs.
+  if (meta.type === 'notFound') {
+    return `<title>${escapeHtml(meta.title)}</title>\n  <meta name="description" content="${escapeAttr(meta.description)}" />\n  <meta name="robots" content="noindex, follow" />`;
+  }
   const title = escapeHtml(meta.title);
   const description = escapeAttr(meta.description);
   const image = escapeAttr(meta.image);
@@ -132,6 +137,7 @@ function injectPage({ html, meta, body }) {
 
 function outputPath(routePath) {
   if (routePath === '/') return path.join(distDir, 'index.html');
+  if (routePath === '/404.html') return path.join(distDir, '404.html');
   return path.join(distDir, routePath.replace(/^\/+/, ''), 'index.html');
 }
 
@@ -185,6 +191,9 @@ async function writeLlms(routes) {
 
 const routes = getStaticRoutes();
 for (const route of routes) await writeRoute(route);
+// TOS serves this document for missing keys while retaining the requested URL
+// and HTTP 404 status. Keep it out of the sitemap and LLM article index.
+await writeRoute({ path: '/404.html', route: { name: 'notFound', path: '/404.html' }, lang: 'en' });
 await writeSitemap(routes);
 await writeRobots();
 await writeLlms(routes);
