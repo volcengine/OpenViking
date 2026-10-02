@@ -4,6 +4,7 @@
 
 from collections.abc import Callable
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 from openviking.message import Message
 from openviking.message.part import ImagePart, TextPart
@@ -20,6 +21,13 @@ def message_has_image_part(message: Message) -> bool:
 
 
 def image_part_to_openai_content(part: ImagePart) -> Dict[str, Any]:
+    source = urlsplit(part.url)
+    if not (
+        (source.scheme in {"http", "https"} and source.netloc)
+        or (source.scheme == "data" and source.path.lower().startswith("image/"))
+    ):
+        # Session paths belong to the writer, not the server's filesystem.
+        raise ValueError("ImagePart requires an HTTP(S) URL or an image data URI")
     image_url: Dict[str, Any] = {"url": part.url}
     if part.detail is not None:
         image_url["detail"] = part.detail
