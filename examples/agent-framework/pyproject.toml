@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openviking-agent-framework"
+version = "0.1.0"
+description = "OpenViking context provider for Microsoft Agent Framework"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0"
+dependencies = ["agent-framework-core>=1.20,<2", "openviking-sdk>=0.1.13,<0.2"]
+
+[project.optional-dependencies]
+test = ["agent-framework-openai>=1.15,<2", "pytest>=8", "pytest-asyncio>=0.24", "python-dotenv>=1"]
+dev = ["ruff", "mypy", "build", "twine"]
+
+[project.urls]
+Repository = "https://github.com/volcengine/OpenViking"
+Documentation = "https://github.com/volcengine/OpenViking/tree/main/examples/agent-framework"
+Issues = "https://github.com/volcengine/OpenViking/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+openviking_agent_framework = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["live: requires a running OpenViking server and real model credentials"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+ignore_missing_imports = true

@@ -97,6 +97,7 @@ const agentIntegrationSidebar = {
           ['03-openclaw.md', 'OpenClaw'],
           ['05-hermes.md', 'Hermes'],
           ['07-langchain-langgraph.md', 'LangChain / LangGraph'],
+          ['19-agent-framework.md', 'Microsoft Agent Framework'],
           ['11-pi.md', 'pi']
         ]
       },
@@ -136,6 +137,7 @@ const agentIntegrationSidebar = {
           ['03-openclaw.md', 'OpenClaw'],
           ['05-hermes.md', 'Hermes'],
           ['07-langchain-langgraph.md', 'LangChain / LangGraph'],
+          ['19-agent-framework.md', 'Microsoft Agent Framework'],
           ['11-pi.md', 'pi']
         ]
       },

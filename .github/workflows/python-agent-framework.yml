@@ -1,0 +1,89 @@
+name: Microsoft Agent Framework Integration
+
+on:
+  pull_request:
+    paths:
+      - 'examples/agent-framework/**'
+      - '.github/workflows/python-agent-framework.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'examples/agent-framework/**'
+      - '.github/workflows/python-agent-framework.yml'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'openviking-agent-framework@')
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.10', '3.12', '3.14']
+    defaults:
+      run:
+        working-directory: examples/agent-framework
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install package and tools
+        run: python -m pip install '.[dev]'
+      - name: Check source
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy src
+      - name: Validate release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from importlib.metadata import version
+          expected = 'openviking-agent-framework@' + version('openviking-agent-framework')
+          assert os.environ['RELEASE_TAG'] == expected, 'Release tag does not match package version'
+          PY
+      - name: Build and check distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+      - name: Verify wheel outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/maf-wheel"
+          "$RUNNER_TEMP/maf-wheel/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/maf-wheel/bin/python" - <<'PY'
+          import sys
+          from agent_framework import ContextProvider
+          from openviking_agent_framework import OpenVikingContextProvider
+          assert issubclass(OpenVikingContextProvider, ContextProvider)
+          assert 'openviking' not in sys.modules
+          PY
+      - uses: actions/upload-artifact@v7
+        if: matrix.python == '3.12'
+        with:
+          name: openviking-agent-framework-distributions
+          path: examples/agent-framework/dist/*
+
+  publish:
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'openviking-agent-framework@')
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openviking-agent-framework
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: openviking-agent-framework-distributions
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

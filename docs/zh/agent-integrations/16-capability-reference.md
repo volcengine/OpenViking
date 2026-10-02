@@ -1,5 +1,9 @@
 # 集成能力参考
 
+**Microsoft Agent Framework（Python）：** [Context Provider](./19-agent-framework.md)
+提供自动召回和完整轮次记录。应用负责请求记忆提取并保存会话状态。
+它不添加模型工具，不接管压缩，也不自动重放离线记录。写入失败需要显式恢复。
+
 **Hermes 范围**：表中的 Hermes 描述其[内置 provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)，
 核对版本为 Hermes main `989798cd5e`。[OpenViking 维护的外部插件](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
 另有提交、召回和镜像改进。内置副本仍在时优先加载；正常使用请按

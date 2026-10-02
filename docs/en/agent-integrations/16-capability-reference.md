@@ -1,5 +1,10 @@
 # Integration Capability Reference
 
+**Microsoft Agent Framework (Python):** The [context provider](./19-agent-framework.md)
+adds automatic recall and completed-turn capture. The application requests memory
+extraction and saves session state. It adds no model tools, compaction takeover,
+or automatic offline replay. Failed writes require explicit recovery.
+
 **Hermes scope:** The Hermes rows describe its [bundled provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking),
 checked against Hermes main `989798cd5e`. The [OpenViking-maintained external plugin](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
 has additional commit, recall, and mirroring behavior. The bundled copy takes
