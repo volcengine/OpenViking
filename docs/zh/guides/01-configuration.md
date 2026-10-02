@@ -1232,8 +1232,8 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 |------|------|------|--------|
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
-| `backups` | object | 多写存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
-| `redirects` | array | 多写存储的文件重定向策略。命中后文件写入指定 backup，而不是 primary | `[]` |
+| `backups` | object | 主备存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
+| `redirects` | array | 主备存储的文件重定向策略。命中后文件写入指定 backup，而不是 primary | `[]` |
 | `queuefs` | object | QueueFS 配置。控制 `/queue` 的命名空间模式、后端和运行时参数 | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str（可选）| 旧版兼容字段，用于覆盖 QueueFS 的 sqlite 数据库文件路径。已被 `storage.agfs.queuefs.db_path` 取代。未设置时默认为 `{storage.workspace}/_system/queue/queue.db`。适用于 workspace 卷不支持 sqlite 的场景（例如某些网络文件系统） | `null` |
 | `s3` | object | S3 后端配置（`backend=s3` 时使用） | - |
@@ -1246,9 +1246,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 > [!WARNING]
 > `storage.agfs` 已不再支持 AGFS HTTP client 模式，也无需再配置旧的 HTTP client 入口。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
 
-##### 多写存储配置
+##### 主备存储配置
 
-`storage.agfs.backups` 用于启用多写存储。未配置时，OpenViking 保持单 backend 模式。
+`storage.agfs.backups` 用于启用主备存储。未配置时，OpenViking 保持单 backend 模式。
 
 ```json
 {
@@ -1289,7 +1289,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `sync_type` | str | 多写同步模式，支持 `"async"` 或 `"sync"` | `"async"` |
+| `sync_type` | str | 主备同步模式，支持 `"async"` 或 `"sync"` | `"async"` |
 | `write_ack_count` | int | `sync` 模式下返回前需要的 backup 确认数 | 全部 backup |
 | `write_ack_timeout_ms` | int | `sync` 模式下等待 backup 确认的超时时间，单位毫秒 | `null` |
 | `write_concurrency` | int | 异步 backup 写入并发上限 | `null` |
@@ -1320,7 +1320,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - `target` 必须引用 `backups.items[]` 中已经定义的 backup `name`。
 - 命中 redirect 的文件仍会通过普通文件系统 API 呈现为可读、可列举的文件。
 
-更多配置示例见 [多写存储指南](./13-multi-write-storage.md)。
+更多配置示例见 [主备存储指南](./13-multi-write-storage.md)。
 
 ##### 全局 Cache Provider、CacheFS 与 PathLock 配置
 

@@ -339,7 +339,7 @@ const conceptsSidebar = {
           ['11-multi-tenant.md', '多租户'],
           ['12-metrics.md', '监控指标'],
           ['13-privacy.md', '隐私配置'],
-          ['14-multi-write-storage.md', '多写存储'],
+          ['14-multi-write-storage.md', '主备存储'],
           ['16-queue-lifecycle.md', '队列状态与完成语义']
         ]
       },
@@ -432,7 +432,7 @@ const guidesSidebar = {
       {
         text: '存储与性能',
         items: [
-          ['13-multi-write-storage.md', '多写存储'],
+          ['13-multi-write-storage.md', '主备存储'],
           ['14-ragfs-cache.md', 'RAGFS 缓存'],
           ['15-snapshot.md', '快照管理'],
           ['16-cuvs.md', 'cuVS 向量检索']

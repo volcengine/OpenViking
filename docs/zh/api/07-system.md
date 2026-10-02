@@ -1,6 +1,6 @@
 # 系统状态
 
-OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多写后端同步状态。组件级观测和 Prometheus 指标分别提供独立文档。
+OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和主备后端同步状态。组件级观测和 Prometheus 指标分别提供独立文档。
 
 ## API 参考
 
@@ -145,7 +145,7 @@ ov --profile health
 无参数。
 
 **检查项说明**:
-- `agfs`: 包含文件系统访问和多写同步状态的嵌套检查结果
+- `agfs`: 包含文件系统访问和主备同步状态的嵌套检查结果
 - `vectordb`: 向量数据库是否健康
 - `api_key_manager`: API 密钥管理器是否已加载
 - `embedding`: 启动时 Embedding provider 是否已初始化；不发起模型请求
@@ -412,7 +412,7 @@ ov system wait --timeout 60
 
 ### backend_sync_status()
 
-查询指定 Viking URI 子树在多写存储后端之间的同步状态。该接口要求 ROOT 或 ADMIN 权限。
+查询指定 Viking URI 子树在主备存储后端之间的同步状态。该接口要求 ROOT 或 ADMIN 权限。
 
 **HTTP API**
 
@@ -456,7 +456,7 @@ ov system backend sync-status viking://resources
 
 ### backend_sync_retry()
 
-重试指定 URI 子树中尚未完成的多写后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
+重试指定 URI 子树中尚未完成的主备后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
 
 **HTTP API**
 
@@ -499,7 +499,7 @@ ov system backend sync-retry viking://resources
 
 `retried` 是本次重新调度的记录数，`failed` 是重试调度失败的记录数；具体后端可能附加额外诊断字段。
 
-公共 Python、TypeScript 和 Go SDK 当前没有多写后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
+公共 Python、TypeScript 和 Go SDK 当前没有主备后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
 
 ---
 

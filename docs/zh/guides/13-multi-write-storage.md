@@ -1,15 +1,15 @@
-# 多写存储指南
+# 主备存储指南
 
-本指南介绍如何配置 OpenViking 的多写存储能力。多写存储允许一个 primary 后端同时复制写入多个 backup 后端，用于保存副本（包括跨地域副本）、配置读路由和存储迁移。primary 故障时不会自动提升 backup。
+本指南介绍如何配置 OpenViking 的主备存储能力。主备存储允许一个 primary 后端同时复制写入多个 backup 后端，用于保存副本（包括跨地域副本）、配置读路由和存储迁移。primary 故障时不会自动提升 backup。
 
-多写能力位于 RAGFS 内部。OpenViking 的 Python SDK、HTTP API 和 CLI 使用方式保持不变。
+主备存储能力位于 RAGFS 内部。OpenViking 的 Python SDK、HTTP API 和 CLI 使用方式保持不变。
 
 ## 前置条件
 
 - 已有可用的 `ov.conf`。
 - 已确认 primary backend 可以正常读写。
 - 如果要接入 S3 兼容存储，已准备好 bucket、endpoint 和访问凭据。
-- 如需迁移已有数据，请遵循 [OVPack 多写迁移流程](./09-ovpack.md#与多写存储配合)；仅启用 backups 不会复制历史文件。
+- 如需迁移已有数据，请遵循 [OVPack 主备存储迁移流程](./09-ovpack.md#与主备存储配合)；仅启用 backups 不会复制历史文件。
 
 ## 最小配置
 
@@ -220,7 +220,7 @@ backup 默认不参与读取。要让 backup 服务读取，需要显式配置 `
 - primary 始终作为最终兜底。
 - 冷备 backup 不建议配置读能力。
 
-如果一个 backup 只配置了 `read`，没有配置 `write`，它不会接收普通多写复制。只有在你明确知道该 backend 的数据来源时，才应使用这种配置。
+如果一个 backup 只配置了 `read`，没有配置 `write`，它不会接收普通复制写入。只有在你明确知道该 backend 的数据来源时，才应使用这种配置。
 
 ## Redirect 配置
 
@@ -304,7 +304,7 @@ Exclude 用于让某个 backup 跳过匹配文件。
 
 ## 加密配置
 
-多写存储复用 OpenViking 的透明静态加密能力。
+主备存储复用 OpenViking 的透明静态加密能力。
 
 全局加密开启示例：
 
@@ -356,9 +356,9 @@ Exclude 用于让某个 backup 跳过匹配文件。
 
 ## 存量数据迁移
 
-多写只复制启用之后的新写入，不会自动复制历史文件。
+主备存储只复制启用之后的新写入，不会自动复制历史文件。
 
-使用 OVPack 迁移时，请遵循 [与多写存储配合](./09-ovpack.md#与多写存储配合)：先在干净目标配置多写，再通过该服务恢复，验证各副本后恢复业务写入。目标 account 初始化和恢复冲突处理也在该流程中说明。
+使用 OVPack 迁移时，请遵循 [与主备存储配合](./09-ovpack.md#与主备存储配合)：先在干净目标配置主备存储，再通过该服务恢复，验证各副本后恢复业务写入。目标 account 初始化和恢复冲突处理也在该流程中说明。
 
 ## 验证配置
 
@@ -397,9 +397,9 @@ backup 默认只参与写入，不参与读取。需要在 backup 上显式配�
 }
 ```
 
-### 为什么启用多写后历史文件没有出现在 backup？
+### 为什么启用主备存储后历史文件没有出现在 backup？
 
-多写只处理启用后的新写入。历史文件请按 [OVPack 迁移流程](./09-ovpack.md#与多写存储配合) 处理；启用 backups 不会自动补齐。
+主备存储只处理启用后的新写入。历史文件请按 [OVPack 迁移流程](./09-ovpack.md#与主备存储配合) 处理；启用 backups 不会自动补齐。
 
 ### 异步模式下能否保证立即读到 backup 的最新数据？
 
@@ -415,7 +415,7 @@ backup 默认只参与写入，不参与读取。需要在 backup 上显式配�
 
 ## 相关文档
 
-- [多写存储](../concepts/14-multi-write-storage.md)
+- [主备存储](../concepts/14-multi-write-storage.md)
 - [存储架构](../concepts/05-storage.md)
 - [配置指南](./01-configuration.md)
 - [加密指南](./08-encryption.md)

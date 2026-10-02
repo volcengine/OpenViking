@@ -359,4 +359,4 @@ curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
 
 - [多版本管理 API](../api/11-snapshot.md)：命令参数与响应的完整参考
 - [配置说明](01-configuration.md)：`ov.conf` 完整配置项
-- [多写存储指南](13-multi-write-storage.md)：资源数据的多后端复制
+- [主备存储指南](13-multi-write-storage.md)：资源数据的多后端复制
