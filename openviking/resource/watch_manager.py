@@ -8,10 +8,10 @@ Provides task creation, update, deletion, query, and persistence storage.
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from openviking.concurrency import AsyncSemaphore
 from openviking.observability.http_error_context import sanitize_public_http_error
@@ -27,6 +27,7 @@ from openviking.resource.watch_storage import (
     WATCH_TASK_STORAGE_TMP_URI,
     WATCH_TASK_STORAGE_URI,
 )
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.utils.logger import get_logger
 
@@ -85,7 +86,10 @@ class WatchTask(BaseModel):
     connector_states: Optional[Dict[str, Any]] = Field(
         default=None, description="Private external Connector stream states"
     )
-    created_at: datetime = Field(default_factory=datetime.now, description="Task creation time")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Task creation time",
+    )
     last_execution_time: Optional[datetime] = Field(None, description="Last execution time")
     last_task_id: Optional[str] = Field(None, description="Latest ingestion task identifier")
     last_status: Optional[str] = Field(None, description="Latest execution status")
@@ -96,9 +100,29 @@ class WatchTask(BaseModel):
     user_id: str = Field(default="default", description="User ID who created this task")
     original_role: str = Field(default="user", description="Role used to execute this task")
 
+    @field_validator("created_at", "last_execution_time", "next_execution_time", mode="before")
+    @classmethod
+    def _normalize_timestamps(cls, value: Any) -> Any:
+        """Normalize watch timestamps to aware UTC.
+
+        Watch state written by older builds holds naive local wall-clock
+        values, and restored or hand-edited storage can carry offset-aware
+        strings. Comparing either against an aware "now" raises
+        ``TypeError: can't compare offset-naive and offset-aware datetimes``
+        and terminates the scheduler loop, so normalize on the way in: a naive
+        value is read as host-local time, which preserves the instant it was
+        written at.
+        """
+        if isinstance(value, str):
+            value = parse_iso_datetime(value)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            return value.astimezone(timezone.utc)
+        return value
+
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat() if v else None}
         extra = "ignore"
+        validate_assignment = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert task to public dictionary."""
@@ -145,12 +169,6 @@ class WatchTask(BaseModel):
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTask":
         """Create task from dictionary."""
         data = dict(data)
-        if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
-        if isinstance(data.get("last_execution_time"), str):
-            data["last_execution_time"] = datetime.fromisoformat(data["last_execution_time"])
-        if isinstance(data.get("next_execution_time"), str):
-            data["next_execution_time"] = datetime.fromisoformat(data["next_execution_time"])
         if data.get("processor_kwargs") is None:
             data["processor_kwargs"] = {}
         if data.get("auth_state") is not None and not isinstance(data.get("auth_state"), dict):
@@ -307,7 +325,7 @@ class WatchManager:
 
             data = {
                 "tasks": [task.to_storage_dict() for task in self._tasks.values()],
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
             content = json.dumps(data, ensure_ascii=False, indent=2)
@@ -732,7 +750,7 @@ class WatchManager:
             task.last_task_id = execution_task_id
             task.last_status = status
             task.last_error = sanitized_error
-            task.last_execution_time = datetime.now()
+            task.last_execution_time = datetime.now(timezone.utc)
             task.next_execution_time = (
                 task.calculate_next_execution_time()
                 if task.is_active and task.watch_interval > 0
@@ -1031,7 +1049,7 @@ class WatchManager:
                 await self._save_tasks()
                 return
 
-            task.last_execution_time = datetime.now()
+            task.last_execution_time = datetime.now(timezone.utc)
             task.next_execution_time = task.calculate_next_execution_time()
 
             await self._save_tasks()
@@ -1046,7 +1064,7 @@ class WatchManager:
             List of tasks that need to be executed
         """
         async with self._lock:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             due_tasks = []
 
             for task in self._tasks.values():
