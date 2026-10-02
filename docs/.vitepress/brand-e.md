@@ -26,7 +26,9 @@ The E slash's wider base is included when retaining 10 units of clear space on
 all sides. The 500.05 × 92.94 viewBox is scaled uniformly. Ink #07090D is used on
 light surfaces and Paper #F4F5F3 on dark surfaces; no CSS filter or synthetic font.
 
-The header logo is 160px wide (112px below 375px viewport width). The separate small `/ docs` label sits outside
+The header logo is 136px wide (112px below 375px viewport width), matching the
+website header so the wordmark stays balanced with the navigation labels.
+The separate small `/ docs` label sits outside
 the artwork and is hidden on mobile. Article typography remains independent;
 #5543 cannot alter this wordmark. README PNGs are 800px wide, displayed at 300px.
 Their absolute URLs pin the asset commit so PR previews and the next PyPI
