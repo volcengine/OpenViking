@@ -340,7 +340,7 @@ const conceptsSidebar = {
           ['12-metrics.md', '监控指标'],
           ['13-privacy.md', '隐私配置'],
           ['14-multi-write-storage.md', '主备存储'],
-          ['16-queue-lifecycle.md', '队列状态与完成语义']
+          ['16-queue-lifecycle.md', '任务状态']
         ]
       },
       {
