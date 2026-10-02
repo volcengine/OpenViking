@@ -1,0 +1,30 @@
+bot/vikingbot/compile/ops/map.py
+  h_b34c679d17e2ac 71-73
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 42-43
+bot/vikingbot/compile/ops/shuffle.py
+  h_b34c679d17e2ac 311-312
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 5,21,24-25,60-63,166-172,176,210-213,216,236-288
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 273,320-328,330,333,338-340,344,358,367-371,389-392,402,414,419,432,538-545
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 13-92,175,257-282,294-302,307-309,319-322,352-356,386-387,414-415
+bot/vikingbot/compile/review.py
+  h_b34c679d17e2ac 1,6,8-11,13,15-19,21,23-26,28-34,36,38-42,44-48,50-53,56-59,62-63,65-73,75-84,86-146,148-151,153-165,167,171-172,174-237
+bot/vikingbot/compile/schemas.py
+  h_b34c679d17e2ac 5,23,31-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "02e7c61012e3320acde13f180e3fa4133b5381b7",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
