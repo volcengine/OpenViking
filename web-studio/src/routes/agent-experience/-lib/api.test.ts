@@ -60,18 +60,37 @@ describe('experience listing server pagination', () => {
     expect(last.hasMore).toBe(false)
   })
 
-  it('applies pagination to raw entries before filtering out directories', async () => {
-    get.mockResolvedValue([
-      { ...file('folder'), isDir: true },
-      file('a.md'),
-      file('b.md'),
+  it('fills the page with files even when the newest entries are directories', async () => {
+    get.mockResolvedValueOnce([
+      { ...file('folder-a'), isDir: true },
+      { ...file('folder-b'), isDir: true },
+      { ...file('folder-c'), isDir: true },
     ])
+    get.mockResolvedValueOnce([file('a.md'), file('b.md')])
     const result = await fetchExperiences({
       experiencesUri,
       page: 1,
       pageSize: 2,
     })
-    expect(result.items.map((item) => item.name)).toEqual(['a.md'])
+    expect(get.mock.calls[1][0].query.offset).toBe(2)
+    expect(result.items.map((item) => item.name)).toEqual(['a.md', 'b.md'])
+    expect(result.hasMore).toBe(false)
+  })
+
+  it('stops scanning when a page of directories still has more entries', async () => {
+    get.mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => ({
+        ...file(`folder-${index}`),
+        isDir: true,
+      })),
+    )
+    const result = await fetchExperiences({
+      experiencesUri,
+      page: 1,
+      pageSize: 2,
+    })
+    expect(get).toHaveBeenCalledTimes(20)
+    expect(result.items).toEqual([])
     expect(result.hasMore).toBe(true)
   })
 
