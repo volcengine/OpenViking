@@ -13,7 +13,7 @@ export function parsePath(pathname = '/', search = '') {
   const query = queryObject(search);
   let route = { name: 'notFound', path: pathPart };
   if (pathPart === '/' || pathPart === '/index.html') route = { name: 'index' };
-  if (/^\/post\/[^/]+\/?$/.test(pathPart)) route = { name: 'post', slug: segs[1] };
+  if (/^\/post\/[^/]+(?:\/(?:index\.html)?)?$/.test(pathPart)) route = { name: 'post', slug: segs[1] };
   return { route, query, raw: `${pathPart}${search || ''}` };
 }
 
@@ -42,4 +42,3 @@ export function buildPath(route, query = {}) {
 export function postPath(slug, query) {
   return buildPath({ name: 'post', slug }, query);
 }
-

@@ -11,8 +11,8 @@ test('only the home path and explicit index file resolve to the index', () => {
   }
 });
 
-test('post routing accepts exactly one slug, with or without a trailing slash', () => {
-  for (const path of ['/post/essay', '/post/essay/']) {
+test('post routing accepts one slug and its generated index document', () => {
+  for (const path of ['/post/essay', '/post/essay/', '/post/essay/index.html']) {
     assert.deepEqual(parsePath(path).route, { name: 'post', slug: 'essay' });
   }
 });
