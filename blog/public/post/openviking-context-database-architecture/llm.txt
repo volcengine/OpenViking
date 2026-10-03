@@ -1,299 +1,310 @@
-# OpenViking Context Database Architecture
+# OpenViking: Inside the Context Database Architecture
 
-Source title: OpenViking Context Database Architecture
 Published: 2026-05-12
-Author: maojia
-
-## Background
-
-Making data available to AI agents is still a hard infrastructure problem. OpenViking starts from a plain problem: useful data exists, but agents still struggle to use it. A model needs an actor surface and a storage substrate; otherwise every task falls back to prompt stuffing.
-
-The article starts from a practical observation attributed to Mike Stonebraker in April 2026: on a benchmark, large language models achieved 0% text-to-SQL accuracy; with RAG-style enhancements the result rose to around 10%; and when the prompt directly included the actual `FROM` clause, target tables, and join conditions, accuracy reached about 35%.
-
-The lesson is about access planning around messy context: where to look, how far to search, which memory belongs to whom, and whether a write is safe. OpenViking is positioned as a context database for AI agents. It uses database thinking as its core design paradigm, while choosing filesystem semantics as the agent-facing navigation and scoping interface.
-
-Most agent context is not born as clean relational records. It is code, documents, PDFs, images, tickets, meetings, chat logs, calendars, and memories. Using it is closer to search and recommendation than to normal transaction processing: first shrink a noisy corpus into a plausible scope, then rank, read, and refine.
-
-Relational databases remain useful for metadata, billing, jobs, and structured state. They are a poor primary interface for agents because the agent must first discover schemas, tables, joins, and valid predicates before it can even ask for context. A path is a cheaper control primitive: choose a project, user memory space, document subtree, or time bucket, then search inside it.
-
-Design comparison:
-
-| Paradigm | What it solves | Where it breaks for agents |
-| --- | --- | --- |
-| Relational schema | Precise operations over typed records. | The model must infer tables, joins, columns, and filters before retrieval starts. |
-| Vector-only RAG | Semantic entry points over unstructured content. | As the corpus grows, embedding discrimination gets worse and small topK misses become fatal. |
-| Scalar filters and rerankers | Useful narrowing and second-stage ordering. | They still need good candidate generation. A reranker cannot rescue evidence that never entered the candidate set, and it adds latency and cost. |
-| Directory semantics | One compact scope parameter before vector search and rerank. | Ranking becomes more reliable after the search scope has already been narrowed. |
-
-The previous OpenViking article introduced why context engineering can be treated as a database problem. This architecture article goes deeper: addressing, directory semantics, distributed deployment, consistency, multi-tenancy, role and permission boundaries, privacy, security, capacity, performance, and evaluation.
-
-## Technical Overview
-
+Updated: 2026-10-04
+Author: maojia (https://github.com/MaojiaSheng)
+Canonical human page: https://blog.openviking.ai/post/openviking-context-database-architecture/
+Agent-readable page: https://blog.openviking.ai/post/openviking-context-database-architecture/llm.txt
 Repository: https://github.com/volcengine/OpenViking
 
-OpenViking uses multiple implementation languages:
+How OpenViking turns directory semantics, decoupled storage, identity, performance, and privacy into a context database layer for AI agents.
 
-- Python 3 implements the core server logic. This choice is driven by the Python ecosystem around model calls, multimodal understanding, content parsing, document processing, and AI dependencies. OpenViking is IO- and data-pipeline heavy before it is CPU-bound.
-- Rust implements the CLI and RAGFS. The CLI benefits from fast startup and easier binary distribution. RAGFS benefits from stronger IO parallelism and throughput.
-- C++ is used for the embedded single-machine vector database so OpenViking can reuse and trim mature VikingDB indexing code.
-- GitHub CI builds and publishes across Windows, Linux, and macOS on AArch64 and x64, including PyPI binaries and Docker images.
+OpenViking starts from a plain problem: useful data exists, but agents still struggle to use it. A model also needs a surface it can act through and a substrate that keeps context; otherwise every task falls back to stuffing material into the prompt.
 
-OpenViking exposes HTTP APIs and can be accessed through CLI, SDK, Skills, and MCP. The documentation entry point is https://docs.openviking.ai.
+A model that writes SQL fluently still has to know which tables to query and how they join. Many agent failures have the same shape. Reasoning is not the weak point; the access plan is: where to look, how far to search, which memory belongs to whom, and whether a write is safe. OpenViking calls the system that answers those questions a context database.
 
-VikingBot is a secondary development of the nanobot project. It integrates OpenViking capabilities and serves as a reference external agent.
+## Why A Filesystem-Shaped Interface
 
-## Directory Semantics And Addressing
+Most agent context is not born as clean relational records. It is code, documents, PDFs, images, tickets, meetings, chat logs, and memories. Using it is closer to search and recommendation than to transaction processing: first shrink a noisy corpus into a plausible scope, then rank, read, and refine.
 
-Vector search has a scaling problem that matters more in RAG than in recommendation. Recommendation systems can recall thousands of candidates through multiple channels and then rely on coarse and fine ranking. An agent usually cannot pass thousands of chunks downstream. The final context window may only tolerate tens of chunks, and filling too much of it weakens the model before it starts reasoning.
+Relational databases remain the right tool for metadata, billing, jobs, and structured state. They are a poor primary interface for agents, because the agent must discover schemas, tables, joins, and valid predicates before it can ask for anything. A path is a cheaper control primitive: pick this project, this user's memory space, this document subtree, then search inside it.
 
-Scalar filters are the first answer: tenant, owner, time, level, source type, and similar fields should prune the search space. Directory retrieval is the more general answer. VikingDB began exploring directory-node filtering in early 2025 while working on vector-scalar filtering. The team observed that many unstructured information systems are organized as directory structures: code repositories, calendars, books, wikis, shelves, service trees, category taxonomies, geographies, and similar hierarchies.
+| Approach | What it solves | Where it breaks for agents |
+| --- | --- | --- |
+| Relational schema | Precise operations over typed records. | The model must infer tables, joins, columns, and filters before retrieval starts. |
+| Vector-only RAG | Semantic entry points over unstructured content. | As the corpus grows, more near-duplicates compete for a small topK, and one missed recall fails the task. |
+| Scalar filters and rerankers | Useful narrowing and second-stage ordering. | They still depend on candidate generation. A reranker cannot rescue evidence that never entered the candidate set, and it adds latency and cost. |
+| Directory semantics | One compact scope parameter before vector search and rerank. | If the scope is right, the candidate set is smaller and cleaner. If it is wrong, the evidence is excluded, so the scope has to stay cheap to widen. |
 
-VikingDB then designed directory-semantics algorithms, architecture, and interfaces. With the Viking DSL query language, a user can specify a directory as the retrieval scope. This gives O(1) scope selection over a directory tree rather than treating the path as ordinary scalar text.
+These are layers, not rivals. OpenViking stacks them in one query: tenant fields and a path narrow the scope, vector search runs inside it, and an optional rerank orders the result. The rest of the architecture follows from that order.
 
-Example:
+## The Shape Of The System
+
+The implementation is deliberately polyglot. Python owns the server because parsing, document processing, multimodal understanding, model SDKs, and AI dependencies live in that ecosystem, and OpenViking is IO- and pipeline-heavy long before it is CPU-bound. Rust owns the surfaces where startup time, binary delivery, and IO throughput matter: the ov CLI and RAGFS, the content filesystem. C++ carries the embedded vector engine that came from VikingDB, so the project reuses mature indexing code instead of rewriting the hardest part.
+
+RAGFS started life as AGFS, a separate Go server the Python process talked to. It has since been rewritten in Rust and is loaded into the server process as a Python extension, which removes a hop from every file operation.
+
+A database-shaped stack for agent context (read top-down for request flow, bottom-up for ownership):
+
+| Layer | Role | Contract | Surface |
+| --- | --- | --- | --- |
+| Agent surface | CLI, SDK, MCP, Skills, VikingBot | Navigation commands and resource URIs | viking://... |
+| OpenViking server | Python: identity, parsing, model calls, queues, retrieval, sessions | Coordinates reads, writes, retries, and isolation | API + jobs |
+| Context filesystem | VikingFS URIs over RAGFS (Rust, embedded), path locks, L0/L1 sidecars | Turns context into paths agents can traverse | ls/tree/read |
+| Storage substrate | Vector index (embedded C++ engine or VikingDB), local or S3-compatible file storage | Durability, retrieval, filters, and artifacts | index + files |
+
+The split defines each layer's contract. Agents speak in commands and URIs. The server enforces identity and runs jobs. VikingFS and RAGFS give context a traversable shape. The vector index and file storage decide what can be retrieved and what persists. Clients reach the server over HTTP; the CLI, SDKs, MCP endpoint, and Skills all use the same API, and VikingBot, the reference agent shipped in the repository, reads and writes through it too.
+
+What one write and one read pass through:
+
+Write path, `add-resource`. A plain import returns after step 3; summaries and vectors keep running in queues.
+
+1. Parser: source becomes files and directories.
+2. TreeBuilder: resolves the target viking:// URI.
+3. ResourceProcessor → RAGFS: writes content under a path lock, then enqueues semantic work.
+4. SemanticQueue (async): generates L0/L1 bottom-up, from files to parent directories.
+5. Vector index (async): embeds and stores URI, level, tenant fields, and retrieval text.
+
+Read path, `find` / `search`, then `read`. One scoped vector query per planned query; reading goes back to files.
+
+1. Intent analysis (optional, search only): turns the session and query into 0–5 typed queries.
+2. Scope filter: account, user, ACL, target directory, context type, level.
+3. Global vector search: can hit L0, L1, or L2 records directly.
+4. Rerank (optional): once, over 2× candidates, when a reranker is configured.
+5. abstract / overview / read: the agent opens the URIs it decides to trust.
+
+The two paths explain a common surprise. A plain add-resource returns once content is parsed and placed, while summaries and vectors are still in the queue; a Git repository import returns even earlier, before the clone finishes. The file becomes readable before it becomes searchable. Workflows that search right after writing should pass --wait or poll the returned task.
+
+> **Info:** The public docs are the living reference for module boundaries and deployment details: [docs.openviking.ai](https://docs.openviking.ai/)
+
+## Directory Semantics Are The Addressing Layer
+
+Vector search has a scaling problem that hurts RAG more than recommendation. A recommender can recall thousands of candidates through several channels and rely on coarse and fine ranking. An agent cannot pass thousands of chunks downstream. The final context window may hold only tens of chunks, and filling it too full weakens the model before it starts reasoning.
+
+Scalar filters are the first answer: tenant, owner, time, level, and source type should prune the search space. Directory retrieval is the more general answer. A lot of useful context is already a tree: code, calendars, wikis, books, service trees, category taxonomies, geographies. VikingDB turned that observation into a path-aware index, and OpenViking exposes it through viking:// URIs.
+
+The detail that matters: the path is not a text field. Every record OpenViking writes to the vector index has a uri field of type path. The engine keeps directory bitmaps for it, so a query can take a whole subtree, or exactly one level of it, by prefix and depth instead of matching path strings row by row. That is why directory semantics lower the cost of generating filters: one path plus a depth is far easier for an agent to produce than a hand-built predicate over an unknown schema.
+
+> Directory semantics turn filtering into scope selection: pick a logical directory and a depth, then search inside it. SQL-style filters make the agent assemble schema, fields, joins, and predicates, which leaves far more room for invalid conditions.
+
+| Directory feature | Why prefix matching is not enough |
+| --- | --- |
+| Depth-aware retrieval | A query must mean the node itself, its direct children, or the whole subtree without rewriting string predicates. |
+| Directory nodes carry content | A wiki page can have its own body and child pages. In OpenViking every processed directory has its own abstract and overview. Treating directories as empty prefixes loses both cases. |
+| Multiple roots and facets | The same corpus may need project, time, category, or geography views, and each root is a search boundary. This is a design direction; see below. |
+| Index and permission boundary | The path takes part in retrieval, update, and authorization. Tenant and ACL filters are also expressed as path scopes. It is not only a display string. |
+
+### Multiple Roots Mean Multiple Logical Views
+
+A multi-root tree is not several physical copies of one file. The same object would be indexed under several logical trees, and each tree is a different way to narrow retrieval before vector search. A document could live in the project resource tree, appear in a calendar tree by creation time, and be reachable through a category or geography tree when the domain needs it.
+
+This is where the architecture is headed, not what the API exposes today. The public top-level namespaces are resources, user, and agent. Time is organized as directories inside the resource tree: an image added without an explicit target lands under viking://resources/images/YYYY/MM/DD/. Independent roots such as calendar, geo, or category are not callable yet.
+
+| Root | What it organizes | Query it simplifies | Status |
+| --- | --- | --- | --- |
+| `viking://resources/...` | Project, repository, document, or uploaded resource structure. | Search inside this product, repo, folder, or knowledge base. | Available |
+| `viking://user/{user}/...` | One user's memories, sessions, private resources, and skills. | Recall only what this user, or this peer, should see. | Available |
+| `viking://resources/images/2026/05/...` | Date directories inside the resource tree. | Search material added on a known day or month. | Available as directories |
+| `viking://calendar/...` | Time buckets as an independent view over all objects. | Memories or material from last week, or around an incident date. | Design direction |
+| `viking://category/...` | Domain category, taxonomy, or service tree. | Search within a topic without the model inferring category fields. | Design direction |
+
+Example tree under the scope root viking://resources/openviking, with the depth of each node:
+
+```text
+viking://resources/openviking                      depth 0
+  docs                                             depth 1
+    design                                         depth 2
+      diagrams                                     depth 3
+  telemetry                                        depth 1
+    grafana                                        depth 2
+```
+
+path-scope-filter.json:
 
 ```json
 {
   "op": "must",
-  "field": "path",
-  "conds": ["/user/shengmaojia/memories"],
+  "field": "uri",
+  "conds": ["/user/alice/memories"],
   "para": "-d=1"
 }
 ```
 
-The `path` field uses a `TYPE_PATH` index. The depth parameter controls scope:
+- `d=-1` searches the whole subtree under the directory.
+- `d=0` matches the node itself.
+- `d=x` searches downward by x levels.
 
-- `d=-1`: global retrieval under the current directory.
-- `d=0`: match the current node itself.
-- `d=x`: search downward from the directory by `x` levels.
+Agents never write this DSL by hand. The target directory passed to find or search is compiled on the server into a d=-1 path scope and merged with account, user, ACL, context-type, and level conditions into a single vector query. Exact URI lookups use d=0.
 
-Directory semantics turn retrieval filtering into a scope-selection problem: choose a logical directory and depth, then search inside it. SQL-style filters require the agent to assemble schema, fields, joins, and predicates, which creates more room for invalid conditions. One path plus a depth rule is much easier to produce than a hand-built predicate over unknown schema.
+> The path is not metadata attached after the fact. It is an indexed scope boundary that applies before vector search, rerank, and reading.
 
-Directory semantics are also not the same as prefix matching. They must support:
+### Progressive Disclosure For Context
 
-- Depth-aware retrieval: current node, direct children, or entire subtree.
-- Directory nodes with their own content, such as wiki pages that also have child pages.
-- Multiple roots and facets, such as project, calendar, category, and geography views.
-- Index, cache, update, and authorization behavior attached to the path boundary.
-
-This differs significantly from normal scalar filtering. The article states that VikingDB is currently the only vector database with a directory index structure, which gives OpenViking a strong foundation for a context database.
-
-Multi-root trees are important. A multi-root tree is not multiple physical copies of the same file. It means the same object can be indexed under several logical trees, and each tree is a different way to narrow retrieval before vector search. A document may live in the project resource tree, appear again in a calendar tree by creation time, and also be reachable through a category or geography tree if the domain needs that view.
-
-Examples:
-
-| Root | What it organizes | Agent query it simplifies |
+| Level | What it stores | Why agents need it |
 | --- | --- | --- |
-| `viking://resources/...` | Project, repository, document, or uploaded resource structure. | Search inside this product, repo, folder, or knowledge base. |
-| `viking://calendar/2026/05/...` | Time buckets such as day, month, quarter, or year. | Search memories or materials from last week, this month, or a known incident date. |
-| `viking://geo/cn/zhejiang/...` | Geography such as country, province, city, or site. | Search policies, assets, or events inside a location boundary. |
-| `viking://category/infra/storage/...` | Domain category, taxonomy, or service tree. | Search within a topic without asking the model to infer category fields. |
+| `L0` | Directory abstract in .abstract.md, 256 characters by default | Vector recall and a cheap first judgment. |
+| `L1` | Directory overview in .overview.md, 4,000 characters by default | Rerank input and navigation: what is in here, what to open next. |
+| `L2` | Original files or parsed bodies | Loaded only when precision requires it. |
 
-OpenViking then builds on this capability by exposing a filesystem-like context interface. To avoid confusing the database namespace with the local filesystem, OpenViking uses `viking://` URIs, for example:
+L0 and L1 are directory-level sidecars. File summaries roll up into the directory's overview, and the abstract is taken from the overview, so a parent directory describes everything below it. The layers control how much an agent reads; they do not force a search to descend level by level. One query can hit a record at any level directly.
 
-```text
-viking://resources/openviking/telemetry/
-```
+## Files, Virtual URIs, And Multimodal Objects
 
-Design rules:
+viking:// is a logical database namespace, not a physical storage path. The source path can be kept as provenance, while the physical key stays internal: viking://resources/docs/auth is stored under /local/{account_id}/resources/docs/auth, with the account prefix added by the server. The visible URI comes from the upload command, a parent the user names, or OpenViking defaults, and it links the stored object to its rows in the vector index.
 
-- Context is progressively disclosed across L0, L1, and L2.
-- L0 is a short summary.
-- L1 describes the data structure.
-- L2 contains detailed information.
-- Every member in the database is treated as a file.
-- Every file is addressable by URI.
-- Every URI links stored objects in AGFS/RAGFS with rows in the vector index.
-- OpenViking is not a filesystem. Uploaded files are parsed, processed, and transformed into AI-ready data.
-
-In VikingDB, each stored row contains a `path`-typed `uri` property. Other scalar fields remain available for common filtering needs.
-
-## Example: Adding An Image
-
-`viking://` is a logical database namespace, not the physical storage path. The original source path can be preserved as provenance, while the physical AGFS/RAGFS or object-store key stays internal. The visible URI is chosen by the upload command, a user-specified parent path, or OpenViking defaults, and that URI links the stored object with rows in the vector index.
-
-The article separates four path concepts:
-
-| Path type | Who sees it | Purpose |
+| Path type | Example | Purpose |
 | --- | --- | --- |
-| Source path | Example: `./docs/images/demo.png` | Provenance: where the content came from. |
-| Physical storage key | Internal only | Placement in local FS, AGFS/RAGFS, S3-like storage, or cache. |
-| Canonical URI | Example: `viking://resources/images/20260509/...` | Stable identity for read, cite, permission, update, and delete. |
-| Matched view URI | Example: `viking://calendar/2026/05/09/...` | Explains which logical root made the result relevant; it may differ from the canonical URI. |
+| Source path | `./docs/images/demo.png` | Provenance: where the content came from. |
+| Physical storage key | Internal only | Placement on local disk, S3-compatible storage, or a backup backend. |
+| Canonical URI | `viking://resources/images/2026/05/09/...` | Stable identity for read, cite, permission, update, and delete. |
+| Matched view URI (planned with multiple roots) | `viking://calendar/2026/05/09/...` | Would explain which logical root made a result relevant; it may differ from the canonical URI. |
 
-When there is only one logical view, the canonical URI and matched URI are usually the same. With multiple roots, retrieval should show the matched view so the agent understands why the item appeared, while read and write operations still target the canonical URI.
+With one logical view, the canonical URI and the matched URI are the same. Once multiple roots exist, retrieval should show the matched view so the agent knows why an item appeared, while reads and writes still target the canonical URI.
 
-Multimodality is a separate axis from directory semantics. Text, code, PDFs, and images all benefit from path-scoped retrieval. Images simply make the difference obvious: a query may hit the textual L0/L1 abstract, the image embedding for the L2 object, or both. The directory decides where to search; modality-specific embeddings decide what is similar inside that scope.
+Multimodality is a separate axis from directory semantics. Text, code, PDFs, and images all benefit from path-scoped retrieval. Images make the difference easy to see: a query may hit the text summary the VLM wrote for the image, the image embedding itself, or both. The directory decides where to search; the embeddings decide what is similar inside that scope. Image-to-image search needs the embedding model configured as multimodal; a text-only model still indexes the image's summary but cannot take an image as the query.
 
-When an image is added with:
-
-```bash
-ov add-resource ./docs/images/demo.png
-```
-
-OpenViking creates L0 and L1 summaries for agent readability and stores the image file as L2. The image can be found through either abstract text or image similarity, depending on the query and model path.
-
-One image upload creates a directory containing only that image, for example:
-
-```text
-viking://resources/images/20260509/upload_321e98a827a0461f8721c683d726cbec_png
-```
-
-Files inside a code repository preserve their original relative paths. That lets agents use code-like navigation while OpenViking maintains semantic search underneath.
-
-## Distribution And Consistency
-
-The open-source version starts with a single-machine architecture by default. Production deployment needs larger capacity, higher throughput, and higher availability, so distribution and consistency are central recent work items.
-
-OpenViking supports multi-instance deployment. Unlike a normal database, it introduces a middleware layer to decouple storage. Through abstractions over the vector database interface, AGFS interface, logging, and telemetry, OpenViking can run without a local data disk. It depends on two core storage systems and builds context-data consistency above them.
-
-The open-source version intentionally avoids nonessential dependencies such as Redis and Kafka. It also manages account information, temporary working directories, transactions, task records, and work queues inside a unified filesystem abstraction.
-
-OpenViking deployment modes:
-
-- Full read-write mode: every deployment instance can receive both reads and writes. This is expected to become the mainstream mode. A remaining challenge is performance isolation, because a heavy write request can occupy CPU in a Python single-process server.
-- Read-write separation: instances are divided into write and read clusters. This provides load isolation and high availability for reads or writes, but it currently depends on manual separation and is not recommended as the default.
-
-Consistency requirements:
-
-- The vector database must provide consistency semantics. VikingDB provides eventual consistency, while the embedded single-machine vector database can provide strong consistency.
-- The distributed filesystem usually provides strong consistency, but ordering problems still need to be handled in OpenViking.
-- OpenViking uses file locks to protect conflicting writes. It has implemented simple directory locks and file locks, currently pessimistic, with basic rollback for failures and lock conflicts.
-
-The exact consistency model and the best-performing lock or transaction mechanism remain active research and community discussion topics.
-
-## Multi-Tenancy And Identity
-
-Local multi-tenant use is simple:
+add-image-resource.sh:
 
 ```bash
-# configure root_api_key in server ov.conf before startup
-# configure the same root_api_key in client ovcli.conf
-ov admin register-user default <your_name>
-# configure the returned api_key in ovcli.conf
+ov add-resource ./docs/images/demo.png --wait
+# Without --to, images land in date directories:
+# viking://resources/images/2026/05/09/...
+
+ov find "architecture diagram with three storage layers" --uri viking://resources/images
+ov find --image ./query.png --uri viking://resources/images
 ```
 
-On public cloud, `root_api_key` is not exposed. Different capacity tiers expose different user-count limits.
+| Input | Stored shape | Agent value |
+| --- | --- | --- |
+| `demo.png` | VLM-written summary plus the image as L2; image vector when the embedding is multimodal | Found through the summary text or through image similarity. |
+| Code repository | Repository layout kept as directories | Agents navigate it like code while retrieval stays semantic. |
+| PDF or Office document | Parsed into Markdown, split by structure | Sections can be read one at a time; L2 is the parsed text, not the original bytes. |
 
-Multi-tenancy is mandatory for a data system. Conventional systems often identify users through group/user models such as Linux, or more complex organization/account structures such as cloud account systems. OpenViking has a harder identity question: how should agents be treated?
+## Distributed By Decoupling Storage
 
-### Role Model Version 1
+The open-source distribution starts as a single-machine service, but the architecture is pointed at managed deployment. The key move is to separate the instance from the data. The vector index can be the in-process engine, a remote HTTP service, or Volcengine VikingDB; file storage can be local disk or S3-compatible storage. With both on remote services, an instance holds no authoritative data of its own.
 
-The first design used three layers: Account, User, and Agent. Permissions followed ownership: Agent belongs to User; User belongs to Account. An OpenViking instance can contain multiple Accounts for grouping, and users get RBAC roles such as Admin or normal user.
+The open-source build also avoids mandatory dependencies such as Redis and Kafka. Temporary working directories, task records, work queues, and path locks sit behind the same filesystem abstraction: queues persist in SQLite on top of it, and locks are lock files by default. When several processes must coordinate locks, the lock provider can switch to Redis. That is an option, not a prerequisite for starting the server.
 
-This supports a familiar story: a company has teams, each team manages its own data, and each employee's agent can only access that employee's private data.
+Running several instances adds two concerns. Uploaded files land on the instance that received the request by default, so replicas need the shared upload mode. Path locks need a provider every process can see. Primary/backup storage can replicate writes to backup backends, synchronously or asynchronously, but it never promotes a backup on its own.
 
-Problem: how can one agent serve multiple visitors, while preserving memory from those conversations?
+Beyond that, there are two ways to lay out instances. Both are architectural tradeoffs to design for, not deployment modes that ship ready to use:
 
-### Role Model Version 2
+| Approach | What happens | Why it matters | Caveat |
+| --- | --- | --- | --- |
+| Full read-write | Every instance accepts reads and writes. | Simpler scaling model. | Needs the shared upload area and cross-process locks above. A heavy write can occupy the CPU of a Python server process and slow reads on the same instance. |
+| Read-write separation | Writes and reads go to separate groups of instances. | Clearer load isolation and availability boundaries. | Request routing, how soon a write becomes readable, and failover all need their own design, and the setup has to be validated against your workload. |
 
-The second design still used Account, User, and Agent, but allowed Agent to own private data. Agent and User relationships could be inverted or combined instead of forcing Agent to belong to User.
+| Layer | Consistency expectation | OpenViking responsibility |
+| --- | --- | --- |
+| VikingDB | Eventual consistency in the managed vector store. | Design retrieval and retries around visibility delay. |
+| Embedded vector engine | Strong consistency on a single machine. | Keep the local mode simple and predictable. |
+| Distributed or object storage | Usually strong, still with ordering edge cases. | Protect writes with path locks. |
 
-Problem: complexity increased sharply. Authentication still tied Agent to User, which made authorization relationships hard to reason about, weakened safety, and made the concepts of User and Agent hard to define. A personal assistant and a digital twin do not fit cleanly.
+One principle orders everything else: files are the source of truth and the vector index is derived from them. An index can be rebuilt from retained files; lost files can only come back from a backup. So OpenViking prefers a missing search result to a wrong one. Deleting removes index records first and files second, so search never returns a file that is gone; if the second step fails, the file is still there and a retry finishes the job. Moving copies the content, updates the index, and then removes the source.
 
-### Role Model Version 3: Target Direction
+Where correctness has to be explicit:
 
-The target conclusion is that `user` is the only authentication object besides root. A user can represent either a human or an agent. OpenViking therefore removes Agent as a distinct identity concept and treats humans and agents uniformly as peers.
+| Layer | Consistency | Protection | Risk |
+| --- | --- | --- | --- |
+| Vector index | Derived from files; a managed store can lag behind writes | Task status, then retry or rebuild from source | Fresh resources may not appear immediately. |
+| File storage | Source of truth; local is strong, remote depends on the backend | EXACT path lock | Concurrent writes can expose partial files. |
+| Directory namespace | Tree structure must stay valid | TREE path lock; delete the index before the file | Move/delete can race with indexing. |
+| Tenancy and permissions | Search and read must agree on what is visible | Account/user/ACL filters on both search and read | A filter applied on one side only leaks or hides context. |
 
-The original motivation for separating agents was to let user memory be shared across applications, so any agent could access the user's global memory. This sounds attractive but fails in several cases:
+> **Warning:** There is no cross-store atomic transaction here. Path locks, implemented in Rust inside RAGFS, keep conflicting writers apart: EXACT covers one path and TREE a subtree. Releasing a lock does not undo what was written. The background half of a session commit resumes from a persistent queue after a restart, and a retried model call need not produce the same text. A stronger consistency model is still under discussion.
 
-- A customer-service agent may need to manage memory about visitors who are not registered OpenViking users and do not have API keys.
-- In that scenario, the visitor is not a real authenticated User object.
-- The agent can store and isolate memory about its service targets internally.
-- The vector database can use a Peer concept to isolate retrieval.
-- The agent needs independent authentication and should not belong to a team employee.
+## Identity: Treat Agents As Database Users
 
-The conclusion is that agents should be treated as database users with independent authentication. This better respects user privacy.
+The hardest multi-tenant question is not accounts. It is whether an agent is subordinate to a human user, owns data by itself, or should be treated as a peer. OpenViking went through all three designs and settled on the third.
 
-## Performance And Capacity
+Local multi-tenancy starts with a root API key and explicit user registration. The hosted service does not expose a root key; the console issues user keys directly. The product surface differs, but the invariant holds: every read and write carries a real identity before it touches private context, and the root key manages accounts and users but cannot read tenant data in API-key mode.
 
-OpenViking still has performance issues and should be evaluated carefully before production use. The team is actively optimizing.
+Three identity designs:
 
-Observability:
+- **V1, Agent belongs to User.** Account → User → Agent with simple RBAC. It fits "each employee's agent sees that employee's data", but one service agent cannot serve many visitors and keep separate memory for each.
+- **V2, Agent can own data.** Agents could own private data and relate to users in either direction. Authentication still tied agents to users, so the authorization graph became hard to explain and harder to secure. A personal assistant and a digital twin fit neither shape cleanly.
+- **V3, Human and agent are peers (current).** Besides root, only a user authenticates, and a user can be a person or an agent service. Whoever that user serves becomes a peer under it.
 
-- `ov status` and `ov observer` provide operational visibility.
-- OpenViking exposes a `/metrics` endpoint for Prometheus, Grafana Agent, and similar monitoring systems.
-- The hosted service will provide detailed performance monitoring.
+This is a privacy decision as much as a modeling one. A customer-service agent may keep memories about visitors who are not registered users and hold no API keys. Forcing those visitors into the User abstraction would make the authorization graph less true and less safe. Separating agents into their own identity type had a similar appeal, letting any agent reach a user's global memory, and it fails the same case.
 
-Capacity is relatively straightforward once the distributed model exists. Performance depends on several layers.
+What landed separates the data owner from the interaction object. The user is the data owner, a person or an agent service holding its own key. The objects that user serves, such as a visitor, a group member, or a code repository, become peers under it: `viking://user/support-bot/peers/customer-alice/memories`. A peer narrows retrieval and reads inside one user; it gets no key and does not create a tenant. The [User / Peer post](https://blog.openviking.ai/post/openviking-user-peer-model) walks through the model, and the [coding agent plugins](https://blog.openviking.ai/post/openviking-coding-agent) use it to keep one memory per repository.
 
-### Vector Database
+How identity bounds what context can cross:
 
-OpenViking supports tiered scaling through the vector database. For personal lightweight instances, creating one vector database per OpenViking instance would waste resources. The team therefore uses VikingDB DSL isolation filters to isolate different Account/User IDs as scalar constraints. One vector database can support millions of OpenViking instances, but each OpenViking instance is limited to around one million vectors. Heavy users, large-scale integrations, and large customer-service systems need a different mode where one OpenViking maps directly to one vector database for effectively unbounded index scale.
+- `root`: admin authority only. Registers users, rotates API keys, configures global policy.
+- `user`: a human or an agent authenticates as a user with its own key. This is the API-key and namespace boundary.
+- `viking://user/{user}`: the private scope. Memories, sessions, and private resources; index filters and read APIs apply the same boundary.
+- `peers/{peer}`: the interaction scope. Narrows content inside one user, such as one visitor or one repository. It does not create a new tenant.
 
-### Filesystem
-
-Filesystem choices involve tradeoffs:
-
-- Local filesystem is fastest and easiest to deploy, but small and easy to lose.
-- ByteNAS inside TCE can provide reliability close to local filesystem performance for TB-scale data, but has throughput bottlenecks.
-- TOS/S3 is the most scalable and has effectively unlimited capacity, but is slower and can slow down the agent workflow.
-- EFS-like filesystems have larger capacity, enough performance, and reliable storage, and may become the main future option, but are currently available only on public cloud.
-
-### OpenViking Internal Chain
-
-Read requests such as RAG queries and memory retrieval can mainly be optimized through distributed multi-instance deployment. Write requests are harder because they involve:
-
-- File parsing and splitting.
-- VLM calls.
-- Embedding model calls.
-- Summarization.
-- Content segmentation.
-- Memory extraction.
-
-Consistency and lock performance, especially for writes and move operations, remain ongoing work.
-
-Optimization examples:
-
-- Queue and parallelize model calls so parsing and vectorization can run with controlled global concurrency, including concurrent large-model and embedding-model calls.
-- Replace the Go AGFS server with embedded calls and rewrite it in Rust to reduce internal data transfer overhead.
-- Parallelize file IO, for example by using tree structures to parallelize recursive `find` and `tree` operations.
-- Reduce data copying during upload and parsing. If files move from receiving directories to temporary work directories and then to visible directories, the underlying filesystem's move cost has a direct effect on end-to-end performance.
-
-## Privacy And Data Security
-
-For a context database, context is plaintext. Privacy and data security are mandatory.
-
-Permission safety:
-
-- OpenViking has three permission modes today but aims to compress them to two: `dev` and `api_key`.
-- The default is `dev` mode without authentication, but non-local deployments that listen beyond localhost must use `api_key`.
-- The root password is only for user management and not for data access, reducing the risk of leaked `root_api_key` during business development.
-- API keys carry identity information. The server validates and decodes them before any user-scoped data access.
-- Root identity is only used when running `ov --sudo`; ordinary requests do not carry the root secret.
-- Data under `viking://user` is visible only to the owning user, and VikingDB index filtering prevents searching other users' private data or leaking metadata.
-
-Storage safety:
-
-- File encryption is implemented.
-- Different tenants or Accounts can use different encryption keys.
-- Encryption still has performance tradeoffs, especially when remote storage must be decrypted before operations such as `grep`.
-
-Privacy configuration:
-
-- OpenViking has an experimental Skill privacy mechanism.
-- Secrets in public Skills are rewritten into protected storage.
-- When an agent reads a Skill, placeholders are restored automatically.
-- This reduces credential leakage from shared Skills in team collaboration.
-
-Example commands:
+local-multitenant.sh:
 
 ```bash
-openviking privacy categories
-openviking privacy list skill
-openviking privacy get skill byted-viking-search-knowledgebase
-openviking privacy skill byted-viking-search-knowledgebase
-openviking privacy upsert skill byted-viking-search-knowledgebase \
+# server ov.conf: set server.root_api_key before startup
+# client ovcli.conf: use the same root key for admin commands
+ov admin register-user default alice
+# write the returned user key back to ovcli.conf for everyday reads and writes
+```
+
+## Performance Is A Pipeline Problem
+
+Once storage can be distributed, capacity is mostly a deployment choice. Performance is harder. Reads, such as RAG queries and memory recall, scale mainly by adding instances. Writes cross parsing, splitting, VLM calls, embedding, summarization, memory extraction, IO movement, and locks.
+
+> **Warning:** The write path still carries real performance cost. Evaluate OpenViking against your own data and concurrency before production use. The architecture leaves room to scale, but ingestion latency and write isolation are active work.
+
+Where the bottlenecks sit:
+
+- **Vector database**: light tenants can share one index separated by account and user fields; large tenants are better served by a dedicated vector store.
+- **Filesystem**: local disk is fast but easy to lose; S3-compatible storage scales but adds latency to every agent read.
+- **Write pipeline**: parsing, splitting, VLM calls, embeddings, summaries, and memory extraction dominate latency.
+- **Locks**: path locks serialize conflicting writes. Moves and deletes on large trees hold TREE locks for longer.
+
+| Layer | Lightweight mode | Heavy mode | Tradeoff |
+| --- | --- | --- | --- |
+| Vector database | One shared index, isolated by account and user fields. | A dedicated vector store per large tenant or deployment. | Sharing saves resources; dedicated stores scale and fail independently. |
+| Filesystem | Local disk, or a shared filesystem. | S3-compatible object storage, optionally with backups. | Local is fast; object storage scales but slows agent loops. |
+| Write pipeline | Queue model calls and embedding work. | Higher concurrency for VLM and embedding calls. | More throughput, but lock and ordering costs become visible. |
+
+The write bottleneck is a chain, not one database call:
+
+1. **Receive**: upload into a temporary area; local per instance by default, shared when replicas need it.
+2. **Parse**: PDF, Office, Markdown, code, images, archives become files and directories.
+3. **Place**: TreeBuilder resolves the target URI; content is written to RAGFS under a path lock.
+4. **Model calls**: the semantic queue builds L0/L1 bottom-up with the VLM; embeddings follow.
+5. **Index**: vectors, URI, level, tenant fields, and retrieval text go into the vector index.
+6. **Observe**: task status, queue depth, model latency, /metrics.
+
+### Optimization directions and progress
+
+1. Queue model calls under concurrency limits. This is now configuration: embedding.max_concurrent defaults to 10 and vlm.max_concurrent to 32.
+2. Replace the Go AGFS server with embedded Rust. Done: RAGFS runs inside the server process.
+3. Parallelize tree operations such as find and tree, which recurse over many directories.
+4. Reduce copies between the receiving, working, and visible directories during upload. On object storage a move is a copy, so this cost shows up directly in end-to-end latency.
+
+For observation, ov status gives a summary, ov observer breaks it down by queue, models, retrieval, and filesystem, and the server exposes /metrics for Prometheus-compatible collectors.
+
+## Privacy: Context Is Plaintext
+
+A context database stores the material an agent reasons with, and that material is often sensitive by definition. OpenViking handles this with key-based identity, a root key limited to administration, user-scoped visibility enforced in the index, optional file encryption, and privacy configs for Skill secrets.
+
+| Control | Purpose |
+| --- | --- |
+| `dev` | Local development without authentication; allowed only on localhost. |
+| `api_key` | Keys carry account, user, and role; the server decodes them before any user-scoped access. |
+| `trusted / oidc / ldap` | Identity asserted by a trusted gateway or an enterprise identity provider. |
+| `ov --sudo` | The root key is used only when a command asks for it, and only for admin actions. |
+| `viking://user` | For non-root requests the server filters retrieval by account and user space, plus ACLs when enabled, so what search returns matches what the caller may read. |
+| Privacy configs | Move Skill secrets into protected storage and restore placeholders at read time. |
+
+Encryption is implemented, and it is not free. It uses envelope encryption with a root key, a key per account, and a key per file, so tenants are cryptographically separated and the blast radius of a leak shrinks. The root key can stay in a local file, in Vault, or behind Volcengine KMS. Authorized reads still return plaintext, enabling encryption does not rewrite existing files, and it covers file storage: retrieval text in the vector index needs its own protection. Remote storage has to be decrypted before operations such as grep, so privacy controls affect latency and operator ergonomics, not only compliance.
+
+privacy-config.sh:
+
+```bash
+ov privacy categories
+ov privacy list skill
+ov privacy skill search-web
+ov privacy upsert skill search-web \
   --values-json '{"api_key":"secret-2","base_url":"https://example.com"}'
-openviking privacy upsert skill byted-viking-search-knowledgebase \
-  --key-api_key secret-3
-openviking privacy versions skill byted-viking-search-knowledgebase
-openviking privacy version skill byted-viking-search-knowledgebase 2
-openviking privacy activate skill byted-viking-search-knowledgebase 2
+ov privacy activate skill search-web 2
 ```
 
-## Closing
+Secret extraction from a Skill relies on a model and only replaces values it recognizes and matches. It reduces plaintext secrets in shared Skills; it does not guarantee that every secret is found.
 
-OpenViking is moving from conceptual architecture to product construction. Through open source, the team has collected many issues and large amounts of feedback. Capacity and performance are now core priorities.
+## What To Remember
 
-The original document closes by thanking more than 150 developers and participants who contributed code, ideas, data, and use cases, with more than 1000 merges and more than 23k stars, toward building what it calls the "MongoDB of the AI era."
+The core architectural judgment is that context is not a blob. It has paths, scopes, identities, consistency constraints, performance budgets, and privacy boundaries. OpenViking is useful because it lets agents consume those properties through an interface they already know how to navigate.
+
+The architecture is still moving from concept to product construction. Open source has brought enough usage, issues, and feedback to make capacity and performance the next hard problems, and some items from earlier plans, such as the Rust filesystem and the peer identity model, have already landed. The design is useful because it names the database properties a context system must expose before agents can depend on it, and it keeps the unfinished consistency and latency work in plain view. For why context engineering becomes a database problem in the first place, read [the database paradigm post](https://blog.openviking.ai/post/openviking-context-database).
+
+Thanks to everyone who has contributed code, ideas, data, and use cases. The remaining questions are not slideware questions; they are the ones that appear when real agents, real data, and real users start sharing one context substrate.
