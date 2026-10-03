@@ -297,8 +297,8 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-seg button { background: transparent; border: 0; padding: 6px 12px; border-radius: 999px; cursor: pointer; font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--th-mute); }
 .b-seg button.is-active { background: var(--th-ink); color: var(--th-bg); }
 /* light/dark toggle */
-.b-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: var(--th-bg-2); border: 1px solid var(--th-line); border-radius: 999px; cursor: pointer; color: var(--th-ink); transition: border-color 0.12s; }
-.b-mode-toggle:hover { border-color: var(--th-ink); }
+.b-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: transparent; border: 0; border-radius: 6px; cursor: pointer; color: var(--th-ink); transition: background-color 0.12s; }
+.b-mode-toggle:hover { background: var(--th-bg-2); }
 @media (max-width: 720px) {
   .b-topbar__inner { padding: 10px 16px; gap: 10px; flex-wrap: nowrap; justify-content: space-between; }
   .b-brand { min-width: 0; max-width: calc(100% - 112px); flex: 0 1 auto; }
@@ -665,10 +665,6 @@ html.ov-assistant-pill .b-shell__main {
 }
 
 /* Language choices remain actionable even when the current URL overrides them. */
-.b-language { position: relative; border: 1px solid var(--th-line); border-radius: 999px; }
-.b-language summary { display: flex; align-items: center; gap: 5px; padding: 5px 8px; cursor: pointer; font: 11px/1.6 monospace; list-style: none; }
-.b-language summary::-webkit-details-marker { display: none; }
-.b-language__menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 90; min-width: 170px; padding: 5px; border: 1px solid var(--th-line); border-radius: 10px; background: var(--th-bg); box-shadow: 0 4px 16px #0002; }
-.b-language__menu button { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
-.b-language__menu button[aria-pressed=true] { font-weight: 700; }
-.b-language button:focus-visible, .b-language summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+.b-topbar { --ov-header-ink: var(--th-ink); --ov-header-muted: var(--th-mute); --ov-header-bg: var(--th-bg); --ov-header-soft: var(--th-bg-2); --ov-header-line: var(--th-line); --ov-header-focus: var(--th-accent); --ov-header-font: var(--th-font-body); }
+.b-mode-toggle:focus-visible { outline: 2px solid var(--th-accent); outline-offset: 3px; }

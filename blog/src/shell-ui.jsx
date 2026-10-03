@@ -1,3 +1,6 @@
+import SiteSwitcher from './SiteSwitcher.jsx';
+import { bindLanguageMenu } from './header-language.js';
+import './header-language.css';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BlogContext, ExternalArrowIcon, pickLocale, ReadingProgress, TOC,
@@ -17,39 +20,30 @@ import { trackPageView } from './track';
 function Topbar({ lang, preference, theme, onLang, onToggleTheme, onHome, S }) {
   const dark = isDark(theme);
   const languageMenu = useRef(null);
+  useEffect(() => bindLanguageMenu(languageMenu.current), []);
   return (
     <header className="b-topbar">
       <div className="b-topbar__inner">
-        <a className="b-brand" href="/" onClick={(e) => { e.preventDefault(); onHome(); }}>
-          <img
-            className="b-brand__lockup"
-            src={dark ? "/assets/brand-lockup-dark.svg" : "/assets/brand-lockup-light.svg"}
-            alt="OpenViking"
-            loading="eager"
-            decoding="async"
-            fetchpriority="high"
-          />
-          <span className="b-brand__sub">/ blog</span>
-        </a>
+        <SiteSwitcher lang={lang} dark={dark} onHome={onHome} />
         <div className="b-topbar__nav">
-          <details className="b-language" ref={languageMenu}
-            onKeyDown={event => { if (event.key === 'Escape') { languageMenu.current.open = false; languageMenu.current.querySelector('summary').focus(); } }}
-            onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) languageMenu.current.open = false; }}>
-            <summary aria-label={S.langLabel}>
+          <details className="ov-language" ref={languageMenu}>
+            <summary aria-label={lang === 'zh' ? `语言：简体中文${preference === 'auto' ? '（跟随浏览器）' : ''}` : `Language: English${preference === 'auto' ? ' (following browser)' : ''}`}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 5h12M9 3v2m4 0c-1 7-5 10-10 12m2-9c1 4 4 7 8 9m0 4 5-13 5 13m-8-4h6"/></svg>
-              {lang === 'zh' ? '中' : 'EN'}
+              <span>{lang === 'zh' ? '中' : 'EN'}</span>
+              <svg className="ov-language-chevron" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
             </summary>
-            <div className="b-language__menu">
+            <div className="ov-language-options">
               {[{ code: 'auto', label: S.followBrowser }, ...LANGS].map(item => (
-                <button key={item.code} type="button" aria-pressed={preference === item.code} onClick={() => { onLang(item.code); languageMenu.current.open = false; }}>
-                  {item.label}
+                <button key={item.code} type="button" lang={item.code === 'auto' ? undefined : item.code === 'zh' ? 'zh-CN' : 'en'} aria-pressed={preference === item.code} onClick={() => { onLang(item.code); languageMenu.current.open = false; languageMenu.current.querySelector('summary').focus(); }}>
+                  {item.code === 'zh' ? '简体中文' : item.label}
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg>
                 </button>
               ))}
             </div>
           </details>
           <button
             className="b-mode-toggle"
-            aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={lang === 'zh' ? (dark ? '切换到浅色模式' : '切换到深色模式') : (dark ? 'Switch to light mode' : 'Switch to dark mode')}
             onClick={onToggleTheme}>
             {dark ? (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

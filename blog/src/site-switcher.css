@@ -1,0 +1,33 @@
+
+.ov-site-switcher { position: relative; display: flex; align-items: center; gap: 10px; height: 64px; white-space: nowrap; }
+.ov-brand-link { display: flex; align-items: center; flex-shrink: 0; min-height: 36px; border-radius: 5px; }
+.ov-brand-link img { display: block; width: 136px; height: auto; }
+.ov-brand-divider { color: var(--th-line); font-size: 23px; font-weight: 300; }
+.ov-site-trigger { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 4px; border-radius: 6px; font: 400 13px/20px var(--th-font-body); letter-spacing: 0; color: var(--th-mute); cursor: pointer; }
+.ov-site-trigger[aria-expanded=true] { color: var(--th-ink); background: var(--th-bg-2); }
+.ov-site-trigger svg { transition: transform 160ms ease-out; }
+.ov-site-trigger[aria-expanded=true] svg { transform: rotate(180deg); }
+.ov-site-panel { position: absolute; top: calc(100% - 3px); left: 0; z-index: 110; width: min(292px, calc(100vw - 32px)); padding: 8px; border: 1px solid var(--th-line); border-radius: 14px; background: var(--th-bg); box-shadow: 0 12px 36px #00000014, 0 2px 8px #00000008; }
+.ov-site-option { display: flex; align-items: center; gap: 12px; padding: 11px 10px; border-radius: 8px; color: var(--th-ink); }
+.ov-site-option + .ov-site-option { margin-top: 3px; }
+.ov-site-option.is-current { background: var(--ov-site-selected); }
+.ov-site-icon { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; border: 1px solid var(--th-line); border-radius: 9px; color: var(--th-mute); }
+.is-current .ov-site-icon { color: var(--th-accent); border-color: transparent; background: var(--th-bg); }
+.ov-site-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.ov-site-name { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.ov-site-description { font-size: 12px; line-height: 1.4; color: var(--th-mute); }
+.ov-site-arrow { color: var(--th-mute); font-size: 16px; }
+.ov-site-status { color: var(--th-accent); }
+.ov-site-switcher a:focus-visible, .ov-site-switcher button:focus-visible { outline: 2px solid var(--th-accent); outline-offset: 3px; }
+@media (hover: hover) { .ov-site-option:hover, .ov-site-trigger:hover { background: var(--th-bg-2); } }
+@media (prefers-reduced-motion: reduce) { .ov-site-trigger svg { transition: none; } }
+@media (max-width: 720px) { .ov-site-switcher { height: 56px; gap: 4px; } .ov-brand-divider, .ov-site-trigger span { display: none; } .ov-site-trigger { padding: 0 2px; width: 16px; } }
+@media (max-width: 374px) { .ov-brand-link img { width: 112px; } }
+
+.b-topbar .ov-site-switcher { height: 36px; --ov-site-selected: color-mix(in oklab, var(--th-accent) 7%, var(--th-bg)); }
+.b-topbar .ov-site-panel { top: calc(100% + 11px); }
+.b-topbar .ov-site-panel::before { content: ""; position: absolute; inset: -12px 0 auto; height: 12px; }
+.ov-brand-link, .ov-site-option { text-decoration: none; }
+.ov-site-trigger { background: transparent; border: 0; }
+.ov-site-panel { font-family: var(--th-font-body); letter-spacing: 0; }
+@media (max-width: 720px) { .b-topbar .ov-site-panel { top: calc(100% + 7px); } }
