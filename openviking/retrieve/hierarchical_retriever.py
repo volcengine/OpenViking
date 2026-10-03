@@ -35,6 +35,7 @@ from openviking_cli.retrieve.types import (
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.config.retrieval_config import EntityLinkingConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +57,7 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        entity_linking_config: Optional[EntityLinkingConfig] = None,
     ):
         """Initialize retriever with rerank_config.
 
@@ -68,6 +70,11 @@ class HierarchicalRetriever:
         self.embedder = embedder
         self.rerank_config = rerank_config
         self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
+        if entity_linking_config is None:
+            from openviking.retrieve.entity_linking.index import linking_config
+
+            entity_linking_config = linking_config()
+        self.entity_linking_config = entity_linking_config
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -175,6 +182,17 @@ class HierarchicalRetriever:
             context_type = ContextType.RESOURCE.value
 
         search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
+        use_entity_linking = (
+            self.entity_linking_config.enabled
+            and self.entity_linking_config.weight > 0
+            and self.embedder is not None
+            and search_type == "semantic"
+            and not image_query
+            and context_type != ContextType.RESOURCE.value
+            and context_type != ContextType.SKILL.value
+        )
+        if use_entity_linking:
+            search_limit = max(search_limit, limit * 4, 60)
         with telemetry.measure("search.vector_retrieval"):
             if search_type == "keywords":
                 vector_results = await vector_proxy.search_by_keywords_in_tenant(
@@ -230,6 +248,21 @@ class HierarchicalRetriever:
             for candidate, score in zip(candidates, scores, strict=True)
             if self._passes_threshold(score, effective_threshold, score_gte)
         ]
+        if use_entity_linking and candidates:
+            try:
+                with telemetry.measure("search.entity_linking"):
+                    boosts = await asyncio.wait_for(
+                        self.vector_store.entity_link_index.boosts(
+                            query.query, candidates, self.embedder, ctx, self.entity_linking_config
+                        ),
+                        timeout=self.entity_linking_config.timeout_s,
+                    )
+                for candidate in candidates:
+                    candidate["_final_score"] += boosts.get(candidate["uri"], 0)
+                telemetry.count("entity_linking.boosted", len(boosts))
+            except Exception as exc:
+                logger.warning("Entity linking failed; preserving ordinary scores: %s", exc)
+                telemetry.count("entity_linking.failed", 1)
         telemetry.count("vector.passed", len(candidates))
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
         final = matched[:limit]

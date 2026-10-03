@@ -344,6 +344,36 @@ Run the open-source server in your own environment under [AGPLv3](LICENSE). It r
 
 The server supports [accounts and user isolation](https://docs.openviking.ai/en/concepts/11-multi-tenant) and opt-in [resource ACLs](https://docs.openviking.ai/en/concepts/15-acl). Configure [authentication](https://docs.openviking.ai/en/guides/04-authentication) before exposing it beyond localhost.
 
+### Optional entity-linked memory ranking
+
+Install the optional NLP dependency and an explicit spaCy model before starting the server:
+
+```bash
+pip install 'openviking[nlp]'
+python -m spacy download en_core_web_sm
+```
+
+Enable it in your `ov.conf`:
+
+```json
+{
+  "retrieval": {
+    "entity_linking": {
+      "enabled": true,
+      "nlp_model": "en_core_web_sm",
+      "weight": 0.5,
+      "similarity_threshold": 0.5
+    }
+  }
+}
+```
+
+Newly embedded L2 memories receive derived entity vectors in a separate account-scoped collection. Text semantic Find/Search fetches at least `max(4 * limit, 60)` ordinary candidates, then adds the strongest entity-match boost before selecting the final results. Matching is restricted to candidates already authorized by the ordinary search. Existing score thresholds apply **before** the boost; common entities receive a frequency penalty. Scores can exceed 1 and are not probabilities. At most `max_query_entities` (default 8) query entities and `max_entity_matches` (default 500) matches per entity are considered.
+
+This feature is disabled by default. It adds local NLP, entity embedding, and auxiliary vector-query work, but no additional LLM extraction. Query-side errors or the `timeout_s` budget (default 10 seconds) retain ordinary scores; in-flight I/O is drained before cancellation completes, so the budget is not a hard response deadline. Memory updates, deletes, copies, and moves maintain the derived links; source fingerprints reject stale generations. Existing memories are not automatically backfilled. Dense embeddings and collection-management access are required; VikingDB API-key-only mode is unsupported. The default NLP model targets English; other languages require a suitable installed model and evaluation.
+
+The entity extraction rules are adapted from [Mem0](https://github.com/mem0ai/mem0/tree/94c3fe9f238f3dbf29c9ce98643bd71eb13077cd) under its included [Apache 2.0 license](openviking/retrieve/entity_linking/LICENSE.mem0). This integration adds candidate ranking to OV's existing memory structure; it does not implement graph traversal or replace memory extraction.
+
 ## Commercial editions
 
 <table>

@@ -688,7 +688,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             execute_started_at = time.perf_counter()
             if embedding_msg.queue_enqueued_at > 0:
                 queue_wait_ms = max((time.time() - embedding_msg.queue_enqueued_at) * 1000.0, 0.0)
-            inserted_data = embedding_msg.context_data
+            # Keep the queue payload intact for technical retries, including the
+            # complete prose used by the derived entity index.
+            inserted_data = dict(embedding_msg.context_data)
+            entity_link_text = inserted_data.pop("_entity_link_text", None)
             logger.debug(
                 "Processing embedding message: %s action=%s",
                 self._embedding_delivery_log_context(embedding_msg),
@@ -881,9 +884,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Write to vector database
                 try:
                     raw_upsert_options = inserted_data.pop("_upsert_options", {})
-                    extracted_memory_type = raw_upsert_options.pop(
-                        "extracted_memory_type", None
-                    )
+                    extracted_memory_type = raw_upsert_options.pop("extracted_memory_type", None)
                     # Reuse the actual vector-store ID when a semantic plan
                     # rebuilds an existing same-level record. Only genuinely new
                     # records derive an ID locally from (account, uri, level).
@@ -961,6 +962,27 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             options=upsert_options,
                         )
                     record_id = result
+                    if record_id and inserted_data.get("context_type") == "memory":
+                        from openviking.retrieve.entity_linking.index import linking_config
+
+                        entity_config = linking_config()
+                        if entity_config.enabled and inserted_data.get("level") == 2:
+                            try:
+                                await self._vikingdb.entity_link_index.replace(
+                                    inserted_data,
+                                    entity_link_text
+                                    if entity_link_text is not None
+                                    else str(embedding_msg.message),
+                                    embedder,
+                                    ctx,
+                                    entity_config,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Entity indexing failed for %s; primary memory is retained: %s",
+                                    inserted_data.get("uri"),
+                                    exc,
+                                )
                     if record_id:
                         logger.debug(
                             "Successfully wrote embedding: %s",

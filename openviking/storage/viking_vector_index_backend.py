@@ -46,6 +46,7 @@ from openviking.utils.tags import merge_search_tags, preserve_memory_type_tag
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -59,6 +60,7 @@ _LOCAL_PURE_DENSE_SCORE_SCALES = {
 
 RETRIEVAL_OUTPUT_FIELDS = [
     "uri",
+    "md5",
     "level",
     "context_type",
     "abstract",
@@ -1164,6 +1166,7 @@ class VikingVectorIndexBackend:
         self._shared_adapter = create_collection_adapter(config)
         self._shared_async_adapter = _AsyncVectorAdapter(self._shared_adapter)
         self._closing = False
+        self._entity_link_index = None
 
         logger.info(
             "VikingVectorIndexBackend facade initialized",
@@ -1188,6 +1191,22 @@ class VikingVectorIndexBackend:
     def _get_default_backend(self) -> _SingleAccountBackend:
         """获取默认 backend（用于 collection 管理等操作）"""
         return self._get_backend_for_account("default")
+
+    @property
+    def entity_link_index(self):
+        """Lazy derived index; creating this object does not load NLP or open a DB."""
+        if self._entity_link_index is None:
+            from openviking.retrieve.entity_linking.index import EntityLinkIndex
+
+            self._entity_link_index = EntityLinkIndex(self)
+        return self._entity_link_index
+
+    async def _maintain_entity_links(self, operation, ctx, *args, **kwargs):
+        """Derived-index failure must not turn a settled primary write into a retry."""
+        try:
+            await getattr(self.entity_link_index, operation)(ctx, *args, **kwargs)
+        except Exception as exc:
+            logger.warning("Entity link %s failed after primary write: %s", operation, exc)
 
     def _get_backend_for_account(self, account_id: str) -> _SingleAccountBackend:
         """获取指定 account 的 backend，懒创建"""
@@ -1249,6 +1268,8 @@ class VikingVectorIndexBackend:
 
     async def release_account(self, account_id: str) -> None:
         """Release derived resources after account data cleanup; never drop a collection."""
+        if self._entity_link_index is not None:
+            await self._entity_link_index.release_account(account_id)
         async with self._account_backend_locks.acquire(account_id):
             backend = self._resolved_backends.pop(account_id, None)
             self._account_backends.pop(account_id, None)
@@ -1482,11 +1503,15 @@ class VikingVectorIndexBackend:
 
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.delete(ids)
+        deleted = await backend.delete(ids)
+        await self._maintain_entity_links("remove_ids", ctx, ids)
+        return deleted
 
     async def strict_delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         """Delete exact record IDs without converting backend failures to success."""
-        return await (await self._get_backend_for_context(ctx)).strict_delete(ids)
+        deleted = await (await self._get_backend_for_context(ctx)).strict_delete(ids)
+        await self._maintain_entity_links("remove_ids", ctx, ids)
+        return deleted
 
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
         backend = await self._get_backend_for_context(ctx)
@@ -1712,7 +1737,9 @@ class VikingVectorIndexBackend:
 
     async def remove_by_uri(self, uri: str, *, ctx: RequestContext) -> int:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.remove_by_uri(uri)
+        deleted = await backend.remove_by_uri(uri)
+        await self._maintain_entity_links("remove_uri_tree", ctx, uri)
+        return deleted
 
     async def scroll(
         self,
@@ -1814,6 +1841,8 @@ class VikingVectorIndexBackend:
 
     async def _strict_transfer_delete(self, ctx: RequestContext, ids: List[str]) -> int:
         backend = await self._get_backend_for_context(ctx)
+        # Keep source entity links until the move settles; compensation may
+        # restore the primary source records if a later batch fails.
         return await backend.strict_delete(ids)
 
     async def count(
@@ -1866,7 +1895,12 @@ class VikingVectorIndexBackend:
             backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
-        return await backend.clear()
+        cleared = await backend.clear()
+        auxiliary_ctx = ctx or RequestContext(
+            user=UserIdentifier.the_default_user(), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_entity_links("remove_account", auxiliary_ctx)
+        return cleared
 
     async def optimize(self) -> bool:
         return await self._get_default_backend().optimize()
@@ -1876,6 +1910,8 @@ class VikingVectorIndexBackend:
         await run_to_completion(self._close_backends)
 
     async def _close_backends(self) -> None:
+        if self._entity_link_index is not None:
+            await self._entity_link_index.close()
         adapters: dict[int, _AsyncVectorAdapter] = {
             id(self._shared_adapter): self._shared_async_adapter
         }
@@ -2425,7 +2461,12 @@ class VikingVectorIndexBackend:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(Eq("account_id", account_id))
+        deleted = await root_backend.delete_by_filter(Eq("account_id", account_id))
+        auxiliary_ctx = RequestContext(
+            user=UserIdentifier(account_id, "default"), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_entity_links("remove_account", auxiliary_ctx)
+        return deleted
 
     async def delete_user_data(
         self,
@@ -2437,9 +2478,14 @@ class VikingVectorIndexBackend:
         """Delete every vector record owned by one user as ROOT."""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(
+        deleted = await root_backend.delete_by_filter(
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
+        auxiliary_ctx = RequestContext(
+            user=UserIdentifier(account_id, user_id), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_entity_links("remove_owner", auxiliary_ctx, user_id)
+        return deleted
 
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:
@@ -2450,6 +2496,7 @@ class VikingVectorIndexBackend:
 
             backend = await self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
+        await self._maintain_entity_links("remove_uris", ctx, uris)
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
         scopes: List[FilterExpr] = [Eq("uri", uri)]
@@ -2744,6 +2791,7 @@ class VikingVectorIndexBackend:
             }
         if affected_target_ids:
             await self._delete_vector_transfer_ids(ctx, affected_target_ids)
+            await self._maintain_entity_links("remove_ids", ctx, affected_target_ids)
         return source_records, batches, target_acl_fields
 
     async def copy_uri_mapping(
@@ -2825,6 +2873,7 @@ class VikingVectorIndexBackend:
                     residual_count=residual_count,
                 ) from transfer_error
             raise
+        await self._maintain_entity_links("transfer", ctx, source_records, target_payloads)
         return result
 
     async def update_uri_mapping(
@@ -2946,6 +2995,9 @@ class VikingVectorIndexBackend:
                     residual_count=len(source_records),
                 ) from transfer_error
             raise
+        await self._maintain_entity_links(
+            "transfer", ctx, source_records, target_payloads, move=True
+        )
         return result
 
     def _build_scope_filter(

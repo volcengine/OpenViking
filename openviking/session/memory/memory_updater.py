@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -1841,12 +1842,21 @@ class MemoryUpdater:
                     level=ContextLevel.DETAIL,
                     user=ctx.user,
                     account_id=ctx.account_id,
+                    md5=hashlib.md5(content.encode(), usedforsecurity=False).hexdigest(),
                 )
                 memory_context.set_vectorize(Vectorize(text=embedding_text))
 
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    from openviking.retrieve.entity_linking.index import linking_config
+
+                    if linking_config().enabled:
+                        # Preserve complete prose for entity extraction even when
+                        # the ordinary preview/embedding template is truncated.
+                        embedding_msg.context_data["_entity_link_text"] = (
+                            LinkRenderer.strip_all_links(mf.content or "")
+                        )
                     if getattr(ingest_options, "search_tags", None) is not None:
                         embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {
