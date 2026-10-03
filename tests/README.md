@@ -26,7 +26,7 @@ Set the `OPENVIKING_CONFIG_FILE` environment variable to point to your `ov.conf`
 export OPENVIKING_CONFIG_FILE="/path/to/ov.conf"
 ```
 
-See [docs/en/guides/configuration.md](../docs/en/guides/configuration.md) for the config file format.
+See [docs/en/guides/01-configuration.md](../docs/en/guides/01-configuration.md) for the config file format.
 
 ### Dependencies
 
