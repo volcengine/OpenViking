@@ -61,6 +61,7 @@ def register_default_tools(
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
     tavily_api_key = config.tools.web.search.tavily_api_key if config.tools.web.search else None
+    keenable_api_key = config.tools.web.search.keenable_api_key if config.tools.web.search else None
 
     # Get provider API key and base from config
 
@@ -88,6 +89,7 @@ def register_default_tools(
             brave_api_key=brave_api_key,
             exa_api_key=exa_api_key,
             tavily_api_key=tavily_api_key,
+            keenable_api_key=keenable_api_key,
         )
     )
     registry.register(WebFetchTool())

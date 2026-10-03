@@ -1,5 +1,5 @@
 """
-Web search tool with multiple backends (brave, ddgs, exa, tavily).
+Web search tool with multiple backends (brave, ddgs, exa, keenable, tavily).
 
 To add a new backend:
     1. Create new file: websearch/mybackend.py
@@ -18,7 +18,7 @@ from .base import WebSearchBackend
 from .registry import registry
 
 # Import backends to register them
-from . import brave, ddgs, exa, tavily
+from . import brave, ddgs, exa, keenable, tavily
 
 
 class WebSearchTool(Tool):
@@ -67,30 +67,37 @@ class WebSearchTool(Tool):
         brave_api_key: Optional[str] = None,
         exa_api_key: Optional[str] = None,
         tavily_api_key: Optional[str] = None,
+        keenable_api_key: Optional[str] = None,
         max_results: int = 5,
     ):
         """
         Initialize WebSearchTool.
 
         Args:
-            backend: Backend name ("auto", "brave", "ddgs", "exa", "tavily") or WebSearchBackend instance
+            backend: Backend name ("auto", "brave", "ddgs", "exa", "keenable", "tavily") or WebSearchBackend instance
             brave_api_key: Brave Search API key
             exa_api_key: Exa AI API key
             tavily_api_key: Tavily Search API key
+            keenable_api_key: Keenable API key (optional, lifts rate limits)
             max_results: Default max results
         """
         self.max_results = max_results
         self._brave_api_key = brave_api_key
         self._exa_api_key = exa_api_key
         self._tavily_api_key = tavily_api_key
+        self._keenable_api_key = keenable_api_key
 
         # Select backend
         if isinstance(backend, WebSearchBackend):
             self._backend = backend
         elif backend == "auto":
-            self._backend = registry.select_auto(brave_api_key, exa_api_key, tavily_api_key)
+            self._backend = registry.select_auto(
+                brave_api_key, exa_api_key, tavily_api_key, keenable_api_key
+            )
         else:
-            self._backend = registry.create(backend, brave_api_key, exa_api_key, tavily_api_key)
+            self._backend = registry.create(
+                backend, brave_api_key, exa_api_key, tavily_api_key, keenable_api_key
+            )
             if not self._backend:
                 raise ValueError(f"Unknown backend: {backend}")
 
