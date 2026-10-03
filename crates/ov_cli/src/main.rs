@@ -806,6 +806,7 @@ enum Commands {
         /// Content to write
         #[arg(
             long,
+            allow_hyphen_values = true,
             conflicts_with = "from_file",
             value_name = "text",
             help_heading = "Common options"
@@ -2959,6 +2960,12 @@ fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
 
     while i < args.len() {
         let token = args[i].to_string_lossy();
+        // A content value is data, even when it is exactly a compact option.
+        if token == "--content" && i + 1 < args.len() {
+            converted.extend(args[i..i + 2].iter().cloned());
+            i += 2;
+            continue;
+        }
         if token == "--compact" || token == "-c" {
             if let Some(next) = args.get(i + 1) {
                 let next_value = next.to_string_lossy();
@@ -4950,6 +4957,83 @@ mod tests {
             }
             _ => panic!("expected add-resource command"),
         }
+    }
+
+    #[test]
+    fn cli_write_accepts_hyphen_prefixed_content() {
+        for text in [
+            "---\nname: test\n---",
+            "- a bullet",
+            "--literal",
+            "--wait",
+            "-",
+            "--",
+        ] {
+            let cli = Cli::try_parse_from(preprocess_cli_args(os_args(&[
+                "ov",
+                "write",
+                "viking://resources/test.md",
+                "--content",
+                text,
+                "--wait",
+            ])))
+            .expect("hyphen-prefixed content should parse as one value");
+            assert!(matches!(
+                cli.command,
+                Commands::Write { content, wait, .. } if content.as_deref() == Some(text) && wait
+            ));
+        }
+    }
+
+    #[test]
+    fn cli_write_preserves_compact_tokens_as_content() {
+        for text in ["--compact", "-c"] {
+            let cli = Cli::try_parse_from(preprocess_cli_args(os_args(&[
+                "ov",
+                "write",
+                "viking://resources/test.md",
+                "--content",
+                text,
+                "--compact",
+                "false",
+            ])))
+            .expect("compact-looking content should remain literal");
+            assert!(!cli.compact);
+            let Commands::Write { content, .. } = cli.command else {
+                panic!("expected write command");
+            };
+            assert_eq!(content.as_deref(), Some(text));
+        }
+    }
+
+    #[test]
+    fn cli_write_keeps_equals_and_file_source_rules() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/test.md",
+            "--content=---\nname: test\n---",
+        ])
+        .expect("equals form should still parse");
+        assert!(matches!(
+            cli.command,
+            Commands::Write { content, .. } if content.as_deref() == Some("---\nname: test\n---")
+        ));
+        assert_eq!(
+            Cli::try_parse_from([
+                "ov",
+                "write",
+                "viking://resources/test.md",
+                "--content",
+                "text",
+                "--from-file",
+                "test.md",
+            ])
+            .err()
+            .expect("content and file sources must remain mutually exclusive")
+            .kind(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
     }
 
     #[test]
