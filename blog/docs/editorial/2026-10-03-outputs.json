@@ -1,8 +1,0 @@
-{
-  "src/posts/openviking-coding-agent/index.jsx": "b7e73503635972457a35a9c3bbaafb6f281435a1cc2b28c680dcb1da884487bc",
-  "src/posts/openviking-context-database/index.jsx": "16001c55d6183ba8cccf6164262b38f61ba746df0799b5c9ffbe72fefc0839bb",
-  "src/posts/openviking-context-database-architecture/index.jsx": "f403e3fd1789e3d4a175fbffcdf248d464c117ea5e3f939680401e81038e3b4f",
-  "public/post/openviking-coding-agent/llm.txt": "af9012bc04ad19a3e745ca8f2294d0352f67eb1c305d3b9186151bad7ff02fda",
-  "public/post/openviking-context-database/llm.txt": "0a6b1400543aa4ad847ca81918b8b8052f32a44bdced659ef1c55dc4022170c0",
-  "public/post/openviking-context-database-architecture/llm.txt": "8ad1b447f695c5cabe69f0ad0c17bb6ab07e3f3f955f9522cb5742182ad3512a"
-}
