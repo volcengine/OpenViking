@@ -47,6 +47,31 @@ with the original author retained. This port leaves memory URI handling as it
 is: the original PR's UID-less `viking://user/memories/...` rewrite is not
 accepted by current OpenViking servers.
 
+Quick Local adapts [Hermes PR #94851](https://github.com/NousResearch/hermes-agent/pull/94851)
+(head `d15e0e65d67a2dd6d3f3ab09a382c1f1684e2560`). Provisioning remains separate
+from the setup UI. The port uses current Hermes PM, authenticated server reuse,
+and paths derived from the provider's bound home. On Python 3.14, the private
+server uses LiteLLM 1.83.7, within OpenViking's supported range; later LiteLLM
+releases exclude that Python version. The profile server controller verifies
+the PID, creation time, executable and config path before stopping a process.
+It repairs permissions on plugin-owned private files after backup restoration;
+no Hermes backup changes are required.
+
+`local_packages.py` selects reviewed OpenViking and llama-cpp-python binaries
+with SHA-256 verification before installation. Both PM and pre-PM installers
+receive verified local wheel files. Setup records the applied requirements so
+that a later pin change updates an existing private runtime. Update pins only after installation,
+model and service checks pass on the listed platforms. Source builds require
+explicit consent. Platform CI runs real installation, local embedding, capture,
+restart and port-recovery checks. It uses a static test LLM configuration and
+does not establish live memory extraction; that remains a release check.
+The reviewed hashes cover the OpenViking and llama-cpp-python wheels only.
+PM/uv resolve the other dependencies; this is not a fully locked server runtime.
+Source builds use package version pins without reviewed binary hashes. A platform
+needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
+Setup also checks LLM access through the installed OpenViking backend. The CI
+fixture must serve an actual completion; an unreachable LLM must fail setup.
+
 ## Migration coordination
 
 Before the catalog cutover, submit a Hermes catalog entry with:
@@ -74,8 +99,9 @@ bundled provider takes precedence while it remains present.
 
 This plugin does not add a Desktop `config_schema.py`.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
-those helpers require compatibility checks. The plugin uses HTTP and does not
-install or package the OpenViking server.
+those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
+profile runtime through Hermes PM, or the earlier Hermes uv installer on the
+tested release baseline. It does not add server dependencies to Hermes.
 
 ## Validation
 

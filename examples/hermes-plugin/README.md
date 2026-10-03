@@ -57,12 +57,12 @@ the gateway after the upgrade. For catalog installations, use
 ## Requirements
 
 - Python 3.11 or newer in the Hermes environment
-- An OpenViking server reachable from Hermes, or OpenViking Service credentials
+- A reachable OpenViking server, OpenViking Service credentials, or Quick Local setup
 - For a self-hosted server, OpenViking installed in its own environment or container
 
-The plugin connects over HTTP. Do not install the OpenViking server into the
-Hermes environment. For local server start from the setup wizard, make the
-`openviking-server` command available on `PATH`.
+The plugin connects over HTTP. Keep the server in a separate environment.
+Quick Local creates that environment for you. For Custom setup to start a local
+server, make `openviking-server` available on `PATH`.
 
 OpenViking 0.2.14 or newer is required. Hermes can identify older servers that
 expose the legacy status-only health response, but those releases do not provide
@@ -72,7 +72,7 @@ admin credentials, and OpenViking 0.4.17 or newer for root or local development.
 
 ## Setup
 
-For a self-hosted deployment, prepare OpenViking in its server environment:
+For a Custom self-hosted deployment, prepare OpenViking in its server environment:
 
 ```bash
 openviking-server init
@@ -89,6 +89,74 @@ hermes memory setup openviking
 The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
 connection values into Hermes, or create a minimal `ovcli.conf` when one does
 not exist.
+
+For a new connection, choose **OpenViking Service**, **Custom**, or **Quick Local**.
+
+Quick Local installs OpenViking 0.4.22 in a private runtime. It uses
+`bge-small-zh-v1.5-f16` for local embeddings and copies the configured Hermes LLM
+settings for memory extraction. The LLM must use a static API key or Hermes's
+local llama.cpp server, with an OpenAI-compatible or Anthropic-compatible API.
+OAuth and cloud-native
+credentials cannot be copied; use Custom for those deployments.
+Google AI Studio uses its OpenAI-compatible endpoint. Static OpenAI and xAI
+API keys use Chat Completions; the selected model must support that API.
+Kimi Coding retains Hermes's client attribution. Anthropic routes that need
+Bearer authentication, including MiniMax and Azure Foundry, and proxy keys
+that LiteLLM would treat as OAuth require a separately configured Custom server.
+Setup checks the copied LLM with one short completion before activation.
+
+Quick Local stores its runtime, data, model cache, and private configuration in
+`$HERMES_HOME/openviking/`. Setup validates it, then leaves its localhost server
+running so the first Hermes turn can use memory. On later starts, Hermes starts
+the server in the background if it has stopped. The embedding model downloads once, about
+46 MiB. The LLM can still use a remote API. Server logs are in
+`$HERMES_HOME/logs/openviking-server.log`.
+The first installation needs network access. It downloads prebuilt packages
+with pinned hashes on macOS 14+ (Apple Silicon), Linux with glibc 2.31+
+(x86-64 or ARM64), and Windows x86-64. Setup asks before a source build on
+other platforms. A source build needs native development tools and can take
+several minutes. You can choose Custom instead and use a separate server.
+Downloads require access to PyPI, GitHub and Hugging Face. The local BGE model
+is trained for Chinese; use Custom for a server with a different embedding model.
+
+Run setup again after changing the Hermes model or API key. Setup validates
+the new settings and restarts this profile's server. Data and the model cache
+are retained. Each profile has its own server and port; Quick Local moves to
+a free port if another service takes its saved port.
+New setups use ports 1934–1953, leaving OpenViking's default port 1933 free.
+Existing Quick Local profiles keep their saved port when it is available.
+
+The server stays running after Hermes exits. Use these commands in the same
+Hermes profile to control it:
+
+```bash
+hermes openviking local status
+hermes openviking local stop
+hermes openviking local start
+hermes openviking local restart
+```
+
+Stopping the server retains its data. Hermes starts it again when memory is
+next used, including from a running gateway. Close those sessions or disable
+OpenViking memory for it to stay stopped. While background startup or recovery
+is in progress, new turns are not captured until the server is ready.
+These commands and Quick Local setup require the external provider
+to be active; a bundled copy still takes precedence where present.
+Switching to Cloud or Custom stops this profile's managed server and retains
+its data. The existing Cloud and Custom connection choices remain available.
+Hermes backups include Quick Local files under the profile home; the plugin
+adds a linked `ovcli.conf` only when it is outside that home.
+
+Before removing the plugin, close Hermes sessions and stop the gateway for
+this profile. Run `hermes openviking local stop`, then select a
+different memory provider or disable OpenViking memory. Finally, run
+`hermes plugins remove openviking`. The private runtime, model cache and data
+remain in `$HERMES_HOME/openviking/`; they can use more than 1 GB per profile.
+Plugin removal does not stop a running server.
+Each running profile also uses several hundred MB of memory. Package upgrades
+retain old runtime generations and wheel files, so disk use can increase.
+After restoring a backup on another machine, run setup again to rebuild any
+runtime excluded from the backup before using Quick Local.
 
 Setup first asks how the Hermes instance is used:
 
@@ -140,6 +208,8 @@ Hermes reads provider settings from the initialized profile's `config.yaml`,
 profile secrets, and linked `ovcli.conf`. Connection values resolve in this order:
 profile environment, linked OpenViking config, Hermes YAML, then defaults. API keys
 come from profile secrets or the linked OpenViking config, not Hermes YAML.
+Quick Local uses its own saved connection and ignores connection environment
+overrides. Recall and commit settings still accept their documented overrides.
 After initialization, the provider keeps that profile for connection, identity,
 and recall settings, including when another profile is active in the same
 process. For the launch profile, process-level `OPENVIKING_*` values fill missing
@@ -179,9 +249,10 @@ memory:
 
 Existing non-empty `OPENVIKING_AGENT`, YAML `agent`, and linked OpenViking
 `actor_peer_id` or legacy `agent_id` values retain their behavior. Resolution
-order remains environment, linked OpenViking config, then Hermes YAML. To use
-no peer, remove the peer value from each configured source and start a new
-Hermes session.
+order remains environment, linked OpenViking config, then Hermes YAML for Cloud
+and Custom connections. Quick Local uses the `hermes` peer. To use
+no peer on a Cloud or Custom connection, remove the peer value from each
+configured source and start a new Hermes session.
 
 Upgrades do not move or delete existing memories. Installations that relied
 on the old implicit `hermes` peer now use user memory for new writes. Without
