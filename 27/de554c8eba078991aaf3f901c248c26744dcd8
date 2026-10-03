@@ -1,0 +1,18 @@
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 212-213,403,538-543
+bot/vikingbot/compile/review.py
+  h_b34c679d17e2ac 175-176,213-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "27de554c8eba078991aaf3f901c248c26744dcd8",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
