@@ -239,6 +239,24 @@ function formatListing(headerUri, entries, budgetTokens, moreHint = MEMORY_MORE_
   return { lines, used, dropped: 0 };
 }
 
+function formatListingGroups(groups, budgetTokens) {
+  const populated = groups.filter(({ entries }) => entries.length > 0);
+  const blocks = new Map();
+  let used = 0;
+  for (let i = 0; i < populated.length; i++) {
+    const remaining = Math.max(0, budgetTokens - used);
+    const share = Math.floor(remaining / (populated.length - i));
+    const group = populated[i];
+    const block = formatListing(group.uri, group.entries, share);
+    blocks.set(group.uri, block);
+    used += block.used;
+  }
+  return {
+    blocks,
+    lines: populated.flatMap(({ uri }) => blocks.get(uri).lines),
+  };
+}
+
 const AGENT_SKILLS_ROOT = "viking://agent/skills";
 // The server caps each skill root at node_limit, so the two roots together
 // can return twice this many; the token budget below decides what fits.
@@ -356,10 +374,13 @@ function formatSkillCatalog(groups, budgetTokens) {
  * @param {Function} fetchJSON  ov-session.mjs:makeFetchJSON closure
  * @param {number} totalBudgetTokens  budget for the profile and memory listings
  * @param {string} [actorPeerId]
- * @param {{ skillCatalog?: boolean, skillCatalogTokenBudget?: number, sessionStartMaxBytes?: number }} [options]
+ * @param {{
+ *   skillCatalog?: boolean, skillCatalogTokenBudget?: number,
+ *   sessionStartMaxBytes?: number, includeActorPeerMemories?: boolean,
+ * }} [options]
  *   callers pass their resolved plugin config: its skillCatalog knob adds
  *   <available-skills>, budgeted separately by skillCatalogTokenBudget.
- *   Without it the block is unchanged.
+ *   includeActorPeerMemories adds the current actor peer's memory indexes.
  * @returns {Promise<null | {
  *   block: string, chars: number, tokens: number, profileUri: string,
  *   profileChars: number, prefCount: number, entCount: number,
@@ -368,7 +389,12 @@ function formatSkillCatalog(groups, budgetTokens) {
  * }>}
  */
 export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
-  const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0 } = options;
+  const {
+    skillCatalog = false,
+    skillCatalogTokenBudget = 0,
+    sessionStartMaxBytes = 0,
+    includeActorPeerMemories = false,
+  } = options;
   // Hosts that spill (Claude Code, Codex) or drop (ZCode) oversized hook output
   // get a byte cap. An estimated token is about 4 UTF-8 bytes at most, so the
   // token budgets shrink to fit under it.
@@ -380,18 +406,32 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const profileUri = `viking://user/${space}/memories/profile.md`;
   const prefUri = `viking://user/${space}/memories/preferences`;
   const entUri = `viking://user/${space}/memories/entities`;
+  const peerRoot = includeActorPeerMemories && String(actorPeerId).trim()
+    ? `viking://user/${space}/peers/${encodeURIComponent(String(actorPeerId).trim())}/memories`
+    : "";
+  const peerPrefUri = peerRoot ? `${peerRoot}/preferences` : "";
+  const peerEntUri = peerRoot ? `${peerRoot}/entities` : "";
 
-  const [profile, prefs, ents, skillGroups] = await Promise.all([
+  const [profile, prefs, ents, peerPrefs, peerEnts, skillGroups] = await Promise.all([
     readProfile(fetchJSON, profileUri, actorPeerId),
     lsDir(fetchJSON, prefUri, actorPeerId),
     lsDir(fetchJSON, entUri, actorPeerId),
+    peerPrefUri ? lsDir(fetchJSON, peerPrefUri, actorPeerId) : [],
+    peerEntUri ? lsDir(fetchJSON, peerEntUri, actorPeerId) : [],
     skillCatalog && skillBudget > 0
       ? fetchSkillCatalog(fetchJSON, actorPeerId)
       : [],
   ]);
   const skills = formatSkillCatalog(skillGroups, skillBudget);
 
-  if (!profile && prefs.length === 0 && ents.length === 0 && skills.lines.length === 0) {
+  if (
+    !profile
+    && prefs.length === 0
+    && ents.length === 0
+    && peerPrefs.length === 0
+    && peerEnts.length === 0
+    && skills.lines.length === 0
+  ) {
     return null;
   }
 
@@ -403,16 +443,33 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const profileTokens = estimateTokens(profileTrunc || "");
 
   const listingBudget = Math.max(0, memoryBudget - profileTokens);
-  const halfListing = Math.floor(listingBudget / 2);
-  const prefBlock = formatListing(prefUri, prefs, halfListing);
-  const entBudget = Math.max(0, listingBudget - prefBlock.used);
-  const entBlock = formatListing(entUri, ents, entBudget);
+  const emptyListing = { lines: [], used: 0, dropped: 0 };
+  let prefBlock;
+  let entBlock;
+  let listingLines;
+  if (peerRoot) {
+    const listings = formatListingGroups([
+      { uri: prefUri, entries: prefs },
+      { uri: entUri, entries: ents },
+      { uri: peerPrefUri, entries: peerPrefs },
+      { uri: peerEntUri, entries: peerEnts },
+    ], listingBudget);
+    prefBlock = listings.blocks.get(prefUri) || emptyListing;
+    entBlock = listings.blocks.get(entUri) || emptyListing;
+    listingLines = listings.lines;
+  } else {
+    const halfListing = Math.floor(listingBudget / 2);
+    prefBlock = formatListing(prefUri, prefs, halfListing);
+    const entBudget = Math.max(0, listingBudget - prefBlock.used);
+    entBlock = formatListing(entUri, ents, entBudget);
+    listingLines = [...prefBlock.lines, ...entBlock.lines];
+  }
 
   const profileLines = profileTrunc
     ? [`<user-profile uri="${profileUri}">`, profileTrunc, `</user-profile>`]
     : [];
-  let memoryLines = prefBlock.lines.length > 0 || entBlock.lines.length > 0
-    ? [`<available-memories>`, ...prefBlock.lines, ...entBlock.lines, `</available-memories>`]
+  let memoryLines = listingLines.length > 0
+    ? [`<available-memories>`, ...listingLines, `</available-memories>`]
     : [];
   let skillLines = skills.lines;
   const render = () => [...profileLines, ...memoryLines, ...skillLines].join("\n");
