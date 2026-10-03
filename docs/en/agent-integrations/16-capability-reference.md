@@ -434,18 +434,18 @@ When the host shortens its context, most integrations make sure the dropped mess
 
 ## When the server is unavailable
 
-No integration blocks the user's prompt because recall failed, but some make the host wait.
+Recall errors are handled so the host can continue without injected memories. Requests can still delay a prompt until they finish or reach their deadline; error recovery does not mean there is no waiting.
 
-| Integration | Server unreachable | Cached failure | Can it delay the host? |
+| Integration | Server unreachable | Cached failure | Waiting and error propagation |
 |---|---|---|---|
-| Claude Code | Every hook catches the error and lets the host continue; session start skips queue replay | Context-search marker for 6 hours, local CLI check for 7 days, health for 5 seconds | No. The URI guard's denials are intentional |
-| Codex, TraeCode CLI 2.0 | Every hook catches the error and does nothing | Context-search marker; a failed local compressor stays off until the next start | No |
+| Claude Code | Every hook catches the error and lets the host continue; session start skips queue replay | Context-search marker for 6 hours, local CLI check for 7 days, health for 5 seconds | Recall waits for its request or deadline before continuing. URI guard denials are intentional and separate from recall failures |
+| Codex, TraeCode CLI 2.0 | Every hook catches the error and does nothing | Context-search marker; a failed local compressor stays off until the next start | Recall waits for its request or deadline, then the prompt continues |
 | Cursor, TRAE, TRAE CN, ZCode | Request errors are swallowed and nothing is injected. A hook that cannot get its lock within 5 seconds skips silently | Context-search marker only, so every turn waits the full 15-second recall timeout | Up to the recall timeout each turn |
-| OpenCode | Recall, capture, and cleanup errors are caught and logged | Context-search marker; health checks are not cached | No |
-| DSH | The plugin swallows errors. Session setup failures are not cached, so each pre-step makes two 5-second health calls | Context-search marker; the user-space lookup is cached for the life of the process | Yes. Pre-step runs profile and recall in sequence, and session flush blocks |
-| pi | If the health check fails at start, no tools are registered and later prompts retry quietly. A failed MCP handshake alone does not stop recall, sync, or takeover; the status line shows `tools ✗` and `/viking` prints the error | Context-search marker. The MCP handshake is retried once per turn and can use its 5-second budget before recall starts | Partly. `session_shutdown` waits up to 30 seconds without takeover, and a network error at `turn_end` waits 10 seconds per message |
+| OpenCode | Recall, capture, and cleanup errors are caught and logged | Context-search marker; health checks are not cached | Recall awaits network requests; cleanup can also wait until its deadline |
+| DSH | The plugin swallows errors. Session setup failures are not cached, so each pre-step makes two 5-second health calls | Context-search marker; the user-space lookup is cached for the life of the process | Pre-step runs profile and recall in sequence, and session flush blocks |
+| pi | If the health check fails at start, no tools are registered and later prompts retry quietly. A failed MCP handshake alone does not stop recall, sync, or takeover; the status line shows `tools ✗` and `/viking` prints the error | Context-search marker. The MCP handshake is retried once per turn and can use its 5-second budget before recall starts | Recall waits for its request or deadline. `session_shutdown` waits up to 30 seconds without takeover, and a network error at `turn_end` waits 10 seconds per message |
 | OpenClaw | Recall is skipped if a 500 ms health check fails | None; one health check per turn | Only `memory_store` errors reach the model; `compact()` can wait up to 5 minutes |
-| Hermes (bundled) | A failed connection is not retried for 30 seconds unless its settings change | The failed settings are remembered | No |
+| Hermes (bundled) | A failed connection is not retried for 30 seconds unless its settings change | The failed settings are remembered | Recall waits within its 4-second total budget before continuing without context |
 | ov CLI | Most commands exit with status 1; `ov status` in table mode and `ov health` exit 0 even when unhealthy | None | Not applicable |
 
 <a id="_3-6-2-common-timeouts"></a>

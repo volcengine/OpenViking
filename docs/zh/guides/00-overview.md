@@ -5,7 +5,7 @@
 | 部署目标 | 阅读顺序 | 完成标准 |
 | --- | --- | --- |
 | 本地体验 | [快速开始](../getting-started/02-quickstart.md) | 导入一份文档，检索并读取其中的内容 |
-| 自建共享服务 | [部署前检查](19-deployment-checklist.md) → [自建服务](03-deployment.md) → [身份认证](04-authentication.md) → [公网访问](12-public-access.md) | 验证持久化、授权访问、未授权拒绝和首次数据处理 |
+| 自建共享服务 | [自建服务](03-deployment.md) → [身份认证](04-authentication.md) → [公网访问](12-public-access.md) | 验证持久化、授权访问、未授权拒绝和首次数据处理 |
 | 企业私有化交付 | [部署前检查](19-deployment-checklist.md) → [安装与验收](20-private-deployment.md) → [升级与排障](21-private-operations.md) | 按交付物清单与安装指南逐项验收 |
 
 企业私有化路径依赖交付物、镜像和环境条件，先核对清单。

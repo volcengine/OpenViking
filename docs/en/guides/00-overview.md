@@ -5,7 +5,7 @@ If someone has already provided a service URL and API key, go directly to [CLI s
 | Goal | Reading order | Completion check |
 | --- | --- | --- |
 | Try it locally | [Quick start](../getting-started/02-quickstart.md) | Import a document, retrieve a match and read its content |
-| Host a shared service | [Pre-deployment checklist](19-deployment-checklist.md) → [Self-host a server](03-deployment.md) → [Authentication](04-authentication.md) → [Public access](12-public-access.md) | Verify persistence, authorized access, unauthorized rejection and initial data processing |
+| Host a shared service | [Self-host a server](03-deployment.md) → [Authentication](04-authentication.md) → [Public access](12-public-access.md) | Verify persistence, authorized access, unauthorized rejection and initial data processing |
 | Install an enterprise delivery | [Pre-deployment checklist](19-deployment-checklist.md) → [Install and verify](20-private-deployment.md) → [Upgrade and troubleshoot](21-private-operations.md) | Verify each item in the delivery manifest and installation guide |
 
 Enterprise deployment depends on delivery artifacts, images and environment requirements; check the manifest first.
