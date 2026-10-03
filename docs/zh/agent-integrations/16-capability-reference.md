@@ -126,7 +126,7 @@ Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`vi
 
 - 调用方需要对该 URI 有 manage 权限；正在被删除的用户会被拒绝。
 - `viking://`、`viking://user` 和 `viking://agent` 不能删除。删除 `viking://resources` 或整个用户根（如 `viking://user/<id>`）需要 ROOT 角色。非 root 调用方不能写 `viking://temp` 根。
-- 被调用方 actor-peer 视图隐藏的 URI 会被拒绝。
+- 调用方的 actor-peer 视图中不可见的 URI 会被拒绝。
 
 这些检查保护的是命名空间，不区分内容类型。按类型的限制来自客户端：
 
