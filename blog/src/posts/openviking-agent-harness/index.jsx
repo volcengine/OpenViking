@@ -353,6 +353,6 @@ export default {
     tags: ['openviking', 'memory', 'claude-code', 'codex', 'mcp'],
     languages: ['en', 'zh'],
     llmPath: '/post/openviking-agent-harness/llm.txt',
-    authors: [{ name: 'OpenViking Team', github: 'volcengine' }],
+    authors: [{ name: 'tosaki', github: 't0saki', role: { en: 'Engineer', zh: '工程师' } }],
   },
 };

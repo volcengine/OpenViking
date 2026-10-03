@@ -1,6 +1,7 @@
 # Memory That Follows You: OpenViking × Agent Harness
 
 Published: 2026-09-07
+Author: tosaki
 Canonical human page: https://blog.openviking.ai/post/openviking-agent-harness/
 
 Cover image:

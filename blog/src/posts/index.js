@@ -14,5 +14,6 @@ import agentAsAColleague from './agent-as-a-colleague/index.jsx';
 import openvikingAgentPlugins from './openviking-agent-plugins/index.jsx';
 import openvikingAgentHarness from './openviking-agent-harness/index.jsx';
 import agentManagedContextWindows from './agent-managed-context-windows/index.jsx';
+import shouldYouUseOpenViking from './should-you-use-openviking/index.jsx';
 
-[agentManagedContextWindows, openvikingAgentHarness, openvikingAgentPlugins, agentAsAColleague, agentSwarmMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);
+[shouldYouUseOpenViking, agentManagedContextWindows, openvikingAgentHarness, openvikingAgentPlugins, agentAsAColleague, agentSwarmMemory, openvikingAgentMemoryDesign, openvikingUserPeerModel, openvikingBenchmarkResults, openvikingTooManyAgents, vikingbotMemoryGame, openvikingCodingAgent, agentRuntime, openvikingContextDatabaseArchitecture, openvikingContextDatabase].forEach(registerPost);

@@ -1,6 +1,7 @@
 # Let the Agent Turn the Page: Codex-Style Context Management on Pi, Backed by OpenViking
 
 Published: 2026-09-11
+Author: tosaki
 Canonical human page: https://blog.openviking.ai/post/agent-managed-context-windows/
 
 Cover image:

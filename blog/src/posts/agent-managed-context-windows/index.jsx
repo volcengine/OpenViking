@@ -1166,6 +1166,6 @@ export default {
     tags: ['openviking', 'context', 'codex', 'memory', 'agent'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    authors: [{ name: 'OpenViking Team', github: 'volcengine' }],
+    authors: [{ name: 'tosaki', github: 't0saki', role: { en: 'Engineer', zh: '工程师' } }],
   },
 };

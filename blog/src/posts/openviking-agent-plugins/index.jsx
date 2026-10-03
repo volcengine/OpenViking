@@ -158,6 +158,6 @@ export default {
     tags: ['openviking', 'agent-plugins', 'mcp', 'skills', 'memory'],
     languages: ['en', 'zh'],
     llmPath: LLM_PATH,
-    authors: [{ name: 'OpenViking Team', github: 'volcengine' }],
+    authors: [{ name: 'zayn', github: 'ZaynJarvis' }],
   },
 };

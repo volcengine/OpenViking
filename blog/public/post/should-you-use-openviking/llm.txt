@@ -1,0 +1,230 @@
+# Should You Use OpenViking? A Three-Minute Test for Agent Wranglers
+
+Published: 2026-10-03
+Author: tosaki
+Canonical human page: https://blog.openviking.ai/post/should-you-use-openviking/
+
+Cover image:
+/assets/covers/should-you-use-openviking.webp
+
+Your agent is brilliant and has the memory of a goldfish. The convention you corrected yesterday needs correcting again today, and your AGENTS.md is now longer than the agent is willing to read. OpenViking is a context database built for exactly this. The test below shows how much it can help you.
+
+The page is a twelve-question test that takes about three minutes. It returns a wrangler type, a five-axis profile, a 0–100 fit score, and a recommendation among four ways to run OpenViking: open source (self-hosted), Managed · Personal and Managed · Enterprise (both are OpenViking Context on Volcengine), and a private deployment. Readers who'd rather not click through can hand a prompt to their own AI instead.
+
+## The twelve questions
+
+1. What's your relationship with AI agents right now?
+   A. I ask a chatbot the odd question, then close the tab
+   B. I pair with a coding agent every day. Hardest-working, most forgetful coworker I have
+   C. I'm building an agent product for people who aren't me
+   D. I run a fleet of agents, and the people who run them
+
+2. New session. How much do you explain before your agent is caught up?
+   A. No catching up needed. Every task is one-and-done
+   B. A sentence or two. Bearable
+   C. A short essay. I keep it in a text snippet, ready to paste
+   D. Every day is Groundhog Day. It forgets yesterday's bug fix, our conventions, and who I am
+
+3. How do you currently make your agent “remember” things?
+   A. I don't. A fresh start every time. Very zen
+   B. An AGENTS.md / CLAUDE.md that keeps growing. The agent now politely ignores the bottom half
+   C. My client's built-in memory, which resets the moment I switch tools
+   D. A homemade stack: a vector store, a summarizer script and a little prayer
+
+4. How much does your agent need to know to do the job well?
+   A. One prompt covers it
+   B. One repo and a few docs
+   C. Several repos, a wiki, a stack of design docs and a pile of skills
+   D. Everything the team, or the whole company, knows. More than any one person has read
+
+5. When your agent goes looking for something, what happens?
+   A. It doesn't. I paste things in
+   B. grep, plus luck
+   C. A RAG pipeline: chunk, embed, top-k, and back come paragraphs that look relevant and aren't
+   D. Three RAG pipelines, two vector stores and a pile of if-else. Nobody dares touch it
+   E. Vector search or a RAG setup that works fine. Not touching it
+
+6. Who shares this context?
+   A. Just me
+   B. Just me, across several tools. What Claude Code knows, Cursor has never heard of
+   C. A team: shared knowledge, separate personal memories
+   D. My users or customers: their memories must never mix
+
+7. How do your agents hand work to each other?
+   A. There's only one. It's lonely
+   B. I'm the message bus: I copy A's output into B
+   C. Several agents with separate notes, regularly undoing each other's work
+   D. We have an orchestrator. The shared state is a mess
+
+8. You tell your security team “let’s put it in the cloud.” What face do they make?
+   A. “We have a security team?”
+   B. “A reputable public cloud with access control. Fine.”
+   C. “Data stays in our own cloud account or VPC. Let’s book a meeting.”
+   D. “Not one byte leaves the building. The meeting is already booked.”
+
+9. Where are your users and servers, mostly?
+   A. Mainland China
+   B. Mostly outside mainland China
+   C. Both
+
+10. The service goes down at 3 a.m. Who gets up?
+   A. Me. Running infrastructure is my idea of fun. I've flashed my router's firmware
+   B. Our SRE team. Kubernetes is their day job
+   C. I will, but I'd rather it happened once a year at most
+   D. Ideally nobody. That's what cloud vendors are for
+
+11. Where do your models come from?
+   A. Already on Volcengine Ark: Agent Plan, Coding Plan or my own inference endpoint
+   B. OpenAI, Anthropic or another provider's API
+   C. Local models. Ollama is my best friend
+   D. An internal model gateway. External APIs are off-limits
+
+12. If something cured your agent's amnesia, how would you pay for it?
+   A. I wouldn't. I have more time than money
+   B. About a coffee a month, if it buys back a few afternoons
+   C. There is a team budget. I need a reason my boss will accept
+   D. Procurement, contracts, reviews: the full ceremony
+
+## How the result is built
+
+The profile has five dimensions: Amnesia (how forgetful your agent is, and how much of your time goes into reminding it); Sprawl (how much it needs to know, how scattered it is, and how much your current retrieval struggles); Crowd (how many people, agents and tenants share the context); Control (how strict your isolation, audit and data-residency rules are); DIY drive (how much infrastructure you are willing and able to run yourself).
+
+Fit comes mostly from two things: how forgetful your agents are, and how much material they need and how scattered it is. Team size and control requirements add a little on top. One-shot tasks, or vector search that already works, pull the score down; below 30, the verdict is that you don't need it yet. Re-explaining the background every session in an agent client always scores at least 45.
+
+Region, ops, model source and budget never touch the fit score; they only decide which edition is recommended. If data must stay in your own cloud account or data center, or external model APIs are banned, the pick comes from Open source or Private deployment; if several people share the context or you run a fleet of agents, the managed pick is Managed · Enterprise. Readers outside mainland China can use the managed service, which runs in Volcengine's Beijing region; overseas-region hosting on BytePlus is coming soon.
+
+When the top two are less than 5 points apart, a managed plan beats Open source, because the setup and ops time saved is usually worth more than the bill, unless running infrastructure is the reader's idea of fun; Private deployment beats the other option when the reader has SREs or a platform team. A reader who wouldn't pay always sees Open source ranked above Managed · Enterprise and Private deployment.
+
+Fit bands:
+
+- Textbook case: When we designed OpenViking, we were more or less picturing you.
+- The missing piece: Your problems line up closely with the ones OpenViking was built to solve.
+- Worth an afternoon: A few spots would clearly benefit. Start with the one that hurts most.
+- Bookmark it: It can help a bit today, and more once the agents multiply and there is more to remember.
+- Your agents are doing fine: Honestly, you don't need OpenViking yet.
+
+## Ten kinds of agent wrangler
+
+- No. I The Goldfish Keeper: “I am its external hard drive.” Your agent is brilliant and remembers nothing. Every session opens with five minutes of reminding it who it is.
+- No. II The AGENTS.md Archaeologist: “Below line 300 lie the laws of a lost civilization.” Every lesson went into one file. Now it's too long for the agent to read and too sacred for you to prune.
+- No. III The RAG Plumber: “Recall is excellent. What it recalls is not.” Chunk size, embeddings, top-k, rerankers: all tuned. Change one chunk size and three downstream metrics move.
+- No. IV The Overbooked Librarian: “Everything is here. Nobody can find any of it.” Knowledge is scattered across wikis, repos and chat threads, more than anyone has read. The agent sees only the slice you happened to paste.
+- No. V The Human Message Bus: “Ctrl+C, Ctrl+V: my orchestration framework.” Your agents don't talk to each other, so you carry A's conclusions to B and B's questions back to A.
+- No. VI The Agent Zookeeper: “Each one is clever. Put them together and they fight.” Many agents, many people, separate notes. What agent A settled yesterday, agent B confidently overturns today.
+- No. VII The Multi-Tenant Landlord: “Every tenant’s memories stay behind their own door.” Your agent serves many users, and your recurring nightmare is user A's memory showing up in user B's chat.
+- No. VIII The Compliance Meeting Regular: “Let’s take this offline. Literally.” Before the architecture slide is done, data residency and audit are on next week’s agenda. There is a weekly meeting called “Data Egress Review.”
+- No. IX The Homelab Tinkerer: “If I can build it, I won’t buy it. My time is free, apparently.” Vector store, summarizer, cron jobs: you have hand-built half a memory system. There is a folder called memory_v3_final.
+- No. X The Light Traveler: “Ask, answer, gone. No baggage.” Your tasks finish in one go, or you mostly use AI in a web chat box. Whether an agent remembers yesterday doesn't change today, for now.
+
+## Open source, managed or private
+
+All editions share one code core. They differ in who deploys and operates it, where the data lives, and how you pay.
+
+### Open source (Self-hosted)
+
+Free and full-featured. You run it and pick the models.
+
+- For: Individuals and teams who want full control and are happy to run it.
+- Ops: You deploy and upgrade it; a single node, or replicas you assemble yourself.
+- Models: Bring your own: embedding defaults to a built-in local model with no key; summaries and memory extraction need a VLM (Volcengine Ark, OpenAI-compatible APIs, Ollama, litellm).
+- Data lives: Wherever you deploy it.
+- Cost: Free (AGPLv3). The real costs are servers, model usage and maintenance time.
+- You will need: A machine that runs Python 3.10+ or Docker, plus a VLM.
+- Links: [Quickstart](https://docs.openviking.ai/en/getting-started/02-quickstart), [Let your agent install it](https://docs.openviking.ai/en/getting-started/04-setup-for-agent), [GitHub](https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=should-you-use-openviking)
+
+### Managed · Personal (OpenViking Context on Volcengine)
+
+One user, no ops: sign up and connect your agent.
+
+- For: Individual developers, personal assistants, single agents.
+- Ops: No deployment, upgrades or model hosting on your side.
+- Models: Runs on the Doubao model family, nothing to deploy; just link one Ark credential (Agent Plan, Coding Plan or your own inference endpoint).
+- Data lives: Volcengine's Beijing region (cn-beijing), also available to users outside mainland China; hosting in overseas regions on BytePlus is coming soon.
+- Cost: The first 50 files in each Personal library are free, then hourly pay-as-you-go from a low starting price; Agent Plan credits apply.
+- You will need: A real-name-verified Volcengine account and one Ark credential (Agent Plan, Coding Plan or your own inference endpoint).
+- Links: [Start Personal (first 50 files free)](https://docs.volcengine.com/docs/84313/2374479), [Personal memory walkthrough](https://docs.volcengine.com/docs/84313/2693723), [Pricing](https://docs.volcengine.com/docs/84313/2485124)
+
+### Managed · Enterprise (OpenViking Context on Volcengine)
+
+Many people and agents, strict isolation, no ops team to spare.
+
+- For: Teams, enterprise apps, multi-agent systems and many end users.
+- Ops: Nothing to deploy or upgrade; dedicated resources that scale up automatically with your file count.
+- Models: Runs on the Doubao model family, nothing to deploy; just link one Ark credential (Agent Plan, Coding Plan or your own inference endpoint).
+- Data lives: Volcengine's Beijing region (cn-beijing), also available to users outside mainland China; hosting in overseas regions on BytePlus is coming soon.
+- Cost: Billed hourly from the moment a library is created; Agent Plan credits apply.
+- You will need: A real-name-verified Volcengine account and one Ark credential (Agent Plan, Coding Plan or your own inference endpoint).
+- Links: [Explore Enterprise](https://www.volcengine.com/product/openviking-service?utm_source=blog&utm_medium=article&utm_campaign=should-you-use-openviking), [Setup guide](https://docs.volcengine.com/docs/84313/2374479), [Pricing](https://docs.volcengine.com/docs/84313/2485124)
+
+### Private deployment (BYOC / VPC / offline)
+
+Data stays in your own environment, with official support.
+
+- For: Organizations whose data must stay in their own cloud account, VPC or data center.
+- Ops: Runs on your own Kubernetes, operated by your team, with distributed deployment and official support.
+- Models: Volcengine Ark or your own model services; offline sites bring their own models.
+- Data lives: Your own cloud account, VPC or offline site.
+- Cost: Tailored to your deployment and support needs; contact the team for a quote.
+- You will need: Kubernetes and an ops team. Once the team confirms your application, the package link and a trial license arrive by email.
+- Links: [Request a trial license](https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform), [Commercial editions](https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=should-you-use-openviking#commercial-editions)
+
+For current managed-service prices, see the Volcengine [pricing page](https://docs.volcengine.com/docs/84313/2485124).
+
+## When you don't need it
+
+- Your current vector search or RAG already works well: keep using it (the official FAQ advises the same).
+- Your app is stateless or every call is one-shot: there is nothing to remember.
+- You need what was just said to be recallable from long-term memory a second later: memories are extracted asynchronously after a session is committed, so that part belongs in the session context.
+
+## The result page
+
+- Below 30: no edition is recommended. The page says you don't need OpenViking yet, lists signs to come back, and keeps the edition ranking in a collapsed panel.
+- Otherwise: a recommended edition with its reason, what you need and what it costs; all four editions ranked; up to four points where OpenViking fits and two things good to know; and up to three answer changes that would move the pick.
+- From 45 up, results for teams, customer-facing products, agent fleets or budgeted projects also get a copyable one-pager proposing a two-week trial.
+
+## Let your own AI judge
+
+The page offers two prompts. "Let the AI interview me" needs no quiz and is reproduced below. "With my quiz result" contains the reader's twelve answers, the quiz result and the same facts block, and asks the AI for its own fit score, a verdict on each edition, where it disagrees with the quiz, what would change its mind, next steps and unknowns.
+
+```text
+Help me decide whether I (or the project in front of you) should adopt OpenViking, and which way to run it. Judge independently from the facts; if I don't need it, say so.
+
+Step 1: if you can read the current project, start with a read-only pass. Do not install anything or modify any file; for configuration, look only at environment variable names and never print a secret's value.
+- Agent instruction files: AGENTS.md, CLAUDE.md, .cursor/rules and similar. Note their length and, if git log is available, how often they change.
+- Home-grown memory or retrieval: vector stores (chromadb, faiss, pgvector, qdrant, milvus…), embedding calls, LangChain / LangGraph, summarization or "memory" modules.
+- Signs of multiple agents or users: orchestration frameworks, several agent configs, code that isolates data per user or tenant.
+- How and where it deploys: Dockerfile, docker-compose, Kubernetes / Helm, cloud provider config.
+- Where models come from: OpenAI, Anthropic, Volcengine Ark, local models or an internal gateway.
+If you can't read a project, skip this step.
+
+Step 2: ask me questions, one at a time, at most 8, only about what the project can't tell you. At minimum find out: how much background I re-explain in each new session; how much material there is and where it lives; who shares the context; whether data may sit on a public cloud; whether users and servers are in mainland China or elsewhere; who runs infrastructure; where models come from; and how I'd expect to pay.
+
+Public facts about OpenViking (rely only on these and on public sources you can verify; do not invent prices, SLAs or certifications):
+- OpenViking is an open-source context database for AI agents, built by Volcengine's Viking team. It puts resources (knowledge), memories and skills into one filesystem organized by viking:// paths, which agents browse with ls, tree, read and grep.
+- Tiered loading: summaries first (L0 about 256 characters, L1 about 4k), full content on demand; search can be scoped to a directory.
+- Memories are extracted asynchronously after a session is committed and stored as readable Markdown.
+- Supported clients include Claude Code, Codex, Cursor, TRAE, OpenCode, OpenClaw, Hermes Agent, LangChain / LangGraph and any MCP client. Every integration needs a running OpenViking server, self-hosted or managed.
+- Where it is not the right tool: vector search you already have that works well (the official FAQ says the same); stateless one-shot calls; needing a fact recallable from long-term memory the moment it is said (memories are processed in the background).
+
+Four ways to run it:
+1. Open source (self-hosted): AGPLv3, free, no activation key. Includes multi-tenancy (account / user, ROOT / ADMIN / USER roles), ACLs, encryption at rest, OAuth 2.1 for MCP, and Prometheus / OpenTelemetry observability. Runs as a single node, or as replicas you assemble yourself (needs a remote vector backend); no automatic failover. Bring your own models: embedding defaults to a built-in local model with no key; summaries and memory extraction need a VLM (Volcengine Ark, OpenAI-compatible APIs, Ollama, litellm and more). Install with uv tool install openviking, Docker or Helm.
+2. Managed · Personal (OpenViking Context on Volcengine): fully managed, no deployment, upgrades or model hosting, same code core as open source; single user; the first 50 files in each Personal library are free, then hourly pay-as-you-go; Agent Plan credits apply.
+3. Managed · Enterprise (OpenViking Context on Volcengine): many users, multiple isolated data spaces, dedicated resources that scale up automatically with file count; billed hourly from the moment a library is created; Agent Plan credits apply.
+   Both managed plans require a real-name-verified Volcengine account and at least one Ark credential (Agent Plan, Coding Plan or your own inference endpoint); models are fixed to the Doubao family. The service runs in Volcengine's Beijing region (cn-beijing) and stores data on Volcengine; it is available outside mainland China (review cross-border latency and data-compliance requirements). Overseas-region hosting on BytePlus is coming soon. Commercial SLA and professional on-call support. Current prices: https://docs.volcengine.com/docs/84313/2485124
+4. Private deployment: runs in your own cloud account / VPC (BYOC) or offline, adds distributed deployment and official support, activated by a license key; Kubernetes-based and needs an ops team. Apply through a form; once the team confirms, a package link and a trial license are emailed. Pricing and support are tailored to the deployment; contact the team for a quote. Offline sites bring their own model services and plan license renewal.
+- For licensing or compliance questions (including AGPL), ask the team; do not offer a legal interpretation.
+
+Step 3: once you have the answers, reply in English with this structure:
+1. Evidence: what you found and what I told you (file paths for anything from the project).
+2. Verdict: a 0–100 fit score and one sentence of reasoning.
+3. Edition: rate Open source, Managed · Personal, Managed · Enterprise and Private deployment as high / medium / low / not a fit, with reasons; check data residency, model source and region separately.
+4. Integration plan: if yes, which material belongs in resources, which in memories and which in skills, which client or SDK to connect, and the first three steps.
+5. What would flip the verdict, and what you can't determine. Don't guess prices, SLAs or certifications.
+```
+
+## Next steps
+
+- Run it yourself: [Quickstart](https://docs.openviking.ai/en/getting-started/02-quickstart), or hand [the setup guide](https://docs.openviking.ai/en/getting-started/04-setup-for-agent) to your agent. By hand, start with `uv tool install openviking --upgrade && openviking-server init`; the wizard sets up your models.
+- Rather not run servers: [start the managed service](https://docs.volcengine.com/docs/84313/2374479); each Personal library's first 50 files are free. Teams: [Enterprise](https://www.volcengine.com/product/openviking-service?utm_source=blog&utm_medium=article&utm_campaign=should-you-use-openviking).
+- Data can't leave the building: [request a private-deployment trial](https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform); once the team confirms, the package and a trial license arrive by email.
+- Still unsure: [GitHub](https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=should-you-use-openviking) or [Discord](https://discord.com/invite/eHvx8E9XF3).
