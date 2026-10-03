@@ -275,6 +275,16 @@ jobs:
     - name: Build package (Wheel Only)
       run: uv build --wheel
 
+    - name: Check bundled ov version matches wheel
+      shell: bash
+      run: |
+        WHEEL_VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        if [[ "$WHEEL_VERSION" != "$OPENVIKING_VERSION" ]]; then
+          echo "::error::ov binary was built as $OPENVIKING_VERSION but the wheel is $WHEEL_VERSION"
+          exit 1
+        fi
+        echo "ov binary and wheel both use $WHEEL_VERSION"
+
     - name: Install patchelf (Linux)
       run: |
         PATCHELF_VERSION=0.18.0
@@ -519,6 +529,16 @@ jobs:
 
     - name: Build package (Wheel Only)
       run: uv build --wheel
+
+    - name: Check bundled ov version matches wheel
+      shell: bash
+      run: |
+        WHEEL_VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        if [[ "$WHEEL_VERSION" != "$OPENVIKING_VERSION" ]]; then
+          echo "::error::ov binary was built as $OPENVIKING_VERSION but the wheel is $WHEEL_VERSION"
+          exit 1
+        fi
+        echo "ov binary and wheel both use $WHEEL_VERSION"
 
     - name: Smoke test built wheel (macOS)
       if: runner.os == 'macOS'
