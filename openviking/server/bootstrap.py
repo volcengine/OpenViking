@@ -4,6 +4,7 @@
 
 import argparse
 import asyncio
+import errno
 import json
 import os
 import shutil
@@ -330,20 +331,18 @@ def main():
             # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
             os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
             os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
-            uvicorn.run(
+            _run_uvicorn(
+                config,
                 "openviking.server.app:create_worker_app",
                 factory=True,
-                host=config.host,
-                port=config.port,
                 workers=workers,
                 timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
         else:
-            uvicorn.run(
+            _run_uvicorn(
+                config,
                 app,
-                host=config.host,
-                port=config.port,
                 timeout_keep_alive=config.timeout_keep_alive,
                 log_config=None,
             )
@@ -351,6 +350,61 @@ def main():
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)
+
+
+def _bind_socket_with_retry(config):
+    """Bind the listen socket up front, waiting out a transient EADDRINUSE.
+
+    uvicorn logs a bind failure and exits gracefully instead of raising, so the
+    retry has to happen on a socket we own: bind (retrying while the port is
+    held), listen, then hand the bound socket to ``uvicorn.run(sock=...)``.
+    A supervised restart (watchdog, systemd, Docker) often relaunches the
+    server while the previous process still holds the port; retry up to
+    ``config.bind_retry_attempts`` times (0 keeps the die-on-first-failure
+    behavior), sleeping ``config.bind_retry_interval_seconds`` between
+    attempts. Any other error, or a port that never frees up, propagates.
+    """
+    attempts = max(0, int(config.bind_retry_attempts))
+    interval = max(0.1, float(config.bind_retry_interval_seconds))
+    family, typ, proto, _, addr = socket.getaddrinfo(
+        config.host, config.port, type=socket.SOCK_STREAM
+    )[0]
+    for attempt in range(attempts + 1):
+        sock = socket.socket(family, typ, proto)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(addr)
+            sock.listen(128)
+            return sock
+        except OSError as exc:
+            sock.close()
+            if getattr(exc, "errno", None) != errno.EADDRINUSE or attempt >= attempts:
+                raise
+            print(
+                f"Port {config.host}:{config.port} is still in use "
+                f"(attempt {attempt + 1}/{attempts}); retrying in {interval:.1f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(interval)
+
+
+def _run_uvicorn(config, *args, **kwargs):
+    """Run uvicorn on a pre-bound socket so EADDRINUSE can be waited out.
+
+    uvicorn 0.41's ``run()`` takes no ``sock=`` parameter, so the bound socket
+    reaches uvicorn per mode: single-process servers go through
+    ``uvicorn.Config(sock=...)`` + ``Server.run()`` (the same pair ``run()``
+    itself assembles), while the multi-worker path passes the socket as the
+    inherited ``fd=`` that ``run()`` already supports.
+    """
+    sock = _bind_socket_with_retry(config)
+    try:
+        if kwargs.get("workers", 1) > 1:
+            return uvicorn.run(*args, fd=str(sock.fileno()), **kwargs)
+        uvicorn_config = uvicorn.Config(*args, **kwargs)
+        return uvicorn.Server(uvicorn_config).run(sockets=[sock])
+    finally:
+        sock.close()
 
 
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:

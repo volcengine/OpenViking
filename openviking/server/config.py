@@ -322,6 +322,14 @@ class ServerConfig(BaseModel):
     # connections the client still believes are reusable, causing sporadic
     # connection-reset / EOF errors.
     timeout_keep_alive: int = 5
+    # A supervised restart (watchdog, systemd Restart=always, Docker healthcheck)
+    # routinely relaunches the server while the previous process is still winding
+    # down and holding the port. Instead of dying on the first EADDRINUSE, wait
+    # out transient holders: retry the bind up to this many times (0 preserves
+    # the old die-immediately behavior) with bind_retry_interval_seconds between
+    # attempts. Applies to both the single-process and the multi-worker path.
+    bind_retry_attempts: int = Field(default=5, ge=0)
+    bind_retry_interval_seconds: float = Field(default=1.0, ge=0.1)
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     # OIDC/LDAP authentication configuration
