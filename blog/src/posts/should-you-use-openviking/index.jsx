@@ -850,6 +850,8 @@ function useQuiz(navigate) {
   const choose = (index, key) => {
     const id = QUESTION_IDS[index];
     const wasComplete = isComplete(answers);
+    // First answer to each question in a run: comparing consecutive steps shows where people drop off.
+    if (!answers[id]) track(`step/${String(index + 1).padStart(2, '0')}/${id}`);
     const next = { ...answers, [id]: key };
     setAnswers(next);
     clearTimeout(advanceTimer.current);
