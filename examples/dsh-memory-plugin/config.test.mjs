@@ -125,3 +125,16 @@ test("a configured peer survives an empty credential peer", async () => {
   assert.equal(config.peerId, "dsh-peer");
   assert.equal(config.explicitPeerId, "dsh-peer");
 });
+
+test("boundaryNotice defaults off and parses host input and env spellings", () => {
+  const env = { OPENVIKING_CLI_CONFIG_FILE: "/nonexistent/ovcli.conf" };
+
+  assert.equal(resolveConfig({}, env).boundaryNotice, false);
+  assert.equal(resolveConfig({ boundaryNotice: true }, env).boundaryNotice, true);
+  assert.equal(resolveConfig({ boundaryNotice: false }, env).boundaryNotice, false);
+  assert.equal(resolveConfig({}, { ...env, OPENVIKING_BOUNDARY_NOTICE: "1" }).boundaryNotice, true);
+  assert.equal(resolveConfig({}, { ...env, OPENVIKING_BOUNDARY_NOTICE: "yes" }).boundaryNotice, true);
+  assert.equal(resolveConfig({}, { ...env, OPENVIKING_BOUNDARY_NOTICE: "0" }).boundaryNotice, false);
+  // Host input outranks the environment, matching the connection-field rule.
+  assert.equal(resolveConfig({ boundaryNotice: false }, { ...env, OPENVIKING_BOUNDARY_NOTICE: "true" }).boundaryNotice, false);
+});

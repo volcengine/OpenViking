@@ -248,3 +248,4 @@ node_modules/
 examples/opencode-plugin/lib/shared/
 examples/dsh-memory-plugin/shared/
 examples/pi-coding-agent-extension/shared/
+*.tgz

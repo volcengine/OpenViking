@@ -189,7 +189,13 @@ The profile's `cordis.patch.yml` can also carry plugin config:
     skipSubagentSessions: true
     commitTokenThreshold: 20000
     mcpToolCallTimeoutMs: 60000
+    boundaryNotice: false
 ```
+
+`boundaryNotice` (or `OPENVIKING_BOUNDARY_NOTICE=1`) opts into the boundary
+notice: a plugin-sourced `user/message` appended after `compaction/end` when a
+compaction-boundary commit archived messages. It defaults to `false`, and with
+the default the plugin never appends anything around compaction.
 
 Recall normally uses `POST /api/v1/search/search` with `mode: "context"`.
 `recallMaxTokens` (`OPENVIKING_RECALL_MAX_TOKENS`) sets this request's
@@ -221,8 +227,9 @@ The older size settings apply to fallback recall, not the primary context reques
 - `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
+- `compaction/start` (DSH appends it before rewriting the transcript) commits unconditionally, the same boundary the Claude Code integration covers with its PreCompact hook, so the commit for messages below the threshold is issued before the rewrite (the write runs on the session's write chain); recall then depends on server-side extraction. With `boundaryNotice: true` (default off), a successful flush also appends a plugin-sourced `user/message` notice (marker `OpenViking boundary commit`) after `compaction/end` — never inside the compaction window — that client-side visualization can decorate; the pending-queue path, skipped commits, and failed metadata reads stay silent. Permanent boundary-commit failures and failed notice appends warn once per session.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
-- `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
+- `syncTurns: false` stops every new write: no captured messages, no threshold, compaction-boundary, or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
 - Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
 - `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
@@ -283,8 +290,26 @@ old skill packages to an rc.2 profile; removing those direct dependencies and
 reinstalling the bundle restored the same integration checks. A clean rc.2
 profile with the published `0.3.0` bundle did not reproduce that import error.
 
-`live-recall.test.mjs` is an opt-in end-to-end gate against a real OpenViking
+`live-recall.test.mjs` is an opt-in live-backend gate against a real OpenViking
 server: it stores a sentinel memory through a session commit, waits for
 extraction, and asserts recall returns that sentinel — the property no stub
 can certify. Enable it with `OPENVIKING_E2E=1` plus the normal credential
 chain; it skips otherwise (including in CI until a server secret exists).
+
+## Live verification
+
+Two opt-in gates run against a real OpenViking server (skipped otherwise, including in CI):
+
+```bash
+OPENVIKING_E2E=1 node --test live-recall.test.mjs verify-live.test.mjs
+```
+
+`verify-live.test.mjs` proves the runtime-to-server compaction boundary: it stages user
+messages as server-side pending tokens (no threshold is reached), feeds the
+`compaction/start` boundary to the same runtime handler the host's `session/event`
+feed routes to (the host's own feed and the full event payload are not exercised
+here), and asserts the boundary commit — `commitSession` accepted with a
+task id and archive uri, no local retry-queue residue. The server-side
+settlement (`commit_count`) is polled and logged as a closing confirmation;
+the accepted task is the strongest signal this in-process gate can observe; the archival itself happens server-side. Credentials resolve through the usual chain
+(`OPENVIKING_*` env / `ovcli.conf`).

@@ -100,6 +100,12 @@ test("drainTick keeps the latch while the server stays down and leaves the entry
 });
 
 test("drainTick does not hit the network while the queue is empty", async () => {
+  // An isolated empty queue: the default directory may hold real entries on
+  // a machine that runs the installed plugin, and any entry would probe health.
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-empty-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+
   let fetchCalls = 0;
   const runtime = new OpenVikingRuntime({
     async fetchJSON() {

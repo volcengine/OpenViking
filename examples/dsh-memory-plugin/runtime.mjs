@@ -13,6 +13,9 @@ import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
   captureEvent,
   isOpenVikingPluginMessage,
+  OPENVIKING_BOUNDARY_NOTICE_MARKER,
+  OPENVIKING_PLUGIN_KIND,
+  OPENVIKING_PLUGIN_SOURCE,
   pluginMessage,
   promptText,
 } from "./capture.mjs";
@@ -55,6 +58,9 @@ export class OpenVikingRuntime {
       initializationRetryable: false,
       hasPendingWrites: false,
       pendingCreatedAt: 0,
+      pendingBoundaryNotice: 0,
+      compactionOpen: false,
+      warnedFailures: new Set(),
       disposing: null,
     };
     this.states.set(session.id, state);
@@ -150,6 +156,16 @@ export class OpenVikingRuntime {
   capture(session, event) {
     const state = this.stateFor(session);
     if (!isCaptureEnabled(state.config)) return;
+    // Sanitization, defense-in-depth: captureEvent already drops any
+    // self-sourced plugin message (legacy `plugin` and the canonical
+    // `plugin:<name>` kind alike); this wiring-point guard documents the
+    // invariant where the events enter and keeps holding if that shared filter
+    // ever changes.
+    if (event.type === "user/message") {
+      const kind = event.data?.source?.kind;
+      if ((kind === "plugin" || kind === OPENVIKING_PLUGIN_KIND)
+        && event.data?.source?.plugin === OPENVIKING_PLUGIN_SOURCE) return;
+    }
     const payload = captureEvent(event, state.config, state.toolNames);
     if (!payload) return;
     this.enqueueWrite(state, async () => {
@@ -179,6 +195,16 @@ export class OpenVikingRuntime {
   }
 
   maybeCommit(session, event) {
+    if (event.type === "compaction/start") {
+      this.stateFor(session).compactionOpen = true;
+      this.commitAtCompactionBoundary(session);
+      return;
+    }
+    if (event.type === "compaction/end") {
+      this.stateFor(session).compactionOpen = false;
+      this.flushBoundaryNotice(session);
+      return;
+    }
     if (event.type !== "turn/end") return;
     const state = this.stateFor(session);
     if (!isCaptureEnabled(state.config)) return;
@@ -208,6 +234,138 @@ export class OpenVikingRuntime {
     });
   }
 
+  // The other harness integrations commit unconditionally from a PreCompact
+  // hook before the host rewrites the transcript. DSH has no hook phase, but
+  // it appends the durable compaction/start event before summarization and
+  // delivers it on the session/event feed this plugin already listens to, so
+  // the same boundary is covered in-process: everything captured so far is
+  // archived before compaction replaces the history range. Unlike dispose
+  // there is no teardown deadline, so the client's full commit timeout
+  // applies.
+  commitAtCompactionBoundary(session) {
+    const state = this.stateFor(session);
+    if (!isCaptureEnabled(state.config)) return;
+    this.enqueueWrite(state, async () => {
+      const commitPayload = {
+        keep_recent_count: state.config.commitKeepRecentCount,
+      };
+      if (state.hasPendingWrites) {
+        await this.enqueueFinalCommit(state, commitPayload);
+        return;
+      }
+      if (!state.ready && !(await this.ensureState(state)).ready) return;
+      let pendingTokens = 0;
+      try {
+        const metadata = await this.client.getSession(
+          state.ovSessionId,
+          state.config.peerId,
+        );
+        pendingTokens = Number(metadata?.pending_tokens || 0);
+      } catch (error) {
+        // Swallowed: the pending-token count only decorates the UI notice; the
+        // boundary commit itself must proceed even when this read fails.
+        this.log("boundary_metadata_error", {
+          sessionId: state.ovSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const response = await this.client.commitSession(
+        state.ovSessionId,
+        state.config.peerId,
+      );
+      this.log("compaction_commit", {
+        sessionId: state.ovSessionId,
+        ok: response.ok,
+        trace_id: response.result?.trace_id || response.traceId,
+        error: response.ok ? undefined : response.error?.message || response.error?.code,
+      });
+      if (response.ok) {
+        state.warnedFailures.delete("compaction_commit");
+      } else if (isRetryableFailure(response)) {
+        await this.enqueueFinalCommit(state, commitPayload);
+      } else {
+        // A permanent failure is dropped by design, so warn is the only
+        // visible signal that the boundary commit did not land.
+        this.warnOnce(state, "compaction_commit", {
+          sessionId: state.ovSessionId,
+          status: response.status,
+          code: response.error?.code,
+        });
+      }
+      if (response.ok && pendingTokens > 0 && response.result?.status !== "skipped"
+        && state.config.boundaryNotice) {
+        // The notice is queued, not appended here: an append between
+        // compaction/start and compaction/end changes the session surface
+        // during summarization and the compaction surface guard disqualifies
+        // the bracket. flushBoundaryNotice appends it after compaction/end.
+        state.pendingBoundaryNotice = pendingTokens;
+      }
+    });
+  }
+
+  // Flush a boundary notice queued at compaction/start. The commit itself is
+  // already durable by then, so PT-002 provenance is unchanged; only the UI
+  // notice moves past the compaction bracket. The queued token count stays
+  // truthful on a failed compaction too, so the flush runs on every
+  // compaction/end. The notice is opt-in (boundaryNotice, default off): with
+  // the flag unset the queue clears without any append. The read-and-clear
+  // runs inside the write chain because the commit that queues the notice is
+  // itself a chained operation: reading at event time can precede the commit
+  // and miss the queued count (slow server, backed-up chain). A bracket that
+  // reopened before the flush runs keeps the notice queued for the next
+  // compaction/end — the notice is decoration and must never append inside a
+  // live bracket, even when the chain is backlogged.
+  flushBoundaryNotice(session) {
+    const state = this.stateFor(session);
+    this.enqueueWrite(state, async () => {
+      if (state.compactionOpen || !state.config.boundaryNotice) return;
+      if (typeof session.append !== "function") return;
+      const pendingTokens = state.pendingBoundaryNotice;
+      if (!pendingTokens) return;
+      state.pendingBoundaryNotice = 0;
+      await this.appendBoundaryNotice(session, pendingTokens);
+    });
+  }
+
+  // Best-effort UI signal: the notice row is what the operator's ov-viz client
+  // module decorates with the boundary-commit badge, so a flush becomes
+  // visible without reading logs. The commit has already succeeded here; a
+  // failed notice append must not fail the write chain. Awaiting the append
+  // lets the catch also cover a host that reports failures by rejection.
+  async appendBoundaryNotice(session, pendingTokens) {
+    const state = this.stateFor(session);
+    try {
+      // The sentence rides twice by cross-repo contract: the message text is
+      // what the model reads, and `source.summary` is what the dsh chat row
+      // shows while collapsed and what the ov-viz client classifies (the
+      // collapsed row's DOM carries no other copy of the marker sentence).
+      const sentence = `${OPENVIKING_BOUNDARY_NOTICE_MARKER}: ${pendingTokens} pending token(s) archived to memory before compaction`;
+      await session.append("user/message", pluginMessage(sentence, {
+        form: "notice",
+        summary: sentence,
+      }), { surfaceOp: "append" });
+      state.warnedFailures.delete("boundary_notice");
+    } catch (error) {
+      // Swallowed: decoration for an already-committed flush; the commit
+      // result stands whether or not the UI notice lands. The warnOnce makes
+      // sure the failure is still visible without reading debug logs.
+      this.log("boundary_notice_error", {
+        sessionId: state.ovSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.warnOnce(state, "boundary_notice", { sessionId: state.ovSessionId });
+    }
+  }
+
+  // Failure signal that survives without debug logging: one warn per session
+  // and stage, reset by the next success. The payload stays bounded to a
+  // status/code token — never message content.
+  warnOnce(state, stage, data) {
+    if (state.warnedFailures.has(stage)) return;
+    state.warnedFailures.add(stage);
+    this.logger?.warn?.(`[openviking:dsh] ${stage} ${JSON.stringify(data)}`);
+  }
+
   dispose(session) {
     const state = this.states.get(session.id);
     if (!state) return;
@@ -222,6 +380,11 @@ export class OpenVikingRuntime {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
         }
+        // Best-effort safety net: dispose between compaction/start and
+        // compaction/end re-runs the flush; the notice still lands only when
+        // the bracket has closed and the real session (not a disposeAll id
+        // stub) is available to append.
+        this.flushBoundaryNotice(session);
         if (!state.ready && !(await this.ensureState(state)).ready) return;
         const response = await this.client.commitSession(
           state.ovSessionId,

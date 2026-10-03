@@ -1,8 +1,7 @@
 import { buildPluginConfig } from "./shared/plugin-config.mjs";
 import { loadCredentialFiles } from "./shared/credentials.mjs";
 
-export const PLUGIN_VERSION = "0.5.13";
-
+export const PLUGIN_VERSION = "0.5.15";
 /**
  * Namespace for the bridged OpenViking MCP tools. DSH publishes every MCP tool
  * as `mcp__<serverName>__<rawName>`, so this string is part of the
@@ -43,5 +42,15 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     deriveEffectivePeer: true,
   });
 
-  return { ...config, peerId: config.effectivePeer.peerId };
+  // dsh-local knob, kept out of the shared schema on purpose: the boundary
+  // notice exists only in this integration, and a shared-schema entry counts
+  // as a change to every plugin (version-bump gate). Promote it to
+  // shared/config-schema.mjs when a second harness grows a boundary notice.
+  // Default false: the notice appends a session message after compaction/end,
+  // and any plugin append near compaction is an explicit opt-in.
+  const rawNotice = input.boundaryNotice ?? env.OPENVIKING_BOUNDARY_NOTICE;
+  const boundaryNotice = rawNotice === true
+    || (typeof rawNotice === "string" && /^(1|true|yes)$/i.test(rawNotice.trim()));
+
+  return { ...config, boundaryNotice, peerId: config.effectivePeer.peerId };
 }

@@ -52,7 +52,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 工作方式
 
-插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`；每个模型步骤前用当前输入做语义检索，把结果作为持久消息追加到同一步骤——因此注入会随会话重放，也对压缩可见。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，待同步 token 超过阈值即 commit，并保留最近十条消息在本地上下文中。写入失败会进入待写队列，在下次会话开始时重放。
+插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`；每个模型步骤前用当前输入做语义检索，把结果作为持久消息追加到同一步骤——因此注入会随会话重放，也对压缩可见。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，待同步 token 超过阈值即 commit，并保留最近十条消息在本地上下文中。DSH 压缩会话时会在改写转录前追加持久的 `compaction/start` 事件，插件在该边界无条件 commit——与 Claude Code 集成在 PreCompact 钩子里执行的改写前 commit 是同一条边界。开启 `boundaryNotice: true`（默认关闭）后，成功的边界 commit 会在 `compaction/end` 之后追加一条 `user/message` 通知（标记 `OpenViking boundary commit`），绝不会落在压缩窗口内，客户端可视化可以据此画标记；插件自身的消息永远不会被再次捕获，跳过或失败的边界不追加任何内容。边界 commit 的永久失败或通知追加失败会按会话 warn 一次，而不是藏在 debug 日志里。写入失败会进入待写队列，在下次会话开始时重放。
 
 每个 DSH 会话映射为 OpenViking 中的 `dsh-<session-id>`，子 agent 各自拥有独立会话。
 
@@ -109,7 +109,7 @@ patch 中写的凭证优先于环境变量。行为配置按优先级从高到�
 | 召不回任何内容 | `curl "<OpenViking 服务地址>/health"`；检查端点配置，以及 prompt 是否长于最小查询长度（3 个字符） |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；可信模式部署还要检查 `OPENVIKING_ACCOUNT` 与 `OPENVIKING_USER` |
 | 串入了其他项目的记忆 | 设置 `OPENVIKING_RECALL_PEER_SCOPE=actor`，将 peer 记忆限定为当前 peer；用户级记忆仍会共享 |
-| 崩溃后没有 commit | commit 由 token 阈值和 teardown 触发；排队的写入会在下次会话开始时重放 |
+| 崩溃后没有 commit | commit 由 token 阈值、压缩边界和 teardown 触发；排队的写入会在下次会话开始时重放 |
 
 ## 延伸阅读
 

@@ -315,7 +315,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
 | Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit when they capture new messages | `PreCompact` commits when it captures new messages |
 | OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
-| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | None |
+| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start`, unconditional, before the host rewrites the transcript |
 | pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
 | pi, takeover off | 20,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
 | OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default) | `/new`, `/reset`, and `memory_store` commit and wait | `compact()` commits and waits up to 5 minutes for extraction |
@@ -392,7 +392,7 @@ When the host shortens its context, most integrations make sure the dropped mess
 | TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
 | Kimi Code | Host summarizes | `PreCompact` commits newly captured messages | Nothing |
 | OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
-| DSH | Not observed | Nothing. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
+| DSH | Host summarizes; the plugin hooks the boundary | `compaction/start` commits the captured-but-uncommitted messages unconditionally, before the host rewrites the transcript. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | An opt-in `boundaryNotice` (default off) rides after `compaction/end`; the archive is not re-injected |
 | pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
 | OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
 | Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |
