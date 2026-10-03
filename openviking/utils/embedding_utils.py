@@ -28,6 +28,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.index_action import FieldPatch, IndexAction
+from openviking.storage.internal_names import is_hidden_entry_name
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
@@ -832,8 +833,7 @@ async def index_resource(
         for file_info in files:
             file_name = file_info["name"]
 
-            # Skip hidden files (like .abstract.md)
-            if file_name.startswith("."):
+            if is_hidden_entry_name(file_name, uri):
                 continue
 
             if file_info.get("type") == "directory" or file_info.get("isDir"):

@@ -38,6 +38,8 @@ List directory contents.
 
 `tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
+Hidden entries: directories are always listed. In resource trees (`viking://resources`, `viking://user/{user_id}/resources` and `viking://user/{user_id}/peers/{peer_id}/resources`), files are hidden only when they are OpenViking metadata (`.abstract.md`, `.overview.md`, `.relations.json`, `.watch_tasks.json`, ...) or storage-internal files (`.path.ovlock`, `.redirect.json`, ...); user dot-files such as `.gitlab-ci.yml` or `.gitignore` are listed, summarized and indexed like other files. In other namespaces every dot-file is hidden. `show_all_hidden=true` lists hidden files too. `tree` and `glob` follow the same rules.
+
 **Entry Structure**
 
 ```python
