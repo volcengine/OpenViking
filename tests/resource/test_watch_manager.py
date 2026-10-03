@@ -4,7 +4,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -101,7 +101,7 @@ class TestWatchTask:
 
     def test_create_task_with_all_fields(self):
         """Test creating a task with all fields specified."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         task = WatchTask(
             task_id="test-task-id",
             path="/test/path",
@@ -133,7 +133,7 @@ class TestWatchTask:
 
     def test_to_dict(self):
         """Test converting task to dictionary."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         task = WatchTask(
             task_id="test-id",
             path="/test/path",
@@ -161,7 +161,7 @@ class TestWatchTask:
 
     def test_from_dict(self):
         """Test creating task from dictionary."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         data = {
             "task_id": "test-id",
             "path": "/test/path",
@@ -190,6 +190,43 @@ class TestWatchTask:
         assert task.created_at == now
         assert task.last_execution_time == now
 
+    def test_from_dict_normalizes_timestamps_to_utc(self):
+        """Persisted aware and legacy naive timestamps both load as aware UTC."""
+        aware = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
+        legacy_naive = datetime(2026, 7, 9, 4, 14, 37)
+
+        from_aware = WatchTask.from_dict(
+            {
+                "path": "/test/path",
+                "created_at": aware.isoformat(),
+                "last_execution_time": aware.isoformat(),
+                "next_execution_time": aware.isoformat(),
+            }
+        )
+        from_naive = WatchTask.from_dict(
+            {
+                "path": "/test/path",
+                "created_at": legacy_naive.isoformat(),
+                "last_execution_time": legacy_naive.isoformat(),
+                "next_execution_time": legacy_naive.isoformat(),
+            }
+        )
+
+        assert from_aware.created_at == aware
+        assert from_aware.next_execution_time == aware
+        # A naive value is host-local wall time: converting keeps the same instant.
+        assert from_naive.created_at == legacy_naive.astimezone(timezone.utc)
+        assert from_naive.created_at.utcoffset() == timedelta(0)
+        assert from_naive.next_execution_time.tzinfo is not None
+
+    def test_assigned_timestamps_are_normalized_to_utc(self):
+        """Due-time comparisons never mix naive and aware values (issue #3268)."""
+        task = WatchTask(path="/test/path")
+        task.next_execution_time = datetime.now() - timedelta(minutes=1)
+
+        assert task.next_execution_time.tzinfo is not None
+        assert task.next_execution_time <= datetime.now(timezone.utc)
+
     def test_from_dict_defaults_legacy_processing_mode(self):
         task = WatchTask.from_dict({"path": "/test/path"})
 
@@ -199,7 +236,7 @@ class TestWatchTask:
 
     def test_calculate_next_execution_time(self):
         """Test calculating next execution time."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         task = WatchTask(
             path="/test",
             watch_interval=30.0,
@@ -213,7 +250,7 @@ class TestWatchTask:
 
     def test_calculate_next_execution_time_with_last_execution(self):
         """Test calculating next execution time based on last execution."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         last_exec = now - timedelta(minutes=10)
         task = WatchTask(
             path="/test",
