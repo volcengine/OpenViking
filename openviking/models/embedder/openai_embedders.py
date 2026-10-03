@@ -78,6 +78,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         dimension: Optional[int] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
+        query_instruction: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         input_type: Optional[str] = None,
@@ -139,6 +140,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self.query_instruction = query_instruction
         self._supports_multimodal = input_type == "multimodal"
         self.encoding_format = encoding_format
         self.extra_body = extra_body
@@ -324,9 +326,28 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return text
         return self.prepare_embedding_input(text)
 
+    def _apply_query_instruction(
+        self, text_input: EmbeddingInput | List[str], is_query: bool
+    ) -> EmbeddingInput | List[str]:
+        """Prepend the instruction to query text for asymmetric models.
+
+        Only query-side input is touched: documents stay unprefixed, so enabling or
+        changing the instruction never invalidates an existing index. Non-string input
+        (multimodal parts) is returned untouched, since the prefix only means something
+        for text.
+        """
+        if not is_query or not self.query_instruction:
+            return text_input
+        if isinstance(text_input, str):
+            return f"{self.query_instruction}{text_input}"
+        if isinstance(text_input, list) and all(isinstance(i, str) for i in text_input):
+            return [f"{self.query_instruction}{i}" for i in text_input]
+        return text_input
+
     def _build_kwargs(
         self, text_input: EmbeddingInput | List[str], is_query: bool = False
     ) -> Dict[str, Any]:
+        text_input = self._apply_query_instruction(text_input, is_query)
         kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
         if self.dimension and self._should_send_dimensions():
             kwargs["dimensions"] = self.dimension

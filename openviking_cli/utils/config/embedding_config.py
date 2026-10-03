@@ -66,6 +66,17 @@ class EmbeddingModelConfig(BaseModel):
             "Leave both unset for symmetric models."
         ),
     )
+    query_instruction: Optional[str] = Field(
+        default=None,
+        description=(
+            "Text prefix prepended to the query string itself for asymmetric embedding "
+            "models that expect an instruction (e.g. qwen3-embedding, bge, gte). "
+            "Unlike query_param, which travels as an API field, this is prepended to the "
+            "input text, which is what those models actually read. Documents are always "
+            "embedded unprefixed, so changing this does not invalidate an existing index. "
+            "Leave unset for symmetric models."
+        ),
+    )
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
@@ -778,6 +789,11 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **(
+                        {"query_instruction": cfg.query_instruction}
+                        if cfg.query_instruction
+                        else {}
+                    ),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                     **(
                         {"encoding_format": cfg.encoding_format}
@@ -805,6 +821,11 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **(
+                        {"query_instruction": cfg.query_instruction}
+                        if cfg.query_instruction
+                        else {}
+                    ),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                     **(
                         {"encoding_format": cfg.encoding_format}
@@ -926,6 +947,11 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "configured_provider": "ollama",
                     "config": dict(runtime_config),
+                    **(
+                        {"query_instruction": cfg.query_instruction}
+                        if cfg.query_instruction
+                        else {}
+                    ),
                 },
             ),
             ("voyage", "dense"): (
