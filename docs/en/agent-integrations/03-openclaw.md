@@ -1,4 +1,4 @@
-# OpenClaw Plugin
+# OpenClaw
 
 Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 

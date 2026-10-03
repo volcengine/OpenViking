@@ -1,4 +1,4 @@
-# ovcli Configuration
+# Client configuration fields
 
 `ovcli.conf` is the client configuration file for the `ov` CLI. It stores the server connection, authentication identity, and command defaults.
 

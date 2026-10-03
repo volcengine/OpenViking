@@ -1,4 +1,4 @@
-# DeepSeek Harness Memory Bundle
+# DeepSeek Harness
 
 Give [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content, and the model gets the OpenViking tools and the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills without any extra setup.
 

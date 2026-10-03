@@ -1,4 +1,4 @@
-# OpenViking 安装 SOP（For Agent）
+# 供 Agent 执行的服务端安装说明
 
 ## 目标
 

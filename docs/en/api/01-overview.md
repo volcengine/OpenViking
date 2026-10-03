@@ -1,4 +1,4 @@
-# API Overview
+# SDK, HTTP and CLI conventions
 
 This page covers how to connect to OpenViking and the conventions shared across all API endpoints.
 
@@ -68,7 +68,7 @@ tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
 It does not implement legacy `agent_id` compatibility.
-See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
+See [`sdk/go/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
 
@@ -93,7 +93,7 @@ const results = await client.search("deployment guide", {
 ```
 
 It uses the same identity headers and response envelope as the Python and Go
-HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
+HTTP clients. See [`sdk/typescript/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/typescript/README.md)
 for package-level examples.
 
 The Python HTTP client reads connection information from `ovcli.conf`; explicit constructor values override the corresponding settings. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:

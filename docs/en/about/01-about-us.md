@@ -4,6 +4,8 @@
 
 OpenViking is an open-source context database for AI agents, initiated and maintained by the Viking team at ByteDance's Volcengine. It organizes resources, memories, and skills as files that agents can browse, search, and read on demand.
 
+[View OpenViking on GitHub](https://github.com/volcengine/OpenViking)
+
 ## Team Introduction
 
 ### Viking Team Background

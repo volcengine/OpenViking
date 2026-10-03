@@ -1,4 +1,4 @@
-# 服务端配置
+# 服务端配置字段
 
 首次配置建议使用 `openviking-server init`，保存后运行 `openviking-server doctor`。
 

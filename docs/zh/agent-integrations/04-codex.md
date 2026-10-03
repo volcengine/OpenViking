@@ -1,4 +1,4 @@
-# Codex 记忆插件
+# Codex
 
 为 [Codex](https://developers.openai.com/codex) 提供跨会话记忆。插件通过 hooks 自动召回、捕获和提交对话，通过 MCP 提供检索、读取和记忆管理工具。
 

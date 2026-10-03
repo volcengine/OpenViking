@@ -4,6 +4,8 @@
 
 OpenViking 是面向 AI Agent 的开源上下文数据库，由字节跳动火山引擎 Viking 团队发起并维护。它用文件系统组织资源、记忆和技能，供 Agent 浏览、检索和按需读取。
 
+[在 GitHub 查看 OpenViking](https://github.com/volcengine/OpenViking)
+
 ## 团队介绍
 
 ### Viking 团队背景

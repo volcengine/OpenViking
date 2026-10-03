@@ -1,5 +1,7 @@
 # VikingBot Installation and Configuration
 
+For its role and architecture, read [VikingBot](../concepts/15-vikingbot.md), then use this page to install it.
+
 VikingBot is the multi-channel AI Agent built into OpenViking. It can start together with OpenViking, run independently for local debugging, or operate as a long-running Gateway connected to chat platforms.
 
 This guide covers installation and configuration for the three main usage scenarios. For complete documentation about Agent tools, chat channels, and architecture, see the [VikingBot documentation](https://github.com/volcengine/OpenViking/blob/main/bot/README.md).

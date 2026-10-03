@@ -1,4 +1,4 @@
-# 快速开始
+# 导入并检索第一份文档
 
 OpenViking 以服务端运行。用独立的 `ov` CLI 连接服务，导入一份小文档，再检索其中的内容。使用托管服务或他人部署的服务时，只需安装 CLI。
 
@@ -102,3 +102,7 @@ ov read "<returned-file-uri>"
 ## 使用 SDK
 
 OpenViking 也提供 Python、TypeScript/JavaScript 和 Go SDK，均连接同一个服务端。客户端示例见 [API 概览](../api/01-overview.md)。
+
+## 下一步
+
+先确认你已经读到示例原文，再按[用你的任务验证效果](06-evaluate.md)换成自己的资料或会话。接入日常工具时，选择[Agent 接入方式](../agent-integrations/01-overview.md)；自己写应用时，进入[应用开发路径](../workflows/01-overview.md)。

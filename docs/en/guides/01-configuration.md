@@ -1,4 +1,6 @@
-# Configuration
+# Configure models and services
+
+Use this guide to choose models, combine configuration examples and understand configuration scope. For field lookups, see [server configuration](../configuration/01-server.md) or [client configuration](../configuration/02-client.md). For a first deployment, start with [deployment paths](00-overview.md).
 
 OpenViking uses a JSON configuration file (`~/.openviking/ov.conf`) for settings.
 
@@ -14,27 +16,6 @@ openviking-server doctor
 ```
 
 `openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
-
-## Account Embedding and VectorDB
-
-ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
-Account. These sections use Account-specific allowlist schemas. Account and
-Cluster settings remain independent; the vector resolver applies Cluster defaults
-for omitted Account values. Provider connections can only be supplied through a
-complete `credentials` binding. Configuration reads return only Account values.
-
-VectorDB is immutable after Account creation. Existing Accounts may rotate complete
-Embedding credential/deployment bindings and update retry, concurrency, failback, and
-circuit-breaker settings. Outer model identity and other vector-space fields remain
-create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
-historical vectors.
-
-Account-owned VectorDB configurations use remote backends only. Account
-configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
-custom adapter parameters. Accounts with no VectorDB settings continue sharing
-the Cluster connection with Account data filtering. Remote resources must
-already exist.
-See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
 
 ## Configuration File
 
@@ -137,6 +118,27 @@ The request body wraps a PATCH document in `settings`:
 ```
 
 PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+
+## Account Embedding and VectorDB
+
+ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
+Account. These sections use Account-specific allowlist schemas. Account and
+Cluster settings remain independent; the vector resolver applies Cluster defaults
+for omitted Account values. Provider connections can only be supplied through a
+complete `credentials` binding. Configuration reads return only Account values.
+
+VectorDB is immutable after Account creation. Existing Accounts may rotate complete
+Embedding credential/deployment bindings and update retry, concurrency, failback, and
+circuit-breaker settings. Outer model identity and other vector-space fields remain
+create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
+historical vectors.
+
+Account-owned VectorDB configurations use remote backends only. Account
+configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
+custom adapter parameters. Accounts with no VectorDB settings continue sharing
+the Cluster connection with Account data filtering. Remote resources must
+already exist.
+See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
 
 ## Configuration Examples
 
@@ -1592,7 +1594,7 @@ Vector database storage configuration
 |-----------|------|-------------|---------|
 | `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
-| `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
+| `url` | str | Remote service URL for 'http' type (e.g., `http://localhost:5000`) | null |
 | `project_name` | str | Project name (alias project) | "default" |
 | `distance_metric` | str | Distance metric for vector similarity search (e.g., 'cosine', 'l2', 'ip') | "cosine" |
 | `dimension` | int | Vector embedding dimension | 0 |

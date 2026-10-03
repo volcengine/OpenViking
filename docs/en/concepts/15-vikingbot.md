@@ -1,4 +1,4 @@
-# VikingBot: A Multi-Channel AI Agent Powered by OpenViking
+# VikingBot: OpenViking's Native Agent
 
 VikingBot is a multi-channel AI Agent provided by OpenViking. OpenViking manages long-term context such as Resources, Memories, and Skills; VikingBot receives user messages, assembles context, invokes models and tools, and delivers results to a command line, chat platform, or HTTP client.
 

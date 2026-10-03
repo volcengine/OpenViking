@@ -1,6 +1,6 @@
-# OpenViking CLI 配置指南
+# 安装与使用 CLI
 
-本文介绍如何安装 OpenViking CLI、完成配置，并验证它可以连接到 OpenViking。
+本文介绍如何安装和配置 OpenViking CLI，并使用它连接到 OpenViking 服务端。
 
 `ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)。
 

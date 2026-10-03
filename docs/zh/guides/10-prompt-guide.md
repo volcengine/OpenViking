@@ -1,4 +1,4 @@
-# OpenViking Prompt 说明与自定义指南
+# 自定义处理 Prompt
 
 本文介绍 OpenViking 当前的 prompt 模板体系，重点说明：
 

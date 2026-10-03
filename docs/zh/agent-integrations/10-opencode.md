@@ -1,4 +1,4 @@
-# OpenCode 插件
+# OpenCode
 
 为 [OpenCode](https://opencode.ai/) 提供跨项目、跨会话的长期记忆和已索引仓库上下文。安装后，每次对话都会通过 OpenCode plugin hooks 自动召回相关记忆并捕获新内容；模型可调用工具来自 Claude Code / Codex 记忆插件同款的 OpenViking stdio MCP 代理。
 

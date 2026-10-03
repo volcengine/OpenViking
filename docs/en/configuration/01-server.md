@@ -1,4 +1,4 @@
-# Server Configuration
+# Server configuration fields
 
 For initial setup, run `openviking-server init`, then run `openviking-server doctor` after saving the configuration.
 

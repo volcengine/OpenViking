@@ -1,4 +1,4 @@
-# DeepSeek Harness 记忆插件
+# DeepSeek Harness
 
 为 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）接入跨项目、跨会话的长期记忆。安装后每次对话都会自动召回相关记忆并捕获新内容，模型也会直接拿到 OpenViking 工具以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个技能，无需额外配置。
 

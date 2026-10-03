@@ -1,4 +1,6 @@
-# 配置
+# 配置模型与服务
+
+本文用于选择模型、组合配置示例和理解生效范围。只查字段时，请看[服务端配置字段](../configuration/01-server.md)或[客户端配置字段](../configuration/02-client.md)；首次部署从[部署路径](00-overview.md)开始。
 
 OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支持 Embedding、VLM、Rerank、存储、解析器等多个模块的配置。
 
@@ -14,24 +16,6 @@ openviking-server doctor
 ```
 
 `openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
-
-## Account Embedding 与 VectorDB
-
-ROOT 可在创建 Account 时配置 `settings.embedding` 和 `settings.vectordb`，
-两者使用 Account 专用白名单模型。Account 与 Cluster 配置分别保存，向量业务
-resolver 为 Account 未设置的值应用 Cluster 默认。Provider 连接只能通过完整
-`credentials` binding 提交，不能跨 Account/Cluster 拼接。配置查询只返回
-Account 配置。
-
-VectorDB 创建后不可修改。新旧 Account 均可轮换完整 Embedding
-credentials/deployment binding，并更新重试、并发、failback 和熔断参数；
-外层 model 身份及其他向量空间字段仅创建时可设。兼容 endpoint 更新不打断
-在途调用，也不会自动重建历史向量。
-
-Account 独立配置的 VectorDB 仅支持远端 backend；Account 不能选择 local/cuvs，
-也不能设置本地路径、cuVS 调优或自定义 adapter 参数。未设置 VectorDB 的
-Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制面提前创建。权限与 PATCH 规则见
-[Admin 配置 API](../api/08-admin.md#runtime-configuration)。
 
 ## 快速开始
 
@@ -135,6 +119,24 @@ PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置�
 的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
+
+## Account Embedding 与 VectorDB
+
+ROOT 可在创建 Account 时配置 `settings.embedding` 和 `settings.vectordb`，
+两者使用 Account 专用白名单模型。Account 与 Cluster 配置分别保存，向量业务
+resolver 为 Account 未设置的值应用 Cluster 默认。Provider 连接只能通过完整
+`credentials` binding 提交，不能跨 Account/Cluster 拼接。配置查询只返回
+Account 配置。
+
+VectorDB 创建后不可修改。新旧 Account 均可轮换完整 Embedding
+credentials/deployment binding，并更新重试、并发、failback 和熔断参数；
+外层 model 身份及其他向量空间字段仅创建时可设。兼容 endpoint 更新不打断
+在途调用，也不会自动重建历史向量。
+
+Account 独立配置的 VectorDB 仅支持远端 backend；Account 不能选择 local/cuvs，
+也不能设置本地路径、cuVS 调优或自定义 adapter 参数。未设置 VectorDB 的
+Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制面提前创建。权限与 PATCH 规则见
+[Admin 配置 API](../api/08-admin.md#runtime-configuration)。
 
 ## 配置示例
 
@@ -1585,7 +1587,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 |------|------|------|--------|
 | `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
-| `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
+| `url` | str | 'http' 类型的远程服务 URL（例如 `http://localhost:5000`） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
 | `distance_metric` | str | 向量相似度搜索的距离度量（例如 'cosine', 'l2', 'ip'） | "cosine" |
 | `dimension` | int | 向量嵌入的维度 | 0 |

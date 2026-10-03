@@ -1,4 +1,4 @@
-# OpenViking Prompt Guide and Customization
+# Customize processing prompts
 
 This document introduces OpenViking's current prompt template system, with a focus on:
 

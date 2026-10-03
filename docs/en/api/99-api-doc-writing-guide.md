@@ -1,4 +1,4 @@
-# API Documentation Writing Guide
+# API documentation standard
 
 This document defines the unified structure and writing conventions for API module documentation in the `docs/en/api/` directory.
 

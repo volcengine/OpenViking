@@ -1,4 +1,4 @@
-# Claude Code Memory Plugin
+# Claude Code
 
 Give [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content without requiring the model to make any tool calls.
 

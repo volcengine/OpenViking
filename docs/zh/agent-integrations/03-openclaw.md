@@ -1,4 +1,4 @@
-# OpenClaw 插件
+# OpenClaw
 
 为 [OpenClaw](https://github.com/openclaw/openclaw) 添加长效记忆。安装完成后，OpenClaw 会自动记住对话中的重要信息，并在每次回复前召回相关上下文。
 

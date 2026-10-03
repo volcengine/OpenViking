@@ -1,4 +1,4 @@
-# Claude Code 记忆插件
+# Claude Code
 
 为 [Claude Code](https://docs.claude.com/zh-CN/docs/claude-code/overview) 添加跨项目、跨会话（session）的长期记忆功能。安装完成后，每轮对话均会自动召回相关记忆并捕获新内容，无需模型主动调用任何工具。
 

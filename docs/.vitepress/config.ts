@@ -1,8 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { defineConfig, type DefaultTheme } from 'vitepress'
-import { titleFromMarkdown, sidebarSection, localizedSectionSidebarItems, localizedGroupedSidebarItems, localizedReferenceSidebarItems, localizedAboutSidebarItems } from './docs-navigation'
+import { defineConfig } from 'vitepress'
+import taskLists from 'markdown-it-task-lists'
+import { hasPageLlmsTxt, pageLlmsTxtPath } from './theme/llms-txt'
+import { titleFromMarkdown, docPageTitle, documentationNav, documentationSidebars, documentationSections } from './docs-navigation'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
@@ -36,42 +38,8 @@ const preferenceBootstrapScript = `;(() => {
   } catch {}
 })()`
 
-const navLabels = {
-  en: {
-    start: 'Getting Started',
-    concepts: 'Concepts',
-    guide: 'Guides',
-    api: 'API Reference',
-    faq: 'FAQ',
-    about: 'About'
-  },
-  zh: {
-    start: '开始使用',
-    concepts: '核心概念',
-    guide: '指南',
-    api: 'API 参考',
-    faq: '常见问题',
-    about: '关于'
-  }
-}
-
-const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|configuration|agent-integrations)/' },
-  { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
-  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|context-compilation)/' },
-  { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
-  { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
-  { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
-]
-
-const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|configuration|agent-integrations)/' },
-  { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
-  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|context-compilation)/' },
-  { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
-  { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
-  { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
-]
+const enNav = documentationNav('en')
+const zhNav = documentationNav('zh')
 
 function collectAllMdFiles(
   srcDir: string,
@@ -83,7 +51,7 @@ function collectAllMdFiles(
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
-      if (ignored.has(entry) || (dir === srcDir && entry === 'repository')) continue
+      if (ignored.has(entry) || (dir === srcDir && ['repository', 'review', 'images'].includes(entry))) continue
       const abs = path.join(dir, entry)
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
@@ -161,19 +129,16 @@ function buildLlmsTxt(siteConfig: any) {
   const outDir = siteConfig.outDir
 
   const allFiles = collectAllMdFiles(srcDir)
-  const files = allFiles.filter(({ relativePath }) => relativePath.replaceAll(path.sep, '/').startsWith('en/'))
-
-  // The machine-readable index and full corpus use the English documentation.
+  const files = documentationSections('en').flatMap(section =>
+    section.groups.flatMap(group => group.pages.map(page => ({
+      relativePath: `en/${page.path}.md`, absPath: path.join(srcDir, `en/${page.path}.md`)
+    })))
+  )
   const sections = new Map<string, { title: string; url: string }[]>()
-  for (const { relativePath, absPath } of files) {
-    const parts = relativePath.replace(/\\/g, '/').split('/')
-    const section = parts.length >= 2 ? parts.slice(0, -1).join('/') : 'misc'
-    const content = fs.readFileSync(absPath, 'utf-8')
-    const heading = content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? path.basename(absPath, '.md')
-    const urlPath = `/${relativePath.replace(/\\/g, '/').replace(/\.md$/, '')}`
-    const url = `${siteUrl}${base}${urlPath}`
-    if (!sections.has(section)) sections.set(section, [])
-    sections.get(section)!.push({ title: heading, url })
+  for (const section of documentationSections('en')) {
+    sections.set(section.en, section.groups.flatMap(group => group.pages.map(page => ({
+      title: `${group.en} — ${docPageTitle('en', page.path)}`, url: `${siteUrl}${base}/en/${page.path}`
+    }))))
   }
 
   const lines: string[] = [
@@ -229,11 +194,10 @@ export default defineConfig({
   description: 'Open-source context database for AI Agents',
   cleanUrls: true,
   lastUpdated: true,
-  // The existing Markdown corpus links to examples, bot docs, and localhost
-  // snippets that are outside the VitePress page tree.
-  ignoreDeadLinks: true,
-  // Repository translations and maintainer guides are browsed on GitHub.
-  srcExclude: ['repository/**'],
+  markdown: { config: md => md.use(taskLists, { label: true }) },
+  // Repository guides are read on GitHub; review notes are local artifacts.
+  // images/ is the public asset directory, including raw Markdown consumed by other apps.
+  srcExclude: ['repository/**', 'review/**', 'images/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
@@ -242,12 +206,17 @@ export default defineConfig({
     ['meta', { property: 'og:image', content: ogImageUrl }],
     ['meta', { property: 'og:image:width', content: '1200' }],
     ['meta', { property: 'og:image:height', content: '630' }],
+    ['link', { rel: 'alternate', type: 'text/plain', title: 'LLM documentation index', href: `${base}llms.txt` }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:image', content: ogImageUrl }],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
   ],
   transformPageData(pageData, { siteConfig }) {
+    if (hasPageLlmsTxt(pageData.relativePath)) {
+      const head = pageData.frontmatter.head ??= []
+      head.push(['link', { rel: 'alternate', type: 'text/plain', title: 'LLM page content', href: `${base.replace(/\/$/, '')}${pageLlmsTxtPath(pageData.relativePath)}` }])
+    }
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
     try {
       // Raw SFC closing tags must not terminate VitePress's generated script block.
@@ -261,6 +230,12 @@ export default defineConfig({
     buildDocsSearchIndex(siteConfig)
   },
   vite: {
+    resolve: {
+      alias: [
+        { find: './VPNavBarTitle.vue', replacement: path.join(docsRoot, '.vitepress/theme/components/SiteSwitcher.vue') },
+        { find: './VPSidebarGroup.vue', replacement: path.join(docsRoot, '.vitepress/theme/components/SidebarGroups.vue') }
+      ]
+    },
     publicDir: 'images',
     plugins: [
       {
@@ -315,17 +290,7 @@ export default defineConfig({
         outline: {
           level: [2, 3]
         },
-        sidebar: {
-          '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
-          '/en/configuration/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
-          '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
-          '/en/guides/': localizedGroupedSidebarItems('en', ['guides']),
-          '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'configuration', 'agent-integrations']),
-          '/en/context-compilation/': localizedGroupedSidebarItems('en', ['guides']),
-          '/en/api/': localizedReferenceSidebarItems('en'),
-          '/en/faq/': [sidebarSection('en/faq', 'FAQ', false)],
-          '/en/about/': localizedAboutSidebarItems('en')
-        }
+        sidebar: documentationSidebars('en')
       }
     },
     zh: {
@@ -337,17 +302,7 @@ export default defineConfig({
       themeConfig: {
         logoLink: `${base}zh/`,
         nav: zhNav,
-        sidebar: {
-          '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
-          '/zh/configuration/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
-          '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
-          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides']),
-          '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),
-          '/zh/context-compilation/': localizedGroupedSidebarItems('zh', ['guides']),
-          '/zh/api/': localizedReferenceSidebarItems('zh'),
-          '/zh/faq/': [sidebarSection('zh/faq', '常见问题', false)],
-          '/zh/about/': localizedAboutSidebarItems('zh')
-        },
+        sidebar: documentationSidebars('zh'),
         outline: {
           label: '页面导航',
           level: [2, 3]

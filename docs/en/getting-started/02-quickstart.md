@@ -1,4 +1,4 @@
-# Quick Start
+# Import and retrieve your first document
 
 OpenViking runs as a server. Connect to it with the standalone `ov` CLI, import a small document, and retrieve its content. If you use a managed service or someone else's deployment, you only need the CLI.
 
@@ -102,3 +102,7 @@ Replace `<returned-file-uri>` with a file URI from the results, without the angl
 ## Use an SDK
 
 OpenViking also provides Python, TypeScript/JavaScript, and Go SDKs that connect to the same server. See the [API Overview](../api/01-overview.md) for client examples.
+
+## Next steps
+
+First confirm that you can read the sample source, then [evaluate OpenViking on your tasks](06-evaluate.md) using your own sources or conversations. To use it in a daily tool, [choose an agent integration](../agent-integrations/01-overview.md). To write your own application, follow the [application workflows](../workflows/01-overview.md).

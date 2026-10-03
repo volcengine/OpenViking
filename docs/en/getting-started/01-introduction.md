@@ -1,47 +1,46 @@
-# Introduction
+# What OpenViking does
 
-OpenViking is an open-source context database for AI agents. It stores resources, memories, and skills in a virtual file system, so an application can browse known paths, retrieve relevant context, and load only the detail it needs.
+OpenViking is an open-source context database for AI agents. It organizes sources, memories and skills in one virtual file system so agents can find relevant content and reuse it in later tasks.
 
-Use it when an agent needs to reuse documents and experience across sessions, with one place to organize and retrieve that context.
+If your sources are hard to find, you keep repeating background in new conversations, or useful experience is difficult to reuse, choose a path below.
 
 ## Start with your task
 
-| I want to… | Start here |
-| --- | --- |
-| Connect to a service and retrieve my first document | [Quick Start](./02-quickstart.md) |
-| Connect an existing agent or coding tool | [Agent Integrations](../agent-integrations/01-overview.md) |
-| Use OpenViking from a terminal | [CLI Setup](./05-cli-setup.md) |
-| Deploy and operate a shared server | [Deployment](../guides/03-deployment.md) and [Authentication](../guides/04-authentication.md) |
-| Build against the SDK or HTTP API | [API Reference](../api/01-overview.md) |
+| What you want to do | First step | Then continue to |
+| --- | --- | --- |
+| Help an agent find evidence in project sources | [Import and retrieve your first document](02-quickstart.md) | Replace the sample with your sources and [evaluate the result](06-evaluate.md) |
+| Add cross-session memory to an existing agent | [Choose an agent integration](../agent-integrations/01-overview.md) | Follow its installation guide, then [check memory across two sessions](06-evaluate.md#check-memory-across-two-sessions) |
+| Use context in your own application | [Application workflows](../workflows/01-overview.md) | Choose a resource, session or skill workflow, then look up its APIs |
+| Turn sources into a wiki, graph or report | [Context Compilation Overview](../context-compilation/01-overview.md) | Choose an output and check it against familiar sources |
+
+**Not sure where to start?** [Import and retrieve your first document](02-quickstart.md). This path uses a small document to connect, import, retrieve and read the source, without requiring you to study the architecture first.
+
+If you already have a service URL and API key, [install and use the CLI](05-cli-setup.md). To provide a service yourself, choose a [deployment path](../guides/00-overview.md). To use the agent included with OpenViking, see [VikingBot Installation and Configuration](../guides/17-vikingbot.md).
+
+## Turn a first result into a working habit
+
+1. **Get a first result.** Confirm that you can read imported content, beyond checking service health.
+2. **Try your own task.** Use sources with known answers or context needed across sessions. Check what is found and used through [Evaluate OpenViking on your tasks](06-evaluate.md).
+3. **Connect it to your work.** Choose an agent, application or compilation workflow. Add deployment and access controls when you need to share the service.
+
+If something fails, use [observability and diagnostics](../guides/05-observability.md) to distinguish connection, processing and retrieval problems.
 
 ## How context is organized
 
-Each file or directory has a `viking://` URI. Use a known URI to list or read context, or search when you do not know where it lives.
+| Context | What it stores |
+| --- | --- |
+| Resources | Documents, code repositories and other external sources |
+| Memories | Preferences, facts and experience extracted from sessions |
+| Skills | Instructions and supporting files for reusable workflows |
 
-| Context | What it contains | Learn more |
-| --- | --- | --- |
-| Resources | Documents, repositories, and other reference material | [Resources](../api/02-resources.md) |
-| Memories | User preferences, entities, events, and experience extracted from sessions | [Memory](../api/16-memory.md) |
-| Skills | Instructions and supporting files for reusable agent workflows | [Skills](../api/04-skills.md) |
-
-Shared resources live under `viking://resources/`. User context lives under `viking://user/{user_id}/`, with Peer-specific context under `peers/{peer_id}/`. Shared skills can live under `viking://agent/skills/`. See [Viking URI](../concepts/04-viking-uri.md) for scope and path rules.
+Content is addressed by a `viking://` URI. Browse a known path, or retrieve a match and then read it. [Context Types](../concepts/02-context-types.md) and [Viking URI](../concepts/04-viking-uri.md) explain the objects and their scope.
 
 ## Load context in layers
 
-OpenViking can generate directory summaries during semantic processing:
-
-| Layer | Content | Default body limit |
-| --- | --- | --- |
-| L0 | Abstract for quick filtering | 256 characters |
-| L1 | Overview for navigation | 4,000 characters |
-| L2 | Original content for detailed reading | No uniform limit |
-
-L0 and L1 are directory sidecars, not a pair of summaries attached to every file. Their availability depends on processing state and configuration. See [Context Layers](../concepts/03-context-layers.md).
-
-[Retrieval](../concepts/07-retrieval.md) combines semantic matching with directory traversal. Use `find` for retrieval without session context, or `search` when session context should inform the query. [Observability](../guides/05-observability.md) helps inspect processing and retrieval behavior.
+During semantic processing, OpenViking can generate directory abstracts (L0) and overviews (L1), then load source content (L2) when needed. L0 and L1 are directory sidecars; availability depends on processing state and configuration. They are not a fixed pair of summaries for every file. See [Context Layers](../concepts/03-context-layers.md).
 
 ## Build memory from sessions
 
-Applications record messages in a session and commit it for asynchronous memory extraction. The active memory policy determines which memories are created or updated for the user or Peer. Integration plugins can automate parts of this workflow; check the integration's supported behavior before relying on it. See [Sessions](../concepts/08-session.md) and [Memory Configuration](../guides/01-configuration.md).
+Applications record messages and commit sessions for asynchronous extraction under a memory policy. Plugins can automate some of these steps; check the [capability comparison](../agent-integrations/16-capability-reference.md) for their scope. Inspect the actual output and recall behavior to learn what was retained and used.
 
-For implementation details, read the [Architecture](../concepts/01-architecture.md). For release-specific changes, check [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
+For a reading path through these mechanisms, start with [Concepts and principles](../concepts/00-overview.md). To continue with a task, choose a link under “Use it in your work” in the sidebar.

@@ -1,6 +1,6 @@
-# OpenViking CLI Setup
+# Install and use the CLI
 
-This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
+This guide shows you how to install and configure the OpenViking CLI and use it to connect to an OpenViking server.
 
 `ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) first.
 

@@ -1,4 +1,4 @@
-# 集成能力参考
+# Agent 集成能力对照
 
 **Hermes 范围**：表中的 Hermes 描述其[内置 provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)，
 核对版本为 Hermes main `989798cd5e`。[OpenViking 维护的外部插件](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)

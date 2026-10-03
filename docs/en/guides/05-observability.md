@@ -552,7 +552,7 @@ A beginner-friendly viewing order is:
 
 After a successful import, you should see a dashboard centered on OpenViking requests, queues, probes, model calls, and overall system state. For a visual reference, see:
 
-- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+- [grafana-demo-dashboard.png](/grafana-demo-dashboard.png)
 
 This screenshot helps you quickly verify whether the imported layout looks correct. If the dashboard structure matches but some panels are empty, it usually means the corresponding metrics have not produced samples yet, or the filters do not match the current traffic.
 

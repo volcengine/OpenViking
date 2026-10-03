@@ -1,4 +1,4 @@
-# Codex Memory Plugin
+# Codex
 
 Give [Codex](https://developers.openai.com/codex) cross-session memory. Hooks handle automatic recall, capture, and session commits; MCP tools let the model search, read, and manage memories.
 

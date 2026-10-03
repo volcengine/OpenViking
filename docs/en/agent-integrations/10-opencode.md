@@ -1,4 +1,4 @@
-# OpenCode Plugin
+# OpenCode
 
 Give [OpenCode](https://opencode.ai/) cross-project and cross-session long-term memory plus indexed repository context. Once installed, every conversation automatically recalls relevant memories and captures new content through OpenCode plugin hooks, while model-callable tools come from the same OpenViking stdio MCP proxy used by the Claude Code and Codex memory plugins.
 

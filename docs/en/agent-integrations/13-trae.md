@@ -1,4 +1,4 @@
-# TRAE, TRAE CN, and TraeCode CLI 2.0 Memory Integration
+# TRAE
 
 Give TRAE, TRAE CN, and TraeCode CLI 2.0 long-term memory across projects and sessions. OpenViking Hooks automatically load relevant context, capture each conversation turn, and commit it for memory extraction. MCP remains available for explicit memory search, reading, and management.
 

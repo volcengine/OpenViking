@@ -35,6 +35,7 @@ jobs:
         env:
           DOCS_BASE: /
           VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
+          VITE_DOCS_SEARCH_URL: ${{ vars.VITE_DOCS_SEARCH_URL }}
 
       - name: Build plugin downloads
         run: bash .github/scripts/build-plugin-downloads.sh docs/.vitepress/dist/dl https://docs.openviking.ai/dl
