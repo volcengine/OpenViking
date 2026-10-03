@@ -22,8 +22,6 @@ The daemon does not need to understand product semantics. It manages process lif
 - Human page: https://blog.openviking.ai/post/agent-runtime/
 - Agent-readable page: https://blog.openviking.ai/post/agent-runtime/llm.txt
 - Runnable examples: https://github.com/ZaynJarvis/agent-runtime
-- Zouk delivery routing details: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md
-- Zouk idle delivery and wake policy: https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy
 - OpenViking MCP integration: https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md
 - Claude Code memory plugin: https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md
 

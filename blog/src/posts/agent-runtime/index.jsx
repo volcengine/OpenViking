@@ -5,10 +5,8 @@ import {
 } from '../../blog-components';
 
 const LLM_PATH = '/post/agent-runtime/llm.txt';
-const ZOUK_DELIVERY_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-delivery-routing.md';
-const ZOUK_LIFECYCLE_DOC = 'https://github.com/ZaynJarvis/zouk/blob/main/docs/agent-lifecycle.md#idle-delivery-and-wake-policy';
-const OPENVIKING_MCP_DOC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime/blob/main/docs/en/guides/06-mcp-integration.md';
-const OPENVIKING_CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime/blob/main/examples/claude-code-memory-plugin/README.md';
+const OPENVIKING_MCP_DOC = 'https://github.com/volcengine/OpenViking/blob/main/docs/en/guides/06-mcp-integration.md?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime';
+const OPENVIKING_CLAUDE_PLUGIN_DOC = 'https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md?utm_source=blog&utm_medium=article&utm_campaign=agent-runtime';
 
 const STREAM_JSON_INPUT = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Say hi back in one sentence."}]}}`;
 
@@ -394,7 +392,7 @@ node 3b_gomoku_daemon.js white`}</Pre>
       <P>{T({
         en: 'The production Zouk design splits this into two layers: delivery routing decides which agents should receive an agent:deliver frame, and lifecycle/wake policy decides how to wake the selected agent process.',
         zh: 'Zouk 的生产实现把这件事拆成两层：消息路由先决定哪些 agent 应该收到 agent:deliver；生命周期/唤醒策略再决定怎样唤醒被选中的 agent 进程。',
-      })} <A href={ZOUK_DELIVERY_DOC}>{T({ en: 'Delivery routing doc', zh: '消息路由文档' })}</A>{T({ en: ' and ', zh: ' 和 ' })}<A href={ZOUK_LIFECYCLE_DOC}>{T({ en: 'idle wake policy', zh: 'idle 唤醒策略' })}</A>{T({ en: ' have the full contract.', zh: ' 里有完整设计。' })}</P>
+      })}</P>
 
       <H3>{T({ en: 'Message delivery paths', zh: '消息投递路径' })}</H3>
 

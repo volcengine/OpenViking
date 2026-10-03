@@ -6,8 +6,8 @@ import {
 
 const OPENVIKING_GITHUB = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent';
 const OPENVIKING_DOCS = 'https://docs.openviking.ai';
-const CLAUDE_PLUGIN_SRC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent/tree/main/examples/claude-code-memory-plugin';
-const CODEX_PLUGIN_SRC = 'https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent/tree/main/examples/codex-memory-plugin';
+const CLAUDE_PLUGIN_SRC = 'https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent';
+const CODEX_PLUGIN_SRC = 'https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent';
 const ARCH_POST = '/post/openviking-context-database-architecture';
 const LOCAL_DEPLOY_DOC = 'https://docs.openviking.ai/zh/getting-started/02-quickstart';
 const CLOUD_CONSOLE = 'https://console.volcengine.com/vikingdb/openviking';
