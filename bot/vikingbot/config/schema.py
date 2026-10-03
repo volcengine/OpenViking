@@ -579,6 +579,7 @@ class WebSearchConfig(BaseModel):
 
     api_key: str = ""  # Brave Search API key
     tavily_api_key: str = ""  # Tavily Search API key
+    firecrawl_api_key: str = ""  # Firecrawl Search API key
     max_results: int = 5
 
 
