@@ -648,6 +648,7 @@ async def search(
         limit=limit,
         score_threshold=0.35 if min_score is None else min_score,
         filter=context_filter,
+        context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
     )

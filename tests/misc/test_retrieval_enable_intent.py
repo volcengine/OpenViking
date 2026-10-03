@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import contextvars
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -108,9 +110,7 @@ async def test_search_service_skips_session_context_when_intent_disabled():
     from openviking.service.search_service import SearchService
 
     fs = _make_viking_fs(enable_intent=False)
-    fs.search = AsyncMock(
-        return_value=MagicMock(name="find_result", query_plan=None, total=0)
-    )
+    fs.search = AsyncMock(return_value=MagicMock(name="find_result", query_plan=None, total=0))
     session = MagicMock()
     session.get_context_for_search = AsyncMock(
         side_effect=AssertionError("must not scan session when intent disabled")
@@ -128,9 +128,7 @@ async def test_search_service_loads_session_context_when_intent_enabled():
     from openviking.service.search_service import SearchService
 
     fs = _make_viking_fs(enable_intent=True)
-    fs.search = AsyncMock(
-        return_value=MagicMock(name="find_result", query_plan=None, total=0)
-    )
+    fs.search = AsyncMock(return_value=MagicMock(name="find_result", query_plan=None, total=0))
     session_info = {"latest_archive_overview": "ov", "current_messages": []}
     session = MagicMock()
     session.get_context_for_search = AsyncMock(return_value=session_info)
@@ -140,3 +138,65 @@ async def test_search_service_loads_session_context_when_intent_enabled():
 
     session.get_context_for_search.assert_awaited_once()
     assert fs.search.await_args.kwargs.get("session_info") is session_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "planned", "expected"),
+    [
+        ("memory", "resource", "memory"),
+        (["memory"], "skill", "memory"),
+        ("resource", "memory", "resource"),
+        (["memory", "resource"], "memory", "memory"),
+        (["memory", "resource"], "skill", None),
+        (None, "skill", "skill"),
+    ],
+)
+async def test_session_search_plan_respects_explicit_context_scope(
+    monkeypatch, scope, planned, expected
+):
+    # #5544: planner classification must not contradict the caller's REST scope.
+    from starlette.requests import Request
+
+    from openviking.server.routers import search as search_router
+    from openviking.service.search_service import SearchService
+
+    fs = _make_viking_fs(enable_intent=True)
+    planner = SimpleNamespace(
+        get_completion_async=AsyncMock(
+            return_value=json.dumps(
+                {"queries": [{"query": "known record", "context_type": planned}]}
+            )
+        )
+    )
+    fs._vlm_resolver = SimpleNamespace(get_query_planner=AsyncMock(return_value=planner))
+    session = SimpleNamespace(
+        load=AsyncMock(),
+        get_context_for_search=AsyncMock(
+            return_value={"latest_archive_overview": "previous discussion"}
+        ),
+    )
+    service = SimpleNamespace(
+        search=SearchService(fs),
+        sessions=SimpleNamespace(session=lambda *args: session),
+    )
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            pass
+
+        async def retrieve(self, typed_query, **kwargs):
+            return QueryResult(query=typed_query, matched_contexts=[], searched_directories=[])
+
+    monkeypatch.setattr(search_router, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever", FakeRetriever
+    )
+    response = await search_router.search(
+        search_router.SearchRequest(query="known record", session_id="fixture", context_type=scope),
+        Request({"type": "http"}),
+        _ctx(),
+    )
+
+    assert response["status"] == "ok"
+    assert response["result"]["query_plan"]["queries"][0]["context_type"] == expected
