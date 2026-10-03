@@ -1,0 +1,114 @@
+# OpenViking for Claude Code and Codex: Reusing Experience Across Sessions
+
+Install the plugin, understand capture and commit, and verify that scoped memory survives a session and helps the next task.
+
+A new conversation can read the repository without knowing why the previous session rejected a design. The OpenViking plugin stores decisions and experience on a server and retrieves them for later tasks. Its value is whether the next session can pick up the work.
+
+## Three kinds of context
+
+Consider a hypothetical fix: the team keeps an old interface because a downstream service has not migrated. Code records the implementation, AGENTS.md defines test commands, and the conversation explains the temporary decision. A later change may need all three, for different reasons.
+
+| Context | What belongs here | What to check |
+| --- | --- | --- |
+| Project instructions | Test commands, code conventions, required constraints | Whether the current repository rules apply |
+| Session records and summaries | What happened in this task and what remains | Whether capture and archival include the last turns |
+| Long-term memory | Reusable preferences, decisions, events, and experience | Source, scope, and whether a newer decision supersedes it |
+
+Local instruction files remain useful. The plugin adds information scattered across past interactions. Recalled memory is background to verify; it cannot override the current request or substitute for current code.
+
+## Connect a server and an identity
+
+You need a reachable OpenViking Server and compatible server and plugin versions. The server supplies model configuration, storage, and memory extraction; installing a plugin connects the client. Current plugins use the viking://~ home alias, so check compatibility with older servers.
+
+On macOS or Linux, the shared installer can configure Claude Code or Codex. It checks dependencies, asks for the server address and API key, and shows configuration changes before applying them. Choose the command for your client.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --harness claude
+```
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --harness codex
+```
+
+If GitHub is hard to reach, run the installer from the Volcengine TOS mirror, then choose the client and download source when prompted.
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+```
+
+For an API-key-authenticated server, use a User/Admin key bound to the intended user. Root keys are for administration. Two clients sharing one person’s memory must use the same server and effective user; matching URLs alone do not establish that identity.
+
+Restart the client after installation. In Codex, enable the plugin and trust its hooks. Working MCP tools do not prove that automatic recall and capture are enabled. Choose either the installer or marketplace setup to avoid duplicate hooks.
+
+## From conversation to reusable memory
+
+| When | Action and completion boundary |
+| --- | --- |
+| SessionStart | Load the profile, memory index, and skill catalog; resume can include an archive summary. Injection has a budget and does not contain all history. |
+| UserPromptSubmit | If auto-recall is enabled, retrieve context for the current input. Network, retrieval, and optional compression add latency. |
+| Stop | Capture new turns; commit when the configured threshold is reached. Successful capture and completed extraction are separate states. |
+| PreCompact | Commit pending records before the host compacts context. Submission can take time, time out, or fail. |
+| SessionEnd | Submit at session end; Codex depends on host version and graceful shutdown. A killed process may never fire the hook. |
+
+The server archives messages before asynchronously generating summaries and extracting memory. A returned task_id makes that work trackable. After completion, memory_diff.json in the archive records actual additions, updates, and deletions. A commit may produce no new memory.
+
+Extraction consults existing content and updates files according to enabled types and policy. Profiles, preferences, entities, and events support later conversations; experience extraction also depends on Agent Evolution settings. A list of memory types is not a promise to produce each type on every turn.
+
+## Where the hosts differ
+
+Both current plugins use a local stdio MCP proxy to reach the server’s /mcp endpoint, resolving connection settings from environment variables or ovcli.conf. Host lifecycles differ, so capture behavior matters more than a fixed hook count.
+
+| Behavior | Claude Code | Codex |
+| --- | --- | --- |
+| Commit | Write paths such as Stop and SessionEnd can use a background worker; PreCompact submits synchronously | Stop captures incrementally; PreCompact commits; supported versions commit on graceful SessionEnd |
+| Exit fallback | Inspect writeback logs and pending retries | Startup or clear checks end markers and idle state; resume does not perform that sweep |
+| Subagents | SubagentStart/Stop paths use separate session records | Do not assume Claude Code subagent behavior applies |
+
+Background writes reduce blocking without removing latency or failure. Pre-compaction submission, per-prompt recall, and model compression can still affect wait time. Separate sessions separate records; they do not create separate user authorization boundaries.
+
+## Set the scope before sharing
+
+By default, the workspace peer derives from Git origin. Clones, worktrees, and subdirectories of the same repository can share project memory; a fork with another origin gets another peer. Outside a repository or explicitly configured workspace, memory goes to the user-level space.
+
+This example assigns a project identity to a non-Git directory and scopes recall to that peer plus user-level memory. A peer remains inside a user boundary; a service for separate people needs separate user identities first.
+
+```json
+{
+  "version": 1,
+  "peer": { "id": "checkout-service" },
+  "recall": { "peer_scope": "actor" }
+}
+```
+
+Claude Code, Codex, and other MCP clients can reuse server-side context. Host process state, uncaptured records, and tool configuration do not migrate with it. A weekly report can draw on sessions, but dates, task status, and omissions still need checking.
+
+## Read the evidence behind a match
+
+Search and find return URIs, summaries, and relevance scores. Those scores rank matches; they are not probabilities that a statement is true. A 0.60 result does not mean “60% trustworthy.” Read the underlying content and check current implementation before using an architectural decision or code constraint.
+
+Explicit tools complement hooks: search/find locate leads, read fetches content, list/grep/glob help navigation, remember records information, add_resource imports material, and forget deletes specified memories. The server’s exposed schema defines the available tools.
+
+Auto-recall can be disabled. If waiting on each prompt costs more than the lookup it saves, keep capture and on-demand search, then compare latency, useful matches, and incorrect citations on real tasks. L0/L1 help select content, but summaries can omit details or become stale.
+
+```bash
+export OPENVIKING_AUTO_RECALL=false
+export OPENVIKING_DEBUG=true
+```
+
+## Check credentials and writeback
+
+The installer can write an API key to local ovcli.conf. The proxy avoids duplicating secrets in project .mcp.json; it does not promise that credentials never reach disk. Protect local configuration and the runtime environment, and keep them out of repositories and shared logs.
+
+Capture strips injected context tags to reduce feedback loops. That does not guarantee that mistakes in an assistant reply will never be extracted. Correct or delete bad memory and inspect its source. OPENVIKING_BYPASS_SESSION bypasses hooks; it does not automatically revoke explicit MCP read/write access.
+
+## Verify one cross-session task
+
+Choose a test project without sensitive data and record a decision with its reason. End the session normally, inspect the server task and memory_diff.json, then ask about the decision in a new session. Request the memory URI and read its source. Finally, repeat the lookup from another client using the same identity and project scope.
+
+Verify three separate outcomes: the content was stored, retrieval finds it, and the agent uses it correctly. Then make a correction and check that later answers use the updated decision. An installation success or “I’ll remember that” proves none of these.
+
+[Claude Code plugin: installation and lifecycle](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md)
+
+[Codex plugin: host requirements and configuration](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md)
+
+[Session commits and memory change records](https://docs.openviking.ai/en/concepts/08-session)

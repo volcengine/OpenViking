@@ -1,232 +1,108 @@
-# OpenViking: The Database Paradigm for Context Engineering
+# Why Agents Need a Context Database: An API Migration Example
 
-OpenViking is a context database for AI agents. It treats context as data: ingested, organized, indexed, summarized, scoped, retrieved, updated, remembered, and read through stable commands.
+Use a cross-repository task to understand resources, memory, skills, and layered reading, and decide when OpenViking is worth introducing.
 
-Context engineering =
+An agent can read code without knowing why an interface migration is unfinished. The implementation may be in one repository, migration conditions in a document, and a temporary decision in last week’s conversation. OpenViking gives these materials a place to live and a way to be found and reused.
 
-```text
-reliable reasoning constraints
-+ complete information organization
-+ effective context recommendation
-+ full-lifecycle memory
-+ traceable self-evolving learning
-```
+## Start with what the task is missing
 
-OpenViking mainly provides complete information organization. It also supports context recommendation and long-lifecycle memory.
+Consider a hypothetical order-API migration. The team moves to v2 but retains v1 for clients that have not upgraded. An agent in a new conversation may see only old code and suggest deleting the compatibility branch. The local cleanup can look reasonable while breaking the migration plan.
 
-## Public Resources
+The task needs the implementation, compatibility conditions, and the reason for the decision. A larger context window can hold more text. It cannot compensate for missing sources, wrong scope, or stale versions.
 
-- GitHub: https://github.com/volcengine/OpenViking
-- Docs: https://docs.openviking.ai/
-- Discord: https://discord.gg/FyTkZ3ZKKm
-- OpenClaw memory plugin guide: https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md
-- Human page: https://blog.openviking.ai/post/openviking-context-database/
-- Agent-readable page: https://blog.openviking.ai/post/openviking-context-database/llm.txt
+The same gap appears when a long-running assistant loses a constraint, team knowledge is scattered, or delivery criteria are unclear. Information is failing to carry across tasks. Recurring costs like these are the reason to consider a context database.
 
-## Context Primitives
+## Resources, memories, and skills have different jobs
 
-| Primitive | Contribution | Limit |
+| Type | In the migration example | How it changes |
 | --- | --- | --- |
-| Prompt | Instructions, roles, rules, examples, and output targets. | Brittle when prompts become long-lived team knowledge. |
-| RAG / KnowledgeBase | Domain knowledge before generation. | Needs good ingestion, chunking, summaries, refresh, and evidence paths. |
-| Web Search | Recent public information. | Source quality, injection, SEO, and trust risks. |
-| Tools / MCP | APIs, functions, and systems. | Tool calls still depend on the right context and validation. |
-| Skills | SOPs, workflows, rules, and tool usage patterns. | Needs broader retrieval and evidence support. |
-| Memory | Experience, preferences, facts, and outcomes. | Only useful when summarized, scoped, retrieved, updated, and explainable. |
+| Resource | API documentation, client support matrix, repositories | Reimport, or configure Watch for supported sources |
+| Memory | The decision to retain v1, its reason, and later corrections | Extract from sessions or record explicitly; check source and conditions |
+| Skill | Migration checks: clients, tests, and rollback plan | Maintain SKILL.md and supporting material for the agent to read and act on |
 
-## Pain Points
+All three share URI and retrieval interfaces, but have different lifecycles. A memory does not automatically synchronize code changes. A remembered postponement cannot remain a current requirement indefinitely. Skills describe procedures; execution still depends on the agent’s tools and permissions.
 
-- Cross-repository coding breaks local context.
-- Long-running agents forget preferences, corrections, and task constraints.
-- Team knowledge is scattered across Git, docs, chats, meetings, PDFs, images, and references.
-- Agents miss standards, taste, historical tradeoffs, and local delivery expectations.
+## Paths make context easier to navigate
 
-The shared issue is context organization: sources, structure, recall, trust, and memory are not stable enough for complex tasks.
+Vector retrieval finds related material despite different wording. Paths express a project, manual, or user memory space. Relational fields support exact filters; graph relationships can trace dependencies. These approaches can be combined. A universal ranking without a workload or implementation is not useful.
 
-## Technical Model
+OpenViking keeps directory operations familiar to agents while adding parsing, summaries, semantic indexes, and memory processing. Vector backends such as VikingDB supply retrieval, and content storage holds readable material. This reduces application-side processing work while adding the cost of models, storage, and maintaining derived artifacts.
 
-Context is not a fixed-schema object. It may be code, docs, images, meetings, conversations, links, summaries, or memories. OpenViking combines several information organization paradigms.
+This also explains the relationship to RAG. Retrieval-augmented generation is a workflow; OpenViking can supply its context layer. It extends the work to organization before retrieval and capture and updates after a task. It does not replace prompts, web search, or tools that call business systems.
 
-| Paradigm | Value | Limit |
-| --- | --- | --- |
-| Vector index | Semantic relevance and modality-agnostic retrieval. | Weak at hierarchy, exact filtering, and relationship explanation. |
-| File system | Paths, hierarchy, and traversal. | Does not solve semantic discovery alone. |
-| Table | Metadata, filtering, owner, time, type, and permission fields. | Awkward as the primary model for messy multimodal context. |
-| Graph | Relationships and path explanation. | Expensive to model and maintain. |
+## From a search lead to evidence
 
-OpenViking uses vector search for semantic entry points, file-system semantics for traversal, limited metadata for governance, and relations where they add value.
+After importing migration material, the agent can scope its search to the project, find compatibility requirements, and open the matching document. Relevance scores help prioritize candidates, directory overviews guide the next read, and bodies establish the exact conditions.
 
-## Design Constraints
-
-- Semantic by default: users should not choose schemas or modalities before adding data.
-- Simple surface: humans and agents use a small filesystem-like interface.
-- Agent-friendly commands: `ov ls`, `ov find`, `ov tree`, `ov abstract`, `ov overview`, `ov read`.
-- Token discipline: summaries and staged reading avoid reading-window waste.
-- Relations without graph burden: links and relations are useful, but graph modeling is not required first.
-
-## CLI Path
-
-Start `openviking-server`, then use the CLI.
-
-### Ingest
-
-```bash
-ov add-resource https://github.com/volcengine/OpenViking
-ov add-resource https://arxiv.org/pdf/2602.09540
-ov add-resource ./team_building.jpg
-ov add-resource ./project.docx
-ov add-resource ./team-docs.zip
-```
-
-### Discover
-
-```bash
-ov ls
-ov find "How does OpenViking use VikingDB?" --uri=viking://resources/code/volcengine/OpenViking
-ov tree viking://resources/code/volcengine/OpenViking/examples/ -L 2
-ov abstract viking://resources/code/volcengine/OpenViking
-ov read viking://resources/code/volcengine/OpenViking/examples/cloud/GUIDE.md
-```
-
-Read path: `ls/find/tree` for L0 summaries, `abstract` for summary, `overview` for structure, `read` for full evidence.
-
-### Maintain
-
-```bash
-ov mv viking://resources/photo/20260102/example.jpg viking://resources/photo/20260103/
-ov rm viking://resources/photo/20260102/example.jpg
-ov rm -r viking://resources/photo/20260102/
-```
-
-### Reuse Skills, Memory, Bot, and Observability
-
-```bash
-ov add-skill ./my-skill/examples/openviking-cli-skills
-ov find "OpenViking usage tips" --uri=viking://agent/skills
-ov add-memory ./2026-03-04/memory-2026-03-04.md
-
-openviking-server --with-bot
-ov chat -m "Ask your question"
-
-ov status
-ov observer vlm
-```
-
-## Product Boundary
-
-| Capability | OpenViking context database | Vector database | File system |
-| --- | --- | --- | --- |
-| Data operations | Add, delete, query, update | Add, delete, query, update | Add, delete, update; query needs other tools |
-| Inputs | Files, text, links, conversation history | Vectors, scalar metadata, vectorizable content | Files |
-| Semantic retrieval | Yes, backed by vector search | Yes | No |
-| Keyword retrieval | Sparse vectors or grep | Sparse vectors and keyword indexes | Grep |
-| Hierarchy | Preserved and exposed to agents | Usually not preserved | Native |
-| Parsing and summaries | Automatic parsing, L0 summaries, overview paths | Usually external | Not built in |
-| Agentic reading | `ls`, `tree`, `find`, `abstract`, `overview`, `read` | Not directly exposed | Traversal only |
-| Data isolation | Account, user, and agent dimensions | Scalar metadata | User/group controls |
-| Built-in capabilities | Memory plugin, bot, native RAG direction | Not included | Not included |
-| Deployment | Local/self-hosted today; managed and distributed options planned | Managed cloud service | Local or object storage |
-| Original files | Not retained by default; still being refined | Not retained | Retained |
-
-Boundary summary:
-
-- Vector search answers what is semantically close.
-- File systems answer where something lives.
-- OpenViking answers how agents use context as managed data.
-
-## Document Decomposition
-
-OpenViking does not force a long document to remain one file. It decomposes, reorganizes, and summarizes it for staged reading.
-
-| Stage | Output | Agent action |
-| --- | --- | --- |
-| Input document | docx, pdf, markdown, web page, folder, or archive becomes a managed resource. | Use `ov add-resource`, not prompt paste. |
-| Chapter paths | Sections become navigable paths such as `viking://resources/docs/project/03-design/`. | Use `ov tree` or `ov ls` first. |
-| Content modules | Each unit carries a point, process, interface, case, or decision. | Use `ov find`, then `ov overview`. |
-| Modal elements | Tables, images, code blocks, links, and attachments become searchable context. | Follow URIs into specific elements. |
-| Summary ladder | L0 summaries, abstracts, overview, and full content form a reading path. | Read summaries first; use `ov read` only when needed. |
-
-Goal: vectorizable units, coherent meaning, and lower model-window cost.
-
-## Team Adoption
-
-Context processing efficiency sets the ceiling for team AI work. OpenViking connects scattered resources into one context layer.
-
-### Deploy
-
-```bash
-uv venv openviking-env
-source openviking-env/bin/activate
-uv pip install openviking --upgrade
-# Configure OpenViking according to the repository README.
-nohup openviking-server > openviking.log 2>&1 &
-ov status
-```
-
-Use local or self-hosted validation first. Configure access and credentials before adding private repositories.
-
-### Build the Corpus
-
-1. Connect core repositories and stable documents.
-2. Add meeting notes, chats, project records, and external references.
-3. Turn repeated workflows into skills and repeated preferences into memory.
-
-### Demo A: Multi-Repository Technical Question
-
-The goal is cross-repo, cross-doc context for real engineering questions.
-
-## OpenClaw Memory
-
-OpenClaw shows the memory problem clearly. Longer tasks need preferences and corrections as retrievable context instead of raw chat messages.
-
-| Pain point | OpenViking practice |
+| Operation | Question it answers |
 | --- | --- |
-| Repeated preferences | Store user requirements and team conventions as searchable memory. |
-| High retry cost | Use session summaries and `add-memory` for reusable experience. |
-| Long tasks | Let OpenClaw retrieve long-term context through OpenViking. |
-| Scattered knowledge | Unify code, documents, meetings, chats, and references. |
+| ls / tree | How is the material organized, and what scope am I in? |
+| find / search | Which material may explain why v1 remains? |
+| abstract / overview | What does this directory cover, and where should I read next? |
+| read | What are the actual compatibility conditions, and do they still apply? |
+
+L0 is a directory abstract, L1 an overview, and L2 original or parsed content. These layers help control reading volume. They do not force every search to descend the tree: current retrieval can match different levels directly, and an agent can read a known URI without searching.
+
+Long documents are converted, split, or preserved according to the parser and configuration. Splitting supports selective reading but can separate a condition from its exception. Inspect the structure, summaries, and bodies together. Successful parsing does not establish that meaning was preserved.
+
+## Try the reading path on a small resource
+
+Configure server models and storage with the quickstart, then connect the ov CLI. The fictional sample below assumes permission to write account-shared resources and an unused checkout-demo destination. It demonstrates ingestion and reading, not an effectiveness benchmark.
 
 ```bash
-curl -fSL https://openclaw.ai/install.sh | bash
-# Follow the OpenViking memory plugin guide:
-# https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md
-ov add-memory ./2026-03-04/memory-2026-03-04.md
+mkdir -p context-demo
+cat > context-demo/decision.md <<'EOF'
+# Order API migration
+Decision: retain v1 until every supported client has migrated to v2.
+Reason: client A still calls v1.
+Removal requires a fresh check of the client support matrix.
+EOF
+ov add-resource ./context-demo \
+  --to viking://resources/checkout-demo --wait
 ```
-
-Good memory is summarized, compressed, reorganized, scoped, and explainable. It is not infinite chat retention.
-
-## VikingBot
-
-VikingBot is a native agent interface for testing ingestion, retrieval, summaries, and reading paths.
 
 ```bash
-openviking-server --with-bot
-ov chat -m "Ask your question"
-ov status
-ov observer vlm
+ov tree viking://resources/checkout-demo
+ov find "When can we remove v1?" --uri viking://resources/checkout-demo
+ov overview viking://resources/checkout-demo
 ```
 
-With `--with-bot`, `ov chat` can use connected resources, skills, summaries, retrieval, and memory context.
+Next, run ov read on the actual file URI returned by tree or find. Parser output paths can differ, so do not assume a fixed generated path. Success means recovering the condition for retaining v1 and recognizing the need to check the client support matrix. An answer based on stale memory that says to delete it is still a failure.
 
-## Core Judgments and Roadmap
+This sample imports the decision but not the client support matrix. The agent should identify that gap instead of inventing a migration status. In a real integration, add the matrix and relevant code, then check that updated material becomes retrievable.
 
-Core judgments:
+## Carry experience into the next task
 
-- Larger context corpora make retrieval quality and organization more important.
-- High-efficiency teams need a context database for full-domain information integration.
-- Vectors, file systems, graphs, and tables are forms; agents need an operable data interface.
-- OpenViking is a context database for complex agent tasks, with memory as one built-in use case.
-- Future agent capability is context capability: knowledge, memory, tools, and organization.
+Resources describe the system; conversations can explain why the team chose it. Plugins or application integrations send messages to an OpenViking Session. A commit archives them and starts asynchronous extraction. Hosts such as Claude Code and Codex need their own capture and recall integration; connecting MCP alone does not upload all history.
 
-Roadmap:
+For the migration, retain the decision, rationale, and condition for reconsideration. Once migration finishes, later records should correct the old decision. Accumulation helps only when it reduces repeated discovery and preserves valid constraints. Repeatedly extracting a mistake makes future work harder to correct.
 
-- Build ecosystem standards and reusable protocols.
-- Strengthen single-machine operations, stable releases, and smooth upgrades.
-- Improve multimodal context, memory retrieval, skill retrieval, and content understanding.
-- Build distributed capabilities and public-cloud integrations for reliable consistency.
+A skill can record checks for similar migrations, and VikingBot or an external agent can use that material. The context system supplies references and procedures; orchestration, tool execution, and acceptance remain with the host and application. Learning from experience should mean an observed improvement in a later task.
 
-## Agent-Readable Contract
+## Start team adoption with a verifiable slice
 
-HTML serves human reading. `llm.txt` serves agent citation. Both should expose the same public content.
+Start with one project’s code and documentation, a few real tasks with known answers, and their decision records. Assign ownership and update rules to each source. For several users, define accounts, users, and shared-resource ACLs. Directory names and prompt conventions are not access controls.
 
-Agents that receive the human URL should check `/post/openviking-context-database/llm.txt`.
+| Check | How to judge it |
+| --- | --- |
+| Finding the evidence | Does expected evidence enter the candidates, or does scope exclude it? |
+| Reading enough | Does the answer retain conditions and exceptions and cite its source? |
+| Updating | After a correction, do later tasks still use the old conclusion? |
+| Cost and value | Hold tasks, model, and source versions fixed; compare quality, latency, and token use |
+| Isolation | Test both allowed and denied identities for search and read |
+
+More data does not automatically improve efficiency. Duplicate, stale, and irrelevant material costs processing time and can crowd out useful results. Demonstrate value with the initial slice before adding sources so the benefit of each addition remains visible.
+
+## When the extra layer is worthwhile
+
+With a few stable documents in one repository, instruction files and existing search may be enough. Keep structured queries for structured business data. OpenViking has a clearer role when context repeatedly gets lost across sources, sessions, and clients, and the team can maintain provenance and access.
+
+For the migration example, the acceptance criterion is concrete: in a new session, the agent finds why the old interface remains, reads the removal condition, and seeks missing evidence before acting. Establish that path before expanding context coverage to the whole team.
+
+[Quickstart: server and model configuration](https://docs.openviking.ai/en/getting-started/02-quickstart)
+
+[Resources, memories, and skills](https://docs.openviking.ai/en/concepts/02-context-types)
+
+[Continue: the architecture of context reads and writes](/post/openviking-context-database-architecture/)
+
+[Continue: memory plugins for Claude Code and Codex](/post/openviking-coding-agent/)
