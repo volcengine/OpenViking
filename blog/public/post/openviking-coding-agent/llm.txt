@@ -1,114 +1,393 @@
-# OpenViking for Claude Code and Codex: Reusing Experience Across Sessions
+# OpenViking for Claude Code & Codex: Give Your Coding Agent Persistent Memory
 
-Install the plugin, understand capture and commit, and verify that scoped memory survives a session and helps the next task.
+Published: 2026-05-20
+Updated: 2026-10-04
+Author: tosaki (https://github.com/t0saki)
+Canonical human page: https://blog.openviking.ai/post/openviking-coding-agent/
+Agent-readable page: https://blog.openviking.ai/post/openviking-coding-agent/llm.txt
 
-A new conversation can read the repository without knowing why the previous session rejected a design. The OpenViking plugin stores decisions and experience on a server and retrieves them for later tasks. Its value is whether the next session can pick up the work.
+One command gives Claude Code and Codex long-term memory powered by OpenViking: conversations are captured and distilled, recalled when relevant, and shared across clients.
 
-## Three kinds of context
+Every time you open a new terminal window, your coding agent starts over. OpenViking gives Claude Code and Codex long-term memory that survives sessions and machines: conversations are captured and distilled on their own, recalled when relevant, and shared by both clients. One command installs it, and afterwards you use claude or codex as before.
 
-Consider a hypothetical fix: the team keeps an old interface because a downstream service has not migrated. Code records the implementation, AGENTS.md defines test commands, and the conversation explains the temporary decision. A later change may need all three, for different reasons.
+## The Problem
 
-| Context | What belongs here | What to check |
-| --- | --- | --- |
-| Project instructions | Test commands, code conventions, required constraints | Whether the current repository rules apply |
-| Session records and summaries | What happened in this task and what remains | Whether capture and archival include the last turns |
-| Long-term memory | Reusable preferences, decisions, events, and experience | Source, scope, and whether a newer decision supersedes it |
+- **Memory Silos**: Work on one project across several machines and agents, and the context and history in each stay separate. Switching means starting from scratch.
+- **No Experience Reuse**: A coding agent's "memory" is mostly the current context window plus local files such as CLAUDE.md, AGENTS.md, and per-project notes. They live on one machine and follow one project, so experience does not build up across tasks or repositories.
+- **Constant Resets**: Start a new thread, and your architectural decisions, hard-won debugging insights, and coding preferences are out of sight. You explain them again.
 
-Local instruction files remain useful. The plugin adds information scattered across past interactions. Recalled memory is background to verify; it cannot override the current request or substitute for current code.
+The result is a frustrating loop: either maintain dense environment documents by hand, or brief the AI like a broken record in every session.
 
-## Connect a server and an identity
+The OpenViking plugin moves that work from you to the system.
 
-You need a reachable OpenViking Server and compatible server and plugin versions. The server supplies model configuration, storage, and memory extraction; installing a plugin connects the client. Current plugins use the viking://~ home alias, so check compatibility with older servers.
+> **Info:** New to OpenViking? Start with the [architecture overview](https://blog.openviking.ai/post/openviking-context-database-architecture). In short, OpenViking is a **context database** for AI agents. Beyond storing vectors for RAG, it keeps conversations, distills them into memories such as your profile, preferences, and project decisions, and updates those memories as later conversations arrive.
 
-On macOS or Linux, the shared installer can configure Claude Code or Codex. It checks dependencies, asks for the server address and API key, and shows configuration changes before applying them. Choose the command for your client.
+## Quick Start
+
+You need a running OpenViking server, either [deployed locally](https://docs.openviking.ai/zh/getting-started/02-quickstart) or the hosted service on [Volcengine](https://console.volcengine.com/vikingdb/openviking). The server must support the viking://~ home alias, which the plugin uses to address your own memory space. Claude Code and Codex share one installer, which asks which client to set up:
+
+terminal:
 
 ```bash
+curl -fsSL https://openviking.ai/install | bash
+
+# or pick the client up front
 curl -fsSL https://openviking.ai/install | bash -s -- --harness claude
-```
-
-```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --harness codex
 ```
 
-If GitHub is hard to reach, run the installer from the Volcengine TOS mirror, then choose the client and download source when prompted.
+The installer downloads plugins from the OpenViking documentation site and never contacts github.com. If openviking.ai is slow to reach, openviking.net serves the same script, and so does the Volcengine TOS mirror:
+
+terminal:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-For an API-key-authenticated server, use a User/Admin key bound to the intended user. Root keys are for administration. Two clients sharing one person’s memory must use the same server and effective user; matching URLs alone do not establish that identity.
+The installer walks you through connecting to a local server (http://127.0.0.1:1933, no authentication by default) or a remote one with an API key. For a remote server, use a user key, not the root key. It checks the server, prints every change it will make, and writes nothing until you confirm. Then it writes ~/.openviking/ovcli.conf, installs openviking-memory into Claude Code (version 2.1.224 and later keep it updated on their own), and registers the plugin for Codex with plugin hooks enabled.
 
-Restart the client after installation. In Codex, enable the plugin and trust its hooks. Working MCP tools do not prove that automatic recall and capture are enabled. Choose either the installer or marketplace setup to avoid duplicate hooks.
+> **Tip:** Re-running the installer is safe. Once done, reopen your terminal and launch claude or codex as usual. On its first start, Codex stops at "6 hooks need review": choose Trust all and continue. If you skip it, the MCP tools still work, but recall and capture never fire.
 
-## From conversation to reusable memory
+If you prefer to control each step, install from the plugin marketplaces instead. Write ~/.openviking/ovcli.conf yourself first, or run the setup.mjs wizard bundled with the plugin; for Codex, also turn on hooks under [features] in ~/.codex/config.toml if your build has them off. Pick one path: enabling the plugin from both the installer and a marketplace runs every hook twice.
 
-| When | Action and completion boundary |
+terminal:
+
+```bash
+# Claude Code
+claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+claude plugin install openviking-memory@openviking
+
+# Codex
+codex plugin marketplace add volcengine/OpenViking
+codex plugin add openviking-memory@openviking
+```
+
+## What the Plugin Gives Your Agent
+
+Once integrated, your coding agent gains two capabilities: conversation hooks that run without being asked, and MCP tools it can call on purpose.
+
+### Conversation Hooks: Invisible Read/Write
+
+Hooks fire at fixed points in the conversation lifecycle. The model does not call them, so they stay out of the way of both you and the model. The list below follows Claude Code; Codex differences come later.
+
+1. **SessionStart** (Start, resume, clear, or after compaction): Injects your profile (profile.md), an index of your preference and entity memories, and a catalog of your skills. On resume and after compaction it adds the latest archived Working Memory. The whole block has a size cap; it is a starting point, not all of your history.
+2. **UserPromptSubmit** (Each message you send): Searches OpenViking with your prompt. The server assembles the most relevant memories and skills within a token budget (1,600 by default) and skips URIs already injected in the last five turns. By default the plugin then compresses the result into a few bullets with a local claude -p call before injecting it.
+3. **Stop** (Model completes a turn): Appends the new turns to your OpenViking session, and commits once pending content passes 20,000 tokens.
+4. **PreCompact** (Before context compaction): Commits synchronously, so the full pre-compaction conversation becomes an archive before Claude Code rewrites the transcript.
+5. **SessionEnd** (Session closes): Final commit, so the last stretch of conversation is archived and goes through memory extraction too.
+6. **SubagentStart/Stop** (Sub-agent spawns / exits): Gives each sub-agent its own session and commits it when the sub-agent finishes, so its side explorations stay out of the main conversation.
+7. **PreToolUse** (Read, Grep, Bash, and similar tools): If the path is a viking:// URI, points the model to the matching OpenViking tool, since a local file tool cannot open it.
+
+> You focus on coding. The plugin records what is worth keeping in the background and hands it back to the model when it becomes relevant.
+>
+> — Design principle
+
+Writes stay off your critical path. `Stop`, `SessionEnd`, and `SubagentStop` return `approve` immediately and hand the HTTP work to a detached background worker, so you never wait for a commit round trip. `PreCompact` is the exception: Claude Code rewrites the transcript right after it, so it runs synchronously. Reads are different. Auto-recall happens before the model answers, so search and local compression time shows up in every turn. If that feels slow, move compression to the server, turn it off, or disable auto-recall and keep capture only.
+
+When the server is unreachable, writes are queued under ~/.openviking/pending/ with owner-only file permissions. The queue is replayed at the next session start, up to three retries per item, and stale entries expire after seven days.
+
+### MCP Tools: Active Memory Management
+
+Beyond the hooks, the plugin starts a local stdio MCP proxy that forwards to the server's /mcp endpoint. When the model decides it needs more context, it can query and manage the store directly:
+
+| Tool | Purpose |
 | --- | --- |
-| SessionStart | Load the profile, memory index, and skill catalog; resume can include an archive summary. Injection has a budget and does not contain all history. |
-| UserPromptSubmit | If auto-recall is enabled, retrieve context for the current input. Network, retrieval, and optional compression add latency. |
-| Stop | Capture new turns; commit when the configured threshold is reached. Successful capture and completed extraction are separate states. |
-| PreCompact | Commit pending records before the host compacts context. Submission can take time, time out, or fail. |
-| SessionEnd | Submit at session end; Codex depends on host version and graceful shutdown. A killed process may never fire the hook. |
+| `find / search` | Semantic search over memories, resources, and skills; search can also assemble an injectable context block |
+| `read` | Read one or more viking:// URIs in full |
+| `list / tree` | Browse the directory structure, recursively if needed |
+| grep / glob | Regex search over content / match files by pattern |
+| `remember` | Send messages straight into long-term memory extraction |
+| `add_resource` | Import files or URLs as knowledge sources, with optional periodic refresh |
+| `add_skill` | Create, install, or share a skill |
+| `write / edit` | Write or patch a viking:// file |
+| `forget` | Delete a stale or wrong memory |
+| `health` | Check backend service health |
 
-The server archives messages before asynchronously generating summaries and extracting memory. A returned task_id makes that work trackable. After completion, memory_diff.json in the archive records actual additions, updates, and deletions. A commit may produce no new memory.
+These tools turn the agent from a passive receiver into an active investigator. To recall an architecture plan discussed last week, it can call `search` and dig up the details itself. It can pull a design doc or API spec in with `add_resource` and keep it refreshed on a schedule, store a key decision with `remember` instead of waiting for the next commit, and remove a memory that turned out to be wrong with `forget`. The server's tool list is authoritative; the table above covers the ones you will use most.
 
-Extraction consults existing content and updates files according to enabled types and policy. Profiles, preferences, entities, and events support later conversations; experience extraction also depends on Agent Evolution settings. A list of memory types is not a promise to produce each type on every turn.
+## How Memory Accumulates and Distills
 
-## Where the hosts differ
+This is where OpenViking departs from a plain RAG setup. Conversations are not just embedded as they are; they go through a memory lifecycle.
 
-Both current plugins use a local stdio MCP proxy to reach the server’s /mcp endpoint, resolving connection settings from environment variables or ovcli.conf. Host lifecycles differ, so capture behavior matters more than a fixed hook count.
+### Conversation Storage and Archival
 
-| Behavior | Claude Code | Codex |
+Every conversation window maps to one OpenViking session whose ID derives from the host's session ID: `cc-<session_id>` for Claude Code and `cx-<session_id>` for Codex, so resume and compaction keep writing to the same session. Uncommitted messages live at `viking://user/{you}/sessions/{id}/messages.jsonl`. A commit happens when pending content passes the threshold (20,000 tokens by default), before compaction, and when the session ends.
+
+Session storage (illustrative):
+
+```text
+viking://user/alice/sessions/
+  cc-9b0962da-…/                    one Claude Code window
+    messages.jsonl                  messages not yet committed
+    history/
+      archive_001/                  first commit
+        messages.jsonl              archived messages (phase 1)
+        .overview.md                Working Memory (phase 2)
+        memory_diff.json            memories added, updated, deleted (phase 2)
+        .done                       background processing finished
+      archive_002/                  …
+  cc-9b0962da-…__subagent-a1b2…/    a sub-agent's own session
+```
+
+Archival is more than moving files. A commit runs in two phases:
+
+**Phase 1: Message Archival** — Under a path lock, the server assigns an archive number, writes the messages to history/archive_NNN/, and keeps only what was not archived in the live session, so the session does not grow forever. Codex threshold commits keep the latest ten messages live as a sliding window. The request returns a task_id.
+
+**Phase 2: Memory Distillation (async)** — A background task picks up the archive from a persistent queue, so it resumes if the server restarts. It does the real processing:
+
+1. Generate **Working Memory**: a seven-section summary of the archive (session title, current state, task and goals, key facts and decisions, files and context, errors and corrections, open issues). When a previous Working Memory exists, each section is updated incrementally and still-valid information carries forward.
+2. Extract **long-term memories** into typed files:
+
+| Group | Type | What it holds |
 | --- | --- | --- |
-| Commit | Write paths such as Stop and SessionEnd can use a background worker; PreCompact submits synchronously | Stop captures incrementally; PreCompact commits; supported versions commit on graceful SessionEnd |
-| Exit fallback | Inspect writeback logs and pending retries | Startup or clear checks end markers and idle state; resume does not perform that sweep |
-| Subagents | SubagentStart/Stop paths use separate session records | Do not assume Claude Code subagent behavior applies |
+| About you | profile | Identity, background, and core skills in one file that keeps getting merged. |
+| About you | preferences | Code style, tool choices, and workflow habits, one topic per file. |
+| About you | entities | Projects, people, services, and concepts you work with. |
+| About you | events | Decisions, milestones, and changes, with dates. |
+| About the assistant | identity / soul | The assistant's name, persona, principles, and boundaries. |
+| Agent Evolution | cases / trajectories / experiences | Tasks as cases, executions as trajectories, and reusable experience distilled from results. Only when Agent Evolution is enabled. |
 
-Background writes reduce blocking without removing latency or failure. Pre-compaction submission, per-prompt recall, and model compression can still affect wait time. Separate sessions separate records; they do not create separate user authorization boundaries.
+3. Perform **knowledge fusion**: existing memories take part in extraction, and an update can merge into, modify, or delete an existing file. Your profile.md gets sharper the more you use it, instead of being overwritten each time.
+4. Write **memory_diff.json** into the archive: which memories were added, updated, or deleted, and which proposed operations a policy skipped. It is the most direct answer to "what did that conversation actually leave behind?" A commit can also leave nothing new.
 
-## Set the scope before sharing
+Distilled memories are organized under your own memory space (illustrative):
 
-By default, the workspace peer derives from Git origin. Clones, worktrees, and subdirectories of the same repository can share project memory; a fork with another origin gets another peer. Outside a repository or explicitly configured workspace, memory goes to the user-level space.
+```text
+viking://user/alice/
+  memories/                         user-level memory, shared across projects
+    profile.md                      who you are
+    preferences/                    e.g. code_review.md, commit_style.md
+    entities/                       e.g. checkout_service.md
+    events/                         e.g. 2026-09-12_order_api_v2.md
+  peers/
+    github.com-acme-checkout/       one repository, derived from its Git origin
+      memories/                     project memory for this repository
+  skills/                           your skills; shared ones live in viking://agent/skills
+  sessions/                         see above
+```
 
-This example assigns a project identity to a non-Git directory and scopes recall to that peer plus user-level memory. A peer remains inside a user boundary; a service for separate people needs separate user identities first.
+### Memory Temperature
+
+Human memory fades with time, and OpenViking tracks something similar. Each memory records how often it was used and when it was last updated, and the two combine into a hotness score:
+
+```text
+hotness = sigmoid(log1p(active_count)) × exp(−ln2 / 7 × age_days)
+```
+
+Default half-life: 7 days. After 30 days without an update, the time factor is about 0.05. Use count can push the frequency factor toward 1, but cannot offset the decay.
+
+Today the score drives memory health statistics: it sorts memories into cold, warm, and hot so you can see which ones have not been touched in a long time. It does not affect retrieval ranking, which stays on relevance, and it does not delete cold memories.
+
+## Real-World Experience: An AI That Actually "Gets" You
+
+### Session Start: The Auto-Injected Profile
+
+Whenever you launch or resume a chat, the plugin builds a context payload before you type anything. Here is what a resumed session can receive (the content is fictional):
+
+injected context:
+
+```text
+<openviking-context source="resume">
+<user-profile uri="viking://user/alice/memories/profile.md">
+# Alice
+- Role: backend engineer
+- Repos: acme/checkout, acme/payments-sdk
+- Focus: order API v2 migration, flaky integration tests
+</user-profile>
+<available-memories>
+  viking://user/alice/memories/preferences/
+    - code_review.md — small PRs, always with a test plan
+    - ... (12 preference files)
+  viking://user/alice/memories/entities/
+    - checkout_service.md — owns order API v1 and v2
+    - ... (18 entity files)
+</available-memories>
+<available-skills>
+  viking://user/alice/skills/
+    - pr-review — Review a pull request against the team checklist.
+</available-skills>
+<session-archive>
+  <archive-overview>
+# Working Memory
+## Session Title
+Order API v2 migration: keep v1 for mobile clients
+## Current State
+v2 endpoints merged; v1 stays behind a compatibility shim.
+## Open Issues
+- Mobile client 4.x still calls v1
+- Flaky test in checkout/integration
+  </archive-overview>
+</session-archive>
+</openviking-context>
+```
+
+> Before you type a keystroke, the model already knows who you are, how you like to work, where you left off, and which issues are still open.
+
+You can drop the "Hi, last time we were working on XXX..." opener.
+
+### Mid-Coding: Recall on Demand
+
+Each time you submit a prompt, the plugin searches once before the model answers. Ask in passing, "How does OpenViking handle MCP OAuth?", and the recalled memories are spliced into the context like this (excerpt):
+
+recalled memories:
+
+```text
+<memory uri="viking://user/alice/memories/entities/mcp_key2oauth.md" type="entities" score="0.60" detail="abstract">
+MCP-Key2OAuth: https://github.com/t0saki/MCP-Key2OAuth ...
+</memory>
+<memory uri="viking://user/alice/memories/entities/openviking_mcp.md" type="entities" score="0.55" detail="abstract">
+OpenViking MCP implementation. Tools: find, search, read, list ...
+</memory>
+<memory uri="viking://user/alice/memories/entities/openviking.md" type="entities" score="0.54" detail="abstract">
+OpenViking: the MCP endpoint is registered as an exact-match Starlette Route ...
+</memory>
+```
+
+The model answers from these records directly, without you digging through project docs. The score is a relevance score used for ranking and filtering (results under 0.35 are not injected by default); it does not mean a memory is "60% likely to be true." Before acting on a memory, have the agent read the URI. With default settings, this block is first compressed by a local claude -p call into a few bullets that keep their URIs. How long all this takes depends on the network and on compression; the plugin's status line shows how many memories were injected in each turn and how long it took.
+
+### Cross-Session Insight
+
+The "this AI actually gets me" moment usually comes from a conversation long gone. During one storage review we compared three ways to support multiple workspaces: a workspace_id column, a table per workspace, or a schema per workspace. While weighing them, the model cited a constraint recorded weeks earlier, in a different and unrelated window: the service runs as a single replica and loads every workspace's data from the database into memory at startup. The conclusion changed because of it. At that scale the database was not the bottleneck; memory would hit the wall first.
+
+That memory scored only 0.37 and was nowhere near the top of the list. It was still the one fact that overturned the intuitive answer.
+
+> "Your past technical judgment surfaces right when you need it." That is hard to get from a hand-maintained CLAUDE.md.
+
+## Breaking Down Walls: Cross-Platform Memory Sharing
+
+Because of the client-server architecture, your memory lives on the OpenViking server instead of being scattered across local project folders.
+
+When the Claude Code and Codex plugins connect to the same server as the same user, they share one memory. A tricky bug you solved in Claude Code is available in Codex. Project memory is keyed by the repository's Git origin, so every clone, worktree, and subdirectory of a repository, even a checkout on another machine, lands under the same peer, while a fork with a different origin stays separate. By default recall is broad: memories from other projects can come back too, ranked lower. To see only the current project plus your user-level memory, set the recall scope to actor.
+
+It goes further. Because OpenViking exposes a standard MCP endpoint, any MCP-capable client can connect. Hook the Claude chat app up to OpenViking and ask for a weekly report built from your recent sessions and memories:
+
+![A weekly report generated from OpenViking memories](https://blog.openviking.ai/assets/posts/openviking-coding-agent/weekly-report.png)
+
+_The Claude chat app reads OpenViking over MCP and drafts a weekly report_
+
+Once the report is final, you can upload it back to OpenViking as a resource. Next week, last week's report is searchable material too:
+
+![Uploading the report back to OpenViking](https://blog.openviking.ai/assets/posts/openviking-coding-agent/memory-loop.png)
+
+_The report is added with add_resource under viking://resources/_
+
+> Accumulate once, use it from every client.
+
+What travels is server-side context. Each host's process state, conversations not yet captured, and tool configuration stay where they are.
+
+## Claude Code vs Codex Plugin Differences
+
+The two plugins share the same design and most of their code, but each adapts to what its host exposes:
+
+| Feature | Claude Code | Codex |
+| --- | --- | --- |
+| Registered hooks | 9 entries, including SessionEnd and the sub-agent lifecycle | 6: SessionStart, UserPromptSubmit, PreToolUse, Stop, PreCompact, SessionEnd |
+| Session start | Inject profile, memory index, skills; archive overview on resume/compact | Same injection; on startup and clear, also sweeps and commits sessions left behind |
+| Session end | SessionEnd commits through a background worker | SessionEnd on graceful exit (Codex 0.145+), with an end marker and a detached worker; otherwise the next startup sweep |
+| MCP transport | Local stdio proxy to /mcp | Local stdio proxy to /mcp |
+| Sub-agents | Each sub-agent gets its own session | No sub-agent hooks |
+| Recall compression | Local claude -p, falls back to the server | Local codex exec with a small model, falls back to the server |
+| Runtime | Node.js 18+ | Codex's bundled Node.js 22+ |
+
+> **Note:** **For Codex users:** Since Codex 0.145, `/quit`, `/exit`, a double `Ctrl+C`, and the end of `codex exec` fire SessionEnd. Codex gives that hook only a few seconds, so the plugin writes an end marker and lets a detached worker do the commit. A closed terminal, `kill`, or a crash fires nothing. For those, the next Codex startup or `/clear` sweeps the leftovers: sessions with an end marker whose commit failed, and sessions idle for more than 30 minutes. `/resume` never sweeps. After an upgrade that adds a hook, approve it in `/hooks`, or it silently never runs.
+
+## Advanced Tuning and Security
+
+Plugin behavior can be tuned with environment variables, or set under the plugin section of ~/.openviking/ovcli.conf; environment variables win:
+
+~/.zshrc:
+
+```bash
+# Recall
+export OPENVIKING_AUTO_RECALL=true            # false keeps capture and on-demand tools only
+export OPENVIKING_SCORE_THRESHOLD=0.35        # results below this relevance are not injected
+export OPENVIKING_RECALL_MAX_TOKENS=1600      # token budget for the server-assembled block
+export OPENVIKING_RECALL_COMPRESS=auto        # off | client | server | auto
+export OPENVIKING_RECALL_PEER_SCOPE=all       # actor: current project + user-level only
+
+# Capture
+export OPENVIKING_CAPTURE_MODE=semantic       # semantic (every turn) or keyword (trigger-based)
+export OPENVIKING_CAPTURE_ASSISTANT_TURNS=true  # include replies and tool I/O
+export OPENVIKING_COMMIT_TOKEN_THRESHOLD=20000  # commit when pending content passes this
+
+# Debug and bypass
+export OPENVIKING_DEBUG=true                  # logs: ~/.openviking/logs/cc-hooks.log
+export OPENVIKING_BYPASS_SESSION_PATTERNS='/tmp/**,**/scratch/**'  # no memory reads/writes here
+```
+
+A repository can carry its own settings in .openviking/config.json, which the team commits, and .openviking/config.local.json, which stays private. The example below gives a directory that is not a Git repository its own project identity and limits recall to that project plus user-level memory. Connection fields such as url, api_key, account, and user are stripped from these files, so a committed config cannot redirect your credentials.
+
+.openviking/config.json:
 
 ```json
 {
   "version": 1,
   "peer": { "id": "checkout-service" },
-  "recall": { "peer_scope": "actor" }
+  "recall": { "peer_scope": "actor" },
+  "bypass": { "session_patterns": ["**/fixtures/**"] }
 }
 ```
 
-Claude Code, Codex, and other MCP clients can reuse server-side context. Host process state, uncaptured records, and tool configuration do not migrate with it. A weekly report can draw on sessions, but dates, task status, and omissions still need checking.
+### Security by Design
 
-## Read the evidence behind a match
+- **Credentials stay out of project config**: the bundled stdio MCP proxy reads your API key at runtime from ovcli.conf or OPENVIKING_* variables, with no shell wrapper. The key is never written into .mcp.json, so it does not end up in the repository. It does live in ~/.openviking/ovcli.conf on your machine, so protect that file.
+- **Self-pollution prevention**: before a turn is captured, the plugin strips <openviking-context>, <system-reminder>, <relevant-memories>, and [Subagent Context] blocks, so answers built from recalled memory are not stored back as new knowledge. This prevents the feedback loop; it does not stop a wrong statement in a reply from being extracted, so fix or forget bad memories when you see them.
+- **Filter before storing**: capture filters are sed-style rules applied to every turn before it is sent. A rule like `s/\b(sk|ghp)_[A-Za-z0-9_-]+/[redacted]/g` redacts tokens; bypass patterns keep throwaway directories out of memory entirely.
+- **Sub-agent session isolation**: each sub-agent writes to its own session derived from the parent's, and its captured messages carry the parent workspace's peer, so they stay in the right project without cluttering the main timeline. Separate sessions separate records; they are not separate users.
+- **One bot, many people**: if one deployment serves several real people, use the actor recall scope with an explicit peer per person. Recall for one person then draws on that person's peer plus the shared user-level memory. A peer is a recall scope inside one user, not an authorization boundary: people who need permissions of their own should get separate user identities and keys, or the host service has to enforce access control.
 
-Search and find return URIs, summaries, and relevance scores. Those scores rank matches; they are not probabilities that a statement is true. A 0.60 result does not mean “60% trustworthy.” Read the underlying content and check current implementation before using an architectural decision or code constraint.
+### Troubleshooting
 
-Explicit tools complement hooks: search/find locate leads, read fetches content, list/grep/glob help navigation, remember records information, add_resource imports material, and forget deletes specified memories. The server’s exposed schema defines the available tools.
+Start with the bundled doctor. Ask Claude Code to check the plugin, which runs the `ov-memory-doctor` skill, or run the script directly. It checks the install, which config file won, the connection and auth, and recent hook activity, and prints a fix for each finding. `/ov` shows the server, identity, and last recall, and the status line under the input box reads `OV ✓`, `⚠ slow`, `✗ offline`, or `⚡ bypass`.
 
-Auto-recall can be disabled. If waiting on each prompt costs more than the lookup it saves, keep capture and on-demand search, then compare latency, useful matches, and incorrect citations on real tasks. L0/L1 help select content, but summaries can omit details or become stale.
+terminal:
 
 ```bash
-export OPENVIKING_AUTO_RECALL=false
-export OPENVIKING_DEBUG=true
+# Claude Code
+node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/ov-memory-doctor.mjs"
+
+# Codex
+node "$(ls -d ~/.codex/plugins/cache/openviking/openviking-memory/*/ | sort -V | tail -1)scripts/ov-memory-doctor.mjs"
 ```
 
-## Check credentials and writeback
+| Symptom | Where to look |
+| --- | --- |
+| Plugin does nothing | No ovcli.conf or ov.conf was found, so the plugin stays disabled. Create one, or set OPENVIKING_MEMORY_ENABLED=1 with URL and key variables. |
+| Codex: MCP works, nothing is remembered | Hooks are untrusted or disabled. Check /hooks and /plugins. |
+| Recall is always empty | Server down or wrong URL: curl <url>/health. Or the threshold filters everything out. |
+| Commits happen, no memories appear | Read memory_diff.json in the archive; if extraction never ran, check the server's embedding and VLM config. |
+| 401 / 403 | API key, account, or user mismatch; a root key cannot read tenant data. |
+| Anything else | Set OPENVIKING_DEBUG=1 and read ~/.openviking/logs/cc-hooks.log. |
 
-The installer can write an API key to local ovcli.conf. The proxy avoids duplicating secrets in project .mcp.json; it does not promise that credentials never reach disk. Protect local configuration and the runtime environment, and keep them out of repositories and shared logs.
+## Why Not Just Use MEMORY.md?
 
-Capture strips injected context tags to reduce feedback loops. That does not guarantee that mistakes in an assistant reply will never be extracted. Correct or delete bad memory and inspect its source. OPENVIKING_BYPASS_SESSION bypasses hooks; it does not automatically revoke explicit MCP read/write access.
+The OpenViking plugin complements native memory; it does not replace it. Claude Code actually has two kinds of local memory, and they behave differently. `CLAUDE.md` holds instructions you write, and Codex's `AGENTS.md` plays the same role. Auto memory is notes Claude keeps on its own: a `MEMORY.md` index plus topic files, which Claude reads and writes during the session. The [Claude Code memory docs](https://code.claude.com/docs/en/memory) describe both.
 
-## Verify one cross-session task
+| Dimension | CLAUDE.md / AGENTS.md (instructions) | Claude Code auto memory | OpenViking Plugin |
+| --- | --- | --- | --- |
+| What it holds | Rules and conventions a person writes | Notes Claude takes: a MEMORY.md index plus one topic file per memory | A file tree on the server, a vector index, and typed memory files |
+| How it is read | Loaded in full at session start | Only the beginning of MEMORY.md at session start; topic files read on demand | Searched by relevance every turn and injected within a token budget |
+| Scope | Travels with the repository, or sits in your user directory | This machine; worktrees and subdirectories of one Git repository share it, other machines do not | Across projects, sessions, machines, and clients; project memory keyed by repository |
+| How it is written | You edit it | Claude writes it during the session; you can edit it too | Extracted and merged by an LLM after each commit, or written on purpose with remember |
+| Auditing | Reviewed like code | Plain local files you can open and edit | memory_diff.json records every commit's changes |
 
-Choose a test project without sensitive data and record a decision with its reason. End the session normally, inspect the server task and memory_diff.json, then ask about the decision in a new session. Request the memory URI and read its source. Finally, repeat the lookup from another client using the same identity and project scope.
+Keep using `CLAUDE.md` or `AGENTS.md` for rules the project must follow: they are simple, reviewable, and travel with the repository. Auto memory is good at notes that stay on one machine and one repository. For experience that grows with time and has to carry across machines, clients, and projects, such as "how did I get around that intermittent crash last Tuesday?" or "how do I usually wrap Axios?", let OpenViking do the bookkeeping.
 
-Verify three separate outcomes: the content was stored, retrieval finds it, and the agent uses it correctly. Then make a correction and check that later answers use the updated decision. An installation success or “I’ll remember that” proves none of these.
+## Conclusion
 
-[Claude Code plugin: installation and lifecycle](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md)
+With OpenViking, your coding agent stops being a stateless tool that forgets everything when the window closes, and becomes a pair programmer that learns your habits and accumulates your experience:
 
-[Codex plugin: host requirements and configuration](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md)
+- **Auto-Accumulate**: debugging sessions and decisions are captured and distilled after each commit, with no manual upkeep.
+- **Recall on Demand**: relevant history appears in context when the task calls for it, without a warm-up briefing.
+- **Cross-Platform**: on one server and one identity, Claude Code, Codex, and any MCP client share the same memory.
+- **Continuous Evolution**: new conversations merge into and correct old memories, and memory_diff.json records each change.
 
-[Session commits and memory change records](https://docs.openviking.ai/en/concepts/08-session)
+If you are tired of re-onboarding your AI assistant every time you open a new terminal, give OpenViking a try.
+
+## Links
+
+- [OpenViking GitHub](https://github.com/volcengine/OpenViking?utm_source=blog&utm_medium=article&utm_campaign=openviking-coding-agent)
+- [OpenViking Docs](https://docs.openviking.ai)
+- [Claude Code Plugin Source & README](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)
+- [Codex Plugin Source & README](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
+- [Deep Dive: OpenViking Architecture](https://blog.openviking.ai/post/openviking-context-database-architecture)
