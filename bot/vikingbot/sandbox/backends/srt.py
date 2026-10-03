@@ -1,6 +1,7 @@
 """SRT backend implementation using @anthropic-ai/sandbox-runtime."""
 
 import asyncio
+import codecs
 import json
 import os
 from pathlib import Path
@@ -317,12 +318,13 @@ class SrtBackend(SandboxBackend):
 
         try:
             buffer = ""
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             while True:
                 chunk = await self._process.stdout.read(4096)
                 if not chunk:
                     break
 
-                buffer += chunk.decode("utf-8", errors="replace")
+                buffer += decoder.decode(chunk)
                 lines = buffer.split("\n")
                 buffer = lines.pop() or ""
 
