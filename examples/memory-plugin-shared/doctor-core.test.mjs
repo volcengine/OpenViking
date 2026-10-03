@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -20,10 +20,36 @@ import {
   readyCheckState,
   scanDebugLog,
   unknownOvcliKeys,
+  whichCommand,
   WORKSPACE_PEER_HINT,
 } from "./lib/doctor-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
+
+test("whichCommand returns the first executable path without a line terminator", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-doctor-path-"));
+  const originalPath = process.env.PATH;
+  const command = `ov-doctor-probe-${process.pid}`;
+  const filename = process.platform === "win32" ? `${command}.exe` : command;
+  const bins = [join(dir, "first bin"), join(dir, "second bin")];
+  try {
+    for (const bin of bins) {
+      mkdirSync(bin);
+      writeFileSync(join(bin, filename), "", { mode: 0o755 });
+    }
+    for (const paths of [bins, bins.slice(0, 1)]) {
+      process.env.PATH = [...paths, originalPath].filter(Boolean).join(delimiter);
+      const resolved = whichCommand(command);
+      assert.equal(resolved, join(bins[0], filename));
+      assert.ok(existsSync(resolved));
+    }
+    assert.equal(whichCommand(`${command}-missing`), "");
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("describeApiKey decodes identity segments and masks the secret", () => {
   const key = `${b64("acme")}.${b64("alice")}.${b64("0123456789abcdef0123456789abcdef")}`;
