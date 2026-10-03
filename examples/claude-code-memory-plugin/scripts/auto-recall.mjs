@@ -46,6 +46,7 @@ async function recall(cfg, query, peer, sessionId) {
     actorPeerId: peer.peerId,
     legacyPeerId: peer.legacyPeerId,
     sessionId,
+    excludeUris: cfg.recallExcludeUris,
     log,
     runCompressor,
     localCompressorAvailable: Boolean(runCompressor),

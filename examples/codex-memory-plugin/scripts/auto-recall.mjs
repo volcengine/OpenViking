@@ -142,6 +142,7 @@ runHookStage({
   const recalled = await buildRecallBlockDetailed(fetchJSON, cfg, userPrompt, {
     actorPeerId: effectivePeer.peerId, legacyPeerId: effectivePeer.legacyPeerId,
     sessionId: recallSessionId || "", runCompressor,
+    excludeUris: cfg.recallExcludeUris,
     localCompressorAvailable: Boolean(runCompressor),
     excludeUris: cfg.recallExcludeUris,
     digestCachePath: RECALL_DIGEST_CACHE_PATH, log,
