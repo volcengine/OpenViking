@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
+import { captureV2Context, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
 function runtimeFixture(overrides = {}) {
@@ -125,42 +125,6 @@ test("cleanup waits for background initialization before flushing", async () => 
   assert.equal(flushed, true)
 })
 
-test("prompt metadata is persisted and context injection is stable across model steps", async () => {
-  let recallCalls = 0
-  const event = {
-    sessionID: "ses_1",
-    messageID: "msg_1",
-    prompt: { text: "find the deployment notes" },
-    metadata: { caller: "test" },
-  }
-  await prepareV2Prompt(event, {
-    directory: "/tmp/project",
-    recallEnabled: true,
-    sessionInject: { buildSessionContext: async () => "<profile>profile</profile>" },
-    recall: {
-      buildRelevantMemories: async (_input, parts) => {
-        recallCalls += 1
-        assert.equal(parts[0].text, "find the deployment notes")
-        return "<openviking-context>memory</openviking-context>"
-      },
-    },
-  })
-  assert.equal(recallCalls, 1)
-  assert.equal(event.metadata.caller, "test")
-
-  const message = { role: "user", content: [{ type: "text", text: event.prompt.text }], metadata: event.metadata }
-  const context = { system: [], messages: [message] }
-  const repoContext = { getRepoSystemPrompt: () => "repo prompt" }
-  injectV2Context(context, repoContext)
-  injectV2Context(context, repoContext)
-
-  assert.equal(message.content.length, 2)
-  assert.match(message.content[0].text, /<profile>profile<\/profile>/)
-  assert.match(message.content[0].text, /<openviking-context>memory<\/openviking-context>/)
-  assert.equal(message.content[0].metadata.openviking, true)
-  assert.equal(context.system.length, 1)
-})
-
 test("captureV2Context advances a per-session cursor and preserves tool parts", async () => {
   const events = []
   const messages = [
@@ -201,8 +165,10 @@ test("v2 prompt, context, after-tool, and event failures are contained", async (
 
   const prompt = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
   runtime.sessionInject.buildSessionContext = async () => "<profile>still available</profile>"
-  await assert.doesNotReject(() => hooks.prompt(prompt))
-  assert.equal(prompt.metadata.openviking.context[0], "<profile>still available</profile>")
+  await assert.doesNotReject(async () => hooks.prompt(prompt))
+  const message = { id: "msg_1", role: "user", content: [{ type: "text", text: "query" }] }
+  await assert.doesNotReject(() => hooks.context({ sessionID: "ses_1", messages: [message], system: [] }))
+  assert.equal(message.content[0].text, "<profile>still available</profile>")
   await assert.doesNotReject(() => hooks.context({ sessionID: "ses_1", messages: null, system: [] }))
   await assert.doesNotReject(() => hooks["execute.after"]({
     status: "completed", tool: "shell", input: { command: "ls" }, result: { content: [] },
