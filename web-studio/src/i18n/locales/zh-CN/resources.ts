@@ -144,6 +144,8 @@ const resources = {
     'remoteUrl.placeholder': '粘贴远程资源地址',
     'remoteUrl.hint': 'HTTP(S) 链接、Git 仓库地址或其他远程资源地址。',
     sourceKind: {
+      dingtalk: '钉钉',
+      dingtalkHint: '通过服务端已配置的身份导入钉钉文档或知识空间。',
       feishu: '飞书 / Lark',
       feishuHint: '支持文档、知识库、电子表格和多维表格链接。',
       git: 'Git 仓库',
@@ -160,6 +162,9 @@ const resources = {
     sourcePicker: {
       title: '支持的远程资源类型',
       hint: '以下类型均有服务端处理链路；选择后可填写对应参数，也可以保持自动识别。',
+      dingtalk: '钉钉',
+      dingtalkHint: '文档、目录、知识空间、表格、AI 表格和文件',
+      dingtalkExample: 'https://alidocs.dingtalk.com/i/nodes/...',
       feishu: '飞书 / Lark',
       feishuHint: '文档、知识库、电子表格和多维表格',
       feishuExample: 'https://example.feishu.cn/docx/...',
@@ -179,6 +184,23 @@ const resources = {
     configurationGuide: {
       title: '如何配置？',
       documentation: '查看服务端配置文档',
+    },
+    dingtalk: {
+      title: '钉钉访问身份和导入限制',
+      hint: '所选服务端身份只能读取钉钉已授权给它的内容。导入后，OpenViking 中的权限不会随钉钉后续权限变更自动更新。',
+      identity: '服务端身份',
+      identityPlaceholder: '请选择身份',
+      identityHint: '服务地址和凭证只保存在服务端，不会显示在 Studio 中。',
+      identityLoading: '正在加载服务端身份…',
+      identityError: '钉钉身份加载失败。',
+      identityEmpty: '服务端尚未配置钉钉身份。请在 ov.conf 中添加后刷新。',
+      retry: '重试',
+      maxNodes: '最大节点数',
+      maxDepth: '最大深度',
+      maxBytesMiB: '本次最大数据量（MiB）',
+      limitError: '限制必须为整数；节点数和 MiB 必须大于 0，深度可以为 0。',
+      limitations:
+        '不可读的子文件会跳过并重试，已有导入内容会保留；目录列表读取失败会停止整次刷新。无法区分删除、移动和失去权限，因此本次缺少的节点也会保留。',
     },
     feishu: {
       auth: {
@@ -252,6 +274,9 @@ const resources = {
       requiredUnsupported: '该资源类型不支持创建定时同步，请选择其他类型。',
       interval: '同步周期（分钟）',
       intervalHint: '例如每小时填写 60，每天填写 1440。',
+      startPaused: '创建后暂停',
+      startPausedHint:
+        '首次导入仍会执行，后续定时同步保持暂停，可在定时同步页面恢复。',
     },
     tosOptions: {
       title: 'TOS 导入',

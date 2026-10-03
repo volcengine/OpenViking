@@ -22,6 +22,14 @@ _IDENTITY_META_FIELDS = frozenset(
         "resolved_extension",
         "resolved_name",
         "original_filename",
+        "dingtalk_identity",
+        "dingtalk_run_id",
+        "dingtalk_processing_key",
+        "dingtalk_previous_digest",
+        "dingtalk_manifest",
+        "dingtalk_report",
+        "dingtalk_limits",
+        "dingtalk_limitations",
     }
 )
 
@@ -58,6 +66,7 @@ class StagedSource:
             SourceType.GIT,
             SourceType.HTTP,
             SourceType.FEISHU,
+            SourceType.DINGTALK,
         }:
             raise ValueError("staged_source.source_type is invalid")
         if not isinstance(original_source, str):

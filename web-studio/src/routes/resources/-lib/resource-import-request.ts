@@ -28,6 +28,7 @@ export type ResourceImportFormState = {
   strict: boolean
   targetUri: string
   watchEnabled: boolean
+  watchInitiallyPaused: boolean
   watchInterval: string
 }
 
@@ -47,6 +48,7 @@ export function buildResourceImportCommonBody({
   strict,
   targetUri,
   watchEnabled,
+  watchInitiallyPaused,
   watchInterval,
 }: ResourceImportFormState): ResourceImportCommonBody {
   const sourceCapabilities = getRemoteResourceCapabilities(
@@ -100,6 +102,9 @@ export function buildResourceImportCommonBody({
 
   if (watchEnabled && sourceCapabilities.watch) {
     body.watch_interval = Number(watchInterval)
+    if (watchInitiallyPaused && sourceCapabilities.initialPaused) {
+      body.is_active = false
+    }
   }
   if (ignoreDirs.trim() && sourceCapabilities.nativeOptions) {
     body.ignore_dirs = ignoreDirs.trim()

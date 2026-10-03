@@ -22,6 +22,7 @@ from openviking.server.temp_upload_store import TempUploadStore
 from openviking.storage.acl import AclSpec
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.config import get_openviking_config
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
@@ -72,7 +73,7 @@ class AddResourceRequest(BaseModel):
             create no Watch: native imports with explicit ``to`` pause a single accessible
             Watch (409 if ambiguous); Connector imports leave Watches untouched.
             See the endpoint's Watch ownership rules.
-        is_active: Initial Watch state for Connector, native Feishu, and native Git imports. When false,
+        is_active: Initial Watch state for Connector, native DingTalk, Feishu, and Git imports. When false,
             requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
     """
@@ -164,6 +165,14 @@ class AddSkillRequest(BaseModel):
         if self.data is None and not self.temp_file_id:
             raise ValueError("Either 'data' or 'temp_file_id' must be provided")
         return self
+
+
+@router.get("/resources/dingtalk/identities")
+async def list_dingtalk_identities(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """List the public fields of server-configured DingTalk identities."""
+    return response_from_result(get_openviking_config().dingtalk.identity_options())
 
 
 @router.post("/resources/temp_upload")

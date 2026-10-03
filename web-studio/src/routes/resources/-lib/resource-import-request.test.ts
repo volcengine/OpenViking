@@ -28,6 +28,12 @@ const BASE_FORM_STATE: ResourceImportFormState = {
   reason: '',
   remoteResourceKind: 'unknown',
   sourceOptionState: {
+    dingtalk: {
+      identity: '',
+      maxBytesMiB: '512',
+      maxDepth: '20',
+      maxNodes: '1000',
+    },
     feishu: { accessToken: '', authMode: 'app', refreshToken: '' },
     git: {
       authMode: 'public',
@@ -51,6 +57,7 @@ const BASE_FORM_STATE: ResourceImportFormState = {
   strict: false,
   targetUri: 'viking://resources/',
   watchEnabled: false,
+  watchInitiallyPaused: false,
   watchInterval: '1440',
 }
 
@@ -123,6 +130,30 @@ describe('resource import request builders', () => {
       branch: 'main',
       parse_mode: 'no_split',
     })
+  })
+
+  it('creates a watched resource paused when requested', () => {
+    expect(
+      buildResourceImportCommonBody({
+        ...BASE_FORM_STATE,
+        remoteResourceKind: 'dingtalk',
+        watchEnabled: true,
+        watchInitiallyPaused: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({ is_active: false, watch_interval: 1440 }),
+    )
+  })
+
+  it('does not send initial pause for a watched web source', () => {
+    expect(
+      buildResourceImportCommonBody({
+        ...BASE_FORM_STATE,
+        remoteResourceKind: 'webPage',
+        watchEnabled: true,
+        watchInitiallyPaused: true,
+      }),
+    ).toEqual(expect.not.objectContaining({ is_active: expect.anything() }))
   })
 
   it('keeps TOS selectable but emits only its supported request fields', () => {

@@ -84,6 +84,14 @@ class AccessorRegistry:
         except Exception as e:
             logger.debug(f"[AccessorRegistry] Failed to register FeishuAccessor: {e}")
 
+        # DingTalkAccessor - handles DingTalk Docs before generic HTTP
+        try:
+            from .dingtalk_accessor import DingTalkAccessor
+
+            self.register(DingTalkAccessor())
+        except Exception as e:
+            logger.debug(f"[AccessorRegistry] Failed to register DingTalkAccessor: {e}")
+
         # LocalAccessor - handles local files (lowest priority)
         try:
             from .local_accessor import LocalAccessor

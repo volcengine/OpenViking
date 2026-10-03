@@ -26,6 +26,7 @@ from .consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from .dingtalk_config import DingTalkConfig
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
@@ -282,6 +283,11 @@ class OpenVikingConfig(BaseModel):
         description="Feishu/Lark document parsing configuration",
     )
 
+    dingtalk: DingTalkConfig = Field(
+        default_factory=DingTalkConfig,
+        description="Named server-side DingTalk MCP identities",
+    )
+
     webfeed: WebFeedConfig = Field(
         default_factory=WebFeedConfig,
         description="Whole-site ingestion via sitemap / RSS / Atom feeds",
@@ -472,7 +478,7 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = {"arbitrary_types_allowed": True, "hide_input_in_errors": True}
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "OpenVikingConfig":

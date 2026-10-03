@@ -1,5 +1,6 @@
 export type RemoteResourceKind =
   | 'unknown'
+  | 'dingtalk'
   | 'feishu'
   | 'git'
   | 'webFeed'
@@ -13,6 +14,7 @@ export type RemoteResourceTypeSelection =
 
 const FEISHU_HOST_SUFFIXES = ['feishu.cn', 'larksuite.com', 'larkoffice.com']
 const FEISHU_PATH_PREFIXES = ['docx', 'wiki', 'sheets', 'base']
+const DINGTALK_HOSTS = new Set(['alidocs.dingtalk.com', 'docs.dingtalk.com'])
 const CODE_HOSTS = new Set([
   'github.com',
   'gitlab.com',
@@ -70,6 +72,10 @@ function looksLikeFeishuUrl(url: URL): boolean {
   )
 }
 
+function looksLikeDingTalkUrl(url: URL): boolean {
+  return DINGTALK_HOSTS.has(url.hostname.toLowerCase().replace(/\.$/, ''))
+}
+
 function looksLikeWebFeed(url: URL): boolean {
   const basename = url.pathname
     .toLowerCase()
@@ -89,7 +95,9 @@ function looksLikeWebFeed(url: URL): boolean {
 
 function looksLikeRemoteFile(url: URL): boolean {
   const filename = url.pathname.toLowerCase().split('/').pop() ?? ''
-  const extension = filename.includes('.') ? filename.split('.').pop() : ''
+  const extension = filename.includes('.')
+    ? (filename.split('.').pop() ?? '')
+    : ''
   return REMOTE_FILE_EXTENSIONS.has(extension)
 }
 
@@ -130,6 +138,7 @@ export function detectRemoteResourceKind(
     return 'unknown'
   }
 
+  if (looksLikeDingTalkUrl(url)) return 'dingtalk'
   if (looksLikeFeishuUrl(url)) return 'feishu'
   if (looksLikeGitRepository(url)) return 'git'
   if (looksLikeWebFeed(url)) return 'webFeed'
