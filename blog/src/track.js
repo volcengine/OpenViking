@@ -3,7 +3,8 @@
  * (https://github.com/t0saki/Viewer-Counter).
  *
  * Disabled unless VITE_COUNTER_URL is set at build time, so default/local/PR
- * builds carry no tracking. Page views are reported with the route pathname;
+ * builds carry no tracking. Page views are reported with the route pathname
+ * and user actions as /e/ event pseudo-pages;
  * document.referrer (origin + pathname only) is attached on the first view so
  * the traffic source is captured for the SPA.
  *
@@ -74,4 +75,13 @@ export function trackPageView(pathname) {
     ref = normalizeReferrer(document.referrer);
   }
   beacon(pathname, ref);
+}
+
+/**
+ * Report a user action as an event pseudo-page under /e/ (the Viewer-Counter
+ * convention), e.g. trackEvent('my-post/start') hits page=/e/my-post/start.
+ * Names must not carry free text or anything identifying.
+ */
+export function trackEvent(name) {
+  beacon(`/e/${name}`);
 }

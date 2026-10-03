@@ -59,9 +59,9 @@ export const FORMS = {
     cost: { zh: '免费（AGPLv3）。要花的是服务器、模型调用和维护时间。', en: 'Free (AGPLv3). The real costs are servers, model usage and maintenance time.' },
     needs: { zh: '一台能跑 Python 3.10+ 或 Docker 的机器，外加一个 VLM。', en: 'A machine that runs Python 3.10+ or Docker, plus a VLM.' },
     cta: [
-      { label: { zh: '快速开始', en: 'Quickstart' }, href: LINKS.quickstart },
-      { label: { zh: '让 agent 帮你装', en: 'Let your agent install it' }, href: LINKS.agentSetup },
-      { label: { zh: 'GitHub', en: 'GitHub' }, href: LINKS.github },
+      { id: 'quickstart', label: { zh: '快速开始', en: 'Quickstart' }, href: LINKS.quickstart },
+      { id: 'agent-setup', label: { zh: '让 agent 帮你装', en: 'Let your agent install it' }, href: LINKS.agentSetup },
+      { id: 'github', label: { zh: 'GitHub', en: 'GitHub' }, href: LINKS.github },
     ],
   },
   personal: {
@@ -76,9 +76,9 @@ export const FORMS = {
     cost: { zh: '每个个人版库前 50 个文件免费，之后按小时按量计费，起步价很低；可以用 Agent Plan 额度抵扣。', en: 'The first 50 files in each Personal library are free, then hourly pay-as-you-go from a low starting price; Agent Plan credits apply.' },
     needs: HOSTED_NEEDS,
     cta: [
-      { label: { zh: '开通个人版（前 50 个文件免费）', en: 'Start Personal (first 50 files free)' }, href: LINKS.hostedQuickstart },
-      { label: { zh: '个人记忆接入教程', en: 'Personal memory walkthrough' }, href: LINKS.hostedPersonal },
-      { label: { zh: '计费说明', en: 'Pricing' }, href: LINKS.billing },
+      { id: 'start', label: { zh: '开通个人版（前 50 个文件免费）', en: 'Start Personal (first 50 files free)' }, href: LINKS.hostedQuickstart },
+      { id: 'walkthrough', label: { zh: '个人记忆接入教程', en: 'Personal memory walkthrough' }, href: LINKS.hostedPersonal },
+      { id: 'pricing', label: { zh: '计费说明', en: 'Pricing' }, href: LINKS.billing },
     ],
   },
   enterprise: {
@@ -93,9 +93,9 @@ export const FORMS = {
     cost: { zh: '从建库开始按小时计费，可以用 Agent Plan 额度抵扣。', en: 'Billed hourly from the moment a library is created; Agent Plan credits apply.' },
     needs: HOSTED_NEEDS,
     cta: [
-      { label: { zh: '了解企业版', en: 'Explore Enterprise' }, href: LINKS.hostedProduct },
-      { label: { zh: '开通指南', en: 'Setup guide' }, href: LINKS.hostedQuickstart },
-      { label: { zh: '计费说明', en: 'Pricing' }, href: LINKS.billing },
+      { id: 'product', label: { zh: '了解企业版', en: 'Explore Enterprise' }, href: LINKS.hostedProduct },
+      { id: 'setup-guide', label: { zh: '开通指南', en: 'Setup guide' }, href: LINKS.hostedQuickstart },
+      { id: 'pricing', label: { zh: '计费说明', en: 'Pricing' }, href: LINKS.billing },
     ],
   },
   private: {
@@ -110,8 +110,8 @@ export const FORMS = {
     cost: { zh: '按部署规模和支持需求定制，联系团队获取方案。', en: 'Tailored to your deployment and support needs; contact the team for a quote.' },
     needs: { zh: 'Kubernetes 和运维团队。提交申请表，团队确认后会把安装包和试用 License 发到你的邮箱。', en: 'Kubernetes and an ops team. Once the team confirms your application, the package link and a trial license arrive by email.' },
     cta: [
-      { label: { zh: '申请私有化试用', en: 'Request a trial license' }, href: LINKS.privateForm },
-      { label: { zh: '商业版说明', en: 'Commercial editions' }, href: LINKS.commercial },
+      { id: 'trial-form', label: { zh: '申请私有化试用', en: 'Request a trial license' }, href: LINKS.privateForm },
+      { id: 'commercial', label: { zh: '商业版说明', en: 'Commercial editions' }, href: LINKS.commercial },
     ],
   },
 };

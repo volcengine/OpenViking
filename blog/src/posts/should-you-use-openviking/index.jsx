@@ -15,6 +15,7 @@ import {
 import {
   promptWithAnswers, promptInterview, shareUrl, shareText, bossMemo,
 } from './prompts.js';
+import { trackEvent } from '../../track';
 
 const LLM_PATH = `/post/${SLUG}/llm.txt`;
 const COVER = `/assets/covers/${SLUG}.webp`;
@@ -22,6 +23,26 @@ const CARD_COVER = `/assets/covers/${SLUG}-card.webp`;
 const POST_PATH = `/post/${SLUG}/`;
 const STORAGE_KEY = 'syo:v1';
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+
+// Anonymous usage events: which options people pick, what result they get, what they copy or click.
+const track = (name) => trackEvent(`${SLUG}/${name}`);
+
+function trackCompletion(answers) {
+  const result = evaluate(answers);
+  QUESTION_IDS.forEach(id => track(`answer/${id}/${answers[id]}`));
+  track(`persona/${result.persona}`);
+  track(`edition/${result.lowFit ? 'none' : result.forms.top}`);
+}
+
+// A takes no onClick, so link clicks are caught on the container and matched by href.
+function linkTracker(place, links, t) {
+  const handler = (e) => {
+    const a = e.target.closest?.('a[href]');
+    const hit = a && links.find(x => t(x.href) === a.getAttribute('href'));
+    if (hit) track(`cta/${place}/${hit.id}`);
+  };
+  return { onClick: handler, onAuxClick: handler };
+}
 
 const reducedMotion = () => {
   try {
@@ -368,7 +389,7 @@ async function writeClipboard(text) {
   }
 }
 
-function CopyButton({ getText, label, done, ghost = true, t }) {
+function CopyButton({ getText, label, done, ghost = true, t, event }) {
   const [state, setState] = useState('idle');
   const [fallback, setFallback] = useState('');
   const timer = useRef(null);
@@ -381,6 +402,7 @@ function CopyButton({ getText, label, done, ghost = true, t }) {
     }
   }, [fallback]);
   const onClick = async () => {
+    if (event) track(`copy/${event}`);
     const text = getText();
     const ok = await writeClipboard(text);
     if (ok) {
@@ -499,7 +521,7 @@ function Ext({ href, children }) {
 function PrimaryCta({ form, t }) {
   const [first, ...rest] = FORMS[form].cta;
   return (
-    <div className="syo-cta">
+    <div className="syo-cta" {...linkTracker(`result/${form}`, FORMS[form].cta, t)}>
       <a className="syo-btn" href={t(first.href)} target="_blank" rel="noreferrer">{t(first.label)} ↗</a>
       {rest.map(c => <span key={t(c.label)} className="syo-ext"><Ext href={c.href}>{t(c.label)}</Ext></span>)}
     </div>
@@ -653,6 +675,8 @@ function showMemo(answers) {
     || answers.stage === 'build' || answers.budget === 'budget' || answers.budget === 'procure';
 }
 
+const LOW_FIT_LINKS = [{ id: 'github', href: LINKS.github }, { id: 'quickstart', href: LINKS.quickstart }];
+
 function LowFit({ result, answers, t }) {
   const chatPain = answers.stage === 'chat' && (answers.reexplain === 'essay' || answers.reexplain === 'groundhog');
   return (
@@ -667,7 +691,7 @@ function LowFit({ result, answers, t }) {
         en: "Your agents don't need long-term memory right now, so there's no rush to add it. Come back and retake the test when any of these happens:",
       })}</p>
       <ol>{LOW_FIT_TRIGGERS.map((x, i) => <li key={i}>{t(x)}</li>)}</ol>
-      <div className="syo-cta">
+      <div className="syo-cta" {...linkTracker('result/none', LOW_FIT_LINKS, t)}>
         <a className="syo-btn" href={LINKS.github} target="_blank" rel="noreferrer">{t({ zh: '先给仓库点个 Star', en: 'Star the repo for later' })} ↗</a>
         <span className="syo-ext"><Ext href={LINKS.quickstart}>{t({ zh: '想先摸摸看：快速开始', en: 'Curious anyway: Quickstart' })}</Ext></span>
       </div>
@@ -696,8 +720,8 @@ function ResultView({ answers, result, shared, onRetake, onAskAi, t, lang }) {
       <PersonaCard result={result} t={t} />
 
       <div className="syo-actions" style={{ marginTop: 18 }}>
-        <CopyButton t={t} label={{ zh: '复制结果链接', en: 'Copy result link' }} getText={url} />
-        <CopyButton t={t} label={{ zh: '复制结果文字', en: 'Copy as text' }} getText={() => shareText(result, url(), lang)} />
+        <CopyButton t={t} event="result-link" label={{ zh: '复制结果链接', en: 'Copy result link' }} getText={url} />
+        <CopyButton t={t} event="result-text" label={{ zh: '复制结果文字', en: 'Copy as text' }} getText={() => shareText(result, url(), lang)} />
         <button type="button" className="syo-link" onClick={onAskAi}>{t({ zh: '让 AI 再评估一次 ↓', en: 'Ask your AI ↓' })}</button>
         <button type="button" className="syo-link" onClick={onRetake}>{t({ zh: '重新测', en: 'Retake' })}</button>
       </div>
@@ -725,7 +749,7 @@ function ResultView({ answers, result, shared, onRetake, onAskAi, t, lang }) {
             <p className="syo-note" style={{ margin: '0 0 12px' }}>{t({ zh: '我们删掉了所有形容词。老板一般喜欢这样。', en: 'We removed the adjectives. Bosses tend to like that.' })}</p>
             <pre className="syo-pre">{bossMemo({ result, problems: problemLinesFor(answers, result.persona, lang), url: shareUrl(code), lang })}</pre>
             <div className="syo-prompt__foot">
-              <CopyButton t={t} ghost={false} label={{ zh: '复制这页纸', en: 'Copy the one-pager' }} getText={() => bossMemo({ result, problems: problemLinesFor(answers, result.persona, lang), url: url(), lang })} />
+              <CopyButton t={t} ghost={false} event="memo" label={{ zh: '复制这页纸', en: 'Copy the one-pager' }} getText={() => bossMemo({ result, problems: problemLinesFor(answers, result.persona, lang), url: url(), lang })} />
             </div>
           </div>
         </details>
@@ -743,6 +767,12 @@ function useQuiz(navigate) {
   const [shared, setShared] = useState(() => Boolean(init));
   const [saved, setSaved] = useState(null);
   const advanceTimer = useRef(null);
+  // Report each run's answers once, on its first completion.
+  const reported = useRef(false);
+
+  useEffect(() => {
+    if (init) track('shared-view');
+  }, [init]);
 
   useEffect(() => {
     if (init) return;
@@ -787,6 +817,8 @@ function useQuiz(navigate) {
 
   const start = () => {
     clearTimeout(advanceTimer.current);
+    reported.current = false;
+    track('start');
     setAnswers({});
     setShared(false);
     setSaved(null);
@@ -795,13 +827,18 @@ function useQuiz(navigate) {
 
   const resume = () => {
     if (!saved) return start();
+    reported.current = isComplete(saved);
     setAnswers(saved);
     setShared(false);
     setStep(isComplete(saved) ? 'result' : firstOpen(saved));
     setSaved(null);
   };
 
-  const finish = () => {
+  const finish = (done) => {
+    if (!reported.current) {
+      reported.current = true;
+      trackCompletion(done);
+    }
     if (reducedMotion()) {
       setStep('result');
       return;
@@ -818,9 +855,9 @@ function useQuiz(navigate) {
     clearTimeout(advanceTimer.current);
     const go = () => {
       // Editing an earlier answer on a finished quiz goes straight back to the result.
-      if (wasComplete) finish();
+      if (wasComplete) finish(next);
       else if (index < QUESTIONS.length - 1) setStep(index + 1);
-      else if (isComplete(next)) finish();
+      else if (isComplete(next)) finish(next);
       else setStep(firstOpen(next));
     };
     if (reducedMotion()) go();
@@ -843,6 +880,8 @@ function useQuiz(navigate) {
     try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     // Drop only ?r=; keep ?lang= and anything else on the URL.
     if (shared || /[?&]r=/.test(window.location.search)) navigate({ query: { r: null } });
+    reported.current = false;
+    track('start');
     setAnswers({});
     setShared(false);
     setSaved(null);
@@ -1055,7 +1094,7 @@ function PromptBox({ quiz, result, t, lang, boxRef }) {
             })}</p>
             <pre className="syo-pre">{text}</pre>
             <div className="syo-prompt__foot">
-              <CopyButton t={t} ghost={false} label={{ zh: '复制 prompt', en: 'Copy prompt' }} getText={() => text} />
+              <CopyButton t={t} ghost={false} event={`prompt-${active}`} label={{ zh: '复制 prompt', en: 'Copy prompt' }} getText={() => text} />
               <span className="syo-note">{t({ zh: '最好交给能读代码的 coding agent：Claude Code、Codex、Cursor 都行。', en: 'Works best in a coding agent that can read your repo: Claude Code, Codex or Cursor.' })}</span>
             </div>
           </>
@@ -1115,7 +1154,7 @@ function EditionCards({ result, shared, t }) {
                 </div>
               ))}
             </dl>
-            <div className="syo-ed__links">
+            <div className="syo-ed__links" {...linkTracker(`editions/${k}`, f.cta, t)}>
               {f.cta.map(c => <Ext key={t(c.label)} href={c.href}>{t(c.label)}</Ext>)}
             </div>
           </div>
