@@ -214,6 +214,19 @@ For the full field reference, supported operations, and more examples, see:
 
 - [Operation Telemetry Reference](07-operation-telemetry.md)
 
+### Embedding provider calls
+
+With `server.observability.traces.enabled`, real embedding calls emit `CLIENT` spans
+named `embeddings <model>`, including provider, model, dimension, input token usage
+when available, duration, and normalized error type. Retries share one logical
+call span; cache hits create none. Composite and failover embedders trace the actual
+provider subcalls. These spans add no input text, vectors, API keys, or raw error
+bodies. Path-shaped model names are shown as `local-model` without changing requests.
+Async span duration includes concurrency waits and retry backoff.
+`openviking.embedding.queue_wait_ms` sums semaphore waits across all attempts;
+`openviking.embedding.provider_duration_ms` sums provider execution time, excluding
+queue waits and retry backoff.
+
 ## Generate a local trace and submit it for troubleshooting
 
 If `telemetry.summary` in the response is not enough to diagnose a problem, you can ask OpenViking to write OpenTelemetry traces to a local JSONL file. The user submits the JSONL file and the problematic `trace_id` to an administrator/support engineer, and the administrator uploads it to the troubleshooting environment for analysis. This is useful for offline customer environments, environments that cannot directly reach an OTLP backend, or cases where support needs the exact reproduction trace.

@@ -25,6 +25,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass(frozen=True)
 class EmbeddingResourceStatus:
     """Read-only Account embedding state."""
@@ -165,9 +166,7 @@ class AccountEmbeddingProvider:
                     raise RuntimeError("Account embedding provider is closed")
 
             settings = await self._resolver.resolve(account_id)
-            fingerprint = hashlib.sha256(
-                settings.embedding.model_dump_json().encode()
-            ).hexdigest()
+            fingerprint = hashlib.sha256(settings.embedding.model_dump_json().encode()).hexdigest()
             with self._lock:
                 if self._closed:
                     raise RuntimeError("Account embedding provider is closed")
@@ -233,6 +232,7 @@ class AccountEmbeddingProvider:
                 self._retired.discard(resource)
 
     async def _execute(self, resource, content, is_query):
+        from openviking.models.embedder.base import _embed_async_with_span
         from openviking.telemetry import bind_telemetry_stage
 
         try:
@@ -242,7 +242,7 @@ class AccountEmbeddingProvider:
             raise
         try:
             with bind_telemetry_stage("embed_query" if is_query else "embed_resource"):
-                result = await resource.embedder.embed_async(content, is_query=is_query)
+                result = await _embed_async_with_span(resource.embedder, content, is_query=is_query)
             if result.dense_vector is not None:
                 expected = resource.settings.vectordb.dimension
                 if len(result.dense_vector) != expected:
