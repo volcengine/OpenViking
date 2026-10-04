@@ -98,7 +98,7 @@ def _serialize_with_metadata(
             template_vars["link_target"] = lambda target_uri: _template_link_target(
                 source_uri, target_uri
             )
-            content = render_template(content_template, template_vars, extract_context)
+            content = render_template(content_template, template_vars, extract_context, strip=False)
         except Exception:
             logger.exception(
                 "Failed to render memory content template; using plain content fallback"
