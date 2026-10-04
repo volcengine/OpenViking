@@ -11,7 +11,8 @@ const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
 const base = configuredBase === '//' ? '/' : configuredBase
-const ogImageUrl = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}og-image.png`
+// Version the filename so social crawlers do not reuse the previous artwork.
+const ogImageUrl = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}og-openviking-docs-be6104a7.png`
 const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
 const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
 const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
@@ -204,11 +205,14 @@ export default defineConfig({
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
     ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: `${base}apple-touch-icon.png` }],
     ['meta', { property: 'og:image', content: ogImageUrl }],
+    ['meta', { property: 'og:image:type', content: 'image/png' }],
+    ['meta', { property: 'og:image:alt', content: 'OpenViking / docs — Guides and API reference for AI agent context.' }],
     ['meta', { property: 'og:image:width', content: '1200' }],
     ['meta', { property: 'og:image:height', content: '630' }],
     ['link', { rel: 'alternate', type: 'text/plain', title: 'LLM documentation index', href: `${base}llms.txt` }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:image', content: ogImageUrl }],
+    ['meta', { name: 'twitter:image:alt', content: 'OpenViking / docs — Guides and API reference for AI agent context.' }],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
   ],
