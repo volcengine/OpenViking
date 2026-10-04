@@ -61,6 +61,7 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
+    AlreadyExistsError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
@@ -742,24 +743,45 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
-        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        requested_mode = mode
+        normalized_tags = (
+            [] if requested_mode == "clear" else normalize_search_tags(tags, discard_invalid=True)
+        )
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        context_type = context_type_for_uri(normalized_uri)
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
+        if requested_mode == "replace" and not normalized_tags:
+            return self._build_tags_result(
+                uri=normalized_uri,
+                updated_uris=[],
+                skipped_count=1,
+                failed_count=0,
+                root_uri=root_uri,
+                context_type=context_type,
+                tags=normalized_tags,
+                mode=requested_mode,
+            )
+        storage_mode = "replace" if requested_mode == "clear" else requested_mode
         if stat.get("isDir"):
-            return await self._set_directory_tags(
+            result = await self._set_directory_tags(
                 uri=normalized_uri,
                 tags=normalized_tags,
-                mode=mode,
+                mode=storage_mode,
                 recursive=recursive,
                 ctx=ctx,
             )
-        return await self._set_single_uri_tags(
-            uri=normalized_uri,
-            tags=normalized_tags,
-            mode=mode,
-            recursive=recursive,
-            ctx=ctx,
-        )
+        else:
+            result = await self._set_single_uri_tags(
+                uri=normalized_uri,
+                tags=normalized_tags,
+                mode=storage_mode,
+                recursive=recursive,
+                ctx=ctx,
+            )
+        result["mode"] = requested_mode
+        result["tags"] = normalized_tags
+        return result
 
     def _build_write_result(
         self,
@@ -780,6 +802,7 @@ class ContentWriteCoordinator:
             "context_type": context_type,
             "mode": mode,
             "written_bytes": written_bytes,
+            "content_updated": True,
             "semantic_status": semantic_status,
             "vector_status": vector_status,
             "queue_status": queue_status,
@@ -877,7 +900,7 @@ class ContentWriteCoordinator:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
             target_preexisting = target_state.preexisting
             is_new_file = target_state.is_new_file
-            if mode == "append":
+            if mode == "append" and target_preexisting:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             final_bytes = self._render_final_bytes(
                 uri,
@@ -1090,6 +1113,7 @@ class ContentWriteCoordinator:
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
+
     async def _vectorize_abstract_overview(
         self,
         *,
@@ -1148,7 +1172,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
     def _validate_tag_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append"}:
+        if mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
     def _ensure_content_write_policy(self, uri: str) -> None:
@@ -1197,7 +1221,9 @@ class ContentWriteCoordinator:
         preexisting = not stat.get("not_found")
         if preexisting:
             if stat.get("isDir"):
-                raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
+                raise InvalidArgumentError(
+                    f"write only supports existing files, got directory: {uri}"
+                )
             return _LockedWriteTarget(True, ({"": FormalEntry(is_dir=False)}, True))
         if is_abstract_overview_uri(uri):
             raise InvalidArgumentError(f"cannot create generated abstract overview directly: {uri}")
@@ -1207,7 +1233,9 @@ class ContentWriteCoordinator:
     def _validate_create_extension(self, uri: str) -> None:
         _, ext = os.path.splitext(uri)
         if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
-            raise InvalidArgumentError(f"creating a new file does not allow extension '{ext}': {uri}")
+            raise InvalidArgumentError(
+                f"creating a new file does not allow extension '{ext}': {uri}"
+            )
 
     def _render_final_bytes(
         self,
@@ -1257,6 +1285,10 @@ class ContentWriteCoordinator:
             # reserved trailer of memory namespaces only (see content_visibility),
             # so non-memory appends must not round-trip through MemoryFileUtils
             # (which strips trailing newlines and injects a metadata trailer).
+            if is_new_file:
+                if not isinstance(content, str):
+                    raise InvalidArgumentError(f"append only supports text content: {uri}")
+                return content.encode("utf-8")
             if not isinstance(existing_raw, str) or not isinstance(content, str):
                 raise InvalidArgumentError(f"append only supports text content: {uri}")
             return (existing_raw + content).encode("utf-8")
