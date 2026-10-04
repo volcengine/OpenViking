@@ -1,0 +1,24 @@
+bot/vikingbot/compile/ops/map.py
+  h_b34c679d17e2ac 89
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 21,249-252,260,269
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 30
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 85-86,126
+bot/vikingbot/compile/skill_resources.py
+  h_b34c679d17e2ac 14,24-25,30,51-57,86-88,112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5302331d68da6b6cac780ceb0121f66c0a693fcc",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
