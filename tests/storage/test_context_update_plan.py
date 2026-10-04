@@ -2816,6 +2816,104 @@ async def test_resource_processor_preserves_skill_metadata_in_direct_directory_m
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scalar_override", "expected_summary"),
+    [
+        # An existing L2 abstract carried by the V snapshot is seeded into
+        # summary_dict so vectorize_file can honor text_source downstream.
+        ({"abstract": "existing summary"}, "existing summary"),
+        # No abstract (new file / empty record) leaves the summary empty, so
+        # vectorize_file falls back to the file body regardless of text_source.
+        ({"abstract": ""}, ""),
+        ({}, ""),
+    ],
+)
+async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
+    monkeypatch, scalar_override, expected_summary
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking_cli.session.user_id import UserIdentifier
+
+    captured = {}
+
+    async def _fake_vectorize_file(
+        *,
+        file_path,
+        summary_dict,
+        parent_uri,
+        context_type,
+        ctx,
+        ingest_options,
+        file_md5,
+        scalar_override,
+        field_patch,
+        action,
+    ):
+        captured["summary_dict"] = summary_dict
+        captured["scalar_override"] = scalar_override
+        captured["ingest_options"] = ingest_options
+        return True
+
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file)
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    await context_update_execution.vectorize_resource_file(
+        "viking://resources/repo/a.py",
+        ctx=ctx,
+        scalar_override={"_record_id": "id-a", **scalar_override},
+        action="upsert",
+    )
+
+    # The existing abstract (if any) is seeded into summary_dict; text_source
+    # policy (summary vs body) is applied inside vectorize_file, not here. The
+    # abstract still travels unchanged as a stored scalar.
+    assert captured["summary_dict"]["summary"] == expected_summary
+    assert captured["scalar_override"]["_record_id"] == "id-a"
+    assert captured["ingest_options"].search_tags is None
+    if scalar_override.get("abstract"):
+        assert captured["scalar_override"]["abstract"] == scalar_override["abstract"]
+
+
+@pytest.mark.asyncio
+async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking_cli.session.user_id import UserIdentifier
+
+    monkeypatch.setattr(
+        context_update_execution,
+        "vectorize_resource_file",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="Embedding", get_queue=lambda *args, **kwargs: object()),
+    )
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr("openviking.utils.embedding_utils._enqueue_embedding_message", enqueue)
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    enqueued = await context_update_execution.enqueue_direct_index_actions(
+        (
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/empty.md",
+                2,
+                "empty-l2",
+                md5="d41d8cd98f00b204e9800998ecf8427e",
+            ),
+        ),
+        ctx=ctx,
+    )
+
+    assert enqueued is True
+    delete_message = enqueue.await_args.args[1]
+    assert delete_message.record_ids == ["empty-l2"]
+
+
 def test_semantic_message_roundtrip_uses_explicit_plan():
     from openviking.storage.context_update_plan import (
         IndexSlot,

@@ -46,7 +46,6 @@ from openviking.server.mcp_endpoint import (
 from openviking.server.mcp_endpoint import ls as list_tool
 from openviking.service.fs_service import ListingPage
 from openviking_cli.exceptions import (
-    AlreadyExistsError,
     FailedPreconditionError,
     InvalidArgumentError,
     InvalidURIError,
@@ -1972,11 +1971,12 @@ async def test_write_replace_overwrites_existing(service):
     assert body == "v2-content"
 
 
-async def test_write_create_fails_when_file_exists(service):
+async def test_write_create_overwrites_existing_file(service):
     uri = "viking://resources/test_write_create_exists.md"
     await write(uri=uri, content="v1")
-    with pytest.raises(AlreadyExistsError):
-        await write(uri=uri, content="v2", mode="create")
+    result = await write(uri=uri, content="v2", mode="create")
+    assert "mode=create" in result
+    assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "v2"
 
 
 async def test_write_append_appends_to_existing(service):
@@ -1987,11 +1987,11 @@ async def test_write_append_appends_to_existing(service):
     assert body == "line1\nline2\n"
 
 
-async def test_write_append_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
-        await write(
-            uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
-        )
+async def test_write_append_creates_missing_file(service):
+    uri = "viking://resources/test_write_append_missing.md"
+    result = await write(uri=uri, content="x", mode="append")
+    assert "mode=append" in result
+    assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "x"
 
 
 async def test_write_create_rejects_disallowed_extension(service):

@@ -1200,9 +1200,9 @@ async def write(
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
     - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
-    - mode="create": fail if the file already exists.
+    - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
     - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
-    - mode="append": append to the end of an existing file; fails if the file does not exist.
+    - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL
       requires manage on the target, or its parent for a new file. Omit to preserve
@@ -1214,19 +1214,9 @@ async def write(
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    try:
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout, acl=acl
-        )
-    except NotFoundError:
-        if mode != "replace":
-            raise
-        # Replace doubles as create-or-overwrite so agents can save a new file
-        # without first checking whether it exists; strict creation stays
-        # available via mode="create".
-        result = await service.fs.write(
-            uri=uri, content=content, ctx=ctx, mode="create", wait=wait, timeout=timeout, acl=acl
-        )
+    result = await service.fs.write(
+        uri=uri, content=content, ctx=ctx, mode=mode, wait=wait, timeout=timeout, acl=acl
+    )
     written = result.get("written_bytes", 0)
     message = (
         f"Wrote {written} bytes to {result.get('uri', uri)} (mode={result.get('mode', mode)})."
