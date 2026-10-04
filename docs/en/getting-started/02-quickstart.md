@@ -52,7 +52,7 @@ ov config
 
 In the interactive configuration, choose **OpenViking Service** for Volcengine or **Custom** for a self-hosted endpoint. Enter the API key and, for a custom service, its URL. Leave the key empty for the default local server. Save and activate the configuration.
 
-The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For scripted setup or multiple endpoints, see [CLI Setup](05-cli-setup.md).
+The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For multiple endpoints or agent-assisted setup, see [CLI Setup](05-cli-setup.md).
 
 Verify the connection:
 
