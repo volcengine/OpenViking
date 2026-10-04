@@ -154,6 +154,29 @@ async def test_hashed_key_is_not_treated_as_a_usable_credential(monkeypatch):
     assert exc.value.status_code == 409
 
 
+async def test_trusted_selection_uses_keyless_root_identity(monkeypatch):
+    users = AsyncMock(return_value=[{"user_id": "bot"}])
+    monkeypatch.setattr(bot_studio, "account_users", users)
+    monkeypatch.setattr(
+        bot_studio, "get_server_url_from_server_data", lambda config: "http://localhost"
+    )
+    config = SimpleNamespace(get_effective_auth_mode=lambda: "trusted")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=config)))
+    ctx = SimpleNamespace(account_id="a")
+
+    identity = await bot_studio.selected_identity(request, ctx, "bot")
+
+    users.assert_awaited_once_with(request, ctx, expose_key=False)
+    assert identity == {
+        "account_id": "a",
+        "user_id": "bot",
+        "role": "user",
+        "api_key_type": "root",
+        "agent_id": "vikingbot",
+        "server_url": "http://localhost",
+    }
+
+
 async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
     app.dependency_overrides[get_request_context] = lambda: RequestContext(
         user=UserIdentifier("a", "root"), role=Role.ROOT
