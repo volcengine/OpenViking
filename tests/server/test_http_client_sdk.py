@@ -56,9 +56,8 @@ async def test_sdk_add_resource(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
 
-    result = await client.add_resource(path=str(f), reason="sdk test", wait=True)
+    result = await client.add_resource(path=str(f), wait=True, options={"reason": "sdk test"})
     assert "usage" not in result
-    assert "telemetry" not in result
     assert "root_uri" in result
     assert result["root_uri"].startswith("viking://")
     creator = RequestContext(
@@ -66,7 +65,7 @@ async def test_sdk_add_resource(http_client):
         role=Role.ADMIN,
     )
     acl = await service.fs.get_acl(result["root_uri"], ctx=creator)
-    assert acl["acl_mode"] == "none"
+    assert acl["acl_mode"] == "inherit"
     assert acl["direct_entries"] == []
 
 
@@ -179,7 +178,8 @@ async def test_sdk_mkdir_with_description_sets_abstract(http_client):
 
     assert await client.abstract(uri) == description
 
-    await client.mkdir(uri)
+    with pytest.raises(ConflictError):
+        await client.mkdir(uri)
 
     assert await client.abstract(uri) == description
 
@@ -418,11 +418,11 @@ async def test_sdk_find(http_client):
     f = TEST_TMP_DIR / "sdk_search.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search test", wait=True)
+    await client.add_resource(path=str(f), wait=True, options={"reason": "search test"})
 
     result = await client.find(query="sample document", limit=5)
-    assert hasattr(result, "resources")
-    assert hasattr(result, "total")
+    assert "resources" in result
+    assert "total" in result
 
 
 async def test_sdk_find_accepts_tags(http_client):
@@ -430,10 +430,10 @@ async def test_sdk_find_accepts_tags(http_client):
     f = TEST_TMP_DIR / "sdk_find_tags.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="find tags test", wait=True)
+    await client.add_resource(path=str(f), wait=True, options={"reason": "find tags test"})
 
-    result = await client.find(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+    result = await client.find(query="sample document", limit=5, options={"tags": ["team=search"]})
+    assert "resources" in result
 
 
 async def test_sdk_search_accepts_tags(http_client):
@@ -441,10 +441,12 @@ async def test_sdk_search_accepts_tags(http_client):
     f = TEST_TMP_DIR / "sdk_search_tags.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search tags test", wait=True)
+    await client.add_resource(path=str(f), wait=True, options={"reason": "search tags test"})
 
-    result = await client.search(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+    result = await client.search(
+        query="sample document", limit=5, options={"tags": ["team=search"]}
+    )
+    assert "resources" in result
 
 
 async def test_sdk_set_tags_accepts_tags(http_client):
@@ -452,7 +454,7 @@ async def test_sdk_set_tags_accepts_tags(http_client):
     f = TEST_TMP_DIR / "sdk_write_tags.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("hello")
-    added = await client.add_resource(path=str(f), reason="write tags test", wait=True)
+    added = await client.add_resource(path=str(f), wait=True, options={"reason": "write tags test"})
     uri = added["root_uri"]
     children = await client.ls(uri, simple=True)
     file_uri = children[0]
@@ -467,11 +469,11 @@ async def test_sdk_find_telemetry(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
     await client.add_resource(
-        path=str(f), reason="telemetry search test", wait=True, telemetry=True
+        path=str(f), wait=True, options={"reason": "telemetry search test", "telemetry": True}
     )
 
-    result = await client.find(query="sample document", limit=5, telemetry=True)
-    assert not hasattr(result, "telemetry")
+    result = await client.find(query="sample document", limit=5, options={"telemetry": True})
+    assert "telemetry" not in result
 
 
 async def test_sdk_find_summary_only_telemetry(http_client):
@@ -480,17 +482,13 @@ async def test_sdk_find_summary_only_telemetry(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
     await client.add_resource(
-        path=str(f),
-        reason="summary only telemetry search test",
-        wait=True,
+        path=str(f), wait=True, options={"reason": "summary only telemetry search test"}
     )
 
     result = await client.find(
-        query="sample document",
-        limit=5,
-        telemetry={"summary": True},
+        query="sample document", limit=5, options={"telemetry": {"summary": True}}
     )
-    assert not hasattr(result, "telemetry")
+    assert "telemetry" not in result
 
 
 # ===================================================================
@@ -506,12 +504,12 @@ async def test_sdk_full_workflow(http_client):
     f = TEST_TMP_DIR / "sdk_e2e.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
-    result = await client.add_resource(path=str(f), reason="e2e test", wait=True)
+    result = await client.add_resource(path=str(f), wait=True, options={"reason": "e2e test"})
     uri = result["root_uri"]
 
     # Search
     find_result = await client.find(query="sample", limit=3)
-    assert find_result.total >= 0
+    assert find_result["total"] >= 0
 
     # List contents (the URI is a directory)
     children = await client.ls(uri, simple=True)

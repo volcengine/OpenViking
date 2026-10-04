@@ -43,3 +43,8 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )
+
+
+def is_ttl_metadata_name(name: str) -> bool:
+    """OV-owned event date directory metadata, preserved by whole-directory transfers."""
+    return name in {".meta.json", ".ttl.json"}

@@ -114,7 +114,13 @@ class _MemoryAGFS:
             raise FileNotFoundError(path)
         return self.files[path]
 
-    def write(self, path, data, ctx=None):
+    def pathlock_acquire_exact(self, path, *args, **kwargs):
+        return {"lease_ref": "test-lease"}
+
+    def pathlock_release(self, lease, *args, **kwargs):
+        pass
+
+    def write(self, path, data, ctx=None, **kwargs):
         self.files[path] = data if isinstance(data, bytes) else data.encode("utf-8")
         self.writes.append(path)
 
@@ -155,7 +161,7 @@ class _CountingVectorStore:
     def __init__(self):
         self.calls = []
 
-    async def count(self, filter=None, ctx=None):
+    async def count(self, filter=None, ctx=None, **kwargs):
         self.calls.append((filter, ctx))
         return 7
 

@@ -200,6 +200,20 @@ async def test_no_split_defers_initial_root_when_parent_targeted(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", [{"ttl_relative": 7}, {"ttl_absolute": 2000000000}])
+async def test_source_queue_rejects_resource_ttl(service, ctx, ttl):
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    with pytest.raises(InvalidArgumentError, match="outside the TTL scope"):
+        await service.add_resource(
+            path="https://example.com/guide.md",
+            ctx=ctx,
+            **ttl,
+        )
+    service._enqueue_add_resource_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_no_split_watch_persists_auto_bound_multi_artifact_directory(
     service: ResourceService,
     ctx: RequestContext,

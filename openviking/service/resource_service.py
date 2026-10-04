@@ -501,7 +501,9 @@ class ResourceService:
                     self._runtime_config_manager,
                     ctx.account_id,
                 )
-                app_credentials = self._load_feishu_credentials_for_watch(app_id, app_secret, feishu_config)
+                app_credentials = self._load_feishu_credentials_for_watch(
+                    app_id, app_secret, feishu_config
+                )
                 watch_auth_state = create_feishu_auth_state(
                     token,
                     refresh_token.strip(),
@@ -1732,6 +1734,8 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        if any(kwargs.get(key) is not None for key in ("ttl_relative", "ttl_absolute")):
+            raise InvalidArgumentError("Resources are outside the TTL scope")
         tos_signature = kwargs.get("tos_signature")
         tos_access = kwargs.get("tos_access")
         if tos_signature is not None or tos_access is not None:
@@ -2141,6 +2145,8 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
+            if result.get("skipped"):
+                return result
             if (
                 not to_is_directory
                 and isinstance(prepared, dict)

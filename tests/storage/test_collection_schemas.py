@@ -1200,6 +1200,40 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "source_suffix"),
+    [(0, "/.abstract.md"), (1, "/.overview.md"), (2, "")],
+)
+async def test_ttl_embedding_checks_source_before_upsert(monkeypatch, level, source_suffix):
+    class _CapturingVikingDB:
+        is_closing = False
+        uses_content_field = False
+
+        upsert = AsyncMock(side_effect=AssertionError("expired source must not be upserted"))
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    handler = TextEmbeddingHandler(_CapturingVikingDB())
+    handler._write_ttl_vector_if_current = AsyncMock(return_value=None)
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    uri = "viking://user/default/memories/events/2026/09/30"
+    if level == 2:
+        uri += "/event.md"
+    queue_data["payload"]["context_data"].update(uri=uri, level=level)
+    payload["data"] = json.dumps(queue_data)
+
+    result = await handler.on_dequeue(payload)
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert handler._write_ttl_vector_if_current.await_args.args[0] == (uri + source_suffix)
+    handler._vikingdb.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_honors_explicit_full_upsert(monkeypatch):
     captured = {}
 

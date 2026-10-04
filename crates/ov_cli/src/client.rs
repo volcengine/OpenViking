@@ -2132,6 +2132,7 @@ mod tests {
             .await
             .expect("request should be captured");
         assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
+        assert!(!no_split_request.contains("ttl_relative"));
     }
 
     #[test]

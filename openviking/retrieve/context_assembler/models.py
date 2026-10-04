@@ -21,10 +21,12 @@ class AssembledEntry:
     text: str = ""
     origin: str = ""
     tokens: int = 0
+    expires_at: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
             "uri": self.uri,
+            "expires_at": self.expires_at,
             "category": self.category,
             "score": self.score,
             "detail": self.detail,

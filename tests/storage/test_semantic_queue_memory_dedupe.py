@@ -152,7 +152,9 @@ class _FakeMemoryDirFS:
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)),
+        lambda: SimpleNamespace(
+            semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
+        ),
     )
 
 

@@ -168,8 +168,7 @@ class TrajectoryRolloutAnalyzer:
         if self.vlm is None:
             if self.vlm_resolver is None:
                 raise RuntimeError(
-                    "TrajectoryRolloutAnalyzer requires a VLM resolver "
-                    "for account-owned work"
+                    "TrajectoryRolloutAnalyzer requires a VLM resolver for account-owned work"
                 )
             vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
 

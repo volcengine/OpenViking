@@ -238,6 +238,19 @@ class AsyncAGFSClient:
             ctx["bypass_cache"] = "true"
         return await self.run("stat", path, ctx=ctx)
 
+    async def update_directory_metadata(
+        self, path: str, fields: Dict[str, Any], *, fs_ctx: Dict[str, str] | None = None
+    ) -> Dict[str, Any]:
+        """Merge attributes into .meta.json using AGFS's exact metadata lock."""
+        import json
+
+        return await self.run(
+            "update_directory_metadata",
+            path,
+            json.dumps(fields),
+            ctx=_fs_ctx_or_default(path, fs_ctx),
+        )
+
     async def mv(
         self,
         old_path: str,

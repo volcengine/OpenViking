@@ -250,8 +250,7 @@ class StreamingMemoryUpdater:
             lease = None
             if lock_paths:
                 lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
-                    lock_paths,
-                    timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+                    lock_paths, timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS
                 )
             try:
                 valid_links = await filter_valid_links(
@@ -502,6 +501,7 @@ class StreamingMemoryUpdater:
                 operations,
                 viking_fs,
                 request.ctx,
+                request=request,
             )
             try:
                 updater = MemoryUpdater(
@@ -679,7 +679,10 @@ def split_request_by_merge_group(
         peer_id = _peer_id_for_operation(op)
         for uri in op.uris:
             single_uri_op = clone_operation_for_uri(op, uri)
-            group_key = MemoryMergeGroupKey(peer_id=peer_id, memory_type=single_uri_op.memory_type)
+            group_key = MemoryMergeGroupKey(
+                peer_id=peer_id,
+                memory_type=single_uri_op.memory_type,
+            )
             upsert_groups.setdefault(group_key, []).append(single_uri_op)
 
     for file in list(operations.delete_file_contents or []):
@@ -723,7 +726,10 @@ def split_request_by_merge_group(
         # Unresolved upserts keep their original standalone passthrough group.
         # Deletes remain in their normal peer/type groups, including replacement
         # metadata, so diagnostics cannot change write/delete ordering.
-        group_key = MemoryMergeGroupKey(peer_id=None, memory_type="")
+        group_key = MemoryMergeGroupKey(
+            peer_id=None,
+            memory_type="",
+        )
         grouped_requests.append(
             (
                 group_key,
@@ -1027,8 +1033,7 @@ async def merge_one_memory_type_operations(
     )
     if vlm_resolver is None:
         raise RuntimeError(
-            "merge_one_memory_type_operations requires a VLM resolver "
-            "for account-owned work"
+            "merge_one_memory_type_operations requires a VLM resolver for account-owned work"
         )
     vlm_config = await vlm_resolver.get_vlm(ctx.account_id)
     provider = PatchMergeContextProvider(
@@ -2207,6 +2212,8 @@ async def acquire_memory_operation_lease(
     operations: ResolvedOperations,
     viking_fs: Any | None,
     ctx: RequestContext,
+    *,
+    request: MemoryUpdateRequest | None = None,
 ) -> Any | None:
     # Materialize implicit URI changes only at the final apply boundary. Doing
     # this before second-stage patch merging would present the same rename as

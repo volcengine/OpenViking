@@ -3,7 +3,7 @@
 """Focused tests for core service behavior."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,64 @@ from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+
+@pytest.mark.asyncio
+async def test_runtime_config_initializes_before_viking_fs_exists(monkeypatch) -> None:
+    """Startup builds account-aware resolvers before constructing VikingFS."""
+    manager = SimpleNamespace(
+        initialize=AsyncMock(),
+        add_update_consumer=MagicMock(),
+    )
+    acl_manager = SimpleNamespace(set_runtime_config_manager=MagicMock())
+    vikingdb = SimpleNamespace(
+        acl_manager=acl_manager,
+        set_vector_config_resolver=MagicMock(),
+    )
+    session_service = SimpleNamespace(set_runtime_config_manager=MagicMock())
+    config = SimpleNamespace(
+        runtime_config=object(),
+        model_copy=lambda **_kwargs: object(),
+    )
+    agent_config = SimpleNamespace(model_copy=lambda **_kwargs: object())
+
+    monkeypatch.setattr(
+        "openviking.config.binding.build_runtime_config_manager",
+        lambda *_args, **_kwargs: manager,
+    )
+    monkeypatch.setattr(
+        "openviking.config.embedding.AccountEmbeddingProvider",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        "openviking.config.vector.AccountVectorConfigResolver",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        "openviking.config.vlm.AccountVLMProvider",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        "openviking.pyagfs.AsyncAGFSClient",
+        lambda client: client,
+    )
+
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._agfs_client = object()
+    service._config = config
+    service._agent_evolution_base_config = agent_config
+    service._runtime_config_manager = None
+    service._viking_fs = None
+    service._vikingdb_manager = vikingdb
+    service._session_service = session_service
+    service._queue_manager = None
+
+    await service._init_runtime_config_manager()
+
+    assert service._runtime_config_manager is manager
+    manager.initialize.assert_awaited_once()
+    acl_manager.set_runtime_config_manager.assert_called_once_with(manager)
+    session_service.set_runtime_config_manager.assert_called_once_with(manager)
 
 
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
@@ -36,6 +94,7 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
             session_commit=SimpleNamespace(max_concurrent=5),
             external_task=SimpleNamespace(max_concurrent=6),
         ),
+        agent_evolution=SimpleNamespace(model_copy=lambda **_kwargs: object()),
         git=object(),
     )
 
@@ -135,6 +194,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
+    service._ttl_cleanup_service = None
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()

@@ -349,6 +349,19 @@ class ResourceProcessor:
                     target_root_uri=root_uri,
                     root_is_file=root_is_file,
                 )
+                if root_is_file and not target_preexisting:
+                    # Resolving a missing flat-file target can leave an empty
+                    # placeholder directory at that URI. This is especially
+                    # visible after TTL cleanup retains the sibling tombstone.
+                    # Remove only the placeholder before an added file action.
+                    try:
+                        stat = await get_viking_fs().stat(root_uri, ctx=ctx, skip_count=True)
+                    except Exception:
+                        stat = {}
+                    if stat.get("isDir"):
+                        await get_viking_fs().remove_files(
+                            root_uri, recursive=True, ctx=ctx, lease_ref=lease_ref
+                        )
             plan_processing_mode = (
                 processing_mode
                 if processing_mode == VECTORS_ONLY or summarize or vectorize
@@ -967,6 +980,7 @@ class ResourceProcessor:
                             ingest_options,
                             acl_update=await viking_fs.prepare_acl_update(root_uri, acl, ctx),
                         )
+
                     artifact_ref = self._ensure_parse_artifact_ref(parse_result)
                     artifact_store = self._store_for_parse_artifact(
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx

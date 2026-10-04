@@ -148,6 +148,9 @@ async def write_stored_links(
             if current_trace_id:
                 mf.extra_fields["last_update_trace_id"] = current_trace_id
             bump_memory_version(mf)
+            from openviking.core.ttl import strip_ttl_fields
+
+            mf.extra_fields = strip_ttl_fields(mf.extra_fields)
             await viking_fs.write_file(
                 uri,
                 MemoryFileUtils.write(mf),
@@ -1342,6 +1345,9 @@ class MemoryUpdater:
                     source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
                 )
                 if changed:
+                    from openviking.core.ttl import strip_ttl_fields
+
+                    mf.extra_fields = strip_ttl_fields(mf.extra_fields)
                     await viking_fs.write_file(
                         uri,
                         MemoryFileUtils.write(mf),
@@ -1462,6 +1468,11 @@ class MemoryUpdater:
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)
+
+            # File metadata cannot override the owning directory's deadline.
+            from openviking.core.ttl import strip_ttl_fields
+
+            metadata = strip_ttl_fields(metadata)
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
@@ -1706,6 +1717,9 @@ class MemoryUpdater:
                     mf.extra_fields["last_update_trace_id"] = current_trace_id
                 mf.content = plain_content
                 bump_memory_version(mf)
+                from openviking.core.ttl import strip_ttl_fields
+
+                mf.extra_fields = strip_ttl_fields(mf.extra_fields)
                 await viking_fs.write_file(
                     uri,
                     MemoryFileUtils.write(mf),
@@ -1791,6 +1805,10 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
                 mf = MemoryFileUtils.read(content, uri=uri)
+                from openviking.storage.directory_ttl import read_directory_fields
+
+                mf.extra_fields.update(await read_directory_fields(viking_fs, uri, ctx=ctx))
+
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
                 abstract = LinkRenderer.strip_all_links(mf.content or "")
@@ -1841,6 +1859,7 @@ class MemoryUpdater:
                     level=ContextLevel.DETAIL,
                     user=ctx.user,
                     account_id=ctx.account_id,
+                    expires_at=mf.extra_fields.get("expires_at"),
                 )
                 memory_context.set_vectorize(Vectorize(text=embedding_text))
 

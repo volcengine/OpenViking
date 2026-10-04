@@ -9,13 +9,17 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.ttl_registry import TTLRecord
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
 class _DummyAgfs:
     def stat(self, _path, ctx=None):
         """Return a minimal stat payload for paths assumed to exist in tree tests."""
+        if "/_system/ttl/" in _path or _path.endswith(".ttl.json"):
+            raise FileNotFoundError(_path)
         return {}
 
 
@@ -29,6 +33,170 @@ def _default_ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
 
+def _event_with_expiry(expires_at: str) -> bytes:
+    return ('{"expires_at": "' + expires_at + '"}').encode()
+
+
+@pytest.mark.asyncio
+async def test_read_stat_exists_hide_expired_event_but_internal_read_can_include_it(
+    monkeypatch, fs
+):
+    ctx = _default_ctx()
+    uri = "viking://user/default/memories/events/2026/09/28/expired.md"
+    path = fs._uri_to_path(uri, ctx=ctx)
+    content = _event_with_expiry("2000-01-01T00:00:00.000Z")
+    monkeypatch.setattr(fs.ttl_registry, "account_may_have_records", AsyncMock(return_value=True))
+
+    async def stat(candidate, **kwargs):
+        if candidate not in {path, path.rsplit("/", 1)[0] + "/.ttl.json"}:
+            raise FileNotFoundError(candidate)
+        return {"name": "expired.md", "isDir": False, "size": len(content)}
+
+    monkeypatch.setattr(fs._async_agfs, "stat", stat)
+    monkeypatch.setattr(fs._async_agfs, "read", AsyncMock(return_value=content))
+
+    with pytest.raises(NotFoundError):
+        await fs.read_file(uri, ctx=ctx)
+    with pytest.raises(NotFoundError):
+        await fs.stat(uri, ctx=ctx)
+    assert await fs.exists(uri, ctx=ctx) is False
+
+    assert await fs.read_file(uri, ctx=ctx, include_expired=True) == content.decode()
+    assert (await fs.stat(uri, ctx=ctx, include_expired=True))["name"] == "expired.md"
+    assert await fs.exists(uri, ctx=ctx, include_expired=True) is True
+
+
+@pytest.mark.asyncio
+async def test_read_hides_expired_session_content(monkeypatch, fs):
+    ctx = _default_ctx()
+    session_uri = "viking://user/default/sessions/session-1"
+    child_uri = f"{session_uri}/messages.jsonl"
+    session_path = fs._uri_to_path(session_uri, ctx=ctx)
+    child_path = fs._uri_to_path(child_uri, ctx=ctx)
+    meta_path = f"{session_path}/.meta.json"
+    files = {
+        meta_path: b'{"expires_at":"2000-01-01T00:00:00.000Z"}',
+        child_path: b'{"role":"user"}\n',
+    }
+    monkeypatch.setattr(fs.ttl_registry, "account_may_have_records", AsyncMock(return_value=True))
+
+    async def stat(path, **kwargs):
+        if path not in files:
+            raise FileNotFoundError(path)
+        return {"name": path.rsplit("/", 1)[-1], "isDir": False}
+
+    monkeypatch.setattr(fs._async_agfs, "stat", stat)
+    monkeypatch.setattr(fs._async_agfs, "read", AsyncMock(side_effect=lambda path: files[path]))
+
+    with pytest.raises(NotFoundError):
+        await fs.read_file(child_uri, ctx=ctx)
+    assert await fs.read_file(child_uri, ctx=ctx, include_expired=True) == ('{"role":"user"}\n')
+
+
+@pytest.mark.asyncio
+async def test_read_hides_partial_cleanup_session_when_metadata_is_already_gone(monkeypatch, fs):
+    ctx = _default_ctx()
+    session_uri = "viking://user/default/sessions/session-1"
+    child_uri = f"{session_uri}/messages.jsonl"
+    child_path = fs._uri_to_path(child_uri, ctx=ctx)
+    child = b'{"role":"user"}\n'
+    monkeypatch.setattr(fs.ttl_registry, "account_may_have_records", AsyncMock(return_value=True))
+
+    async def stat(path, **kwargs):
+        if path == child_path:
+            return {"name": "messages.jsonl", "isDir": False}
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(fs._async_agfs, "stat", stat)
+    monkeypatch.setattr(fs._async_agfs, "read", AsyncMock(return_value=child))
+    fs.ttl_registry.get = AsyncMock(
+        return_value=TTLRecord(
+            object_uri=session_uri,
+            object_type="session",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            expires_at="2000-01-01T00:00:00.000Z",
+        )
+    )
+
+    with pytest.raises(NotFoundError):
+        await fs.read_file(child_uri, ctx=ctx)
+    assert await fs.read_file(child_uri, ctx=ctx, include_expired=True) == child.decode()
+
+
+@pytest.mark.asyncio
+async def test_unmanaged_event_without_metadata_remains_visible(monkeypatch, fs):
+    ctx = _default_ctx()
+    uri = "viking://user/default/memories/events/2026/06/11/legacy.md"
+    path = fs._uri_to_path(uri, ctx=ctx)
+    metadata_read = AsyncMock(side_effect=FileNotFoundError)
+
+    monkeypatch.setattr(fs.ttl_registry, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(fs._async_agfs, "read", metadata_read)
+
+    assert await fs._ttl_uri_visible(uri, ctx, path=path) is True
+    metadata_read.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ls_and_tree_apply_node_limit_after_ttl_filter(monkeypatch, fs):
+    ctx = _default_ctx()
+    root_uri = "viking://user/default/memories/events/2026/09"
+    root_path = fs._uri_to_path(root_uri, ctx=ctx)
+    expired_path = f"{root_path}/28"
+    live_path = f"{root_path}/29"
+    contents = {
+        expired_path + "/.meta.json": _event_with_expiry("2000-01-01T00:00:00.000Z"),
+        live_path + "/.meta.json": _event_with_expiry("2999-01-01T00:00:00.000Z"),
+    }
+
+    async def stat(path, **kwargs):
+        if path in {root_path, expired_path, live_path}:
+            return {"name": "events", "isDir": True}
+        if path in contents:
+            return {"name": ".meta.json", "isDir": False}
+        raise FileNotFoundError(path)
+
+    entries = [
+        {
+            "name": "28",
+            "size": 1,
+            "mode": 0o755,
+            "modTime": "2026-01-01T00:00:00Z",
+            "isDir": True,
+        },
+        {
+            "name": "29",
+            "size": 1,
+            "mode": 0o755,
+            "modTime": "2026-01-01T00:00:00Z",
+            "isDir": True,
+        },
+    ]
+
+    async def ls(_path, **_kwargs):
+        offset = _kwargs.get("offset", 0)
+        limit = _kwargs.get("limit")
+        return entries[offset : offset + limit] if limit is not None else entries[offset:]
+
+    async def tree_directory(_path, **_kwargs):
+        return [
+            make_entry(expired_path, "28", is_dir=True),
+            make_entry(live_path, "29", is_dir=True),
+        ]
+
+    monkeypatch.setattr(fs._async_agfs, "stat", stat)
+    monkeypatch.setattr(fs._async_agfs, "read", AsyncMock(side_effect=lambda path: contents[path]))
+    monkeypatch.setattr(fs._async_agfs, "ls", ls)
+    monkeypatch.setattr(fs._async_agfs, "tree_directory", tree_directory)
+
+    listed = await fs.ls(root_uri, node_limit=1, ctx=ctx, show_all_hidden=True)
+    tree = await fs.tree(root_uri, node_limit=1, ctx=ctx, show_all_hidden=True)
+
+    assert [entry["uri"] for entry in listed] == [f"{root_uri}/29"]
+    assert [entry["uri"] for entry in tree] == [f"{root_uri}/29"]
+
+
 @pytest.mark.asyncio
 async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
     path = "/local/default/resources/example.md"
@@ -40,7 +208,7 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
     async def ensure_access(_uri, _ctx):
         return None
 
-    async def read_path_visible(_uri, _path, _primary_path, _ctx):
+    async def read_path_visible(_uri, _path, _primary_path, _ctx, **_kwargs):
         return True
 
     async def stat_path(_path):

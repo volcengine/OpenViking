@@ -394,6 +394,18 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
     return None
 
 
+def is_storage_not_found(exc: BaseException) -> bool:
+    """Require typed storage evidence, including the cause of an OV wrapper."""
+    if isinstance(exc, AGFSClientError):
+        return isinstance(exc, AGFSNotFoundError) or (
+            isinstance(exc, AGFSHTTPError) and exc.status_code == 404
+        )
+    if isinstance(exc, (FileNotFoundError, NotFoundError)):
+        nested = exc.__cause__ or exc.__context__
+        return nested is None or is_storage_not_found(nested)
+    return False
+
+
 def is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, FileNotFoundError):
         return True

@@ -87,7 +87,10 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
 
 
 @pytest.mark.asyncio
-async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility():
+async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.ttl_view.read_directory_fields", AsyncMock(return_value={})
+    )
     service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
 
@@ -113,18 +116,24 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
             "session_id": "duplicate",
             "uri": "viking://user/alice/sessions/duplicate",
             "is_dir": True,
+            "expires_at": None,
+            "ttl_days": None,
             "mod_time": "2026-07-13T01:00:00Z",
         },
         {
             "session_id": "new-session",
             "uri": "viking://user/alice/sessions/new-session",
             "is_dir": True,
+            "expires_at": None,
+            "ttl_days": None,
             "mod_time": "2026-07-13T02:00:00Z",
         },
         {
             "session_id": "legacy-session",
             "uri": "viking://user/alice/sessions/legacy-session",
             "is_dir": True,
+            "expires_at": None,
+            "ttl_days": None,
             "mod_time": "2026-07-12T01:00:00Z",
         },
     ]

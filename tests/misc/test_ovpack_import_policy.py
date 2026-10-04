@@ -25,14 +25,37 @@ from openviking.storage.ovpack.operations import (
     import_ovpack,
     restore_ovpack,
 )
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import (
+    ConflictError,
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_transfer_merge_binding import binding_fs as binding_fs
 from tests.storage.test_transfer_merge_binding import indexed_fs as indexed_fs
 
 
 class FakeVikingFS:
+    _ensure_restore_target_ttl = VikingFS._ensure_restore_target_ttl
+    _ttl_metadata_target = staticmethod(VikingFS._ttl_metadata_target)
+    _ttl_record_for_write = VikingFS._ttl_record_for_write
+    _handle_agfs_read = VikingFS._handle_agfs_read
+
+    def _ctx_or_default(self, ctx):
+        return ctx
+
     def __init__(self, existing_roots: set[str] | None = None) -> None:
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_tree=AsyncMock(return_value={}),
+            pathlock_acquire_tree_batch=AsyncMock(return_value={}),
+            pathlock_release=AsyncMock(),
+            stat=AsyncMock(side_effect=FileNotFoundError),
+            read=AsyncMock(side_effect=FileNotFoundError),
+        )
+        self.ttl_registry = SimpleNamespace(get=AsyncMock(return_value=None))
+        self._uri_to_path = lambda uri, ctx=None: "/local/default/" + uri.removeprefix("viking://")
         self.written_files: list[str] = []
         self.created_dirs: list[str] = []
         self.tree_calls: list[str] = []
@@ -44,7 +67,7 @@ class FakeVikingFS:
         assert skip_count is True
         return {"uri": uri, "isDir": True}
 
-    async def mkdir(self, uri: str, exist_ok: bool = False, ctx=None):
+    async def mkdir(self, uri: str, exist_ok: bool = False, ctx=None, lease_ref=None):
         self.created_dirs.append(uri)
 
     async def ls(self, uri: str, ctx=None):
@@ -52,11 +75,11 @@ class FakeVikingFS:
             return []
         raise NotFoundError(uri, "file")
 
-    async def rm(self, uri: str, recursive: bool = False, ctx=None):
+    async def rm(self, uri: str, recursive: bool = False, ctx=None, lease_ref=None):
         assert recursive is True
         self.removed_roots.append(uri)
 
-    async def write_file_bytes(self, uri: str, data: bytes, ctx=None):
+    async def write_file_bytes(self, uri: str, data: bytes, ctx=None, lease_ref=None):
         self.written_files.append(uri)
         self.write_contexts.append(ctx)
 
@@ -73,6 +96,9 @@ class FakeVikingFS:
 
 class FakeExportVikingFS:
     def __init__(self) -> None:
+        self.ttl_registry = SimpleNamespace(account_may_have_records=AsyncMock(return_value=False))
+        self._uri_to_path = lambda uri, ctx=None: uri
+        self._async_agfs = SimpleNamespace(stat=AsyncMock(side_effect=FileNotFoundError))
         self.binary_files = {
             "viking://resources/demo/notes.txt": b"hello",
         }
@@ -319,10 +345,11 @@ class FakeVectorStore:
 
     async def resolve(self, account_id):
         from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
         return SimpleNamespace(
-            embedding=EmbeddingConfig(dense={
-                "provider": "openai", "model": "test", "dimension": 3, "api_key": "test"
-            }),
+            embedding=EmbeddingConfig(
+                dense={"provider": "openai", "model": "test", "dimension": 3, "api_key": "test"}
+            ),
             vectordb=SimpleNamespace(sparse_weight=0),
         )
 
@@ -712,8 +739,8 @@ async def test_backup_restore_contract(
         == "viking://"
     )
     assert fake_fs.written_files == [
-        "viking://resources/README.md",
         "viking://user/resources/sessions/sess_1/.meta.json",
+        "viking://resources/README.md",
     ]
     fake_fs.rm.assert_not_awaited()
     assert all(ctx.role == Role.ROOT for ctx in fake_fs.write_contexts)
@@ -772,6 +799,8 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
                     "abstract": "portable summary",
                     "description": "portable description",
                     "tags": ["portable"],
+                    "expires_at": "2030-01-02T00:00:00.000Z",
+                    "ttl_generation": "generation-1",
                     "md5": "portable-md5",
                 },
             }
@@ -796,7 +825,94 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
         "summary": "portable summary",
     }
     assert vectorized_files[0]["scalar_override"]["tags"] == ["portable"]
+    assert vectorized_files[0]["scalar_override"]["expires_at"] == ("2030-01-02T00:00:00.000Z")
+    assert vectorized_files[0]["scalar_override"]["ttl_generation"] == "generation-1"
     assert vectorized_files[0]["scalar_override"]["md5"] == "portable-md5"
+
+
+@pytest.mark.parametrize("operation", ["import", "restore"])
+@pytest.mark.parametrize("expires_at", ["2000-01-01T00:00:00Z", "2040-01-01T00:00:00Z"])
+async def test_ovpack_prettl_overwrite_preserves_current_lifecycle(
+    temp_ovpack_path, request_ctx, operation, expires_at
+):
+    from openviking.core.ttl import ttl_metadata_uri
+
+    parent = "viking://user/alice/memories/events/2026/09"
+    owner = f"{parent}/28"
+    uri = f"{owner}/e.md"
+    scope_root = "user"
+    rel = "e.md" if operation == "import" else uri.removeprefix("viking://")
+    root = "28" if operation == "import" else "openviking-backup"
+    files = {rel: "old unmanaged body"}
+    manifest = _manifest_for_files(root, files)
+    manifest["root"].update(uri=owner, scope=scope_root)
+    if operation == "restore":
+        manifest["root"].update(uri="viking://", package_type="backup")
+        manifest["scopes"] = [scope_root]
+        manifest["entries"].extend(
+            [
+                {"path": scope_root, "kind": "directory"},
+            ]
+        )
+    _write_ovpack_with_manifest(temp_ovpack_path, root, files, manifest=manifest)
+    if operation == "restore":
+        with zipfile.ZipFile(temp_ovpack_path, "a") as zf:
+            zf.writestr(f"{root}/files/{scope_root}/", "")
+    fs = FakeVikingFS(existing_roots={owner, f"viking://{scope_root}"})
+    metadata_path = fs._uri_to_path(ttl_metadata_uri("event", owner), ctx=request_ctx)
+    fields = json.dumps({"expires_at": expires_at, "ttl_generation": "current"})
+    metadata = fields.encode()
+
+    async def stat(path, **kwargs):
+        if path == metadata_path:
+            return {"isDir": False}
+        raise FileNotFoundError(path)
+
+    async def read(path, **kwargs):
+        assert (
+            fs._async_agfs.pathlock_acquire_tree.await_count
+            or fs._async_agfs.pathlock_acquire_tree_batch.await_count
+        )
+        assert not fs.removed_roots and not fs.written_files and not fs.created_dirs
+        if path == metadata_path:
+            return metadata
+        raise FileNotFoundError(path)
+
+    fs._async_agfs.stat = stat
+    fs._async_agfs.read = read
+    with pytest.raises(NotFoundError if expires_at.startswith("2000") else ConflictError):
+        if operation == "import":
+            await import_ovpack(
+                fs, str(temp_ovpack_path), parent, request_ctx, on_conflict="overwrite"
+            )
+        else:
+            await restore_ovpack(fs, str(temp_ovpack_path), request_ctx, on_conflict="overwrite")
+    assert not fs.removed_roots and not fs.written_files and not fs.created_dirs
+
+
+@pytest.mark.parametrize("managed_source", [False, True])
+async def test_ovpack_new_target_accepts_live_source(
+    temp_ovpack_path, request_ctx, monkeypatch, managed_source
+):
+    files = {"e.md": "body"}
+    if managed_source:
+        files[".ttl.json"] = json.dumps(
+            {"expires_at": "2040-01-01T00:00:00Z", "ttl_generation": "new"}
+        )
+    manifest = _manifest_for_files("28", files)
+    manifest["root"].update(uri="viking://user/alice/memories/events/2026/09/28", scope="user")
+    _write_ovpack_with_manifest(temp_ovpack_path, "28", files, manifest=manifest)
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization", AsyncMock()
+    )
+    fs = FakeVikingFS()
+    await import_ovpack(
+        fs, str(temp_ovpack_path), "viking://user/alice/memories/events/2026/09", request_ctx
+    )
+    assert "viking://user/alice/memories/events/2026/09/28/e.md" in fs.written_files
+    assert (
+        "viking://user/alice/memories/events/2026/09/28/.ttl.json" in fs.written_files
+    ) is managed_source
 
 
 @pytest.mark.asyncio

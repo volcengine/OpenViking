@@ -61,7 +61,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                 msg.session_id,
                 session_uri=msg.session_uri,
             )
-            if not await session.exists():
+            if not await session.exists(include_expired=True):
                 error = f"Session '{msg.session_id}' no longer exists"
                 tracker = get_task_tracker()
                 await tracker.create(
@@ -78,7 +78,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            await session.load()
+            await session.load(include_expired=True)
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
                 processed = await session.resume_queued_commit(msg)
             if not processed:

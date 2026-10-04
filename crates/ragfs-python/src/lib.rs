@@ -203,10 +203,10 @@ use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
 };
 use ragfs::core::{
-    build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS,
-    OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
-    FS_CTX,
+    ConfigValue, FS_CTX, FileInfo, FileSystem, FilesystemStats, FsContext, FsContextInner,
+    FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS, OperationStats,
+    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
+    build_configured_stack,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
@@ -2025,7 +2025,7 @@ impl RAGFSBindingClient {
         Ok(m)
     }
 
-    /// Get file/directory information.
+    /// Get file/directory information, including the directory's stored deadline.
     #[pyo3(signature = (path, ctx=None))]
     fn stat(
         &self,
@@ -2035,14 +2035,84 @@ impl RAGFSBindingClient {
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
-        let info = self
-            .run_scoped(py, fs_ctx, move || async move { top.stat(&path).await })
+        let (info, expiry) = self
+            .run_scoped(py, fs_ctx, move || async move {
+                let info = top.stat(&path).await?;
+                let expiry = if info.is_dir {
+                    ragfs::core::directory_metadata::read_directory_metadata(top.as_ref(), &path)
+                        .await?
+                        .remove("expires_at")
+                        .unwrap_or(serde_json::Value::Null)
+                } else {
+                    serde_json::Value::Null
+                };
+                Ok::<_, ragfs::core::Error>((info, expiry))
+            })
             .map_err(to_py_err)?;
-
         Python::attach(|py| {
             let dict = file_info_to_py_dict(py, &info)?;
+            dict.bind(py)
+                .set_item("expires_at", serde_json_to_py(py, &expiry)?)?;
             Ok(dict.into())
         })
+    }
+
+    /// Merge persistent directory attributes under the metadata file's exact lock.
+    #[pyo3(signature = (path, patch, ctx=None))]
+    fn update_directory_metadata(
+        &self,
+        py: Python<'_>,
+        path: String,
+        patch: String,
+        ctx: Option<HashMap<String, String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let patch: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&patch).map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let fs_ctx = build_fs_context(ctx);
+        let write_ctx = fs_ctx.clone();
+        let top = self.top.clone();
+        let manager = self.clone_pathlock_manager();
+        let result = self
+            .run_scoped(py, fs_ctx, move || async move {
+                use ragfs::core::directory_metadata::{metadata_path, update_directory_metadata};
+                if !top.stat(&path).await?.is_dir {
+                    return Err(ragfs::core::Error::NotADirectory(path));
+                }
+                // A borrowed lease is validated by the write wrapper. Otherwise
+                // own an exact file lease for the entire read-modify-write.
+                if write_ctx
+                    .pathlock()
+                    .and_then(|ctx| ctx.lease_ref.as_ref())
+                    .is_some()
+                {
+                    return update_directory_metadata(top.as_ref(), &path, patch).await;
+                }
+                let lease = manager
+                    .acquire_exact(&metadata_path(&path), Duration::from_secs(30), None)
+                    .await?;
+                let leased_ctx = Arc::new(
+                    FsContextInner::with_pathlock(
+                        write_ctx.account_id(),
+                        PathLockContext {
+                            lease_ref: Some(lease.lease.lease_ref.clone()),
+                            disable_auto_pathlock: false,
+                        },
+                    )
+                    .with_bypass_cache(true),
+                );
+                let result = FS_CTX
+                    .scope(
+                        leased_ctx,
+                        update_directory_metadata(top.as_ref(), &path, patch),
+                    )
+                    .await;
+                let released = manager.release(&lease).await;
+                let result = result?;
+                released?;
+                Ok(result)
+            })
+            .map_err(to_py_err)?;
+        Python::attach(|py| serde_json_to_py(py, &serde_json::Value::Object(result)))
     }
 
     /// Rename/move a file or directory.

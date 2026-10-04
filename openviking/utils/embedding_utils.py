@@ -19,6 +19,7 @@ from openviking.core.namespace import (
     is_session_uri,
     owner_space_for_uri,
 )
+from openviking.core.ttl import TTL_FIELD_NAMES, ttl_object_for_uri
 from openviking.parse.parsers.media.utils import (
     MPEG_TS_PROBE_BYTES,
     is_mpeg_ts,
@@ -26,7 +27,11 @@ from openviking.parse.parsers.media.utils import (
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
-from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
+from openviking.storage.abstract_overview import (
+    body_for_preview,
+    embedding_text_for_body,
+    semantic_body_digest,
+)
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -71,7 +76,12 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         # Internal queue metadata, removed by TextEmbeddingHandler before upsert.
         embedding_msg.context_data["_upsert_record_id"] = str(record_id)
     for field, value in overrides.items():
-        if field.startswith("_") or field in NON_PORTABLE_VECTOR_RECORD_FIELDS or value is None:
+        if (
+            field.startswith("_")
+            or field in NON_PORTABLE_VECTOR_RECORD_FIELDS
+            or field in TTL_FIELD_NAMES
+            or value is None
+        ):
             continue
         embedding_msg.context_data[field] = value
 
@@ -89,6 +99,7 @@ def _apply_planned_field_patch(
         for field, value in (field_patch.values if field_patch is not None else {}).items()
         if not field.startswith("_")
         and field not in NON_PORTABLE_VECTOR_RECORD_FIELDS
+        and field not in TTL_FIELD_NAMES
         and value is not None
     }
     for field in patch_values:
@@ -478,6 +489,9 @@ async def vectorize_directory_meta(
                 telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value))
+            if msg_abstract is not None and ttl_object_for_uri(uri) is not None:
+                msg_abstract.context_data["_source_sidecar_uri"] = f"{uri}/.abstract.md"
+                msg_abstract.context_data["_source_sidecar_digest"] = semantic_body_digest(abstract)
             _apply_scalar_overrides(
                 msg_abstract,
                 level_overrides,
@@ -540,6 +554,9 @@ async def vectorize_directory_meta(
                 telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value))
+            if msg_overview is not None and ttl_object_for_uri(uri) is not None:
+                msg_overview.context_data["_source_sidecar_uri"] = f"{uri}/.overview.md"
+                msg_overview.context_data["_source_sidecar_digest"] = semantic_body_digest(overview)
             _apply_scalar_overrides(
                 msg_overview,
                 level_overrides,

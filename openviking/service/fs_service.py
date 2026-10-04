@@ -37,7 +37,7 @@ from openviking.storage.abstract_overview import (
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import is_storage_internal_name, is_ttl_metadata_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -355,7 +355,7 @@ class FSService:
             or include_abstract is True
             or include_overview is True
         ):
-            return ListingPage(
+            page = ListingPage(
                 entries=await viking_fs._finalize_listing_entries(
                     page.entries,
                     output,
@@ -369,13 +369,30 @@ class FSService:
                 ),
                 has_more=page.has_more,
             )
+        from openviking.storage.ttl_view import TTLView
+
+        ttl_view = TTLView(viking_fs, ctx)
+        page.entries = await ttl_view.attach_many(page.entries)
         return page
 
     @staticmethod
     def _reject_storage_internal_target(uri: str) -> None:
         """Reject reserved names in targets and implicitly created parent directories."""
-        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
+        if any(
+            is_storage_internal_name(part) or is_ttl_metadata_name(part) for part in uri_parts(uri)
+        ):
             raise InvalidArgumentError(f"cannot create storage internal name: {uri}")
+
+    async def lifetime_fields(self, uri: str, ctx: RequestContext) -> dict:
+        from openviking.storage.ttl_view import TTLView
+
+        return await TTLView(self._ensure_initialized(), ctx).fields(uri)
+
+    async def get_ttl(self, uri: str, ctx: RequestContext) -> dict:
+        from openviking.storage.document_ttl import get_document_ttl
+
+        self._reject_storage_internal_target(uri)
+        return await get_document_ttl(self._ensure_initialized(), uri, ctx=ctx)
 
     async def mkdir(
         self,
@@ -457,14 +474,29 @@ class FSService:
         recursive: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
+        *,
+        strict: bool = False,
+        lease_ref: Optional[Dict[str, Any]] = None,
+        verify_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
+        if is_ttl_metadata_name(uri.rsplit("/", 1)[-1]):
+            raise InvalidArgumentError("cannot remove resource TTL metadata directly")
         viking_fs = self._ensure_initialized()
         cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
-        refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
+        refresh_parent_uri = (
+            self._semantic_refresh_parent_uri(uri, context_type) if lease_ref is None else None
+        )
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        result = await viking_fs.rm(
+            uri,
+            recursive=recursive,
+            ctx=ctx,
+            strict=strict,
+            **({"verify_only": True} if verify_only else {}),
+            **({"lease_ref": lease_ref} if lease_ref is not None else {}),
+        )
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
@@ -980,7 +1012,10 @@ class FSService:
         overview_limit: int = 4000,
     ) -> ListingPage:
         """Get directory tree."""
+        from openviking.storage.ttl_view import TTLView
+
         viking_fs = self._ensure_initialized()
+        ttl_view = TTLView(viking_fs, ctx)
 
         async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
             """Fetch and return one pre-tag tree page."""
@@ -1015,7 +1050,7 @@ class FSService:
                 or include_abstract is True
                 or include_overview is True
             ):
-                return ListingPage(
+                page = ListingPage(
                     entries=await viking_fs._finalize_listing_entries(
                         page.entries,
                         output,
@@ -1029,6 +1064,7 @@ class FSService:
                     ),
                     has_more=page.has_more,
                 )
+            page.entries = await ttl_view.attach_many(page.entries)
             return page
 
         fetch_limit = node_limit + 1 if node_limit > 0 else node_limit
@@ -1037,7 +1073,7 @@ class FSService:
             entries, ctx, None, include_tags or "tags" in (extra_fields or [])
         )
         return ListingPage(
-            entries=entries[:node_limit] if node_limit > 0 else entries,
+            entries=await ttl_view.attach_many(entries[:node_limit] if node_limit > 0 else entries),
             has_more=node_limit > 0 and len(entries) > node_limit,
         )
 
@@ -1050,12 +1086,15 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(
+        entry = await viking_fs.stat(
             uri,
             ctx=ctx,
             skip_count=skip_count,
             include_lock_status=include_lock_status,
         )
+        from openviking.storage.ttl_view import TTLView
+
+        return await TTLView(viking_fs, ctx).attach(entry)
 
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
         """Validate write access without mutating the target."""
@@ -1170,7 +1209,9 @@ class FSService:
         matches = result.get("matches", [])
         if include_tags and not normalized_tags and any("tags" not in match for match in matches):
             matches = await self._attach_and_filter_tags(matches, ctx, None, include_tags=True)
-        result["matches"] = matches
+        from openviking.storage.ttl_view import TTLView
+
+        result["matches"] = await TTLView(viking_fs, ctx).attach_many(matches)
         result["count"] = len(matches)
         return result
 
@@ -1206,6 +1247,12 @@ class FSService:
             )
         )
         if not project_tags:
+            if extra_fields is not None:
+                from openviking.storage.ttl_view import TTLView
+
+                result["matches"] = await TTLView(viking_fs, ctx).attach_many(
+                    result.get("matches", [])
+                )
             return result
 
         matches = await self._attach_and_filter_tags(
@@ -1213,7 +1260,9 @@ class FSService:
         )
         if node_limit is not None and node_limit > 0:
             matches = matches[:node_limit]
-        result["matches"] = matches
+        from openviking.storage.ttl_view import TTLView
+
+        result["matches"] = await TTLView(viking_fs, ctx).attach_many(matches)
         result["count"] = len(matches)
         return result
 

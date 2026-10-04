@@ -1745,3 +1745,12 @@ results = client.search(query=query, session_id=session_id)
 - [Retrieval](06-retrieval.md) - Search with session
 - [Resources](02-resources.md) - Resource management
 - [Background Tasks](17-tasks.md) - track commit tasks
+
+
+## Session TTL
+
+Sessions inherit the `sessions` root policy on creation. Create/config APIs reject `ttl_relative`, `ttl_absolute`, `expires_at`, `ttl_days` and `ttl_per_file`, including explicit nulls.
+
+Create, detail, list, config update, message append, commit and context responses expose `expires_at`, explicitly null without TTL. Successful appends and completed nonempty commits renew the saved duration. Direct expired-session access returns 404; lists omit expired sessions.
+
+See [Directory TTL](../concepts/17-ttl.md) and [root policy configuration](../configuration/01-server.md#ttl).

@@ -363,6 +363,11 @@ enum AclCommands {
 #[derive(Subcommand)]
 enum Commands {
     // --- Data Operations ---
+    /// [Data] Inspect or change an event date directory or session expiry
+    Ttl {
+        #[command(subcommand)]
+        action: TtlCommands,
+    },
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
@@ -2067,7 +2072,25 @@ enum PrivacyCommands {
 }
 
 #[derive(Subcommand)]
+enum TtlCommands {
+    /// Read a directory lifetime or inherited policy
+    Get { uri: String },
+}
+
+#[derive(Subcommand)]
 enum AdminCommands {
+    /// Read runtime configuration overrides (omit --account-id for cluster settings)
+    GetConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+    },
+    /// Patch runtime settings; JSON null removes an override and restores inheritance
+    PatchConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        settings: serde_json::Value,
+    },
     /// Create a new account with its first admin user
     CreateAccount {
         /// Account ID to create
@@ -2833,6 +2856,8 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "set-role"
             | "regenerate-key"
             | "set-account-settings"
+            | "get-configuration"
+            | "patch-configuration"
     )
 }
 
@@ -3409,35 +3434,53 @@ async fn main() {
                     }
                 }
             } else if let Some(path) = path {
-                handlers::handle_add_resource(
-                    path,
-                    add_type,
-                    to,
-                    parent,
-                    parent_auto_create,
-                    reason,
-                    instruction,
-                    wait,
-                    timeout,
-                    strict_mode,
-                    ignore_dirs,
-                    include,
-                    exclude,
-                    no_directly_upload_media,
-                    watch_interval.unwrap_or(0.0),
-                    processing_mode,
-                    resource_args,
-                    tags,
-                    tag_mode,
-                    acl,
-                    ctx,
-                )
-                .await
+                match handlers::parse_add_resource_args(resource_args.as_deref()) {
+                    Err(e) => Err(e),
+                    Ok(args) => {
+                        let resource_args =
+                            args.map(|value| serde_json::Value::Object(value).to_string());
+                        handlers::handle_add_resource(
+                            path,
+                            add_type,
+                            to,
+                            parent,
+                            parent_auto_create,
+                            reason,
+                            instruction,
+                            wait,
+                            timeout,
+                            strict_mode,
+                            ignore_dirs,
+                            include,
+                            exclude,
+                            no_directly_upload_media,
+                            watch_interval.unwrap_or(0.0),
+                            processing_mode,
+                            resource_args,
+                            tags,
+                            tag_mode,
+                            acl,
+                            ctx,
+                        )
+                        .await
+                    }
+                }
             } else {
                 Err(error::Error::Client(
                     "a path/URL or --manifest is required".to_string(),
                 ))
             }
+        }
+        Commands::Ttl { action } => {
+            let client = ctx.get_client();
+            let result: Result<serde_json::Value> = match action {
+                TtlCommands::Get { uri } => {
+                    client
+                        .get("/api/v1/content/ttl", &[("uri".into(), uri)])
+                        .await
+                }
+            };
+            result.map(|value| output::output_success(&value, ctx.output_format, ctx.compact))
         }
         Commands::AddSkill(args) => {
             handlers::handle_add_skill(args, legacy_upload_options, ctx).await
@@ -4030,6 +4073,34 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn resource_ttl_is_out_of_scope() {
+        assert!(
+            Cli::try_parse_from(["ov", "add-resource", "a.md", "--ttl-relative", "7"]).is_err()
+        );
+    }
+
+    #[test]
+    fn object_ttl_configuration_is_rejected() {
+        for args in [
+            vec![
+                "ov",
+                "ttl",
+                "set",
+                "viking://user/alice/sessions/s1",
+                "--ttl-relative",
+                "30",
+            ],
+            vec!["ov", "session", "new", "--ttl-relative", "30"],
+            vec!["ov", "session", "config", "set", "s1", "--inherit-ttl"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        assert!(
+            Cli::try_parse_from(["ov", "ttl", "get", "viking://user/alice/sessions/s1"]).is_ok()
+        );
     }
 
     #[test]

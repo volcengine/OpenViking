@@ -71,6 +71,8 @@ openviking-server --config /path/to/ov.conf
 | `ingest` | object | 内置默认值 | 会话日志导入配置 |
 | `output_language_override` | string | `""` | 强制摘要和记忆输出语言；空值表示自动识别 |
 | `allow_private_networks` | boolean | `false` | 是否允许抓取内网或私有地址资源 |
+| `ttl` | object | 关闭 | events 日期目录和 Session 的 TTL 策略 |
+| `ttl_cleanup` | object | 执行器开启 | 物理清理调度、抖动和批次预算；所有 TTL 策略仍默认关闭 |
 
 `auto_generate_l0`、`auto_generate_l1`、`default_search_mode` 和 `default_search_limit` 是已弃用的兼容字段。旧配置文件仍可加载这些字段，但它们不会影响运行时行为。
 
@@ -468,3 +470,48 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
   }
 }
 ```
+
+## TTL
+
+TTL 默认关闭，仅用于 events 日期目录和 Session。`ov.conf` 中的 `ttl` 提供启动基线，沿用已有集群/account 运行时配置表达库覆盖；account、user 身份不增加 TTL 优先级。resources 不提供 TTL 配置。
+
+新生命周期目录按「具体根目录策略 → 类型默认值 → 库全局默认值 → 关闭」解析。`inherit` 继续向上查找，`disabled` 阻断继承。`days` 要求正整数 `ttl_days`。events 类型/目录默认策略另支持 `absolute`，以 Unix 秒数 `ttl_absolute` 指定时间；全局和 Session 默认值支持相对天数或关闭。目录键只接受用户或 peer 的 events 根目录、用户的 sessions 根目录；年月、日期、单 Session 及其内部路径均只读。
+
+```json
+{
+  "ttl": {
+    "global": {"mode": "disabled"},
+    "user_events": {"mode": "days", "ttl_days": 60},
+    "peer_events": {"mode": "inherit"},
+    "sessions": {"mode": "days", "ttl_days": 30},
+    "directories": {
+      "viking://user/alice/memories/events": {"mode": "days", "ttl_days": 7}
+    }
+  }
+}
+```
+
+运行时 HTTP 接口：`GET/PATCH /api/v1/admin/configuration` 修改集群覆盖（ROOT）；`GET/PATCH /api/v1/admin/accounts/{account_id}/configuration` 修改库覆盖（本库 ADMIN 或 ROOT）。PATCH 请求体为 `{"settings": {"ttl": ...}}`；省略字段保持原值，`null` 删除该层覆盖并回退至基线，修改单个目录不会清空其他目录。GET 返回该层显式覆盖，不是对象的冻结期限。
+
+```bash
+ov admin get-configuration --account-id default
+ov admin patch-configuration --account-id default --settings '{"ttl":{"global":{"mode":"days","ttl_days":90}}}'
+```
+
+CLI 省略 `--account-id` 时操作集群层。Python HTTP SDK 对应 `admin_get_configuration(account_id)`、`admin_patch_configuration(settings, account_id)`。默认策略仅影响新建的日期目录和 Session；已有纳管目录保留冻结的时长，历史未纳管目录继续不生效，向其中新增文件也不会自动纳管。已有目录期限只读。Session 相对期限在成功追加消息或完成非空 commit 后续期；events 的相对和绝对期限都保持固定。
+
+`ttl_cleanup` 独立控制物理删除执行器。它默认 `enabled: true`，但所有 TTL 策略默认关闭时没有到期任务。关闭执行器会暂停新的物理删除并保留重试状态；已到期目录及其内容 仍会立即逻辑不可见。调度器同时使用扫描抖动和稳定的逐对象清理偏移，避免所有租户集中在 UTC 0 点删除。
+
+| 配置项 | 默认值 | 作用 |
+|---|---:|---|
+| `ttl_cleanup.enabled` | `true` | 执行已启用 TTL 策略对象的物理清理 |
+| `ttl_cleanup.check_interval_seconds` | `30` | registry 扫描基础间隔 |
+| `ttl_cleanup.scan_jitter_seconds` | `5` | 每轮扫描的随机延迟，用于分散调度轮询 |
+| `ttl_cleanup.cleanup_jitter_seconds` | `86400` | 逻辑到期后的稳定逐对象清理延迟窗口，默认 24 小时 |
+| `ttl_cleanup.batch_size` | `100` | 每轮最多领取的记录数 |
+| `ttl_cleanup.max_batch_bytes` | `1048576` | 每轮最多领取的序列化字节数 |
+| `ttl_cleanup.scan_time_budget_seconds` | `5` | 每轮 registry 扫描的最大时间 |
+
+逻辑可见性在 `expires_at` 改变，`cleanup_jitter_seconds` 只延迟物理删除。到期目录内全部 L0/L1/L2 及向量、Meta 均清理，目录外的上层摘要保留。
+
+以上为 OV 原生链路。托管控制台或网关还需将对应配置和请求路由转发至 OV；增加 OV 路由不代表既有云端代理会自动开放。该 PR 不修改公有云服务或计费链路。

@@ -25,7 +25,7 @@ from openviking.server.auth import (
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
-from openviking.server.models import Response
+from openviking.server.models import ContentResponse, Response
 from openviking.server.telemetry import run_operation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
@@ -103,6 +103,13 @@ class ReindexRequest(BaseModel):
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
+@router.get("/ttl")
+async def get_ttl(uri: str = Query(...), _ctx: RequestContext = Depends(get_request_context)):
+    """Read an event or session path's effective directory expiry."""
+    uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
+    return Response(status="ok", result=await get_service().fs.get_ttl(uri, _ctx))
+
+
 def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     """Allow users to reindex only their own private namespace."""
     if ctx.role != Role.USER:
@@ -151,7 +158,11 @@ async def read(
             raise mapped from e
         raise
 
-    return Response(status="ok", result=result)
+    return ContentResponse(
+        status="ok",
+        result=result,
+        expires_at=(await service.fs.lifetime_fields(uri, _ctx))["expires_at"],
+    )
 
 
 @router.get("/abstract")
@@ -171,7 +182,11 @@ async def abstract(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ContentResponse(
+        status="ok",
+        result=result,
+        expires_at=(await service.fs.lifetime_fields(uri, _ctx))["expires_at"],
+    )
 
 
 @router.get("/overview")
@@ -191,7 +206,11 @@ async def overview(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ContentResponse(
+        status="ok",
+        result=result,
+        expires_at=(await service.fs.lifetime_fields(uri, _ctx))["expires_at"],
+    )
 
 
 @router.get("/download")

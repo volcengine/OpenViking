@@ -28,6 +28,7 @@ class _FakeVikingFS:
         self._file_contents = {self._norm(k): v for k, v in file_contents.items()}
         self.writes = []
         self._async_agfs = self
+        self.ttl_registry = SimpleNamespace(account_may_have_records=AsyncMock(return_value=False))
 
     def _norm(self, path):
         if "://" not in path:

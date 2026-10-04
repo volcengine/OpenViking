@@ -138,6 +138,7 @@ def test_queue_collector_maps_status(monkeypatch):
             self.in_progress = in_progress
             self.processed = processed
             self.error_count = error_count
+            self.requeue_count = 4
 
     class DummyQueueManager:
         async def check_status(self):
@@ -157,6 +158,7 @@ def test_queue_collector_maps_status(monkeypatch):
     assert 'openviking_queue_in_progress{queue="semantic"} 1.0' in text
     assert 'openviking_queue_processed_total{queue="semantic"} 10' in text
     assert 'openviking_queue_errors_total{queue="semantic"} 2' in text
+    assert 'openviking_queue_requeued_total{queue="semantic"} 4' in text
 
 
 def test_task_tracker_collector_maps_counts(monkeypatch):

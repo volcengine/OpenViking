@@ -162,6 +162,10 @@ class VikingFS(
         )
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
+        from openviking.storage.ttl_registry import TTLRegistry
+
+        self.ttl_registry = TTLRegistry(self._async_agfs)
+        self.runtime_config_manager = None
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Set the VLM resolver supplied by the owning service."""

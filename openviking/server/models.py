@@ -25,6 +25,12 @@ class Response(BaseModel):
     profile: Optional[list[str]] = None
 
 
+class ContentResponse(Response):
+    """Single-owner text/list payload without changing the result shape."""
+
+    expires_at: Optional[str] = None
+
+
 class ListingResponse(Response):
     """Filesystem listing response with pagination metadata."""
 

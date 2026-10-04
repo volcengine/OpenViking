@@ -11,6 +11,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.acl import AclAction
+from openviking.storage.ttl_registry import TTLRegistry
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -33,6 +34,9 @@ def _user_ctx(*, actor_peer_id: str | None = None) -> RequestContext:
 
 
 class _CopyAGFS:
+    async def read(self, path, fs_ctx=None):
+        raise FileNotFoundError(path)
+
     def __init__(
         self,
         *,
@@ -53,7 +57,7 @@ class _CopyAGFS:
             "owned": True,
         }
 
-    async def stat(self, path, fs_ctx=None):
+    async def stat(self, path, fs_ctx=None, *, bypass_cache=False):
         self.events.append(("stat", path, fs_ctx))
         if path.endswith("/source") or path.endswith("/source.md"):
             return {"isDir": self.source_is_dir}
@@ -97,7 +101,7 @@ class _DirectoryCopyAGFS(_CopyAGFS):
         }
         self.exact_leases: list[tuple[str, dict]] = []
 
-    async def stat(self, path, fs_ctx=None):
+    async def stat(self, path, fs_ctx=None, *, bypass_cache=False):
         self.events.append(("stat", path, fs_ctx))
         if path in self.directories:
             return {"isDir": True}
@@ -189,7 +193,7 @@ class _MoveRollbackAGFS(_CopyAGFS):
         self.paths = {"/local/acct/resources/source.md"}
         self.fail_source_delete = True
 
-    async def stat(self, path, fs_ctx=None):
+    async def stat(self, path, fs_ctx=None, *, bypass_cache=False):
         self.events.append(("stat", path, fs_ctx))
         if path == "/local/acct/resources":
             return {"isDir": True}
@@ -214,6 +218,7 @@ class _MoveRollbackAGFS(_CopyAGFS):
 def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
     fs = VikingFS.__new__(VikingFS)
     fs._async_agfs = agfs
+    fs.ttl_registry = TTLRegistry(agfs)
     fs.vector_store = None
     fs.acl_manager = None
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
@@ -228,6 +233,16 @@ def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
         lambda path, **_kwargs: f"viking://{path.removeprefix('/local/acct/')}",
     )
     return fs
+
+
+class _TTLDirectoryCopyAGFS(_DirectoryCopyAGFS):
+    async def read(self, path, fs_ctx=None):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def rm(self, path, recursive=False, fs_ctx=None, auto_pathlock=True):
+        await super().rm(path, recursive=recursive, fs_ctx=fs_ctx)
 
 
 @pytest.mark.parametrize(

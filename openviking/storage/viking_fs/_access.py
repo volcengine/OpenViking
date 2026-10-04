@@ -16,8 +16,12 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
+from openviking.core.ttl import (
+    ttl_object_for_uri,
+    ttl_scope_for_uri,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error
+from openviking.server.error_mapping import is_not_found_error, is_storage_not_found
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import (
     AclAction,
@@ -102,9 +106,7 @@ class _AccessMixin:
     def _require_request_context(self, ctx: Optional[RequestContext]) -> RequestContext:
         """Resolve an account context without inventing the default account."""
         if ctx is None and self._bound_ctx.get() is None:
-            raise RuntimeError(
-                "Account request context is required for account-scoped operations"
-            )
+            raise RuntimeError("Account request context is required for account-scoped operations")
         return self._ctx_or_default(ctx)
 
     @contextmanager
@@ -554,13 +556,21 @@ class _AccessMixin:
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
         directories_only: bool = False,
+        *,
+        include_expired: bool = False,
     ):
         """Yield one visible tree page after namespace and ACL filtering."""
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path: Optional[str] = None
         for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri,
+                candidate_path,
+                primary_path,
+                real_ctx,
+                include_expired=include_expired,
+            ):
                 continue
             if await self._agfs_path_exists(candidate_path):
                 path = candidate_path
@@ -603,7 +613,13 @@ class _AccessMixin:
                     acl_enabled=acl_enabled,
                 ):
                     continue
-                if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
+                if not await self._read_path_visible(
+                    uri,
+                    entry["path"],
+                    primary_path,
+                    real_ctx,
+                    include_expired=include_expired,
+                ):
                     continue
                 entry_uri = self._alias_uri_for_path(
                     request_uri=uri,
@@ -751,12 +767,57 @@ class _AccessMixin:
         path: str,
         primary_path: str,
         ctx: RequestContext,
+        *,
+        include_expired: bool = False,
     ) -> bool:
-        if path == primary_path:
-            return True
-        if self._legacy_session_alias(request_uri):
+        if path != primary_path and self._legacy_session_alias(request_uri):
             owner_user_id = self._safe_uri_parts(request_uri)[1]
-            return await self._legacy_session_path_visible(path, owner_user_id=owner_user_id)
+            if not await self._legacy_session_path_visible(path, owner_user_id=owner_user_id):
+                return False
+        if include_expired:
+            return True
+
+        visible_uri = request_uri
+        primary_prefix = primary_path.rstrip("/") + "/"
+        if path.startswith(primary_prefix):
+            relative_path = path[len(primary_prefix) :].strip("/")
+            request_root = request_uri.rstrip("/")
+            separator = "" if request_root.endswith("://") else "/"
+            visible_uri = (
+                request_root if not relative_path else f"{request_root}{separator}{relative_path}"
+            )
+        return await self._ttl_uri_visible(visible_uri, ctx, path=path)
+
+    async def _ttl_uri_visible(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        *,
+        path: Optional[str] = None,
+        require_source: bool = False,
+        ttl_view=None,
+    ) -> bool:
+        """Check the owner deadline for every level, including directories.
+
+        Source metadata remains authoritative when new TTL policies are off.
+        Vector hits additionally require a live source after physical cleanup.
+        """
+        if ttl_scope_for_uri(uri) is None:
+            return True
+        target = ttl_object_for_uri(uri)
+        if target is None:
+            return True
+        from openviking.storage.ttl_view import TTLView
+
+        if not await (ttl_view or TTLView(self, ctx)).visible(uri):
+            return False
+        if require_source:
+            try:
+                await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx), bypass_cache=True)
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    return False
+                raise
         return True
 
     def _alias_uri_for_path(
@@ -950,10 +1011,17 @@ class _AccessMixin:
         ctx: Optional[RequestContext] = None,
     ) -> tuple[List[tuple[Dict[str, Any], str]], int, bool]:
         """Return one mapped RagFS page, consumed count, and exhaustion state."""
+        from openviking.storage.ttl_view import TTLView
+
         real_ctx = self._ctx_or_default(ctx)
+        ttl_view = TTLView(self, real_ctx)
         if self._is_session_root_uri(uri):
             items = await self._session_root_items(uri, real_ctx)
-            return items, len(items), True
+            visible_items = []
+            for entry, entry_uri in items:
+                if await self._ttl_uri_visible(entry_uri, real_ctx, ttl_view=ttl_view):
+                    visible_items.append((entry, entry_uri))
+            return visible_items, len(items), True
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
         merge_paths = self._legacy_session_alias(uri) is not None
@@ -994,6 +1062,11 @@ class _AccessMixin:
                     entry_path=f"{path.rstrip('/')}/{entry.get('name', '')}",
                     ctx=ctx,
                 )
+                entry_path = f"{path.rstrip('/')}/{entry.get('name', '')}"
+                if not await self._ttl_uri_visible(
+                    entry_uri, real_ctx, path=entry_path, ttl_view=ttl_view
+                ):
+                    continue
                 by_uri.setdefault(entry_uri, (entry, entry_uri))
             if not merge_paths:
                 break

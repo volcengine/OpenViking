@@ -31,7 +31,8 @@ class _FakeVikingFS:
     async def exists(self, uri, ctx=None):
         return self.parent_exists
 
-    async def rm(self, uri, recursive=False, ctx=None):
+    async def rm(self, uri, recursive=False, ctx=None, strict=False):
+        assert strict is False  # Interactive removal retains its existing contract.
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
         if self.rm_error:
             raise self.rm_error
@@ -434,18 +435,21 @@ async def test_grep_projects_tags_for_each_match(request_context):
     )
 
     assert result["matches"] == [
-        {
-            "uri": "viking://resources/a.md",
-            "line": 1,
-            "content": "needle",
-            "tags": ["team=search", "env=prod"],
-        },
-        {
-            "uri": "viking://resources/b.md",
-            "line": 2,
-            "content": "needle",
-            "tags": [],
-        },
+        {**item, "expires_at": None, "ttl_days": None}
+        for item in [
+            {
+                "uri": "viking://resources/a.md",
+                "line": 1,
+                "content": "needle",
+                "tags": ["team=search", "env=prod"],
+            },
+            {
+                "uri": "viking://resources/b.md",
+                "line": 2,
+                "content": "needle",
+                "tags": [],
+            },
+        ]
     ]
 
 
@@ -462,7 +466,7 @@ async def test_grep_skips_tag_projection_without_tags_or_include_tags(request_co
 
     result = await service.grep("viking://resources", "needle", ctx=request_context)
 
-    assert result["matches"] == matches
+    assert result["matches"] == [{**item, "expires_at": None, "ttl_days": None} for item in matches]
 
 
 @pytest.mark.asyncio
@@ -480,7 +484,10 @@ async def test_grep_projects_tags_when_include_tags_is_requested(request_context
         "viking://resources", "needle", ctx=request_context, include_tags=True
     )
 
-    assert result["matches"] == [{**matches[0], "tags": ["env=prod"]}]
+    assert result["matches"] == [
+        {**item, "expires_at": None, "ttl_days": None}
+        for item in [{**matches[0], "tags": ["env=prod"]}]
+    ]
 
 
 @pytest.mark.asyncio
@@ -504,6 +511,13 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
 
     service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
 
+    assert await service.ls("viking://resources", ctx=request_context) == ListingPage(
+        entries=[{**entry, "expires_at": None, "ttl_days": None} for entry in entries],
+        has_more=False,
+    )
+    abstract.assert_not_awaited()
+    overview.assert_not_awaited()
+
     assert await service.ls(
         "viking://resources",
         ctx=request_context,
@@ -511,11 +525,20 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
         include_abstract=True,
         include_overview=True,
     ) == ListingPage(
-        entries=[{**selected, "abstract": "L0 summary", "overview": "L1 overview"}],
+        entries=[
+            {
+                **selected,
+                "abstract": "L0 summary",
+                "overview": "L1 overview",
+                "expires_at": None,
+                "ttl_days": None,
+            }
+        ],
         has_more=True,
     )
     assert await service.tree("viking://resources", ctx=request_context) == ListingPage(
-        entries=entries, has_more=False
+        entries=[{**entry, "expires_at": None, "ttl_days": None} for entry in entries],
+        has_more=False,
     )
     abstract.assert_awaited_once_with(selected["uri"], ctx=request_context)
     overview.assert_awaited_once_with(selected["uri"], ctx=request_context)
@@ -550,7 +573,9 @@ async def test_ls_and_tree_detect_more_entries_with_n_plus_one(
         node_limit=2,
     )
 
-    assert page.entries == entries[:2]
+    assert page.entries == (
+        [{**entry, "expires_at": None, "ttl_days": None} for entry in entries[:2]]
+    )
     assert page.has_more is expected_has_more
     fetch_mock = getattr(viking_fs, method_name)
     assert fetch_mock.await_args.kwargs["node_limit"] == 3
@@ -609,6 +634,8 @@ async def test_glob_filters_and_projects_tags_before_applying_node_limit(request
             {
                 "uri": "viking://resources/b.md",
                 "isDir": False,
+                "expires_at": None,
+                "ttl_days": None,
                 "tags": ["team=search", "env=prod"],
             }
         ],
@@ -699,7 +726,7 @@ async def test_tagged_grep_reuses_tags_returned_by_viking_fs(request_context):
         tags=["team=search", "env=prod"],
     )
 
-    assert result["matches"] == matches
+    assert result["matches"] == [{**item, "expires_at": None, "ttl_days": None} for item in matches]
 
 
 @pytest.mark.asyncio
@@ -771,6 +798,8 @@ async def test_ls_filters_and_paginates_before_reading_summaries(request_context
                 "tags": ["team=search", "env=prod"],
                 "abstract": "L0 summary",
                 "overview": "L1 overview",
+                "expires_at": None,
+                "ttl_days": None,
             }
         ],
         has_more=True,
@@ -873,6 +902,8 @@ async def test_tree_projects_directory_tags_before_pagination_and_summaries(
                 "tags": ["team=search", "env=prod"],
                 "abstract": "L0 summary",
                 "overview": "L1 overview",
+                "expires_at": None,
+                "ttl_days": None,
             }
         ],
         has_more=False,

@@ -660,6 +660,44 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("uri", "fenced"),
+    [
+        ("viking://user/default/memories/events/2026/09/30", True),
+        ("viking://user/default/memories/events/2026", False),
+        ("viking://user/default/resources/demo", False),
+    ],
+)
+async def test_only_ttl_directory_vectors_acquire_source_sidecar_locks(monkeypatch, uri, fenced):
+    from openviking.storage.abstract_overview import semantic_body_digest
+
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+    await embedding_utils.vectorize_directory_meta(
+        uri=uri,
+        abstract="event abstract",
+        overview="event overview",
+        context_type="memory" if "/memories/" in uri else "resource",
+        ctx=DummyReq(),
+        content_is_body=True,
+    )
+
+    for msg, name, body in zip(
+        queue.items,
+        (".abstract.md", ".overview.md"),
+        ("event abstract", "event overview"),
+        strict=True,
+    ):
+        if fenced:
+            assert msg.context_data["_source_sidecar_uri"] == f"{uri}/{name}"
+            assert msg.context_data["_source_sidecar_digest"] == semantic_body_digest(body)
+        else:
+            assert "_source_sidecar_uri" not in msg.context_data
+            assert "_source_sidecar_digest" not in msg.context_data
+
+
+@pytest.mark.asyncio
 async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch):
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))

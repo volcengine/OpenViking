@@ -922,7 +922,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 item_uri = VikingURI(dir_uri).join(name).uri
                 file_paths.append(item_uri)
         file_paths.sort()
-
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
             return
@@ -1092,6 +1091,7 @@ class SemanticProcessor(DequeueHandlerBase):
         lock: Optional[Dict[str, Any]] = None,
         total_entries: int = 0,
         sampled_entries: int = 0,
+        is_stale_locked: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> AbstractOverviewWriteResult:
         return await write_abstract_overview(
             viking_fs=viking_fs,
@@ -1100,6 +1100,7 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract=abstract,
             ctx=ctx,
             is_stale=lambda: is_semantic_msg_stale(msg),
+            is_stale_locked=is_stale_locked,
             metadata={
                 **({"source": msg.source} if msg.source else {}),
                 "generated_by": {

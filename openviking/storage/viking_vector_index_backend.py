@@ -18,6 +18,7 @@ from openviking.core.namespace import (
     uri_parts,
     visible_roots,
 )
+from openviking.core.ttl import TTL_FIELD_NAMES, ttl_enabled
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.acl import (
@@ -377,7 +378,13 @@ class _SingleAccountBackend:
     def _prepare_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         self._validate_vector_dimension(data.get("vector"))
-        payload = {k: v for k, v in data.items() if v is not None}
+        # Lifecycle metadata belongs to OV files and durable tasks. Existing
+        # cloud collections need no new fields, including on restore/reindex.
+        payload = {
+            k: v
+            for k, v in data.items()
+            if v is not None and k not in TTL_FIELD_NAMES and k != "ttl_generation"
+        }
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
 
@@ -1615,6 +1622,118 @@ class VikingVectorIndexBackend:
                 updated_records.append(updated_record)
         return updated_records
 
+    @staticmethod
+    async def _ttl_source(ctx: RequestContext):
+        from openviking.storage.viking_fs import get_viking_fs
+
+        try:
+            fs = get_viking_fs()
+        except RuntimeError:
+            if ttl_enabled():
+                raise
+            return None
+        return fs
+
+    @staticmethod
+    async def _ttl_visibility(fs, records, ctx: RequestContext, ttl_view=None) -> List[bool]:
+        from openviking.storage.ttl_view import TTLView
+
+        ttl_view = ttl_view or TTLView(fs, ctx)
+
+        async def visible(record):
+            uri = str(record.get("uri") or "")
+            if not uri:
+                raise ValueError("Vector candidate has no URI for TTL validation")
+            record["expires_at"] = (await ttl_view.fields(uri))["expires_at"]
+            source_uri = uri
+            if record.get("level") in (0, 1) and not uri.endswith(
+                ("/.abstract.md", "/.overview.md")
+            ):
+                source_uri += "/.abstract.md" if record["level"] == 0 else "/.overview.md"
+            return await fs._ttl_uri_visible(
+                source_uri, ctx, require_source=True, ttl_view=ttl_view
+            )
+
+        result = []
+        for start in range(0, len(records), 16):
+            result.extend(await asyncio.gather(*(visible(r) for r in records[start : start + 16])))
+        return result
+
+    async def _read_with_ttl(
+        self,
+        read,
+        *,
+        ctx: RequestContext,
+        filter,
+        limit: int,
+        offset: int,
+        output_fields,
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
+        """Fill a visible candidate page using only existing vector fields.
+
+        Source metadata is authoritative. Exclude rejected (URI, level) pairs
+        and query again *before* the retrieval layer spends its candidate
+        budget. A one-shot post-filter would let expired rows crowd out live
+        ones. Raw maintenance queries deliberately bypass this read barrier.
+        """
+        fs = await self._ttl_source(ctx)
+        if fs is None or limit <= 0:
+            return await read(
+                filter=filter, limit=limit, offset=offset, output_fields=output_fields, **kwargs
+            )
+        fields = (
+            list(dict.fromkeys([*output_fields, "uri", "level", "abstract"]))
+            if output_fields is not None
+            else None
+        )
+        from openviking.storage.ttl_view import TTLView
+
+        ttl_view = TTLView(fs, ctx)
+        requested = limit + offset
+        base_filter = RawDSL(filter) if isinstance(filter, dict) else filter
+        current_filter = base_filter
+        excluded: dict[int, set[str]] = {}
+        while True:
+            records = await read(
+                filter=current_filter, limit=requested, offset=0, output_fields=fields, **kwargs
+            )
+            visibility = await self._ttl_visibility(fs, records, ctx, ttl_view=ttl_view)
+            visible = [record for record, keep in zip(records, visibility, strict=True) if keep]
+            hidden = [record for record, keep in zip(records, visibility, strict=True) if not keep]
+            if not hidden or len(records) < requested:
+                page = visible[offset : offset + limit]
+                if output_fields is not None:
+                    # Preserve adapter-added scores/IDs; only remove fields we
+                    # added solely to validate the source.
+                    extra = {"uri", "level", "abstract"} - set(output_fields)
+                    page = [{k: v for k, v in row.items() if k not in extra} for row in page]
+                return page
+            old_size = sum(map(len, excluded.values()))
+            for record in hidden:
+                excluded.setdefault(int(record.get("level", 2)), set()).add(record["uri"])
+            if sum(map(len, excluded.values())) == old_size:
+                raise RuntimeError("Vector backend did not exclude rejected TTL candidates")
+            current_filter = self._merge_filters(
+                base_filter,
+                *[
+                    Or(
+                        [
+                            RawDSL({"op": "must_not", "field": "level", "conds": [level]}),
+                            RawDSL(
+                                {
+                                    "op": "must_not",
+                                    "field": "uri",
+                                    "conds": sorted(uris),
+                                    "para": "-d=0",
+                                }
+                            ),
+                        ]
+                    )
+                    for level, uris in sorted(excluded.items())
+                ],
+            )
+
     async def query(
         self,
         query_vector: Optional[List[float]] = None,
@@ -1628,9 +1747,25 @@ class VikingVectorIndexBackend:
         advance: Optional[Dict[str, Any]] = None,
         *,
         ctx: RequestContext,
+        include_expired: bool = True,
     ) -> List[Dict[str, Any]]:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.query(
+        query = backend.query
+        if not include_expired:
+            return await self._read_with_ttl(
+                query,
+                ctx=ctx,
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                filter=filter,
+                limit=limit,
+                offset=offset,
+                output_fields=output_fields,
+                order_by=order_by,
+                order_desc=order_desc,
+                advance=advance,
+            )
+        return await query(
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             filter=filter,
@@ -1658,7 +1793,9 @@ class VikingVectorIndexBackend:
             filter,
             self._tenant_filter(ctx, acl_enabled=acl_enabled),
         )
-        return await backend.search_by_random(
+        return await self._read_with_ttl(
+            backend.search_by_random,
+            ctx=ctx,
             filter=filter,
             limit=limit,
             offset=offset,
@@ -1677,6 +1814,7 @@ class VikingVectorIndexBackend:
         advance: Optional[Dict[str, Any]] = None,
         *,
         ctx: RequestContext,
+        include_expired: bool = True,
     ) -> List[Dict[str, Any]]:
         return await self.query(
             query_vector=query_vector,
@@ -1687,6 +1825,7 @@ class VikingVectorIndexBackend:
             output_fields=output_fields,
             advance=advance,
             ctx=ctx,
+            include_expired=include_expired,
         )
 
     async def filter(
@@ -1699,6 +1838,7 @@ class VikingVectorIndexBackend:
         order_desc: bool = False,
         *,
         ctx: RequestContext,
+        include_expired: bool = True,
     ) -> List[Dict[str, Any]]:
         return await self.query(
             filter=filter,
@@ -1708,6 +1848,7 @@ class VikingVectorIndexBackend:
             order_by=order_by,
             order_desc=order_desc,
             ctx=ctx,
+            include_expired=include_expired,
         )
 
     async def remove_by_uri(self, uri: str, *, ctx: RequestContext) -> int:
@@ -1821,11 +1962,26 @@ class VikingVectorIndexBackend:
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         *,
         ctx: Optional[RequestContext] = None,
+        include_expired: bool = True,
     ) -> int:
         if ctx:
             backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
+        if not include_expired and ctx is not None:
+            fs = await self._ttl_source(ctx)
+            if fs is not None:
+                total, cursor = 0, None
+                while True:
+                    records, cursor = await backend.scroll(
+                        filter=filter,
+                        limit=256,
+                        cursor=cursor,
+                        output_fields=["uri", "level", "abstract"],
+                    )
+                    total += sum(await self._ttl_visibility(fs, records, ctx))
+                    if cursor is None:
+                        return total
         return await backend.count(filter=filter)
 
     async def search_by_keywords(
@@ -1850,7 +2006,21 @@ class VikingVectorIndexBackend:
             )
         else:
             backend = self._get_default_backend()
-        return await backend.search_by_keywords(
+        read = backend.search_by_keywords
+        if ctx is not None:
+            return await self._read_with_ttl(
+                read,
+                ctx=ctx,
+                keywords=keywords,
+                query=query,
+                limit=limit,
+                offset=offset,
+                filter=filter,
+                output_fields=output_fields,
+                mode=mode,
+                fields=fields,
+            )
+        return await read(
             keywords=keywords,
             query=query,
             mode=mode,
@@ -1964,6 +2134,7 @@ class VikingVectorIndexBackend:
                 offset=offset,
                 output_fields=RETRIEVAL_OUTPUT_FIELDS,
                 ctx=ctx,
+                include_expired=False,
             )
 
         parse_duration_ms(
@@ -2001,7 +2172,8 @@ class VikingVectorIndexBackend:
             acl_enabled=acl_enabled,
         )
         backend = await self._get_backend_for_context(ctx)
-        return await backend.search_by_keywords(
+        return await self._read_with_ttl(
+            backend.search_by_keywords,
             query=query,
             mode="bm25",
             fields=["content"],
@@ -2009,6 +2181,7 @@ class VikingVectorIndexBackend:
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            ctx=ctx,
         )
 
     async def filter_in_tenant(
@@ -2048,6 +2221,7 @@ class VikingVectorIndexBackend:
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
+            include_expired=False,
         )
 
     async def _search_with_event_time_decay(
@@ -2083,6 +2257,7 @@ class VikingVectorIndexBackend:
             "limit": final_window,
             "offset": 0,
             "output_fields": RETRIEVAL_OUTPUT_FIELDS,
+            "include_expired": False,
         }
         remaining_results, event_results = await asyncio.gather(
             self.search(filter=non_event_filter, **search_kwargs),
@@ -2441,15 +2616,34 @@ class VikingVectorIndexBackend:
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
 
-    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+    async def delete_uris(
+        self, ctx: RequestContext, uris: List[str], *, level: Optional[int] = None
+    ) -> None:
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
                 Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
             ]
+            if level is not None:
+                conds.append(Eq("level", level))
 
             backend = await self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
+
+    async def delete_uri_scope(
+        self, ctx: RequestContext, uri: str, *, level: Optional[int] = None
+    ) -> None:
+        """Strictly delete one URI and every descendant in its tenant."""
+        backend = await self._get_backend_for_context(ctx)
+        await backend.delete_by_filter(
+            And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    Or([Eq("uri", uri), PathScope("uri", uri, depth=-1)]),
+                    *([Eq("level", level)] if level is not None else []),
+                ]
+            )
+        )
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
         scopes: List[FilterExpr] = [Eq("uri", uri)]

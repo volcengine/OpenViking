@@ -59,6 +59,7 @@ def _tiers_down_from(candidate: Candidate, tier: Tier) -> List[Tier]:
 def _make_entry(candidate: Candidate, tier: Tier, text: str) -> AssembledEntry:
     entry = AssembledEntry(
         uri=candidate.base_uri,
+        expires_at=candidate.expires_at,
         category=candidate.category,
         score=candidate.score,
         detail=tier,
