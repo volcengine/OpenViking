@@ -1,10 +1,12 @@
 # Install and use the CLI
 
-`ov` is the command-line client for OpenViking. It connects to an existing OpenViking server. It does not install a server. If you do not have a server yet, do step 1 of the [Quick Start](02-quickstart.md) first.
+`ov` is the command-line client for OpenViking. OpenViking stores the context of your agents as a file system: resources, memories, and skills are directories and files under `viking://`. With `ov`, you can browse, read, search, and write this content. Agents use the same commands.
+
+`ov` connects to an existing OpenViking server. If you do not have a server yet, do step 1 of the [Quick Start](02-quickstart.md) first.
 
 ## Set up with an agent
 
-Click **Copy** below and paste the prompt into your coding agent, for example Claude Code, Codex, or Cursor. The agent installs `ov`, asks you which server to use, and then configures and checks the connection.
+Click **Copy** below and paste the prompt into your coding agent, for example Claude Code, Codex, or Cursor. The agent installs `ov`, asks you which server to use, and then saves the config and checks the connection.
 
 <AgentPrompt>
 
@@ -125,7 +127,7 @@ Read the output. Exit code 0 alone does not prove that the server is healthy. To
 
 Do not import data as a demo unless I ask.
 
-After setup, I may ask you to browse, search, add, or organize content with `ov`. Run `ov --help` to see the command groups. Run `ov <command> --help` before you use a command.
+After setup, I may ask you to browse, search, add, or organize content with `ov`. OpenViking content is a directory tree under `viking://`. To read, first use `ov abstract` or `ov overview` to read the directory summary. Then use `ov read` to read only the files you need. Run `ov --help` to see the command groups. Run `ov <command> --help` before you use a command.
 
 EXECUTE NOW: Complete the above TODO list to achieve: `ov config validate` shows every check as passed, and `ov health -o json` returns `"healthy": true`.
 
@@ -156,9 +158,9 @@ ov language en
 ov --version
 ```
 
-The second command sets the display language of the CLI. Use `zh-CN` for Chinese. You must set a language before you use most commands.
+`ov language` sets the display language. Use `zh-CN` for Chinese. Most commands do not run until you set a language.
 
-A machine that runs the OpenViking server already has `ov`. The server package (`uv tool install openviking`) installs it.
+A machine that runs the OpenViking server already has `ov`. On that machine, skip `npm i` and only set the language.
 
 ## 2. Add a connection
 
@@ -178,32 +180,43 @@ Follow the prompts:
 
 ```bash
 ov config validate
-ov health
 ```
 
-`ov config validate` checks the active config. The connection works when all checks pass: config file valid, server reachable, auth accepted, and healthy. `ov health` shows the server status as **Connected (Healthy)**.
+The connection works when all items under **Checks** pass: Config file `valid`, Server `reachable`, Auth `accepted`, and Health `healthy`.
 
 Setup is complete. Next, you can [import and retrieve your first document](02-quickstart.md#_3-import-a-document). To learn more, read on.
 
 ## What you can do with `ov`
 
+OpenViking content is a directory tree. Run `ov ls` to list the root, `viking://`:
+
+- `viking://resources/`: imported documents, code repositories, and web pages. Shared in the account.
+- `viking://user/<user-id>/`: your memories, private resources, skills, and sessions. `viking://~/` points to this directory.
+- `viking://agent/`: skills and agent configuration, shared in the account.
+
+Each directory has an L0 abstract and an L1 overview. The full text of a file is L2. Read the L0 and L1 of a directory first to decide if it is relevant. Then read only the L2 files that you need. For details, see [Viking URI](../concepts/04-viking-uri.md) and [Context Layers](../concepts/03-context-layers.md).
+
 | Task | Commands |
 |---|---|
-| Browse | `ov ls`, `ov tree`, `ov stat` |
-| Read content | `ov abstract`, `ov overview`, `ov read`, `ov get` |
-| Search | `ov find`, `ov search`, `ov grep`, `ov glob` |
-| Add content | `ov add-resource`, `ov add-skill`, `ov add-memory`, `ov write` |
-| Organize content | `ov mkdir`, `ov mv`, `ov cp`, `ov rm`, `ov set-tags` |
-| Track background tasks | `ov task list`, `ov task status`, `ov wait` |
-| Manage sessions | `ov session new`, `ov session add-message`, `ov session commit` |
-| Back up and move data | `ov export`, `ov import`, `ov backup`, `ov restore`, `ov snapshot` |
-| Manage users and accounts (admin or root key) | `ov admin list-users`, `ov admin register-user`, `ov admin regenerate-key` |
-| Check the connection and server | `ov config`, `ov health`, `ov status` |
+| Browse | `ov ls`, `ov tree`, `ov stat`. `ov tui` opens an interactive browser. |
+| Read by layer | `ov abstract` (L0), `ov overview` (L1), `ov read` (L2). `ov get` downloads a file to your machine. |
+| Search | `ov find` (semantic search), `ov grep` (match content), `ov glob` (match paths) |
+| Import documents and skills | `ov add-resource`, `ov add-skill`, `ov skills` |
+| Write and organize | `ov write`, `ov mkdir`, `ov mv`, `ov cp`, `ov rm` |
+| Extract memories from a conversation | `ov session new`, `ov session add-message`, `ov session commit`. `ov add-memory` does these three steps in one command. |
+| Wait for background processing | `ov task list`, `ov task status`, `ov wait` |
+| Save and roll back versions | `ov snapshot` |
+| Back up and move data | `ov export`, `ov import`, `ov backup`, `ov restore` |
+| Rebuild indexes (`viking://resources` needs an admin key) | `ov reindex` |
+| Manage users (admin or root key) | `ov admin list-users`, `ov admin register-user`, `ov admin regenerate-key` |
+| Check the server | `ov health`, `ov status` |
+
+After you import content or commit a session, the server processes it in the background: it parses content, extracts memories, generates L0 and L1, and builds indexes. Until processing is complete, `ov find` does not return the new content.
 
 Run `ov <command> --help` to see the options of a command. You can also ask your agent to do any of these tasks.
 
 ::: warning Caution
-`ov rm -r` deletes a directory and all of its content. Before you delete, use `ov ls` to check the URI.
+`ov rm -r` deletes a directory and all of its content. The delete runs on the server, so other agents that use the same server also lose this content. Before you delete, use `ov ls` to check the URI.
 :::
 
 ## Manage several connections
@@ -214,26 +227,26 @@ ov config switch   # select the active config
 ov config show     # show the active config, with secrets hidden
 ```
 
-To edit or delete a config, run `ov config` and select the action. To configure `ov` from a script, use `ov config add`. Run `ov config add --help` for the options.
+To edit or delete a config, run `ov config` and select the action. To add a config from a script, use `ov config add`. Run `ov config add --help` for the options.
 
-The active config is `~/.openviking/ovcli.conf`. Each saved config is `~/.openviking/ovcli.conf.<name>`. When you switch, `ov` copies the saved config to the active file.
+The active config is `~/.openviking/ovcli.conf`. Each saved config is `~/.openviking/ovcli.conf.<name>`. If you set `OPENVIKING_CLI_CONFIG_FILE`, `ov` uses that file as the active config, and saved configs are in the same directory as that file. For all fields, see [Client Configuration](../configuration/02-client.md).
 
-If you set `OPENVIKING_CLI_CONFIG_FILE`, `ov` uses that file as the active config. Saved configs are then in the same directory as that file. For all fields, see [Client Configuration](../configuration/02-client.md).
+## API keys
 
-## API key types
+When the server uses API key authentication, a key has one of three roles:
 
 - **User key**: for data commands, such as `ov add-resource` and `ov find`. Most users need only this key.
-- **Root key**: for administration commands and commands with `--sudo`.
+- **Admin key**: for data commands, and for managing the users of its account.
+- **Root key**: for managing the whole server, for example to create accounts. In `api_key` mode, a root key cannot read or write account data.
 
-One config can hold both keys. Normal commands use the user key. Commands with `--sudo` use the root key. For details, see [Authentication](../guides/04-authentication.md).
+One config can hold a user key and a root key. Normal commands use the user key. `ov admin`, `ov system`, `ov reindex`, `ov task status`, and `ov task list` use the root key when you add `--sudo`. For details, see [Authentication](../guides/04-authentication.md).
 
-## Keep API keys safe
+To keep API keys safe:
 
-- Type the API key in the `ov config` prompt. Do not put a key in a command, because the shell history keeps it.
-- Use `ov config show` to look at a config. It hides secrets.
-- Do not share the content or screenshots of `~/.openviking/ovcli.conf`.
-- Use a temporary key that you can revoke for demos and trials.
-- If an agent sets up `ov` for you, give it the key only through a channel that you trust.
+- Type the key in the `ov config` prompt. Do not put a key in a command, because the shell history keeps it.
+- Use `ov config show` to look at a config. It hides secrets. Do not share the content or screenshots of `~/.openviking/ovcli.conf`.
+- For demos and trials, use a temporary key that you can revoke.
+- If an agent sets up `ov` for you, do not paste the key into the chat. Put the key in an environment variable, or run `ov config` yourself and type the key when the agent asks.
 
 ## Troubleshooting
 
@@ -261,32 +274,13 @@ If this fails, start the server first. See [Deployment](../guides/03-deployment.
 
 ### API key validation fails
 
-Run `ov config`, select **Edit Config**, and enter the key again. For OpenViking Service, copy the key from the console. For a self-hosted server, ask your administrator for the correct key and key type.
+Run `ov config`, select **Edit Config**, and enter the key again. For OpenViking Service, copy the key from the console. For a self-hosted server, ask your administrator for the correct key and key type. In `api_key` mode, data commands need a user key or an admin key.
 
 ### The wrong config is active
 
 Run `ov config list` to see which config is active. Run `ov config switch` to select another one.
 
-### `ov config setup-cli` does not work
-
-This command was removed. Use `ov config`.
-
-## Rebuild indexes
-
-`ov reindex <uri>` checks and repairs the indexes of imported content:
-
-```bash
-ov reindex viking://resources/my-project --mode vectors_only
-ov reindex viking://resources/my-project --mode semantic_and_vectors
-```
-
-- `vectors_only` (default): rebuilds vectors only.
-- `semantic_and_vectors`: regenerates the abstract and overview (`.abstract.md`, `.overview.md`), then rebuilds vectors.
-
-By default, the command processes the full subtree and waits until it is complete. It skips resources and skills whose MD5 fingerprint did not change. Add `--force` to rebuild all data in scope. Add `--recursive false` to process only the target itself. Run `ov reindex --help` for all options.
-
 ## Next steps
 
 - Import and retrieve your first document: [Quick Start](02-quickstart.md).
 - Connect OpenViking to the agent you use every day: [Agent integrations](../agent-integrations/01-overview.md).
-- See all commands with `ov --help`. See the options of one command with `ov <command> --help`.

@@ -64,31 +64,28 @@ This checks that the server responds; the import below also exercises model proc
 
 ## 3. Import a document
 
-Save the following as `quickstart.md` in your current directory:
+Save the following as `ov-launch-plan.md` in your current directory:
 
 ```markdown
-# Project Atlas
+# OpenViking overseas launch
 
-Project Atlas backs up its documents every Friday.
-Maya owns the backup process. Keep each backup for 30 days.
+Zayn owns the OpenViking overseas launch. The Singapore team ships the managed service first and the self-hosted edition two weeks later.
 ```
 
 Import it into a new resource directory:
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+ov add-resource ./ov-launch-plan.md --to viking://resources/ov-launch-plan --wait --timeout 120
 ```
 
 The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).
 
-Use an unused target URI for this example. If you repeat the example, choose a new target and use that same URI in the commands below.
-
 ## 4. Browse and search
 
 ```bash
-ov tree viking://resources/quickstart-demo
-ov overview viking://resources/quickstart-demo
-ov find "Who owns the backup process?" --uri viking://resources/quickstart-demo
+ov tree viking://resources/ov-launch-plan
+ov overview viking://resources/ov-launch-plan
+ov find "Who owns the overseas launch?" --uri viking://resources/ov-launch-plan
 ```
 
 `tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. To read a match, pass its returned URI to `ov read`:

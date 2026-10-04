@@ -64,31 +64,28 @@ ov health
 
 ## 3. 导入文档
 
-在当前目录创建 `quickstart.md`，内容如下：
+在当前目录创建 `ov-launch-plan.md`，内容如下：
 
 ```markdown
-# Atlas 项目
+# OpenViking 海外发布计划
 
-Atlas 项目每周五备份文档。
-Maya 负责备份流程，每份备份保留 30 天。
+Zayn 负责 OpenViking 的海外发布。新加坡团队先上线托管服务，两周后发布自托管版本。
 ```
 
 将它导入新的资源目录：
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+ov add-resource ./ov-launch-plan.md --to viking://resources/ov-launch-plan --wait --timeout 120
 ```
 
 CLI 会自动上传本地文件。`--wait` 等待处理完成，命令成功后再继续。若省略该参数，保存返回的 `task_id`，用 `ov task status <task_id>` 查询到 `completed` 后再使用结果。详见[后台任务](../api/17-tasks.md)。
 
-本例使用尚未使用的目标 URI。重复运行示例时，换一个新目标，并同步替换下方命令中的 URI。
-
 ## 4. 浏览与检索
 
 ```bash
-ov tree viking://resources/quickstart-demo
-ov overview viking://resources/quickstart-demo
-ov find "谁负责备份流程？" --uri viking://resources/quickstart-demo
+ov tree viking://resources/ov-launch-plan
+ov overview viking://resources/ov-launch-plan
+ov find "谁负责 OpenViking 的海外发布？" --uri viking://resources/ov-launch-plan
 ```
 
 `tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。读取某条命中时，把返回的 URI 传给 `ov read`：

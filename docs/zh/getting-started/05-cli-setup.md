@@ -1,10 +1,12 @@
 # 安装与使用 CLI
 
-`ov` 是 OpenViking 的命令行客户端。它连接已有的 OpenViking 服务端，不负责安装服务端。还没有服务时，先完成[快速开始](02-quickstart.md)的第 1 步。
+`ov` 是 OpenViking 的命令行客户端。OpenViking 把 Agent 的上下文存成一个文件系统：资源、记忆和技能都是 `viking://` 下的目录和文件。用 `ov` 可以浏览、读取、检索和写入这些内容。Agent 也用同样的命令操作这些内容。
+
+`ov` 连接一个已有的 OpenViking 服务。还没有服务时，先完成[快速开始](02-quickstart.md)的第 1 步。
 
 ## 让 Agent 配置
 
-点击下方的**复制**，把提示词粘贴给你使用的编程 Agent，例如 Claude Code、Codex 或 Cursor。Agent 会安装 `ov`，向你确认要连接的服务，然后完成配置和检查。
+点击下方的**复制**，把提示词粘贴给你使用的编程 Agent，例如 Claude Code、Codex 或 Cursor。Agent 会安装 `ov`，向你确认要连接的服务，然后保存配置并检查连接。
 
 <AgentPrompt>
 
@@ -125,7 +127,7 @@ ov health -o json
 
 除非我要求，不要导入数据做演示。
 
-配置完成后，我可能会让你用 `ov` 浏览、检索、添加或整理内容。运行 `ov --help` 查看命令分组。使用某条命令前，先运行 `ov <命令> --help`。
+配置完成后，我可能会让你用 `ov` 浏览、检索、添加或整理内容。OpenViking 的内容是 `viking://` 下的目录树。读取时，先用 `ov abstract` 或 `ov overview` 读目录摘要，再用 `ov read` 读需要的文件。运行 `ov --help` 查看命令分组。使用某条命令前，先运行 `ov <命令> --help`。
 
 EXECUTE NOW：完成上面的 TODO 列表，达到：`ov config validate` 的检查项全部通过，并且 `ov health -o json` 返回 `"healthy": true`。
 
@@ -156,9 +158,9 @@ ov language zh-CN
 ov --version
 ```
 
-第二条命令设置 CLI 的显示语言。英文界面使用 `en`。使用大多数命令前，必须先设置语言。
+`ov language` 设置显示语言。英文界面使用 `en`。未设置语言时，大多数命令不能运行。
 
-运行 OpenViking 服务端的机器已经有 `ov`。服务端安装包（`uv tool install openviking`）会一并安装它。
+在运行 OpenViking 服务端的机器上，`ov` 已随服务端安装。跳过 `npm i`，只设置语言。
 
 ## 2. 添加连接
 
@@ -178,32 +180,43 @@ ov config
 
 ```bash
 ov config validate
-ov health
 ```
 
-`ov config validate` 检查当前配置。检查项全部通过时，连接可用：配置文件有效、服务器可连接、认证已通过、健康。`ov health` 显示服务状态为 **Connected (Healthy)**。
+输出的**检查项**全部通过时，连接可用：配置文件“有效”，服务器“可连接”，认证“已通过”，健康状态“健康”。
 
 配置到此完成。接下来可以[导入并检索第一份文档](02-quickstart.md#_3-导入文档)。想了解更多，可以继续往下看。
 
 ## `ov` 能做什么
 
+OpenViking 的内容是一棵目录树。运行 `ov ls` 查看根目录 `viking://`：
+
+- `viking://resources/`：导入的文档、代码仓库和网页。同一账号内共享。
+- `viking://user/<用户 ID>/`：你的记忆、私有资源、技能和会话。`viking://~/` 指向这个目录。
+- `viking://agent/`：同一账号内共享的技能和 Agent 配置。
+
+每个目录有 L0 摘要和 L1 概览。文件全文是 L2。先读目录的 L0 和 L1，判断内容是否相关，再读需要的 L2 文件。详见 [Viking URI](../concepts/04-viking-uri.md) 和[上下文层级](../concepts/03-context-layers.md)。
+
 | 任务 | 命令 |
 |---|---|
-| 浏览目录 | `ov ls`、`ov tree`、`ov stat` |
-| 读取内容 | `ov abstract`、`ov overview`、`ov read`、`ov get` |
-| 检索 | `ov find`、`ov search`、`ov grep`、`ov glob` |
-| 添加内容 | `ov add-resource`、`ov add-skill`、`ov add-memory`、`ov write` |
-| 整理内容 | `ov mkdir`、`ov mv`、`ov cp`、`ov rm`、`ov set-tags` |
-| 查看后台任务 | `ov task list`、`ov task status`、`ov wait` |
-| 管理会话 | `ov session new`、`ov session add-message`、`ov session commit` |
-| 备份与迁移数据 | `ov export`、`ov import`、`ov backup`、`ov restore`、`ov snapshot` |
-| 管理用户和账号（需要 admin 或 root key） | `ov admin list-users`、`ov admin register-user`、`ov admin regenerate-key` |
-| 检查连接和服务 | `ov config`、`ov health`、`ov status` |
+| 浏览目录 | `ov ls`、`ov tree`、`ov stat`。`ov tui` 打开交互式浏览界面。 |
+| 按层读取 | `ov abstract`（L0）、`ov overview`（L1）、`ov read`（L2）。`ov get` 把文件下载到本地。 |
+| 检索 | `ov find`（语义检索）、`ov grep`（匹配内容）、`ov glob`（匹配路径） |
+| 导入资料和技能 | `ov add-resource`、`ov add-skill`、`ov skills` |
+| 写入和整理 | `ov write`、`ov mkdir`、`ov mv`、`ov cp`、`ov rm` |
+| 从对话中提取记忆 | `ov session new`、`ov session add-message`、`ov session commit`。`ov add-memory` 一步完成这三步。 |
+| 等待后台处理 | `ov task list`、`ov task status`、`ov wait` |
+| 保存和回滚版本 | `ov snapshot` |
+| 备份与迁移 | `ov export`、`ov import`、`ov backup`、`ov restore` |
+| 重建索引（`viking://resources` 需要 admin key） | `ov reindex` |
+| 管理用户（需要 admin 或 root key） | `ov admin list-users`、`ov admin register-user`、`ov admin regenerate-key` |
+| 检查服务 | `ov health`、`ov status` |
+
+导入资料和提交会话后，服务端在后台处理：解析内容，提取记忆，生成 L0 和 L1，建立索引。处理完成前，`ov find` 检索不到新内容。
 
 用 `ov <命令> --help` 查看命令的参数。这些操作也可以直接交给 Agent 完成。
 
 ::: warning 注意
-`ov rm -r` 会删除目录及其中的全部内容。删除前，先用 `ov ls` 确认 URI。
+`ov rm -r` 会删除目录及其中的全部内容。删除在服务端执行，使用同一服务的其他 Agent 也会失去这些内容。删除前，先用 `ov ls` 确认 URI。
 :::
 
 ## 管理多个连接
@@ -214,26 +227,26 @@ ov config switch   # 选择当前配置
 ov config show     # 查看当前配置，密钥会被隐藏
 ```
 
-编辑或删除配置时，运行 `ov config` 并选择对应操作。在脚本中配置时，使用 `ov config add`，参数见 `ov config add --help`。
+编辑或删除配置时，运行 `ov config` 并选择对应操作。在脚本中添加配置时，使用 `ov config add`，参数见 `ov config add --help`。
 
-当前配置是 `~/.openviking/ovcli.conf`。每个已保存的配置是 `~/.openviking/ovcli.conf.<名称>`。切换时，`ov` 把选中的配置复制到当前配置文件。
+当前配置是 `~/.openviking/ovcli.conf`。每个已保存的配置是 `~/.openviking/ovcli.conf.<名称>`。设置 `OPENVIKING_CLI_CONFIG_FILE` 后，`ov` 改用该文件作为当前配置，已保存的配置位于该文件所在目录。全部字段见[客户端配置](../configuration/02-client.md)。
 
-设置 `OPENVIKING_CLI_CONFIG_FILE` 后，`ov` 把该文件作为当前配置，已保存的配置也位于该文件所在目录。全部字段见[客户端配置](../configuration/02-client.md)。
+## API Key
 
-## API Key 类型
+服务使用 API Key 认证时，key 有三种角色：
 
 - **User key**：用于数据命令，例如 `ov add-resource` 和 `ov find`。大多数用户只需要这种 key。
-- **Root key**：用于管理命令和带 `--sudo` 的命令。
+- **Admin key**：可以执行数据命令，也可以管理本账号的用户。
+- **Root key**：管理整个服务，例如创建账号。在 `api_key` 模式下，root key 不能读写账号数据。
 
-一个配置可以同时保存两种 key。普通命令使用 user key，带 `--sudo` 的命令使用 root key。详见[认证](../guides/04-authentication.md)。
+一个配置可以同时保存 user key 和 root key。普通命令使用 user key。`ov admin`、`ov system`、`ov reindex`、`ov task status` 和 `ov task list` 加 `--sudo` 时使用 root key。详见[认证](../guides/04-authentication.md)。
 
-## 保护 API Key
+保护 API Key：
 
-- 在 `ov config` 的输入框中输入 API Key。不要把 key 写进命令，shell 历史会保存命令。
-- 用 `ov config show` 查看配置。它会隐藏密钥。
-- 不要分享 `~/.openviking/ovcli.conf` 的内容或截图。
+- 在 `ov config` 的输入框中输入 key。不要把 key 写进命令，shell 历史会保存命令。
+- 用 `ov config show` 查看配置，它会隐藏密钥。不要分享 `~/.openviking/ovcli.conf` 的内容或截图。
 - 演示和试用时，使用可以撤销的临时 key。
-- 让 Agent 配置 `ov` 时，只通过你信任的渠道把 key 交给 Agent。
+- 让 Agent 配置时，不要把 key 粘贴到对话中。把 key 放进环境变量，或在 Agent 请求时自己运行 `ov config` 输入 key。
 
 ## 常见问题
 
@@ -261,32 +274,13 @@ curl http://127.0.0.1:1933/health
 
 ### API Key 校验失败
 
-运行 `ov config`，选择**编辑配置**，重新输入 key。OpenViking 服务的 key 从控制台复制。自建服务的 key 和 key 类型向管理员确认。
+运行 `ov config`，选择**编辑配置**，重新输入 key。OpenViking 服务的 key 从控制台复制。自建服务的 key 和 key 类型向管理员确认。在 `api_key` 模式下，数据命令需要 user key 或 admin key。
 
 ### 当前配置不对
 
 运行 `ov config list` 查看当前配置。运行 `ov config switch` 选择其他配置。
 
-### `ov config setup-cli` 不可用
-
-该命令已移除。使用 `ov config`。
-
-## 重建索引
-
-`ov reindex <uri>` 检查并修复已导入内容的索引：
-
-```bash
-ov reindex viking://resources/my-project --mode vectors_only
-ov reindex viking://resources/my-project --mode semantic_and_vectors
-```
-
-- `vectors_only`（默认）：只重建向量。
-- `semantic_and_vectors`：先重新生成摘要和概览（`.abstract.md`、`.overview.md`），再重建向量。
-
-命令默认处理整个子树，并等待完成。MD5 指纹未变化的 resource 和 skill 会被跳过。加 `--force` 重建范围内的全部数据。加 `--recursive false` 只处理目标本身。全部参数见 `ov reindex --help`。
-
 ## 下一步
 
 - 导入并检索第一份文档：[快速开始](02-quickstart.md)。
 - 把 OpenViking 接入你日常使用的 Agent：[Agent 接入方式](../agent-integrations/01-overview.md)。
-- 用 `ov --help` 查看全部命令，用 `ov <命令> --help` 查看单个命令的参数。
