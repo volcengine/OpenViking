@@ -4,9 +4,9 @@
 
 ## Set up with an agent
 
-Copy the prompt below and give it to your coding agent, for example Claude Code, Codex, or Cursor. The agent installs `ov`, asks you which server to use, and then configures and checks the connection.
+Click **Copy** below and paste the prompt into your coding agent, for example Claude Code, Codex, or Cursor. The agent installs `ov`, asks you which server to use, and then configures and checks the connection.
 
-::: details Show the agent prompt
+<AgentPrompt>
 
 ````markdown
 # openviking-cli
@@ -125,12 +125,14 @@ Read the output. Exit code 0 alone does not prove that the server is healthy. To
 
 Do not import data as a demo unless I ask.
 
+After setup, I may ask you to browse, search, add, or organize content with `ov`. Run `ov --help` to see the command groups. Run `ov <command> --help` before you use a command.
+
 EXECUTE NOW: Complete the above TODO list to achieve: `ov config validate` shows every check as passed, and `ov health -o json` returns `"healthy": true`.
 
 For more context, read https://docs.openviking.ai/llms.txt.
 ````
 
-:::
+</AgentPrompt>
 
 The rest of this page describes manual setup.
 
@@ -181,7 +183,28 @@ ov health
 
 `ov config validate` checks the active config. The connection works when all checks pass: config file valid, server reachable, auth accepted, and healthy. `ov health` shows the server status as **Connected (Healthy)**.
 
-Next, [import and retrieve your first document](02-quickstart.md#_3-import-a-document).
+Setup is complete. Next, you can [import and retrieve your first document](02-quickstart.md#_3-import-a-document). To learn more, read on.
+
+## What you can do with `ov`
+
+| Task | Commands |
+|---|---|
+| Browse | `ov ls`, `ov tree`, `ov stat` |
+| Read content | `ov abstract`, `ov overview`, `ov read`, `ov get` |
+| Search | `ov find`, `ov search`, `ov grep`, `ov glob` |
+| Add content | `ov add-resource`, `ov add-skill`, `ov add-memory`, `ov write` |
+| Organize content | `ov mkdir`, `ov mv`, `ov cp`, `ov rm`, `ov set-tags` |
+| Track background tasks | `ov task list`, `ov task status`, `ov wait` |
+| Manage sessions | `ov session new`, `ov session add-message`, `ov session commit` |
+| Back up and move data | `ov export`, `ov import`, `ov backup`, `ov restore`, `ov snapshot` |
+| Manage users and accounts (admin or root key) | `ov admin list-users`, `ov admin register-user`, `ov admin regenerate-key` |
+| Check the connection and server | `ov config`, `ov health`, `ov status` |
+
+Run `ov <command> --help` to see the options of a command. You can also ask your agent to do any of these tasks.
+
+::: warning Caution
+`ov rm -r` deletes a directory and all of its content. Before you delete, use `ov ls` to check the URI.
+:::
 
 ## Manage several connections
 

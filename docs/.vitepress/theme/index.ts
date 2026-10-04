@@ -3,6 +3,7 @@ import { createLanguagePreference } from './language-preference.js'
 import { h, defineAsyncComponent } from 'vue'
 import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import AgentPrompt from './components/AgentPrompt.vue'
 import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
 import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'
 import MemoryExtractionDiagram from './components/MemoryExtractionDiagram.vue'
@@ -269,6 +270,7 @@ export default {
   },
   enhanceApp({ app, router }: EnhanceAppContext) {
     app.component('VPButton', VPButton)
+    app.component('AgentPrompt', AgentPrompt)
     app.component('ArchitectureDiagram', ArchitectureDiagram)
     app.component('IngestionPipelineDiagram', IngestionPipelineDiagram)
     app.component('MemoryExtractionDiagram', MemoryExtractionDiagram)

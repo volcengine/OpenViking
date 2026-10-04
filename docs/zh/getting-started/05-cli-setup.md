@@ -4,9 +4,9 @@
 
 ## 让 Agent 配置
 
-复制下面的提示词，发给你使用的编程 Agent，例如 Claude Code、Codex 或 Cursor。Agent 会安装 `ov`，向你确认要连接的服务，然后完成配置和检查。
+点击下方的**复制**，把提示词粘贴给你使用的编程 Agent，例如 Claude Code、Codex 或 Cursor。Agent 会安装 `ov`，向你确认要连接的服务，然后完成配置和检查。
 
-::: details 展开 Agent 提示词
+<AgentPrompt>
 
 ````markdown
 # openviking-cli
@@ -125,12 +125,14 @@ ov health -o json
 
 除非我要求，不要导入数据做演示。
 
+配置完成后，我可能会让你用 `ov` 浏览、检索、添加或整理内容。运行 `ov --help` 查看命令分组。使用某条命令前，先运行 `ov <命令> --help`。
+
 EXECUTE NOW：完成上面的 TODO 列表，达到：`ov config validate` 的检查项全部通过，并且 `ov health -o json` 返回 `"healthy": true`。
 
 需要更多上下文时，阅读 https://docs.openviking.ai/llms.txt 。
 ````
 
-:::
+</AgentPrompt>
 
 下文是手动配置步骤。
 
@@ -181,7 +183,28 @@ ov health
 
 `ov config validate` 检查当前配置。检查项全部通过时，连接可用：配置文件有效、服务器可连接、认证已通过、健康。`ov health` 显示服务状态为 **Connected (Healthy)**。
 
-下一步，[导入并检索第一份文档](02-quickstart.md#_3-导入文档)。
+配置到此完成。接下来可以[导入并检索第一份文档](02-quickstart.md#_3-导入文档)。想了解更多，可以继续往下看。
+
+## `ov` 能做什么
+
+| 任务 | 命令 |
+|---|---|
+| 浏览目录 | `ov ls`、`ov tree`、`ov stat` |
+| 读取内容 | `ov abstract`、`ov overview`、`ov read`、`ov get` |
+| 检索 | `ov find`、`ov search`、`ov grep`、`ov glob` |
+| 添加内容 | `ov add-resource`、`ov add-skill`、`ov add-memory`、`ov write` |
+| 整理内容 | `ov mkdir`、`ov mv`、`ov cp`、`ov rm`、`ov set-tags` |
+| 查看后台任务 | `ov task list`、`ov task status`、`ov wait` |
+| 管理会话 | `ov session new`、`ov session add-message`、`ov session commit` |
+| 备份与迁移数据 | `ov export`、`ov import`、`ov backup`、`ov restore`、`ov snapshot` |
+| 管理用户和账号（需要 admin 或 root key） | `ov admin list-users`、`ov admin register-user`、`ov admin regenerate-key` |
+| 检查连接和服务 | `ov config`、`ov health`、`ov status` |
+
+用 `ov <命令> --help` 查看命令的参数。这些操作也可以直接交给 Agent 完成。
+
+::: warning 注意
+`ov rm -r` 会删除目录及其中的全部内容。删除前，先用 `ov ls` 确认 URI。
+:::
 
 ## 管理多个连接
 
