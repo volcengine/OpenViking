@@ -403,8 +403,8 @@ This variant is useful when multiple instances share the same `workspace`, but Q
 
 For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 
-To build the image yourself, pass an explicit OpenViking version:
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+To build the image yourself, pass an explicit OpenViking version. Replace `<VERSION>` with a release number:
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 

@@ -398,8 +398,8 @@ docker compose up -d
 
 如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 
-如需自行构建镜像，请显式传入 OpenViking 版本：
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+如需自行构建镜像，请显式传入 OpenViking 版本。把 `<VERSION>` 替换为发布版本号：
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 
