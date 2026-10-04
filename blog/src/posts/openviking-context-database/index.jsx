@@ -670,7 +670,7 @@ ov health`}</Pre>
         <Li>{T({ en: 'Better multimodal, memory, and skill retrieval, and a more complete content-understanding interface.', zh: '增强多模态、记忆和技能检索能力，打通更完整的内容理解接口。' })}</Li>
         <Li>{T({ en: 'Distributed capability with public-cloud integration and more reliable distributed consistency.', zh: '建设分布式能力，对接公有云，实现更可靠的分布式一致性。' })}</Li>
       </Ol>
-      <Quote cite={T({ en: 'OpenViking mission', zh: 'OpenViking 的使命' })}>
+      <Quote cite="OpenViking">
         {T({
           en: 'OpenViking\'s mission is to help agent technology flourish.',
           zh: 'OpenViking 的核心使命是推动智能体技术蓬勃发展。',

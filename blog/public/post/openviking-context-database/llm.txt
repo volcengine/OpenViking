@@ -391,6 +391,6 @@ OpenViking began as something to validate locally or self-host. Since then a hos
 
 > OpenViking's mission is to help agent technology flourish.
 >
-> — OpenViking mission
+> — OpenViking
 
 Resources: [OpenViking on GitHub](https://github.com/volcengine/OpenViking), [docs.openviking.ai](https://docs.openviking.ai/), [the architecture deep dive](https://blog.openviking.ai/post/openviking-context-database-architecture), and [memory plugins for Claude Code and Codex](https://blog.openviking.ai/post/openviking-coding-agent).
