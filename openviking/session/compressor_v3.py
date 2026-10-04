@@ -471,6 +471,7 @@ class SessionCompressorV3:
                 peer_memory_enabled=peer_memory_enabled,
                 allowed_peer_ids=allowed_peer_ids,
                 event_search_tags=event_search_tags,
+                agent_evolution_enabled=agent_evolution_enabled,
             )
             agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
             cases_allowed = (
@@ -673,6 +674,7 @@ class SessionCompressorV3:
         peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
+        agent_evolution_enabled: bool = False,
     ) -> "_V3ExtractionResult":
         del user
         if not messages:
@@ -714,6 +716,7 @@ class SessionCompressorV3:
             transaction_handle=None,
             memory_registry=registry,
             vlm_config=vlm_config,
+            agent_evolution_enabled=agent_evolution_enabled,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()

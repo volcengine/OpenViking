@@ -69,6 +69,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         transaction_handle=None,
         memory_registry: MemoryTypeRegistry | None = None,
         vlm_config: Optional["VLMHandle"] = None,
+        agent_evolution_enabled: bool = False,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
@@ -89,6 +90,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
+        self._agent_evolution_enabled = agent_evolution_enabled
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -496,10 +498,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages.append(self._build_conversation_message())
 
         # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
+        # When agent_evolution is enabled, include agent-stage schemas (e.g. experiences)
+        # so the extraction prompt can produce them.
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if getattr(s, "stage", "user") == "user"
+            if getattr(s, "stage", "user") == "user" or self._agent_evolution_enabled
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
@@ -626,7 +630,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if getattr(s, "stage", "user") == "user"
+            if getattr(s, "stage", "user") == "user" or self._agent_evolution_enabled
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
