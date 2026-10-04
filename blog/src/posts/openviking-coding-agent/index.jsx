@@ -539,8 +539,8 @@ OpenViking: the MCP endpoint is registered as an exact-match Starlette Route ...
 </memory>`}</Pre>
 
       <P>{T({
-        en: 'The model answers from these records directly, without you digging through project docs. The score is a relevance score used for ranking and filtering (results under 0.35 are not injected by default); it does not mean a memory is "60% likely to be true." Before acting on a memory, have the agent read the URI. With default settings, this block is first compressed by a local claude -p call into a few bullets that keep their URIs. How long all this takes depends on the network and on compression; the plugin\'s status line shows how many memories were injected in each turn and how long it took.',
-        zh: '模型直接利用这些历史记录作答，不需要你再翻项目文档。score 是相关性分数，用来排序和筛选（默认低于 0.35 的不注入），不是“这条记忆有 60% 的可能是对的”。真要依据某条记忆做决定，让 Agent 用 read 打开对应的 URI 看原文。默认配置下，这段内容还会先经本地 claude -p 压缩成几条带 URI 的要点再注入。整个过程花多久，取决于网络和压缩；插件的状态栏会显示每一轮注入了几条记忆、用了多长时间。',
+        en: 'The model answers from these records directly, without you digging through project docs. The score is a relevance score used for ranking and filtering (results under 0.35 are not injected by default); it does not mean a memory is "60% likely to be true." Before acting on a memory, have the agent read the URI. The default auto mode prefers a local CLI call—claude -p in Claude Code, codex exec in Codex—to compress this block into a few bullets that keep their URIs. If no local compressor is available, it requests server compression. If a local call fails, it keeps the recalled content within the injection budget. How long all this takes depends on the network and on compression; the plugin\'s status line shows how many memories were injected in each turn and how long it took.',
+        zh: '模型直接利用这些历史记录作答，不需要你再翻项目文档。score 是相关性分数，用来排序和筛选（默认低于 0.35 的不注入），不是“这条记忆有 60% 的可能是对的”。真要依据某条记忆做决定，让 Agent 用 read 打开对应的 URI 看原文。默认 auto 模式优先通过本地 CLI 压缩成几条带 URI 的要点：Claude Code 用 claude -p，Codex 用 codex exec。本地压缩器不可用时，会请求服务端压缩；本地调用失败时，则保留注入预算内的召回内容。整个过程花多久，取决于网络和压缩；插件的状态栏会显示每一轮注入了几条记忆、用了多长时间。',
       })}</P>
 
       <H3 id="cross-session">{T({ en: 'Cross-Session Insight', zh: '跨越周期的长期启发' })}</H3>
@@ -655,8 +655,8 @@ OpenViking: the MCP endpoint is registered as an exact-match Starlette Route ...
           ],
           [
             T({ en: 'Recall compression', zh: '召回压缩' }),
-            T({ en: 'Local claude -p, falls back to the server', zh: '本地 claude -p，失败时交给服务端' }),
-            T({ en: 'Local codex exec with a small model, falls back to the server', zh: '本地 codex exec 调用小模型，失败时交给服务端' }),
+            T({ en: 'auto: local claude -p when available; otherwise server compression', zh: 'auto：本地 claude -p，不可用时请求服务端压缩' }),
+            T({ en: 'auto: local codex exec with a small model when available; otherwise server compression', zh: 'auto：本地 codex exec 调用小模型，不可用时请求服务端压缩' }),
           ],
           [
             T({ en: 'Runtime', zh: '运行环境' }),

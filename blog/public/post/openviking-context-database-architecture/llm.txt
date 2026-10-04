@@ -136,7 +136,7 @@ Agents never write this DSL by hand. The target directory passed to find or sear
 | `L1` | Directory overview in .overview.md, 4,000 characters by default | Rerank input and navigation: what is in here, what to open next. |
 | `L2` | Original files or parsed bodies | Loaded only when precision requires it. |
 
-L0 and L1 are directory-level sidecars. File summaries roll up into the directory's overview, and the abstract is taken from the overview, so a parent directory describes everything below it. The layers control how much an agent reads; they do not force a search to descend level by level. One query can hit a record at any level directly.
+L0 and L1 are directory-level sidecars. File summaries roll up into the directory's overview, and the abstract is taken from the overview. A parent summarizes its children, but large directories use a stable sample of at most 32 direct children by default, and an overview can lag behind recent changes. Absence from a summary does not mean the source is absent. The layers control how much an agent reads; they do not force a search to descend level by level. One query can hit a record at any level directly.
 
 ## Files, Virtual URIs, And Multimodal Objects
 

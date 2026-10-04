@@ -302,10 +302,10 @@ OpenViking does not have to keep a long document as one file. Depending on the p
 | **Source document** | In a plain file system a long document is one file: read it all at once or slice it with outside tools, with no control over window use or semantic boundaries. Inputs can be docx, pdf, markdown, web pages, archives, or team folders. | Write it in with ov add-resource instead of pasting the text into a prompt. |
 | **Chapter directories** | Chapters become subdirectories that keep order and nesting, e.g. viking://resources/docs/project/03-design/. | Look at the tree with ov tree or ov ls before reading blind. |
 | **Content modules** | Chapters split into modules small enough to embed, each carrying one idea, procedure, interface, case, or decision. | Locate with ov find, then decide with ov overview whether the full body is needed. |
-| **Modal elements** | Images, tables, code blocks, links, and attachments become context elements that can be searched and cited, not just attachments to a file. | Enter from a summary and follow the URI to the specific element. |
+| **Modal elements** | Images can be extracted as separate resources. Tables, code blocks, and links typically remain in the parsed body and are retrieved and cited through their containing chapter or file. The exact form depends on the parser. | Follow the URI to the image resource or to the chapter or file containing the element. |
 | **Summary levels** | Each directory gets an abstract and an overview; read returns the full body. | Abstract first, overview next, read last; expand the full text only when evidence is insufficient. |
 
-> **Reading-window strategy:** Splitting has three goals: **embeddable**, **semantically self-contained**, and **cheap on the window**. It also has a cost: a condition and its exception can land in different modules. That is why the original stays readable at L2. When a decision hinges on the exact wording, read the body.
+> **Reading-window strategy:** Splitting has three goals: **embeddable**, **semantically self-contained**, and **cheap on the window**. It also has a cost: a condition and its exception can land in different modules. When a decision hinges on the exact wording, read the relevant L2 body and check neighboring modules for conditions and exceptions.
 
 ### Using OpenViking to improve team AI capability
 

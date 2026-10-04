@@ -243,7 +243,7 @@ OpenViking: the MCP endpoint is registered as an exact-match Starlette Route ...
 </memory>
 ```
 
-The model answers from these records directly, without you digging through project docs. The score is a relevance score used for ranking and filtering (results under 0.35 are not injected by default); it does not mean a memory is "60% likely to be true." Before acting on a memory, have the agent read the URI. With default settings, this block is first compressed by a local claude -p call into a few bullets that keep their URIs. How long all this takes depends on the network and on compression; the plugin's status line shows how many memories were injected in each turn and how long it took.
+The model answers from these records directly, without you digging through project docs. The score is a relevance score used for ranking and filtering (results under 0.35 are not injected by default); it does not mean a memory is "60% likely to be true." Before acting on a memory, have the agent read the URI. The default auto mode prefers a local CLI call—claude -p in Claude Code, codex exec in Codex—to compress this block into a few bullets that keep their URIs. If no local compressor is available, it requests server compression. If a local call fails, it keeps the recalled content within the injection budget. How long all this takes depends on the network and on compression; the plugin's status line shows how many memories were injected in each turn and how long it took.
 
 ### Cross-Session Insight
 
@@ -286,7 +286,7 @@ The two plugins share the same design and most of their code, but each adapts to
 | Session end | SessionEnd commits through a background worker | SessionEnd on graceful exit (Codex 0.145+), with an end marker and a detached worker; otherwise the next startup sweep |
 | MCP transport | Local stdio proxy to /mcp | Local stdio proxy to /mcp |
 | Sub-agents | Each sub-agent gets its own session | No sub-agent hooks |
-| Recall compression | Local claude -p, falls back to the server | Local codex exec with a small model, falls back to the server |
+| Recall compression | auto: local claude -p when available; otherwise server compression | auto: local codex exec with a small model when available; otherwise server compression |
 | Runtime | Node.js 18+ | Codex's bundled Node.js 22+ |
 
 > **Note:** **For Codex users:** Since Codex 0.145, `/quit`, `/exit`, a double `Ctrl+C`, and the end of `codex exec` fire SessionEnd. Codex gives that hook only a few seconds, so the plugin writes an end marker and lets a detached worker do the commit. A closed terminal, `kill`, or a crash fires nothing. For those, the next Codex startup or `/clear` sweeps the leftovers: sessions with an end marker whose commit failed, and sessions idle for more than 30 minutes. `/resume` never sweeps. After an upgrade that adds a hook, approve it in `/hooks`, or it silently never runs.

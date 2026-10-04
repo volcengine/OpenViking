@@ -317,8 +317,8 @@ const OpenVikingArchitecturePost = ({ t }) => {
         ]}
       />
       <P>{T({
-        en: 'L0 and L1 are directory-level sidecars. File summaries roll up into the directory\'s overview, and the abstract is taken from the overview, so a parent directory describes everything below it. The layers control how much an agent reads; they do not force a search to descend level by level. One query can hit a record at any level directly.',
-        zh: 'L0 和 L1 是目录级的 sidecar。文件的摘要汇总进所在目录的概览，摘要再从概览里提取，所以父目录描述的是它下面的全部内容。分层控制的是 Agent 读多少，并不要求检索逐层下钻：一次查询可以直接命中任何一层的记录。',
+        en: 'L0 and L1 are directory-level sidecars. File summaries roll up into the directory\'s overview, and the abstract is taken from the overview. A parent summarizes its children, but large directories use a stable sample of at most 32 direct children by default, and an overview can lag behind recent changes. Absence from a summary does not mean the source is absent. The layers control how much an agent reads; they do not force a search to descend level by level. One query can hit a record at any level directly.',
+        zh: 'L0 和 L1 是目录级的 sidecar。文件的摘要汇总进所在目录的概览，摘要再从概览里提取。父目录概括子项内容；大目录默认对最多 32 个直接子项做稳定采样，概览也可能尚未反映最近的更新。因此，摘要中没有提及，不代表资料不存在。分层控制的是 Agent 读多少，并不要求检索逐层下钻：一次查询可以直接命中任何一层的记录。',
       })}</P>
 
       <H2 id="uri-multimodal">{T({ en: 'Files, Virtual URIs, And Multimodal Objects', zh: '文件、虚拟 URI 和多模态对象' })}</H2>
