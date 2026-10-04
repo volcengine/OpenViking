@@ -14,6 +14,8 @@ export default defineConfig({
     },
     react(),
     ViteImageOptimizer({
+      // Keep the small, versioned brand card lossless (including its SVG source).
+      exclude: /og-openviking-blog[^/]*\.(png|svg)$/,
       png: { quality: 80 },
       jpeg: { quality: 80 },
     }),
