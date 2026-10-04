@@ -22,6 +22,7 @@ from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     get_default_registry,
 )
+from openviking.session.memory.constants import EXPERIENCE_MEMORY_TYPE
 from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
@@ -498,12 +499,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages.append(self._build_conversation_message())
 
         # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
-        # When agent_evolution is enabled, include agent-stage schemas (e.g. experiences)
-        # so the extraction prompt can produce them.
+        # When agent_evolution is enabled, also include experiences so the extraction prompt
+        # can produce them. Trajectories stay excluded — they have a dedicated gradient path.
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if getattr(s, "stage", "user") == "user" or self._agent_evolution_enabled
+            if getattr(s, "stage", "user") == "user"
+            or (self._agent_evolution_enabled and s.memory_type == EXPERIENCE_MEMORY_TYPE)
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
@@ -630,7 +632,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         schemas = [
             s
             for s in self._get_registry().list_all(include_disabled=False)
-            if getattr(s, "stage", "user") == "user" or self._agent_evolution_enabled
+            if getattr(s, "stage", "user") == "user"
+            or (self._agent_evolution_enabled and s.memory_type == EXPERIENCE_MEMORY_TYPE)
         ]
         if self._isolation_handler:
             schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
