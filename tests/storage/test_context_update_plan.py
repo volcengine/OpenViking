@@ -2856,9 +2856,7 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
         captured["ingest_options"] = ingest_options
         return True
 
-    monkeypatch.setattr(
-        "openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file
-    )
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file)
     ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
 
     await context_update_execution.vectorize_resource_file(
@@ -2876,6 +2874,44 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
     assert captured["ingest_options"].search_tags is None
     if scalar_override.get("abstract"):
         assert captured["scalar_override"]["abstract"] == scalar_override["abstract"]
+
+
+@pytest.mark.asyncio
+async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking_cli.session.user_id import UserIdentifier
+
+    monkeypatch.setattr(
+        context_update_execution,
+        "vectorize_resource_file",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="Embedding", get_queue=lambda *args, **kwargs: object()),
+    )
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr("openviking.utils.embedding_utils._enqueue_embedding_message", enqueue)
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    enqueued = await context_update_execution.enqueue_direct_index_actions(
+        (
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/empty.md",
+                2,
+                "empty-l2",
+                md5="d41d8cd98f00b204e9800998ecf8427e",
+            ),
+        ),
+        ctx=ctx,
+    )
+
+    assert enqueued is True
+    delete_message = enqueue.await_args.args[1]
+    assert delete_message.record_ids == ["empty-l2"]
 
 
 def test_semantic_message_roundtrip_uses_explicit_plan():

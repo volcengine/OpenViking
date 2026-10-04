@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Execute a compiled :class:`ContextUpdatePlan` outside the parser pipeline.
+"""Execute a single-file :class:`ContextUpdatePlan` outside the parser pipeline.
 
-``add_resources`` builds a :class:`ContextUpdatePlan` and drives its stages
-(synchronous content commit, direct index actions, and the asynchronous
-semantic plan / file refresh) inline. The single-file and batch content-write
-paths need the same execution, so the shared logic lives here and both callers
-reuse it. Keeping one implementation prevents the write and ingest paths from
-drifting on how a plan is committed and enqueued.
+``add_resources`` already builds and executes a :class:`ContextUpdatePlan`
+inside :class:`ResourceProcessor`. Content write does not have parsed artifact
+files or the directory-level vector sources that executor consumes, so this
+module adapts the same plan contract to an inline file body. Keeping this
+adapter separate avoids making the resource-ingest executor depend on
+single-file write state.
 
 The helper deliberately does not own the resource lock or the request wait
 tracker: those lifecycles differ per caller (write releases the lock between
@@ -51,10 +51,10 @@ class PlanWork:
 async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> bool:
     """Enqueue plan-level direct index actions (delete / upsert / field update).
 
-    Canonical implementation shared by ``add_resources`` and the content-write
-    paths. Deletes are coalesced into one message, file L2 upserts reuse
-    :func:`vectorize_file`, and scalar-only mutations enqueue an ``update_fields``
-    message. Returns whether any embedding work was enqueued.
+    This is the inline-file counterpart of ``ResourceProcessor``'s richer
+    artifact executor. Deletes are coalesced into one message, file L2 upserts
+    reuse :func:`vectorize_file`, and scalar-only mutations enqueue an
+    ``update_fields`` message. Returns whether any embedding work was enqueued.
     """
     if not actions:
         return False
@@ -68,6 +68,7 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
     embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
     telemetry_id = get_current_telemetry().telemetry_id
     action_counts = Counter(action.action.value for action in actions)
+    enqueued_any = False
 
     delete_ids = [action.record_id for action in actions if action.action == IndexAction.DELETE]
     if delete_ids:
@@ -80,16 +81,19 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
             },
             telemetry_id=telemetry_id,
         )
-        await _enqueue_embedding_message(
-            embedding_queue,
-            message,
-            failure_message="Failed to enqueue planned vector deletes",
+        enqueued_any = (
+            await _enqueue_embedding_message(
+                embedding_queue,
+                message,
+                failure_message="Failed to enqueue planned vector deletes",
+            )
+            or enqueued_any
         )
     for action in actions:
         if action.action in {IndexAction.UPSERT, IndexAction.MERGE}:
             if action.level != int(ContextLevel.DETAIL):
                 raise ValueError("Direct index upsert only supports file detail records")
-            await vectorize_resource_file(
+            vector_enqueued = await vectorize_resource_file(
                 action.uri,
                 ctx=ctx,
                 file_md5=action.md5,
@@ -100,6 +104,29 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
                 action=action.action.value,
                 field_patch=action.field_patch,
             )
+            if vector_enqueued:
+                enqueued_any = True
+            else:
+                # An empty/unsupported replacement cannot produce a new
+                # embedding. Delete the planned record ID so an older vector
+                # cannot keep representing content that is no longer present.
+                delete_message = EmbeddingMsg.for_delete(
+                    record_ids=[action.record_id],
+                    context_data={
+                        "uri": action.uri,
+                        "account_id": ctx.account_id,
+                        "owner_user_id": ctx.user.user_id,
+                    },
+                    telemetry_id=telemetry_id,
+                )
+                enqueued_any = (
+                    await _enqueue_embedding_message(
+                        embedding_queue,
+                        delete_message,
+                        failure_message=f"Failed to enqueue stale vector delete for {action.uri}",
+                    )
+                    or enqueued_any
+                )
             continue
         if action.action != IndexAction.UPDATE_FIELDS:
             continue
@@ -115,10 +142,13 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
             },
             telemetry_id=telemetry_id,
         )
-        await _enqueue_embedding_message(
-            embedding_queue,
-            message,
-            failure_message=f"Failed to enqueue scalar update for {action.uri}",
+        enqueued_any = (
+            await _enqueue_embedding_message(
+                embedding_queue,
+                message,
+                failure_message=f"Failed to enqueue scalar update for {action.uri}",
+            )
+            or enqueued_any
         )
     logger.debug(
         "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
@@ -127,7 +157,7 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
         dict(action_counts),
         len(actions),
     )
-    return True
+    return enqueued_any
 
 
 async def vectorize_resource_file(

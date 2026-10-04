@@ -85,18 +85,24 @@ class _FakeVikingDB:
         }
 
     async def get_incremental_inventory_under_uri(
-        self, target_uri, *, ctx, output_fields=None, depth=-1
+        self,
+        target_uri,
+        *,
+        ctx,
+        output_fields=None,
+        recursive=True,
+        include_direct_children=False,
     ):
-        del ctx
+        del ctx, include_direct_children
         self.inventory_output_fields = list(output_fields or [])
-        self.inventory_depth = depth
+        self.inventory_depth = -1 if recursive else 0
         base = target_uri.rstrip("/")
         prefix = base + "/"
 
         def in_scope(uri: str) -> bool:
             if uri == base or uri.startswith(base + "#"):
                 return True
-            return depth != 0 and uri.startswith(prefix)
+            return recursive and uri.startswith(prefix)
 
         return {
             str(value.get("id") or f"id-{index}"): {
@@ -362,9 +368,7 @@ async def test_build_rnfv_snapshot_projects_tags_only_for_effective_request_inte
     )
 
     snapshot = await build_rnfv_snapshot(
-        viking_fs=_FakeVikingFS(
-            [{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}]
-        ),
+        viking_fs=_FakeVikingFS([{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}]),
         vikingdb=vikingdb,
         store=store,
         artifact_ref=ref,
