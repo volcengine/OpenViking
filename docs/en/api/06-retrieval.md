@@ -845,7 +845,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
-| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| level_limit | int | No | 10 | Maximum directory depth to traverse. HTTP SDKs use the server default when omitted. |
 | tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
 | before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
