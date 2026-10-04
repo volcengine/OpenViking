@@ -253,7 +253,7 @@ async def gather_candidates(
                     abstract = ""
                 uri = base_uri = f"{root}/SKILL.md"
                 is_directory = False
-            if uri in excluded or base_uri in excluded:
+            if any(_is_under(u, x) for u in (uri, base_uri) for x in excluded):
                 excluded_count += 1
                 continue
             origin = origin_for_uri(base_uri, ctx.actor_peer_id, user_root)

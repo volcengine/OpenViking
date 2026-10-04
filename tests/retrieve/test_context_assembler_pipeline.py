@@ -756,6 +756,34 @@ async def test_excluding_a_package_drops_a_hit_on_any_file_inside_it():
     assert result.stats["excluded"] == 1
 
 
+async def test_exclude_uris_directory_prefix_excludes_subtree():
+    """Passing a directory URI to exclude_uris should exclude all files under it."""
+    hits = [
+        {
+            "uri": f"{USER_ROOT}/memories/events/old.md",
+            "score": 0.8,
+            "abstract": "old event",
+        },
+        {
+            "uri": f"{USER_ROOT}/memories/preferences/lang.md",
+            "score": 0.7,
+            "abstract": "language pref",
+        },
+    ]
+    result = await assemble_context(
+        service=_service(hits=hits, bodies={}),
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="test",
+            exclude_uris=[f"{USER_ROOT}/memories/events"],
+        ),
+    )
+
+    uris = [e.uri for e in result.entries]
+    assert f"{USER_ROOT}/memories/events/old.md" not in uris
+    assert f"{USER_ROOT}/memories/preferences/lang.md" in uris
+
+
 async def test_a_pinned_detail_reads_the_package_skill_md():
     """A package entry is a file, not a directory: `detail` reaches its SKILL.md."""
     service = _skill_service(
