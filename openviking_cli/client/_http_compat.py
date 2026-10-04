@@ -86,28 +86,32 @@ def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     exc_class = ERROR_CODE_TO_EXCEPTION.get(code, OpenVikingError)
 
     if exc_class == OpenVikingError:
-        raise exc_class(message, code=code, details=details)
-    if exc_class in (
+        exception = exc_class(message, code=code, details=details)
+    elif exc_class in (
         InvalidArgumentError,
         FailedPreconditionError,
         ResourceExhaustedError,
         AbortedError,
         UnimplementedError,
     ):
-        raise exc_class(message, details=details)
-    if exc_class == InvalidURIError:
+        exception = exc_class(message, details=details)
+    elif exc_class == InvalidURIError:
         uri = details.get("uri", "") if details else ""
         reason = details.get("reason", "") if details else ""
-        raise exc_class(uri, reason)
-    if exc_class == NotFoundError:
+        exception = exc_class(uri, reason)
+    elif exc_class == NotFoundError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    if exc_class == AlreadyExistsError:
+        exception = exc_class(resource, resource_type)
+    elif exc_class == AlreadyExistsError:
         resource = details.get("resource", "") if details else ""
         resource_type = details.get("type", "resource") if details else "resource"
-        raise exc_class(resource, resource_type)
-    raise exc_class(message)
+        exception = exc_class(resource, resource_type)
+    else:
+        exception = exc_class(message)
+    if details is not None:
+        exception.details.update(details)
+    raise exception
 
 
 class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
