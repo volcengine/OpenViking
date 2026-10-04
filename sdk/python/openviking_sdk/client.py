@@ -8,8 +8,6 @@ import inspect
 import mimetypes
 import os
 import tempfile
-import uuid
-import zipfile
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
@@ -17,7 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ._utils import _path_is_relative_to, run_async
+from ._utils import run_async
 from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
@@ -69,6 +67,7 @@ from .options import (
     UpdateSkillOptions,
     WriteOptions,
 )
+from .uploads import zip_directory
 
 ERROR_CODE_TO_EXCEPTION = {
     "INVALID_ARGUMENT": InvalidArgumentError,
@@ -683,24 +682,7 @@ class AsyncHTTPClient:
         raise exc_class(message)
 
     def _zip_directory(self, dir_path: str) -> str:
-        dir_path = Path(dir_path)
-        if not dir_path.is_dir():
-            raise ValueError(f"Path {dir_path} is not a directory")
-
-        root = dir_path.resolve()
-        zip_path = Path(tempfile.gettempdir()) / f"temp_upload_{uuid.uuid4().hex}.zip"
-        entry_count = 0
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in dir_path.rglob("*"):
-                if file_path.is_symlink():
-                    continue
-                if file_path.is_file():
-                    if not _path_is_relative_to(file_path.resolve(), root):
-                        continue
-                    arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
-                    zipf.write(file_path, arcname=arcname)
-                    entry_count += 1
-        return str(zip_path)
+        return zip_directory(dir_path)
 
     async def _upload_temp_file(self, file_path: str) -> str:
         with open(file_path, "rb") as f:
