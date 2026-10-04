@@ -6,7 +6,8 @@ import { getAllPosts, getPostBySlug, pickLocale } from './blog-components';
 import { SHELL_STRINGS, THEME_LIGHT, buildPath, makeFormatDate } from './shell-core';
 
 export const SITE_URL = 'https://blog.openviking.ai';
-export const SITE_SOCIAL_IMAGE = '/assets/covers/openviking-blog-social.png';
+// Version the filename so social crawlers do not reuse the previous artwork.
+export const SITE_SOCIAL_IMAGE = '/assets/covers/og-openviking-blog-f3530f14.png';
 export const SITE_SOCIAL_IMAGE_WIDTH = 1200;
 export const SITE_SOCIAL_IMAGE_HEIGHT = 630;
 
@@ -73,7 +74,7 @@ export function getPageMeta({ route, lang = 'en' }) {
     const meta = post?.meta || {};
     const title = pickLocale(meta.title, effectiveLang);
     const description = pickLocale(meta.description, effectiveLang);
-    const cover = meta.cover || '/assets/og-image.png';
+    const cover = meta.cover || SITE_SOCIAL_IMAGE;
     return {
       lang: effectiveLang,
       type: 'article',
