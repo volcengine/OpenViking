@@ -1,0 +1,2138 @@
+.gitattributes
+  h_b34c679d17e2ac 7-10
+.github/scripts/build-plugin-downloads.sh
+  h_b34c679d17e2ac 1-71
+.github/scripts/check-marketplace-archive.mjs
+  h_b34c679d17e2ac 10,218-227
+.github/scripts/check-plugin-version-bumps.sh
+  h_b34c679d17e2ac 55-57,62-63,83-85
+.github/scripts/generate-channels-json.sh
+  h_b34c679d17e2ac 1-30
+.github/scripts/generate-claude-marketplace-json.sh
+  h_b34c679d17e2ac 1-27
+.github/scripts/opencode-release-version.mjs
+  h_b34c679d17e2ac 1-2,56-65
+.github/scripts/publish-dumb-git-repo.sh
+  h_b34c679d17e2ac 1-26
+.github/scripts/reproducible-zip.sh
+  h_b34c679d17e2ac 1-24
+.github/scripts/stamp-installer-version.sh
+  h_b34c679d17e2ac 1-26
+.github/workflows/_build.yml
+  h_b34c679d17e2ac 278-287,533-542
+.github/workflows/_docs-deploy.yml
+  h_b34c679d17e2ac 38-41
+.github/workflows/docs-tos.yml
+  h_b34c679d17e2ac 9-18,51-54,123,175-218,220
+.github/workflows/docs.yml
+  h_b34c679d17e2ac 17-26
+.github/workflows/hermes-plugin-tests.yml
+  h_b34c679d17e2ac 1-162
+.github/workflows/release-tos.yml
+  h_b34c679d17e2ac 16,83,86-92,101,114-119,174-176,185-186,188,193-195,202-206,208,213-214
+.github/workflows/star-stats.yml
+  h_b34c679d17e2ac 1-41
+CONTRIBUTING.md
+  h_b34c679d17e2ac 3-5
+README.md
+  h_b34c679d17e2ac 5-6,10,12,14,125-150,153,156,158-169,188-243
+agent-plugins/README.md
+  h_b34c679d17e2ac 18,28-29,37,59,62-63
+agent-plugins/plugin.json
+  h_b34c679d17e2ac 4
+agent-plugins/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 17,33-42
+agent-plugins/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 70-74
+agent-plugins/skills/openviking-memory/references/optional-tools.md
+  h_b34c679d17e2ac 37-41
+agent-plugins/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+agent-plugins/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 33
+agent-plugins/skills/ov-kanban/README.md
+  h_b34c679d17e2ac 1-6,8-11,13-14,16-21,23-30,33-34,37-74
+agent-plugins/skills/ov-kanban/SKILL.md
+  h_b34c679d17e2ac 1-180
+agent-plugins/skills/ov-kanban/references/loop.sh
+  h_b34c679d17e2ac 1-56
+agent-plugins/skills/ov-kanban/references/task-template.md
+  h_b34c679d17e2ac 1-32
+bot/vikingbot/cli/commands.py
+  h_b34c679d17e2ac 15-69,76-81,89-91,139-140,144-162,173-187,961-963,966-968
+crates/ov_cli/src/base_client.rs
+  h_b34c679d17e2ac 127-129,131,135-140,146-151,687-705
+crates/ov_cli/src/client.rs
+  h_b34c679d17e2ac 37-39,45,51-53,393,397-399,486,496-498,502,572-574,591,595-600,630-632,634,650,652-660,679-685,689-691,761,777,788,799,805,817,898,918-920,2094,2131,2163-2176,2199-2209,2341-2343,2364-2366,2379-2381,2398-2400,2547-2549,2551,2568-2571,2582-2585,2601-2603
+crates/ov_cli/src/commands/compile.rs
+  h_b34c679d17e2ac 6-8,19-21,31,52,65-72,102-108,115,122-130
+crates/ov_cli/src/commands/content.rs
+  h_b34c679d17e2ac 52,66,93,101
+crates/ov_cli/src/commands/filesystem.rs
+  h_b34c679d17e2ac 16,49,147-156,183-185,207-209,230-232,234,251-253,255,311,321,382-398,411,478,482-496,545-548,646-653,689-705,735,737,740,743,746,750,851,854-855,916,920,1047,1183-1184,1200-1201,1239-1253,1271-1293,1332-1336,1339
+crates/ov_cli/src/commands/resources.rs
+  h_b34c679d17e2ac 27,54
+crates/ov_cli/src/commands/search.rs
+  h_b34c679d17e2ac 133,151,168,179,188,199,434,607-634,640,943-944,952
+crates/ov_cli/src/config.rs
+  h_b34c679d17e2ac 269,273,302,400-411,419-427
+crates/ov_cli/src/config_agent.rs
+  h_b34c679d17e2ac 212-217,684-688
+crates/ov_cli/src/config_wizard/store.rs
+  h_b34c679d17e2ac 12,99-102,105-106,220-225,276-280,315-323,325-327,867-924
+crates/ov_cli/src/config_wizard/wizard.rs
+  h_b34c679d17e2ac 64-70,73-85,641,645,648-650,1534-1537,1539,6121,6144,6148-6149,6588,6592-6603,6607-6608,6610-6611,6614-6667,6669-6670,6708-6711,6714-6715,6718,6753-6761,6763-6764,6768-6769,6771-6780,6783,6797,6802-6803,6806-6807,6810-6811,6834,6837,6841,6844,6848,6851-6858
+crates/ov_cli/src/handlers.rs
+  h_b34c679d17e2ac 36,127,1404,1428,1459,1471,1498,1533-1535,1553,1564,1574,1583-1587,1589-1591,1620-1622,1631,1642,1674-1676,1698-1706,1736-1747,1755-1757,1775-1777,1779,1798-1809,1833-1844,1850-1852,1854,1868-1873,1879
+crates/ov_cli/src/help_ui.rs
+  h_b34c679d17e2ac 584-585,610-611,614,733,877,887-890,2961-2962
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 33-61,385,487,491,497-499,529-559,602-609,620,629-659,663-665,705,720-722,861-862,864-866,960-967,981-988,1048-1055,1290-1291,1301,1378,1382,1396,1398,1402,1406,1496,3381,3438,3670-3672,3687-3689,3705-3707,3709,3721-3723,3725,3737-3741,3862,3881,3896,3901,3916,3930,3938,3949,3955,3965,4363-4384,4416-4419,4430-4434,4446-4448,4456-4458,4467-4470,4476-4479,4994-5040,6003,6005,6016,6023
+crates/ov_cli/src/openviking_assets.rs
+  h_b34c679d17e2ac 898
+crates/ov_cli/src/output.rs
+  h_b34c679d17e2ac 47-52,54-57,63-71,73,1247-1290
+crates/ov_cli/src/theme.rs
+  h_b34c679d17e2ac 36-42,45-49,74-78,81-82,194-210,383-385,478-521
+crates/ov_cli/src/tui/tree.rs
+  h_b34c679d17e2ac 24-28,153-155,169,344-374
+crates/ov_cli/tests/config_override.rs
+  h_b34c679d17e2ac 1-102
+crates/ragfs-python/src/lib.rs
+  h_b34c679d17e2ac 2332,2337,2349,2369
+crates/ragfs/Cargo.toml
+  h_b34c679d17e2ac 115
+crates/ragfs/src/cache/wrapper.rs
+  h_b34c679d17e2ac 132,185-187,1275,1289,1303
+crates/ragfs/src/cache_runtime/memory.rs
+  h_b34c679d17e2ac 3,234-243
+crates/ragfs/src/core/encryption_wrapper.rs
+  h_b34c679d17e2ac 538,551
+crates/ragfs/src/core/filesystem.rs
+  h_b34c679d17e2ac 598,611,625,653-662,711,722,763-770,781,1143,1272,1281-1312,1408,1427
+crates/ragfs/src/core/mountable.rs
+  h_b34c679d17e2ac 1100-1101,1152,1172,1192,1408,2281-2290,2311,2332-2341
+crates/ragfs/src/core/multibackend_wrapper.rs
+  h_b34c679d17e2ac 1618-1627,1746-1755,1803,1817,1828-1837,1842,1926-1928
+crates/ragfs/src/core/multibackend_wrapper/tests.rs
+  h_b34c679d17e2ac 155-164,224,240,254,275
+crates/ragfs/src/core/stats_wrapper.rs
+  h_b34c679d17e2ac 196,209
+crates/ragfs/src/git/enumerate.rs
+  h_b34c679d17e2ac 110,229
+crates/ragfs/src/git/service.rs
+  h_b34c679d17e2ac 265-268,294,555-565,650,674,2002,2342-2412,6212
+crates/ragfs/src/lock/wrapper.rs
+  h_b34c679d17e2ac 356,367
+crates/ragfs/src/multibackend/admin.rs
+  h_b34c679d17e2ac 42
+crates/ragfs/src/plugins/localfs/mod.rs
+  h_b34c679d17e2ac 10,123,412,414,433,481,490,566,1155,1169,1243-1244,1246,1348,1373-1374,1399,1417,1438,1468,1521,1553,1579,1600-1631,1636-1637,1657,1682,1709,1746,1776,1796,1814,1836
+crates/ragfs/src/plugins/queuefs/backend.rs
+  h_b34c679d17e2ac 7,25-26,36,64-68,73,77-78,112,115-118,121-124,128-133,1094-1154
+crates/ragfs/src/plugins/queuefs/mod.rs
+  h_b34c679d17e2ac 82-92,388,392,405,423-425,428-429,919-930,973,978
+crates/ragfs/src/plugins/s3fs/mod.rs
+  h_b34c679d17e2ac 1035,1049,1066,1073-1075
+crates/ragfs/src/shape/probe.rs
+  h_b34c679d17e2ac 118-120
+docs/.vitepress/LANGUAGE.md
+  h_b34c679d17e2ac 1-31
+docs/.vitepress/brand-e.md
+  h_b34c679d17e2ac 1-39
+docs/.vitepress/config.ts
+  h_b34c679d17e2ac 4-7,12-21,42-43,55,133-137,139-142,198-201,205-217,220-223,237-242,274-276,282,292,297,307,309
+docs/.vitepress/deployment-context.md
+  h_b34c679d17e2ac 1-74
+docs/.vitepress/docs-navigation.ts
+  h_b34c679d17e2ac 5,7,12,15-16,19-28,33-34,37-41,43-61,63
+docs/.vitepress/social-preview.md
+  h_b34c679d17e2ac 1-15
+docs/.vitepress/theme/OpenVikingSearch.vue
+  h_b34c679d17e2ac 25,216,477-480,485,492
+docs/.vitepress/theme/components/AgentPrompt.vue
+  h_b34c679d17e2ac 1-109
+docs/.vitepress/theme/components/ArchitectureDiagram.vue
+  h_b34c679d17e2ac 1-145
+docs/.vitepress/theme/components/DocBreadcrumb.vue
+  h_b34c679d17e2ac 4,7
+docs/.vitepress/theme/components/DocsHome.vue
+  h_b34c679d17e2ac 20-21,56,80,104,116-120,122,133,138,143,146
+docs/.vitepress/theme/components/EncryptionFlowDiagram.vue
+  h_b34c679d17e2ac 1-206
+docs/.vitepress/theme/components/FlowDiagram.vue
+  h_b34c679d17e2ac 1-135
+docs/.vitepress/theme/components/IngestionPipelineDiagram.vue
+  h_b34c679d17e2ac 1-22
+docs/.vitepress/theme/components/KeyHierarchyDiagram.vue
+  h_b34c679d17e2ac 1-18
+docs/.vitepress/theme/components/LocaleSwitch.vue
+  h_b34c679d17e2ac 2-4,6-9,11,13-15,17-24,26-44,49-60
+docs/.vitepress/theme/components/MemoryExtractionDiagram.vue
+  h_b34c679d17e2ac 1-19
+docs/.vitepress/theme/components/NavScreenFooter.vue
+  h_b34c679d17e2ac 1-14,16-21,23-45
+docs/.vitepress/theme/components/PathLockDiagram.vue
+  h_b34c679d17e2ac 1-19
+docs/.vitepress/theme/components/SidebarFooter.vue
+  h_b34c679d17e2ac 1-12
+docs/.vitepress/theme/components/SidebarGroups.vue
+  h_b34c679d17e2ac 1-76
+docs/.vitepress/theme/components/SiteSwitcher.vue
+  h_b34c679d17e2ac 1-135
+docs/.vitepress/theme/components/StorageLayersDiagram.vue
+  h_b34c679d17e2ac 1-85
+docs/.vitepress/theme/components/ThemeToggle.vue
+  h_b34c679d17e2ac 1-16
+docs/.vitepress/theme/components/VikingBotOverviewDiagram.vue
+  h_b34c679d17e2ac 1-118
+docs/.vitepress/theme/custom.css
+  h_b34c679d17e2ac 9-12,15-17,70-73,433-441
+docs/.vitepress/theme/docs-catalog.data.ts
+  h_b34c679d17e2ac 25-26
+docs/.vitepress/theme/docs-catalog.test.ts
+  h_b34c679d17e2ac 2,6-7,10-15,18-20,23-30,32,35-96,99-103
+docs/.vitepress/theme/docs-sections.ts
+  h_b34c679d17e2ac 1-237,239-249
+docs/.vitepress/theme/fonts.css
+  h_b34c679d17e2ac 1-11
+docs/.vitepress/theme/fonts/reading/README.md
+  h_b34c679d17e2ac 1-7
+docs/.vitepress/theme/fonts/reading/maple-LICENSE.txt
+  h_b34c679d17e2ac 1-93
+docs/.vitepress/theme/fonts/reading/source-serif-LICENSE.md
+  h_b34c679d17e2ac 1-93
+docs/.vitepress/theme/fonts/reading/sources.json
+  h_b34c679d17e2ac 1-20
+docs/.vitepress/theme/fonts/reading/subsets.css
+  h_b34c679d17e2ac 1-253
+docs/.vitepress/theme/fonts/tosaki/IPA-LICENSE.txt
+  h_b34c679d17e2ac 1-116
+docs/.vitepress/theme/fonts/tosaki/README.md
+  h_b34c679d17e2ac 1-23
+docs/.vitepress/theme/fonts/tosaki/ibm-plex-LICENSE.txt
+  h_b34c679d17e2ac 1-93
+docs/.vitepress/theme/fonts/tosaki/noto-serif-LICENSE.txt
+  h_b34c679d17e2ac 1-92
+docs/.vitepress/theme/fonts/tosaki/sources.json
+  h_b34c679d17e2ac 1-1650
+docs/.vitepress/theme/fonts/tosaki/typography.css
+  h_b34c679d17e2ac 1-4099
+docs/.vitepress/theme/fonts/tosaki/xihei-other-LICENSES.txt
+  h_b34c679d17e2ac 1-47
+docs/.vitepress/theme/header-language.css
+  h_b34c679d17e2ac 1-30
+docs/.vitepress/theme/header-language.js
+  h_b34c679d17e2ac 1-50
+docs/.vitepress/theme/header.css
+  h_b34c679d17e2ac 1-54
+docs/.vitepress/theme/index.ts
+  h_b34c679d17e2ac 1-2,4,6-15,17,26,53-54,77-79,120-121,141,158,164,195,203,225,265,267-268,272-279,283-292,300
+docs/.vitepress/theme/language-entry.d.ts
+  h_b34c679d17e2ac 1-2
+docs/.vitepress/theme/language-entry.js
+  h_b34c679d17e2ac 1-11
+docs/.vitepress/theme/language-preference.contract.d.ts
+  h_b34c679d17e2ac 1-2
+docs/.vitepress/theme/language-preference.contract.js
+  h_b34c679d17e2ac 1-155
+docs/.vitepress/theme/language-preference.d.ts
+  h_b34c679d17e2ac 1-16
+docs/.vitepress/theme/language-preference.js
+  h_b34c679d17e2ac 1-125
+docs/.vitepress/theme/language-preference.test.ts
+  h_b34c679d17e2ac 1-3
+docs/.vitepress/theme/language-routing.test.ts
+  h_b34c679d17e2ac 1-40
+docs/.vitepress/theme/language-routing.ts
+  h_b34c679d17e2ac 1-7
+docs/.vitepress/theme/language-state.ts
+  h_b34c679d17e2ac 1-4
+docs/.vitepress/theme/locale-pages.data.ts
+  h_b34c679d17e2ac 1-14
+docs/.vitepress/theme/reading.css
+  h_b34c679d17e2ac 1,5,7-8,12-17,19-29,31-38,45-46,88,91-109
+docs/.vitepress/theme/vikingbot-widget.ts
+  h_b34c679d17e2ac 37,132,138-139
+docs/en/about/01-about-us.md
+  h_b34c679d17e2ac 5-7,13,32,34,46,56-59,61,63,65-73,75,77,79,81,83,85,87,93,95,99,101,103,107,111-114,116,120,122
+docs/en/about/02-changelog.md
+  h_b34c679d17e2ac 6-7,24
+docs/en/agent-integrations/01-overview.md
+  h_b34c679d17e2ac 1,38
+docs/en/agent-integrations/02-claude-code.md
+  h_b34c679d17e2ac 1,9,12-13,16,20,44,69,100,122
+docs/en/agent-integrations/03-openclaw.md
+  h_b34c679d17e2ac 1,32,45,56,77,80,83,121-140,159,183
+docs/en/agent-integrations/04-codex.md
+  h_b34c679d17e2ac 1,3,9,12-13,16,26,38,40,67-78,129-130
+docs/en/agent-integrations/05-hermes.md
+  h_b34c679d17e2ac 1,32-34
+docs/en/agent-integrations/06-mcp-clients.md
+  h_b34c679d17e2ac 3,7,22,40,42-46,74,76,89
+docs/en/agent-integrations/07-langchain-langgraph.md
+  h_b34c679d17e2ac 1,224,233-236
+docs/en/agent-integrations/08-community-plugins.md
+  h_b34c679d17e2ac 23-24,39,43-77,88-89,93-94
+docs/en/agent-integrations/09-log-ingestion.md
+  h_b34c679d17e2ac 3,5,101,126,132
+docs/en/agent-integrations/10-opencode.md
+  h_b34c679d17e2ac 1,11,32,35-36,39,58-63,155-158,170
+docs/en/agent-integrations/11-pi.md
+  h_b34c679d17e2ac 1,9,13-15,19,31,34-35
+docs/en/agent-integrations/12-cursor.md
+  h_b34c679d17e2ac 1,9,12-13,23,31,47,50
+docs/en/agent-integrations/13-trae.md
+  h_b34c679d17e2ac 1,9,12-13,16,20,32,34,41-42,50,61,64,78
+docs/en/agent-integrations/15-agent-plugins.md
+  h_b34c679d17e2ac 39,60-61,70,76,78,81-82
+docs/en/agent-integrations/16-capability-reference.md
+  h_b34c679d17e2ac 1,3,5,7-9,11,13,15,17,19,21,23,25,27,29-61,63,65-67,69,71,73,75,77,79-86,88,90-96,98,100-103,105,107-109,111-117,119,121,123,125,127-129,131-133,135-141,143,145,147,149,151,153,155-157,159,161,163-308,310-331,333-367,369,371,373-387,389-408,410,412,414-418,420,422,424,426-431,433,435,437,439-451,453,455,457,459,461,463-477,479,481-500,502-505,507,509-511,513,515,517,519,521,523,525-528,530,532,534-545,547,549,551,553,555,557,559-563,565,567,569,571-575,577,579,581-584,586,588,590,592-595,597,599,601-604,606,608,610,612-616,618,620,622-625,627,629,631,633-638,640,642-654,656,658-726,734,741,743,745,747-749,751,753,755,757-758,760,762-764,766-790,794-799
+docs/en/agent-integrations/17-dsh.md
+  h_b34c679d17e2ac 1,3,9,12-13,16,18,39,51,59,76-78,83-88,91,105,107-109,111
+docs/en/agent-integrations/18-plugin-development.md
+  h_b34c679d17e2ac 1
+docs/en/agent-integrations/19-recall-tuning.md
+  h_b34c679d17e2ac 1-42
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 1,71,96,99,105,110,120-121,167,215,220,227,241,306-307,358,402,560,562
+docs/en/api/02-resources.md
+  h_b34c679d17e2ac 3,52,66,70,82-87,92,115-116,126,137,139,185-186,197,201-203,206-214,218,231,246,302,333-343,413,426,518,521,523,533,581,595,604-609,617,624-626
+docs/en/api/03-filesystem.md
+  h_b34c679d17e2ac 7-8,25-28,36,39,76,79,85-86,88,91,97-102,108-113,117,120,123-127,151-153,156,158,160,175,191-194,196,202,205,208,211-219,222,228-234,240-244,248,251,254-258,273-274,277,279,300,317,361-362,380,398,402,466-470,473,528,568-569,580,591,598-599,603,649,660,672,782,827,839
+docs/en/api/04-skills.md
+  h_b34c679d17e2ac 91,164,414,449-457,523-526,576-579,619,675-678,742-745,747-750,813-816,843,857,937,939,956
+docs/en/api/05-sessions.md
+  h_b34c679d17e2ac 47,59,102-103,106,110,114,166,205,207-208,210,255,306,308-309,312,318,693,695,698,715,733,735-736,738,791,794-795,797-798,845-846,848,930,963-964,967,997,1029-1030,1138-1139,1142,1149,1163,1206,1216,1236,1265,1267-1268,1271,1324,1334,1337,1341,1363,1394-1395,1397-1398,1402-1408,1421,1429-1434,1481,1510,1550,1559-1560,1566-1567,1574-1575,1619,1621,1623-1625,1627-1631,1633-1638,1640-1642,1646-1680,1710,1716,1727,1729,1735-1736
+docs/en/api/06-retrieval.md
+  h_b34c679d17e2ac 3,9-13,21,26,33,37,42,45,56,59,62,69,108,112-113,297,300,303,306,309,312,315,318,321,324,327,369,373,379,383,396,400,403,410,415-425,442,445,450,461-473,491,513,527,556,569,572,575,577-585,588,591,594,607,643,663,696,704,744-746,833,929,932,935,938,941,944,953-964,966-979,1053,1089,1092,1095-1096,1099,1102,1111-1118,1126-1143,1153,1171-1172
+docs/en/api/07-system.md
+  h_b34c679d17e2ac 11,22,140,150,153,174,177,212,228,250,311-315,333,337,368,370,415
+docs/en/api/08-admin.md
+  h_b34c679d17e2ac 41,50,110,173-180,245-246,302-303,314,328,431-436,458-466,471-511,516-523,530-531,535-822,875,887,891-893,913,917,924-946,950-952,1007,1024,1039,1063,1152,1174,1252,1274,1290,1311,1354,1369,1386,1408,1419-1420,1512,1534,1612,1632,1694,1707,1717,1722,1728,1742-1743,1757,1790,1802,1814,1880,1915,1919,1923-1924,1936-1937
+docs/en/api/09-metrics.md
+  h_b34c679d17e2ac 5,17,74
+docs/en/api/10-privacy.md
+  h_b34c679d17e2ac 5-9,87,95,113,121,139,163,177,227,245,253,273,289,333,345-346,349-350,353,356-358,360,364-366
+docs/en/api/11-snapshot.md
+  h_b34c679d17e2ac 3,5,23,37,68,153,243,325,406,418-429,460,462-464,534,540,590,636,727
+docs/en/api/12-acl.md
+  h_b34c679d17e2ac 3,5,7-10,13,15,17-22,25,27,29,34-35,39-43,45,47,51-54,58,60,62,64,69-70,73,75-77,80,83-94
+docs/en/api/12-content.md
+  h_b34c679d17e2ac 9,57,66,121,130,147,153,194,203,223,233,298-299,305,389,393-418,438,442,465,477-508,540,546,641,655,657-660,662,681-682,686,688,690,692,715,725,739,760,765,774-775,778,781,785,799,807,828
+docs/en/api/14-ovpack.md
+  h_b34c679d17e2ac 76-84,126,143,204,217-226,236,251,312,316-317
+docs/en/api/15-watches.md
+  h_b34c679d17e2ac 9,13,18,68-69,209,216
+docs/en/api/16-memory.md
+  h_b34c679d17e2ac 9-21,25,27,34
+docs/en/api/17-tasks.md
+  h_b34c679d17e2ac 53,55,57-58,61,65,72,75,153-154,159-160,212-213,236,320-325,345,347-348,350,357
+docs/en/api/18-observer.md
+  h_b34c679d17e2ac 7,40-42,77,87,91,96-98,105,109,116-118,152-161,165-168,175,203-205,239-240,286,296,337,388,398,425-427,490-495,498
+docs/en/api/19-agent-evolution.md
+  h_b34c679d17e2ac 3,57,67,107
+docs/en/api/20-webdav.md
+  h_b34c679d17e2ac 7,15,46
+docs/en/api/22-openviking-assets.md
+  h_b34c679d17e2ac 1,107,117,128
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 43-44,55,175,181
+docs/en/api/24-vikingbot.md
+  h_b34c679d17e2ac 83-84
+docs/en/api/99-api-doc-writing-guide.md
+  h_b34c679d17e2ac 1,14-22,44,46,108-111,136,138,140-142,165-166,185,196,203,242,245,252-254,258-273,281
+docs/en/concepts/00-overview.md
+  h_b34c679d17e2ac 1-37
+docs/en/concepts/01-architecture.md
+  h_b34c679d17e2ac 7-29,31-32,36-37,40,42-43,45-48,52,69-70,77,80-84,89,93-94,100,104,107,117-119,125-126,139,142,155
+docs/en/concepts/02-context-types.md
+  h_b34c679d17e2ac 3,9-36,45,61-62,106,108,112-114,117,125,129-131,142,151,164,170-171,175,181,187-192,195,199-202,212-217
+docs/en/concepts/03-context-layers.md
+  h_b34c679d17e2ac 3,53,57,149
+docs/en/concepts/04-viking-uri.md
+  h_b34c679d17e2ac 21,45,58,65,90-93,117,167,187,205-206,210,240,256,264,293-294,319-320,359,362,365,368,377-378,397,400,403-406,408-409,414
+docs/en/concepts/05-storage.md
+  h_b34c679d17e2ac 7,14,18-21,74,120-121,140,145,152
+docs/en/concepts/06-extraction.md
+  h_b34c679d17e2ac 3,7,9,24-26,28,30,32-39,41,43,45,49,51,53-55,57,65-74,84,101-104,130,134-135,140,152,155,166
+docs/en/concepts/07-retrieval.md
+  h_b34c679d17e2ac 3,8,15-18,21-22,25-26,29,35-40,48,80,82,84,86-90,92,94,98,100-104,106,110-111,119
+docs/en/concepts/08-session.md
+  h_b34c679d17e2ac 13-15,28,72-76,107-111,149-150,153-155,157,159,163,172,179-180,187-188
+docs/en/concepts/09-transaction.md
+  h_b34c679d17e2ac 3,7,15-17,21,25,27,29-32,34,36,42,77-78,89,98,129,153,155-166,169,171-176,180,207,209,239,369,377,379,455
+docs/en/concepts/10-encryption.md
+  h_b34c679d17e2ac 3-8,14,16,18,22,25-26,32,49-50,118-119,122-127,131-133,139-145,148,155-160
+docs/en/concepts/11-multi-tenant.md
+  h_b34c679d17e2ac 3,43,60,82-83,113,115,243,245,247-249,251,258-259,265,272,311
+docs/en/concepts/12-metrics.md
+  h_b34c679d17e2ac 3,97,127,135,140,171,173-184,228-229,239-240,256-257,261,309-310,408,422-423,471-472,495-496
+docs/en/concepts/13-privacy.md
+  h_b34c679d17e2ac 7,27,48,54,79,115-116,123-124,134-139,147
+docs/en/concepts/14-multi-write-storage.md
+  h_b34c679d17e2ac 3,41,43,116,119,123
+docs/en/concepts/15-acl.md
+  h_b34c679d17e2ac 16,50,70-79,83,87,102,104-106,108,128-130,135-137,145-146
+docs/en/concepts/15-vikingbot.md
+  h_b34c679d17e2ac 1,17,99
+docs/en/concepts/16-queue-lifecycle.md
+  h_b34c679d17e2ac 3-6,9,25,33,37,74,80,98
+docs/en/configuration/01-server.md
+  h_b34c679d17e2ac 1,22-23,51,149,156,235-242,272,362,370-371
+docs/en/configuration/02-client.md
+  h_b34c679d17e2ac 1,5,7,50,135,151,153,155,167,216,224-225,234,240,272,282,285,319,332,358
+docs/en/context-compilation/01-overview.md
+  h_b34c679d17e2ac 3,7,9-11,13,15,19-20,31-38,41,52-55,58-61,65
+docs/en/context-compilation/02-llm-wiki.md
+  h_b34c679d17e2ac 3,16,20-21,28,44,47,54
+docs/en/context-compilation/03-knowledge-graph.md
+  h_b34c679d17e2ac 3,21-22,26,33,67,76-77,85
+docs/en/context-compilation/04-daily-report.md
+  h_b34c679d17e2ac 7-8,14,21,23,35,45
+docs/en/context-compilation/05-knowledge-distillation.md
+  h_b34c679d17e2ac 3,5,7,23-24,28,35,37,71
+docs/en/context-compilation/06-memory-consolidation.md
+  h_b34c679d17e2ac 1,3,5,7,9,11-14,16,18,20,22-27,30,32-35,38,40-42,45,47,49,51-56,58,60-66,68,70,72-78,80,82,84,87-97,100,102-104,106,108-109
+docs/en/faq/faq.md
+  h_b34c679d17e2ac 7,9,11-16,20-30,34,36-40,42,79,86,97,117-121,150,152-153,173,175-176,180,186,194,197,216-218,223,229,247,251,255,261,266,274,277,280,283,290-294,298,300,302,312-313,315,325-326,332-333,336-338,351,361,372,374,381,384,390
+docs/en/getting-started/01-introduction.md
+  h_b34c679d17e2ac 1,3,5,9-14,16,18,20,22-24,26,28,30-34,36-38,40,44,46
+docs/en/getting-started/02-quickstart.md
+  h_b34c679d17e2ac 1,55,67,70,72-73,79,87-89,92,103-106
+docs/en/getting-started/04-setup-for-agent.md
+  h_b34c679d17e2ac 1,12-14,44-47,87,89,136,144,153,199-200,202,214-215,230-231,261,264-266,273,277,285,325,385,399
+docs/en/getting-started/05-cli-setup.md
+  h_b34c679d17e2ac 1,3,5,7,9,11,13-14,16,18,20,22,24,26-29,31,33-39,41,43,46,48,51,53,55,62,64,66,68-72,74,76,78,80,82,85,88,91,94,97,100,102-104,106,108-115,117,119,122-123,126,128,130,132,134-135,137,139,141,143,145,147-151,153,156-158,161,163,165,168,171,173-177,179,185,187,189,191,193-195,197,199-212,214,216,218-220,222,225-227,230,232,234,236,238-240,242,244,246-249,251,253,255,257,259,261,263,265,267,270,273,275,277,279,281,283,285-286
+docs/en/getting-started/06-evaluate.md
+  h_b34c679d17e2ac 1-50
+docs/en/guides/00-overview.md
+  h_b34c679d17e2ac 1-23
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 1-3,7-10,61,68,70-96,108,120-141,157-158,366,507,509,529-531,625-636,639,680,714,768-769,771,802,809,811,817-819,860-861,875,911,942,980,989,993,1032-1051,1129-1143,1156,1168,1174,1179,1188,1197,1446-1451,1623,1740,1744-1798,1825-1826,1914-1952,1994,1996-2004,2049,2063,2154-2156,2195,2220-2224,2280
+docs/en/guides/02-volcengine-purchase-guide.md
+  h_b34c679d17e2ac 3,91,100-101,109,126,137,142,148,157,167,173,175-178,180,182-184,187-188,203-204,208,221,233,246,266-267,271-274,276
+docs/en/guides/03-deployment.md
+  h_b34c679d17e2ac 3-4,65,67,107,238-240,248,331,335-336,406-407,411-413,416-419,428,437,440
+docs/en/guides/04-authentication.md
+  h_b34c679d17e2ac 5,9-15,25,77,90,119,122,177,180,335,504,539,545,562-563,586,609,615,690,693,712,723,727,760,769,787
+docs/en/guides/05-observability.md
+  h_b34c679d17e2ac 3,9,19,26,31,72,84,104,108,180,376,480,510,555
+docs/en/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 1,3,9,13,15,22-23,30,35,41,106,111,115,125,129-131,135,137,145-148,168-202,208-210,212,256,258,265-266
+docs/en/guides/07-operation-telemetry.md
+  h_b34c679d17e2ac 11,53,69-75,79,154,281,287,292-294,345-347,353,355,357-368,376-377
+docs/en/guides/08-encryption.md
+  h_b34c679d17e2ac 7,9-12,39,62,65,67,69,72,77,82,85,92,96-97,105,109,149,200,216,219-225,240,262,265-277,281,286-287,362,380,382,384,415,455,457,459,468-469
+docs/en/guides/09-ovpack.md
+  h_b34c679d17e2ac 4,23,30,80,137,206-207,209,212-214,216,222,225,229-230,232,238,242,267,311,322,325,328,334,342,393,602,624
+docs/en/guides/10-prompt-guide.md
+  h_b34c679d17e2ac 1,154,161-175,178,193,203,254,266,283,289,301,306-310,316,322,328,343-352,377,391-395,401,552-556,592-597,646-647,655,658-659,684,691-692
+docs/en/guides/11-grafana-prometheus.md
+  h_b34c679d17e2ac 3,50,68,70,75-76,104,108-109,112,143,184,200,207,225-227,275,319,321,351,363-364,456
+docs/en/guides/11-oauth.md
+  h_b34c679d17e2ac 3,7-8,33,39,94-95,146,148-149,189,203-204,206-249,289,295,379-380
+docs/en/guides/12-public-access.md
+  h_b34c679d17e2ac 99-100,107,129-130,133-134,142-144,168,172,179-183,189,205
+docs/en/guides/13-multi-write-storage.md
+  h_b34c679d17e2ac 3,16,97,101-102,124,131,155,173,207,374,377,380,391,406
+docs/en/guides/14-ragfs-cache.md
+  h_b34c679d17e2ac 63-67,91,168,336-338
+docs/en/guides/15-snapshot.md
+  h_b34c679d17e2ac 3,129,154,166,172,180,182-183,192,202-203,208-209,221-223,225,228-232,234,236-237,257,261,264-265,271,315,352
+docs/en/guides/16-cuvs.md
+  h_b34c679d17e2ac 9,121,124,145,188-191,350-351
+docs/en/guides/17-vikingbot.md
+  h_b34c679d17e2ac 3-4,24,43-44,101-102,122-123,197-199,223,266-279
+docs/en/guides/18-openviking-assets.md
+  h_b34c679d17e2ac 121-123,171,196,250-251,264-265,345-347,370
+docs/en/guides/19-deployment-checklist.md
+  h_b34c679d17e2ac 1-89
+docs/en/guides/20-private-deployment.md
+  h_b34c679d17e2ac 1-3,5,7,9,11,13,15,17,19-24,26,28-30,32-36,39,41,43-45,47,49-58,61,63,65,67,69-75,78,80-87,89,91,93-97,99,101,103-106,108,110,112-115,117,119,121-124,126,128-130,133,135-138,140,142-144,146-150,152,154,156-163,165,167,169-202,204,206-210,212,214-216,218-220,222-228,230-231,233,235,237,239-243,245-247,249,251,253-255,257,259,261,263-268,270,272,274
+docs/en/guides/21-private-operations.md
+  h_b34c679d17e2ac 1-76
+docs/en/reference/01-overview.md
+  h_b34c679d17e2ac 1-15
+docs/en/workflows/01-overview.md
+  h_b34c679d17e2ac 1-25
+docs/images/agents/en/agent-cli.md
+  h_b34c679d17e2ac 1,6,18-19,22
+docs/images/agents/en/api.md
+  h_b34c679d17e2ac 3,59,86-87
+docs/images/agents/en/claude-code.md
+  h_b34c679d17e2ac 8-9,12,36,40
+docs/images/agents/en/cli.md
+  h_b34c679d17e2ac 23-24
+docs/images/agents/en/codex.md
+  h_b34c679d17e2ac 6-7,10,18,30-32,40-41
+docs/images/agents/en/cursor.md
+  h_b34c679d17e2ac 6-7,10
+docs/images/agents/en/deepseek-harness.md
+  h_b34c679d17e2ac 6-7,10,12,27,32
+docs/images/agents/en/deerflow-memory-manager.md
+  h_b34c679d17e2ac 3-4,65
+docs/images/agents/en/hermes.md
+  h_b34c679d17e2ac 9-10,40,49-50,59-62,71-72,86,98
+docs/images/agents/en/mcp.md
+  h_b34c679d17e2ac 18
+docs/images/agents/en/openclaw.md
+  h_b34c679d17e2ac 9,12,15-21
+docs/images/agents/en/opencode.md
+  h_b34c679d17e2ac 6-7,10,20,26
+docs/images/agents/en/sdk.md
+  h_b34c679d17e2ac 1,3,6,11,29,33,37,46,61-62
+docs/images/agents/en/trae.md
+  h_b34c679d17e2ac 3,6-7,10,20,32-34
+docs/images/agents/en/workbuddy.md
+  h_b34c679d17e2ac 18
+docs/images/agents/skills/sales-opportunity-order-builder.md
+  h_b34c679d17e2ac 36,70-71,109,116,146,199,221-222,227
+docs/images/agents/zh/agent-cli.md
+  h_b34c679d17e2ac 2,7,19-20,23
+docs/images/agents/zh/api.md
+  h_b34c679d17e2ac 3,59,86-87
+docs/images/agents/zh/claude-code.md
+  h_b34c679d17e2ac 8-9,12,36,40
+docs/images/agents/zh/cli.md
+  h_b34c679d17e2ac 25-26
+docs/images/agents/zh/codex.md
+  h_b34c679d17e2ac 6-7,10,18,30-32,40-41
+docs/images/agents/zh/cursor.md
+  h_b34c679d17e2ac 6-7,10
+docs/images/agents/zh/deepseek-harness.md
+  h_b34c679d17e2ac 6-7,10,12,27,32
+docs/images/agents/zh/deerflow-memory-manager.md
+  h_b34c679d17e2ac 3-4,65
+docs/images/agents/zh/hermes.md
+  h_b34c679d17e2ac 9,39,48-49,58-61,70,84,96
+docs/images/agents/zh/mcp.md
+  h_b34c679d17e2ac 18
+docs/images/agents/zh/openclaw.md
+  h_b34c679d17e2ac 9,12,15-21
+docs/images/agents/zh/opencode.md
+  h_b34c679d17e2ac 6-7,10,20,26
+docs/images/agents/zh/sdk.md
+  h_b34c679d17e2ac 1-2,5,9,27,31,35,43,58-59
+docs/images/agents/zh/trae.md
+  h_b34c679d17e2ac 3,6-7,10,20,32-34
+docs/images/agents/zh/workbuddy.md
+  h_b34c679d17e2ac 18
+docs/images/brand-lockup-dark.svg
+  h_b34c679d17e2ac 1
+docs/images/brand-lockup-light.svg
+  h_b34c679d17e2ac 1
+docs/images/favicon.svg
+  h_b34c679d17e2ac 1
+docs/images/font-licenses.html
+  h_b34c679d17e2ac 1
+docs/images/integrations/README.md
+  h_b34c679d17e2ac 5-11
+docs/images/integrations/claude-code.svg
+  h_b34c679d17e2ac 1
+docs/images/integrations/codex.svg
+  h_b34c679d17e2ac 1
+docs/images/integrations/cursor.svg
+  h_b34c679d17e2ac 1
+docs/images/integrations/opencode.svg
+  h_b34c679d17e2ac 1
+docs/images/integrations/trae.svg
+  h_b34c679d17e2ac 1
+docs/images/nav-logo-dark.svg
+  h_b34c679d17e2ac 1
+docs/images/nav-logo-light.svg
+  h_b34c679d17e2ac 1
+docs/package-lock.json
+  h_b34c679d17e2ac 14,1871-1877
+docs/package.json
+  h_b34c679d17e2ac 16
+docs/repository/CONTRIBUTING_CN.md
+  h_b34c679d17e2ac 3,178
+docs/repository/CONTRIBUTING_JA.md
+  h_b34c679d17e2ac 3,192
+docs/repository/README_CN.md
+  h_b34c679d17e2ac 5-6,10,12,14,30-33,50-51,55,111,116-117,125-149,152,155,157-168,183,187-238,244,248,252,256,260,264,272,276,280,284,288,292,304,307,338,348,356,402,411,417-419
+docs/repository/README_JA.md
+  h_b34c679d17e2ac 5-6,10,12,14,30-33,50-51,55,111,116-117,125-150,153,156,158-169,184,188-245,251,255,259,263,267,271,279,283,287,291,295,299,311,314,345,355,363,409,418,424-426
+docs/repository/RELEASE.md
+  h_b34c679d17e2ac 91,95-116
+docs/repository/RELEASE_CN.md
+  h_b34c679d17e2ac 87,91-112
+docs/scripts/build-reading-fonts.py
+  h_b34c679d17e2ac 1-112
+docs/scripts/check-built-anchors.py
+  h_b34c679d17e2ac 2,5,48,66-68,75,77,80,82
+docs/scripts/check-docs-consistency.mjs
+  h_b34c679d17e2ac 62
+docs/zh/about/01-about-us.md
+  h_b34c679d17e2ac 5-7,13,32,34,46,55-56,59,61,63,65-73,75,77,79,83,85,87,93,95,99,101,103,107,111-114,116,120,122
+docs/zh/about/02-changelog.md
+  h_b34c679d17e2ac 6-7,21
+docs/zh/about/03-roadmap.md
+  h_b34c679d17e2ac 19
+docs/zh/agent-integrations/01-overview.md
+  h_b34c679d17e2ac 1,38
+docs/zh/agent-integrations/02-claude-code.md
+  h_b34c679d17e2ac 1,9,12-13,16,20,25,42,44,53,69,96,100,122
+docs/zh/agent-integrations/03-openclaw.md
+  h_b34c679d17e2ac 1,32,45,56,77,80,83,121-140,159,183
+docs/zh/agent-integrations/04-codex.md
+  h_b34c679d17e2ac 1,3,9,12-13,16,26,38,40,67-78,109,129-130
+docs/zh/agent-integrations/05-hermes.md
+  h_b34c679d17e2ac 1,30-31
+docs/zh/agent-integrations/06-mcp-clients.md
+  h_b34c679d17e2ac 3,7,22,40,42-46,74,76,89
+docs/zh/agent-integrations/07-langchain-langgraph.md
+  h_b34c679d17e2ac 1,212,221-224
+docs/zh/agent-integrations/08-community-plugins.md
+  h_b34c679d17e2ac 23-24,39,43-74,85-86,90-91
+docs/zh/agent-integrations/09-log-ingestion.md
+  h_b34c679d17e2ac 3,5,101,124,130
+docs/zh/agent-integrations/10-opencode.md
+  h_b34c679d17e2ac 1,3,11,32,35-36,39,58-63,105,155-158,170
+docs/zh/agent-integrations/11-pi.md
+  h_b34c679d17e2ac 1,9,13-15,19,31,34-35,61
+docs/zh/agent-integrations/12-cursor.md
+  h_b34c679d17e2ac 1,9,12-13,23,31,47,50
+docs/zh/agent-integrations/13-trae.md
+  h_b34c679d17e2ac 1,9,12-13,16,20,32,34,41-42,50,61,64,78
+docs/zh/agent-integrations/15-agent-plugins.md
+  h_b34c679d17e2ac 39,60-61,70,76,78,81-82
+docs/zh/agent-integrations/16-capability-reference.md
+  h_b34c679d17e2ac 1,3,5,7-9,11,13,15,17,19,21,23,25,27,29-61,63,65-67,69,71,73,75,77,79-86,88,90-96,98,100-103,105,107,109,111-117,119,121,123,125,127-129,131-133,135-141,143,145,147,149,151,153,155-157,159,161,163-164,166-308,310-331,333-367,369,371,373-381,383,385,387,389-398,400,402,404-408,410,412,414-424,426-431,433,435,437,439-451,453,455,457,459,461,463-477,479,481,483-500,502-505,507,509-511,513,515,517,519,521,523,525-528,530,532,534-545,547,549,551,553,555,557,559-563,565,567,569,571-575,577,579,581-584,586,588,590,592-595,597,599,601-604,606,608,610,612-616,618,620,622-625,627,629,631,633-638,640,642,644,646-663,665,667-726,734,741,743,745,747-749,751,753,755,757-758,760,762-764,766-790,794-796,798-799,802
+docs/zh/agent-integrations/17-dsh.md
+  h_b34c679d17e2ac 1,3,9,12-13,16,18,39,51,59,76-78,83-88,91,97,105,107-109,111
+docs/zh/agent-integrations/18-plugin-development.md
+  h_b34c679d17e2ac 1,49
+docs/zh/agent-integrations/19-recall-tuning.md
+  h_b34c679d17e2ac 1-42
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 1,67,92,94,100,105,115-116,162,210,215,222,236,301-302,353,397,555,557
+docs/zh/api/02-resources.md
+  h_b34c679d17e2ac 3,11-12,22-23,29-30,38-39,48-49,54-55,60-62,66,70,82-87,92,115-116,126,185-186,197,202-203,206-214,218,231,246,580,594,603-608,616,623-624
+docs/zh/api/03-filesystem.md
+  h_b34c679d17e2ac 7-8,25-28,36,39,74,77,84-85,87,90,96,98-99,101-102,108-113,118,121,124-125,162-164,167,170,173,177,179,195,211-214,216,222,225,228,231,236-238,240,243,249,252-253,255-256,262-266,271,274,277-278,300,303-307,310,312,335,352,396-397,415,433,437,439,501-505,508,563,603-604,615,626,633-634,638,684,695,707,817,862,874
+docs/zh/api/04-skills.md
+  h_b34c679d17e2ac 91,164,414,449-457,523-526,577-580,620,677-680,745-748,750-753,816-819,846,860,940-943,959
+docs/zh/api/05-sessions.md
+  h_b34c679d17e2ac 46-47,59,102-103,106,110,114,166,205,207-208,210,255,308-309,312,318,691,693,696,713,733-734,736,789,792-793,795-796,843-844,846,928,961-962,965,995,1009,1046-1048,1115-1126,1133,1135-1136,1139,1146,1158-1167,1203,1213,1262,1264-1265,1268,1321,1331,1334,1338,1360,1388,1390-1391,1393-1394,1398-1404,1417,1425-1430,1477,1506,1555-1556,1562-1563,1570-1571,1615,1617,1619-1621,1623-1627,1629-1634,1636-1638,1642-1676,1706,1712,1723,1725,1731-1732
+docs/zh/api/06-retrieval.md
+  h_b34c679d17e2ac 3,9-13,21,26,33,37,42,45,56,59,69,108,112-113,297,300,303,306,309,312,315,318,321,324,327,369,373,379,383,396,400,403,410,415-425,442,445,450,461-473,491,513,527,556,569,572,575-582,584-585,588,591,594,607,643,663,696,704,744-746,832,928,931,934,937,940,943,952-963,965-978,1086,1089,1092-1093,1100-1107,1117,1135-1136
+docs/zh/api/07-system.md
+  h_b34c679d17e2ac 3,11,20,138,148,151,172,175,210,226,242,303-307,325,329,360,362,407,415,459,502
+docs/zh/api/08-admin.md
+  h_b34c679d17e2ac 1,41,50,110,168-175,230-231,271-272,277,281,349,385-392,396-429,432-438,444-705,754,766,770-772,792,796,803-825,829-831,886,903,918,940,1029,1051,1129,1151,1167,1188,1231,1246,1263,1285,1296-1297,1389,1410,1488,1508,1570,1583,1593,1598,1604,1618-1619,1633,1666,1678,1690,1756,1791,1795,1799-1800,1812-1813
+docs/zh/api/09-metrics.md
+  h_b34c679d17e2ac 5,17,74
+docs/zh/api/10-privacy.md
+  h_b34c679d17e2ac 1,5-9,87,95,113,121,139,163,177,227,245,253,273,289,333,345-346,349-350,353,356-358,360,364-366
+docs/zh/api/11-snapshot.md
+  h_b34c679d17e2ac 1,3,5,23,37,68,153,243,325,406,418-429,460,462-464,534,540,590,636,727
+docs/zh/api/12-acl.md
+  h_b34c679d17e2ac 3,5,7-13,15,17-22,25,27,32-35,39,44-45,49-53,55,57,61-64,68,70,72,74,76,79-81,83,85-87,90,93-104
+docs/zh/api/12-content.md
+  h_b34c679d17e2ac 9,57,66,121,130,147,151,153,194,203,223,233,298-299,305,389,393-418,438,442,465,477-508,540,546,641,655,657-660,662,681-682,686,688,690,692,715,725,739,760,765,774-775,778,781,785,799,807,828
+docs/zh/api/14-ovpack.md
+  h_b34c679d17e2ac 76-84,143,204,217-226,236,251,311,314-315
+docs/zh/api/15-watches.md
+  h_b34c679d17e2ac 9,13,18,68-69,207,214
+docs/zh/api/16-memory.md
+  h_b34c679d17e2ac 9-21,25,27,34
+docs/zh/api/17-tasks.md
+  h_b34c679d17e2ac 53,55,57-58,61,65,72,75,153-154,159-160,210-211,234,318-323,343,345-346,348,355
+docs/zh/api/18-observer.md
+  h_b34c679d17e2ac 7,40-42,77,87,91,96-98,105,109,116-118,152-161,165-168,175,203-205,239-240,286,296,337,388,398,425-427,490-495,498
+docs/zh/api/19-agent-evolution.md
+  h_b34c679d17e2ac 3,57,67,107
+docs/zh/api/20-webdav.md
+  h_b34c679d17e2ac 7,15,28,46
+docs/zh/api/22-openviking-assets.md
+  h_b34c679d17e2ac 1,4,6,99,108,119
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 43-44,55,175,181
+docs/zh/api/24-vikingbot.md
+  h_b34c679d17e2ac 80-81
+docs/zh/api/99-api-doc-writing-guide.md
+  h_b34c679d17e2ac 1,14-22,44,46,107-110,135,137,139-141,162-163,179,190,197,236,239,246-248,252-267,275
+docs/zh/concepts/00-overview.md
+  h_b34c679d17e2ac 1-37
+docs/zh/concepts/01-architecture.md
+  h_b34c679d17e2ac 7-29,31-32,36-37,40,42-43,45-48,52,69-70,77,80-84,89,93-94,100,104,107,117-119,125-126,139,142,155
+docs/zh/concepts/02-context-types.md
+  h_b34c679d17e2ac 3,9-36,45,61-62,106,108,112-114,117,125,129-131,142,151,164,170-171,175,181,187-192,195,199-202,212-217
+docs/zh/concepts/03-context-layers.md
+  h_b34c679d17e2ac 3,53,57,149
+docs/zh/concepts/04-viking-uri.md
+  h_b34c679d17e2ac 21,39,51,58,83-86,110,157,176,194-195,199,229,245,259,281-282,307-308,341,344,347,350,359-360,379,382,385-388,390-391,396
+docs/zh/concepts/05-storage.md
+  h_b34c679d17e2ac 7,14,18-21,53,55,60,62,74,117-118,137,142,149,161
+docs/zh/concepts/06-extraction.md
+  h_b34c679d17e2ac 3,7,9,24-26,28,30,32-39,41,43,45,49,51,53-55,57,65-74,84,101-104,130,134-135,140,152,155,166
+docs/zh/concepts/07-retrieval.md
+  h_b34c679d17e2ac 3,8,15-18,21-22,25-26,29,35-40,48,80,82,84,86-90,92,94,98,100-104,106,110-111,119
+docs/zh/concepts/08-session.md
+  h_b34c679d17e2ac 13-15,28,72-76,107-111,149-150,153-155,157,159,163,172,179-180,187-188
+docs/zh/concepts/09-transaction.md
+  h_b34c679d17e2ac 3,7,15-17,21,25,27,29-32,34,36,42,76-77,88,97,126,150,152-163,168-173,177,204,206,236,380,388,390,464
+docs/zh/concepts/10-encryption.md
+  h_b34c679d17e2ac 3-7,13,15,17,21,24-25,31,48-49,117-118,121-126,130-132,138-144,147,154-159
+docs/zh/concepts/11-multi-tenant.md
+  h_b34c679d17e2ac 3,43,60,82-83,113,115,240,242,244-246,248,255-256,262,269,307,313
+docs/zh/concepts/12-metrics.md
+  h_b34c679d17e2ac 3,97,127,135,140,171,173-184,230,240-241,257-258,262,308-309,407,421-422,470-471
+docs/zh/concepts/13-privacy.md
+  h_b34c679d17e2ac 7,27,48,54,79,115-116,119,123-124,134-139,147
+docs/zh/concepts/14-multi-write-storage.md
+  h_b34c679d17e2ac 1,3,5,9,34,38-39,41,43,86,99,108,112,116,118-119,123-124,133
+docs/zh/concepts/15-acl.md
+  h_b34c679d17e2ac 16,50,69,71-75,79,83,98,100-101,103,123-125,130-131,137,169
+docs/zh/concepts/15-vikingbot.md
+  h_b34c679d17e2ac 1,16,98
+docs/zh/concepts/16-queue-lifecycle.md
+  h_b34c679d17e2ac 1-5,9,22,30,34,67,72,91
+docs/zh/configuration/01-server.md
+  h_b34c679d17e2ac 1,22-23,51,149,156,234-241,271,361,369-370
+docs/zh/configuration/02-client.md
+  h_b34c679d17e2ac 1,5,7,47,132,148,150,152,164,213,217,221-222,231,237,269,279,282,316,329,355
+docs/zh/context-compilation/01-overview.md
+  h_b34c679d17e2ac 3,7,9-11,13,15,19-20,31-38,41,52-55,58-61,65
+docs/zh/context-compilation/02-llm-wiki.md
+  h_b34c679d17e2ac 3,16,20-21,28,44,47,54,84
+docs/zh/context-compilation/03-knowledge-graph.md
+  h_b34c679d17e2ac 3,21-22,26,33,55,67,76-77,85
+docs/zh/context-compilation/04-daily-report.md
+  h_b34c679d17e2ac 7-8,14,21,23,35,45,55
+docs/zh/context-compilation/05-knowledge-distillation.md
+  h_b34c679d17e2ac 3,5,7,19,23-24,28,35,37,69,71,78-79
+docs/zh/context-compilation/06-memory-consolidation.md
+  h_b34c679d17e2ac 1-109
+docs/zh/faq/faq.md
+  h_b34c679d17e2ac 7,9,11-16,20-30,34,36-40,42,78,85,95,115-119,148,150-151,171,173-174,178,184,192,195,214-216,221,227,245,249,253,259,264,272,275,278,281,288-292,296,298,300,310-311,313,323-324,330-331,334-336,349,359,370,372,379,382,388
+docs/zh/getting-started/01-introduction.md
+  h_b34c679d17e2ac 1,3,5,9-14,16,18,20,22-24,26,28,30-34,36-38,40,44,46
+docs/zh/getting-started/02-quickstart.md
+  h_b34c679d17e2ac 1,55,67,70,72-73,79,87-89,92,103-106
+docs/zh/getting-started/04-setup-for-agent.md
+  h_b34c679d17e2ac 1,12-14,44-47,87,89,136,144,153,199-200,202,214-215,230-231,261,264-266,273,277,285,325,385,399
+docs/zh/getting-started/05-cli-setup.md
+  h_b34c679d17e2ac 1,3,5,7,9,11,13-14,16,18,20,22,24,26-29,31,33-39,41,43,46,48,51,53,55,62,64,66,68-72,74,76,78,80,82,85,88,91,94,97,100,102-104,106,108-115,117,119,122-123,126,128,130,132,134-135,137,139,141,143-145,147-151,153,156-158,161,163,165,168,171,173-177,179,182,185,187,189,191,193-195,197,199-212,214,216,218-220,222,225-227,230,232,234,236,238-240,242,244,246-249,255,257,259,261,263,265,267,273,277,279,281,285-286
+docs/zh/getting-started/06-evaluate.md
+  h_b34c679d17e2ac 1-50
+docs/zh/guides/00-overview.md
+  h_b34c679d17e2ac 1-23
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 1-3,7-10,62,69-93,105,117-139,315,364,487-506,527-529,623-634,637,676,764-765,767,797,804,806,812-814,855-856,870,906,937,976,985,989,1027-1046,1123-1134,1147,1159,1165,1170,1179,1188,1263-1264,1267,1277,1279,1320,1351,1616,1730,1734-1788,1815-1816,1904-1942,1983,1985-1993,2001,2133,2143-2145,2184,2209-2213,2269
+docs/zh/guides/02-volcengine-purchase-guide.md
+  h_b34c679d17e2ac 3,93,102-103,111,128,139,144,150,159,169,175,177-180,182,184-186,189-190,205-206,210,223,235,248,268-269,273-276,278
+docs/zh/guides/03-deployment.md
+  h_b34c679d17e2ac 3-4,65,67,233-235,243,326,330-331,401-402,406-408,411-414,423,432,435
+docs/zh/guides/04-authentication.md
+  h_b34c679d17e2ac 3-19,23,25,27,47,52-53,56-61,80,83,113,157,300,389,391,437,440,457,464,479,519,521,524,596-599,602,612,631,642,646,679,688,706,721
+docs/zh/guides/05-observability.md
+  h_b34c679d17e2ac 3,9,19,26,31,72,84,104,108,180,479,509,547
+docs/zh/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 1,3,9,13,15,22-23,30,35,41,106,108,112,121,125-127,131,133,139,141-144,162-194,200-202,204,248,250,257-258
+docs/zh/guides/07-operation-telemetry.md
+  h_b34c679d17e2ac 11,53,69-75,79,154,275,281,286-288,339-341,347,349,351-362,370-371
+docs/zh/guides/08-encryption.md
+  h_b34c679d17e2ac 7,9-12,16,18,24,27,39,62,65,67,69,72,77,82,85,92,96-97,105,109,149,200,216,219-225,240,262,265-277,281,286-287,362,380,382,384,415,455,457,459,468-469
+docs/zh/guides/09-ovpack.md
+  h_b34c679d17e2ac 3,19,25,34,36,40,53,70,119,186-187,189,192-194,196,202,205,209-210,212,218,222,247,291,302,305,308,314,322,370,566,584
+docs/zh/guides/10-prompt-guide.md
+  h_b34c679d17e2ac 1,154,161-175,178,193,203,254,266,283,289,301,306-310,316,322,328,343-352,377,391-395,401,552-556,592-597,646-647,655,658-659,684,691-692
+docs/zh/guides/11-grafana-prometheus.md
+  h_b34c679d17e2ac 3,50,68,70,75-76,104,108-109,112,143,184,200,207,225-227,275,319,321,351,363-364,456
+docs/zh/guides/11-oauth.md
+  h_b34c679d17e2ac 3,7-8,30,36,83-84,133,135-136,173,186-187,189-232,272,277,323,351-352
+docs/zh/guides/12-public-access.md
+  h_b34c679d17e2ac 95-96,103,125-126,129-130,138-140,164,168,175-179,185,200
+docs/zh/guides/13-multi-write-storage.md
+  h_b34c679d17e2ac 1,3,5,12,16,97,101-102,124,131,155,173,207,223,307,359,361,374,377,380,391,400,402,406,418
+docs/zh/guides/14-ragfs-cache.md
+  h_b34c679d17e2ac 62-66,90,163,330-332
+docs/zh/guides/15-snapshot.md
+  h_b34c679d17e2ac 1,3,129,154,166,172,180,182-183,192,202-203,208-209,221-223,225,228-232,234,236-237,257,261,264-265,271,315,352,362
+docs/zh/guides/16-cuvs.md
+  h_b34c679d17e2ac 13-14,128,131,147,182-184,322-323
+docs/zh/guides/17-vikingbot.md
+  h_b34c679d17e2ac 3-4,24,43-44,101-102,122-123,196-198,222,265-278
+docs/zh/guides/18-openviking-assets.md
+  h_b34c679d17e2ac 114-116,163,184,236-237,249-250,324-326,348
+docs/zh/guides/19-deployment-checklist.md
+  h_b34c679d17e2ac 1-3,5,7,9,11-13,15,17,19,21-25,27,29,31,33-39,41,43,45-54,56,58,60,62,64,66-73,75,77,79,81-85,87,89
+docs/zh/guides/20-private-deployment.md
+  h_b34c679d17e2ac 1-3,5,7,9,11,13,15,17,20-36,39,41,43-45,47,49-53,56-58,61,63,65,67,70-75,78,80-87,89-91,94-96,99,101-106,108,110,112-114,117,119,121-123,126,128-130,133,136-137,140,143-144,146-150,152,154,157-162,165,167,169-172,175,177-179,181,185-200,204,206-209,212,214-230,233,235,237,240-243,245-246,249,251,253-254,257,259,261,263-268,270,272,274
+docs/zh/guides/21-private-operations.md
+  h_b34c679d17e2ac 1-76
+docs/zh/reference/01-overview.md
+  h_b34c679d17e2ac 1-15
+docs/zh/workflows/01-overview.md
+  h_b34c679d17e2ac 1-25
+examples/agent-hook-plugin/README.md
+  h_b34c679d17e2ac 1,3,9,16,23,25,27,36,44-50
+examples/agent-hook-plugin/README_CN.md
+  h_b34c679d17e2ac 1,3,9,16,19,23,25,27,36,44-50
+examples/agent-hook-plugin/hosts/cursor.mjs
+  h_b34c679d17e2ac 36
+examples/agent-hook-plugin/hosts/cursor/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/hosts/cursor/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 12,64-67
+examples/agent-hook-plugin/hosts/cursor/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+examples/agent-hook-plugin/hosts/cursor/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 1-136
+examples/agent-hook-plugin/hosts/incremental-turn-capture.mjs
+  h_b34c679d17e2ac 1-82
+examples/agent-hook-plugin/hosts/index.mjs
+  h_b34c679d17e2ac 2,7
+examples/agent-hook-plugin/hosts/kimicode-turns.mjs
+  h_b34c679d17e2ac 1-138
+examples/agent-hook-plugin/hosts/kimicode.mjs
+  h_b34c679d17e2ac 1-78
+examples/agent-hook-plugin/hosts/kimicode/DESIGN.md
+  h_b34c679d17e2ac 1-29
+examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json
+  h_b34c679d17e2ac 1-66
+examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json
+  h_b34c679d17e2ac 1-12
+examples/agent-hook-plugin/hosts/kimicode/runtime-index.mjs
+  h_b34c679d17e2ac 1-3
+examples/agent-hook-plugin/hosts/trae.mjs
+  h_b34c679d17e2ac 45
+examples/agent-hook-plugin/hosts/trae/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/hosts/zcode-capture.mjs
+  h_b34c679d17e2ac 1-5,8,11,15
+examples/agent-hook-plugin/hosts/zcode.mjs
+  h_b34c679d17e2ac 48
+examples/agent-hook-plugin/hosts/zcode/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/plugin.json
+  h_b34c679d17e2ac 3-4
+examples/agent-hook-plugin/scripts/hook.mjs
+  h_b34c679d17e2ac 55-56,72,94-103,111,118,121,125-144,175-176,183-186
+examples/agent-hook-plugin/scripts/ov-memory-doctor.mjs
+  h_b34c679d17e2ac 121
+examples/agent-hook-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 3,23-32
+examples/agent-hook-plugin/tests/cursor.test.mjs
+  h_b34c679d17e2ac 35,138,140-141
+examples/agent-hook-plugin/tests/kimicode-turns.test.mjs
+  h_b34c679d17e2ac 1-88
+examples/agent-hook-plugin/tests/kimicode.test.mjs
+  h_b34c679d17e2ac 1-130
+examples/agent-hook-plugin/tests/zcode-capture.test.mjs
+  h_b34c679d17e2ac 76-84
+examples/basic-usage/README_CN.md
+  h_b34c679d17e2ac 234
+examples/claude-code-memory-plugin/.claude-plugin/plugin.json
+  h_b34c679d17e2ac 3
+examples/claude-code-memory-plugin/README.md
+  h_b34c679d17e2ac 16-17,20,98
+examples/claude-code-memory-plugin/README_CN.md
+  h_b34c679d17e2ac 12-13,16,94
+examples/claude-code-memory-plugin/STATUSLINE.md
+  h_b34c679d17e2ac 3,11,13,16
+examples/claude-code-memory-plugin/package.json
+  h_b34c679d17e2ac 3
+examples/claude-code-memory-plugin/scripts/auto-capture.mjs
+  h_b34c679d17e2ac 41,168-169,192
+examples/claude-code-memory-plugin/scripts/auto-capture.test.mjs
+  h_b34c679d17e2ac 13,19,30,39-42,409-447
+examples/claude-code-memory-plugin/scripts/auto-recall.mjs
+  h_b34c679d17e2ac 52
+examples/claude-code-memory-plugin/scripts/auto-recall.test.mjs
+  h_b34c679d17e2ac 10-11,313-334
+examples/claude-code-memory-plugin/scripts/ov-memory-doctor.mjs
+  h_b34c679d17e2ac 103,132,136,140-147,189-192
+examples/claude-code-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 223-232
+examples/claude-code-memory-plugin/scripts/shared/capture-utils.mjs
+  h_b34c679d17e2ac 412-466,479-481,602,645-646,650,652-653,656
+examples/claude-code-memory-plugin/scripts/shared/config-schema.mjs
+  h_b34c679d17e2ac 96-106,147-149,259
+examples/claude-code-memory-plugin/scripts/subagent-stop.mjs
+  h_b34c679d17e2ac 36,84-85
+examples/claude-code-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 12,24-33
+examples/claude-code-memory-plugin/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 12,64-67
+examples/claude-code-memory-plugin/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+examples/claude-code-memory-plugin/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 33
+examples/claude-code-memory-plugin/skills/ov-memory-doctor/SKILL.md
+  h_b34c679d17e2ac 78,176-177
+examples/claude-code-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 18,21-22
+examples/codex-memory-plugin/.codex-plugin/plugin.json
+  h_b34c679d17e2ac 3
+examples/codex-memory-plugin/DESIGN.md
+  h_b34c679d17e2ac 21,213-218,366,377-382
+examples/codex-memory-plugin/README.md
+  h_b34c679d17e2ac 29-30,36-37,40,44
+examples/codex-memory-plugin/scripts/auto-recall.mjs
+  h_b34c679d17e2ac 146
+examples/codex-memory-plugin/scripts/auto-recall.test.mjs
+  h_b34c679d17e2ac 194,238,258-259,273-278
+examples/codex-memory-plugin/scripts/capture-utils.mjs
+  h_b34c679d17e2ac 356-434,438-444
+examples/codex-memory-plugin/scripts/capture-utils.test.mjs
+  h_b34c679d17e2ac 4,12-82,89-98
+examples/codex-memory-plugin/scripts/ov-memory-doctor.mjs
+  h_b34c679d17e2ac 203
+examples/codex-memory-plugin/scripts/ov-session.mjs
+  h_b34c679d17e2ac 14-15,69,72-73,76,116-130
+examples/codex-memory-plugin/scripts/pre-compact-capture.test.mjs
+  h_b34c679d17e2ac 148-175
+examples/codex-memory-plugin/scripts/session-end.test.mjs
+  h_b34c679d17e2ac 171-205
+examples/codex-memory-plugin/scripts/session-state.mjs
+  h_b34c679d17e2ac 118,131,142-144
+examples/codex-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 223-232
+examples/codex-memory-plugin/scripts/shared/capture-utils.mjs
+  h_b34c679d17e2ac 412-466,479-481,602,645-646,650,652-653,656
+examples/codex-memory-plugin/scripts/shared/config-schema.mjs
+  h_b34c679d17e2ac 96-106,147-149,259
+examples/codex-memory-plugin/scripts/startup-capture.test.mjs
+  h_b34c679d17e2ac 1-145
+examples/codex-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 11,23-32
+examples/codex-memory-plugin/setup-helper/install.sh
+  h_b34c679d17e2ac 13
+examples/codex-memory-plugin/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 12,64-67
+examples/codex-memory-plugin/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+examples/codex-memory-plugin/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 33
+examples/codex-memory-plugin/skills/ov-memory-doctor/SKILL.md
+  h_b34c679d17e2ac 81
+examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 20
+examples/dsh-memory-plugin/README.md
+  h_b34c679d17e2ac 17-18,25,38,52-55,108-111,142,180,183-191,194-217,220,231-242
+examples/dsh-memory-plugin/bundle.test.mjs
+  h_b34c679d17e2ac 13,41-45
+examples/dsh-memory-plugin/capture.mjs
+  h_b34c679d17e2ac 4,8,16,23-40,63-66,76,79-81,83,85-86,92,101
+examples/dsh-memory-plugin/capture.test.mjs
+  h_b34c679d17e2ac 3-9,20-40,56-64,88-104,219,222-234
+examples/dsh-memory-plugin/config.mjs
+  h_b34c679d17e2ac 4
+examples/dsh-memory-plugin/cordis.patch.yml
+  h_b34c679d17e2ac 2-3
+examples/dsh-memory-plugin/icon.svg
+  h_b34c679d17e2ac 1-4
+examples/dsh-memory-plugin/index.mjs
+  h_b34c679d17e2ac 15-19,37-43,48-70,72,114-128
+examples/dsh-memory-plugin/index.test.mjs
+  h_b34c679d17e2ac 38-39,80-81,104-246
+examples/dsh-memory-plugin/lifecycle.mjs
+  h_b34c679d17e2ac 1,3
+examples/dsh-memory-plugin/locale/en.json
+  h_b34c679d17e2ac 1-6
+examples/dsh-memory-plugin/locale/zh.json
+  h_b34c679d17e2ac 1-6
+examples/dsh-memory-plugin/mcp-env.mjs
+  h_b34c679d17e2ac 15-17,23-29
+examples/dsh-memory-plugin/mcp.test.mjs
+  h_b34c679d17e2ac 81-83,96-183,269-271
+examples/dsh-memory-plugin/package-lock.json
+  h_b34c679d17e2ac 3,9,22-24
+examples/dsh-memory-plugin/package.json
+  h_b34c679d17e2ac 3,5,9-11,14,23,29,46-48
+examples/dsh-memory-plugin/runtime.mjs
+  h_b34c679d17e2ac 14,18,21,25,37,48,143,425
+examples/dsh-memory-plugin/runtime.test.mjs
+  h_b34c679d17e2ac 9,24-36,273,384-430
+examples/dsh-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 7-8,13,25-30,34-43
+examples/dsh-memory-plugin/session-id.mjs
+  h_b34c679d17e2ac 1-21
+examples/dsh-memory-plugin/session-id.test.mjs
+  h_b34c679d17e2ac 1-30
+examples/dsh-memory-plugin/session-workspace.test.mjs
+  h_b34c679d17e2ac 1-153
+examples/dsh-memory-plugin/skills.mjs
+  h_b34c679d17e2ac 7
+examples/dsh-memory-plugin/skills.test.mjs
+  h_b34c679d17e2ac 37
+examples/dsh-memory-plugin/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 12,64-67
+examples/dsh-memory-plugin/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+examples/dsh-memory-plugin/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 1-136
+examples/dsh-memory-plugin/uri-guard.test.mjs
+  h_b34c679d17e2ac 3,134
+examples/hermes-plugin/DEVELOPMENT.md
+  h_b34c679d17e2ac 26-74,77,83-93,100-104,108-133,144-157
+examples/hermes-plugin/README.md
+  h_b34c679d17e2ac 5-6,8,12,14,16-19,22-23,30-32,37,39,54-55,60,63-65,75,93-183,212-223,233-234,257-260,273-321,363-365,369-406,461-470
+examples/hermes-plugin/__init__.py
+  h_b34c679d17e2ac 31,44,48-49,57-61,70,80,102-103,117,132-135,168-182,273-283,288-290,297-299,516-517,520-521,524-526,625-626,814,817-831,839-881,885-887,891,898-905,908-910,912-913,915-919,922-924,953-966,978-981,1034-1036,1038,1172,1175,1309,1333-1335,1340,1380-1385,1392-1397,1399,1421,1429,1437-1438,1440-1443,1493,1502-1505,1511-1517,1521,1526,1551-1560,1566,1572-1594,1596,1605-1609,1640-1656,1666,1672-1676,1678,1680,1692-1704,1712-1713,1747-1760,1766,1771,1773,1781-1789,1793-1801,1821-1826,1830-1832,1838,1856-1868,1924-1925,1928-1929,1942,1957,1961-1986,1998-1999,2013-2016,2037,2049-2057,2088,2093,2098-2102,2114,2116,2122-2123,2128-2129,2204,2219-2223,2431,2439,2446-2447,2488-2489,2491-2492,2507,2514,2525-2526,2528,2531-2544,2552-2553,2557-2594,2919-2920,2937,2943,2949,2956,2978,2987,2993-3000,3012-3034,3043,3045-3053,3076-3078
+examples/hermes-plugin/_setup.py
+  h_b34c679d17e2ac 16-17,20-21,33-83,290-291,309-310,327-341,406-460,464-465,470-473,506-513,537-540,542-545
+examples/hermes-plugin/cli.py
+  h_b34c679d17e2ac 1-56
+examples/hermes-plugin/local_packages.py
+  h_b34c679d17e2ac 1-132
+examples/hermes-plugin/local_server.py
+  h_b34c679d17e2ac 1-418
+examples/hermes-plugin/native_memory_mirror.py
+  h_b34c679d17e2ac 1-387
+examples/hermes-plugin/plugin.yaml
+  h_b34c679d17e2ac 2
+examples/hermes-plugin/pyproject.toml
+  h_b34c679d17e2ac 3,12-13
+examples/hermes-plugin/quick_local.py
+  h_b34c679d17e2ac 1-1252
+examples/hermes-plugin/tests/conftest.py
+  h_b34c679d17e2ac 1-55
+examples/hermes-plugin/tests/test_env_writes.py
+  h_b34c679d17e2ac 1-104
+examples/hermes-plugin/tests/test_gateway_recall.py
+  h_b34c679d17e2ac 1-589
+examples/hermes-plugin/tests/test_local_lifecycle.py
+  h_b34c679d17e2ac 1-725
+examples/hermes-plugin/tests/test_local_packages.py
+  h_b34c679d17e2ac 1-94
+examples/hermes-plugin/tests/test_native_memory_bridge.py
+  h_b34c679d17e2ac 1-207
+examples/hermes-plugin/tests/test_native_memory_mirror.py
+  h_b34c679d17e2ac 1-610
+examples/hermes-plugin/tests/test_quick_local.py
+  h_b34c679d17e2ac 1-66,68-74,76-95,97-114,118-157,159-195,197-247,249-404,406-496,499-509,511-523,525-588,590-744,747-783,785,788-803,805,807-808,810-817,820-821,823-825,827-828,830-831,833-834,836-837,839-840,842,844-846,848-849,852-853,855,857-868,870,872-876,879-880,883-886,888-1164,1166-1271
+examples/hermes-plugin/tests/test_quick_local_preflight.py
+  h_b34c679d17e2ac 1-207
+examples/hermes-plugin/tests/test_quick_local_routes.py
+  h_b34c679d17e2ac 1-140
+examples/hermes-plugin/tests/test_recall_timeout.py
+  h_b34c679d17e2ac 1-195
+examples/hermes-plugin/tests/test_setup_profiles.py
+  h_b34c679d17e2ac 1-231
+examples/hermes-plugin/tests/test_standalone.py
+  h_b34c679d17e2ac 5,28-336,650-651,932-990
+examples/memory-plugin-shared/README.md
+  h_b34c679d17e2ac 15-43
+examples/memory-plugin-shared/agent-hook-runtime.test.mjs
+  h_b34c679d17e2ac 12,211-226,254,273-275,457-476
+examples/memory-plugin-shared/bootstrap.sh
+  h_b34c679d17e2ac 1-122
+examples/memory-plugin-shared/bootstrap.test.mjs
+  h_b34c679d17e2ac 1-193
+examples/memory-plugin-shared/capture-utils.test.mjs
+  h_b34c679d17e2ac 10-11,247-320
+examples/memory-plugin-shared/entrypoint-symlink.test.mjs
+  h_b34c679d17e2ac 1-126
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  h_b34c679d17e2ac 2,50-52,64,80-127,185,197-198,251,298,394,523,536-567,583,587,597-637,649
+examples/memory-plugin-shared/install-lib-closure.test.mjs
+  h_b34c679d17e2ac 21
+examples/memory-plugin-shared/install-opencode-jsonc.test.mjs
+  h_b34c679d17e2ac 128-141,174,188-189,191,196,203-204,211,220-222,233,235
+examples/memory-plugin-shared/install-sources.test.mjs
+  h_b34c679d17e2ac 1-671
+examples/memory-plugin-shared/install-tui.test.mjs
+  h_b34c679d17e2ac 2-4,15-22,25,31-44,60,103,124,156,198-212,224-225,250-259,286-287,295-576
+examples/memory-plugin-shared/install.sh
+  h_b34c679d17e2ac 4-5,7-18,20-28,30-33,35-36,38-102,106-107,110-120,131-136,138-145,164,170,173-175,188-194,227,229,233-237,244-264,268,317,341-343,357,379,392-402,409-413,422-428,501,512,608-610,612-613,653,667,703-706,739-740,764,766-769,779,794-795,819,821-824,852-855,857,865-870,889,904-905,931,987,997,1012,1019-1020,1036-1037,1044,1110,1118,1122-1123,1141,1150-1155,1260,1299,1302,1314-1321,1324,1335,1337-1341,1343,1360-1366,1368-1370,1372-1377,1379-1382,1385,1387-1390,1396,1401-1402,1406,1409-1473,1475-1477,1481-1483,1485-1486,1488,1495-1496,1503-1514,1524-1525,1542-1544,1553-1607,1609-1610,1613-1704,1706-1714,1716-1727,1729-1732,1734-1742,1747-1748,1756,1758-1761,1772,1791,1797-1798,1800,1836-1837,1839,1853-1854,1860-1872,1874-1890,1892,1894,1896-1901,1905-1942,1949-1964,1967,1977-1984,1987,1994-2057,2060-2063,2065,2070-2080,2082-2085,2087-2091,2093-2094,2105,2112,2123-2133,2141,2174-2203,2205,2212,2214-2221,2223-2225,2264,2266,2272-2285,2312,2314-2315,2320,2340,2343-2352,2357,2372-2377,2429,2493-2524,2529-2530,2533-2535,2543,2570,2572,2579,2607,2609,2624-2681,2684-2685,2699,2705,2710-2713,2730,2734-2751,2768,2779,2821-2855,2857-2858,2890,2899-2914,2917-2918,2921,2923,2930,2987-2988,2990,3007-3342,3347-3349,3351,3354,3361,3370,3375-3387,3409,3413,3415-3419
+examples/memory-plugin-shared/lib/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 222-231
+examples/memory-plugin-shared/lib/capture-utils.d.mts
+  h_b34c679d17e2ac 5-10
+examples/memory-plugin-shared/lib/capture-utils.mjs
+  h_b34c679d17e2ac 411-465,478-480,601,644-645,649,651-652,655
+examples/memory-plugin-shared/lib/config-schema.mjs
+  h_b34c679d17e2ac 95-105,146-148,258
+examples/memory-plugin-shared/lib/install/host-json-config.mjs
+  h_b34c679d17e2ac 294-303
+examples/memory-plugin-shared/lib/install/jsonc-edit.mjs
+  h_b34c679d17e2ac 316-322,327-333,360-369
+examples/memory-plugin-shared/lib/install/kimicode-plugin.mjs
+  h_b34c679d17e2ac 1-120
+examples/memory-plugin-shared/lib/install/kimicode-plugin.test.mjs
+  h_b34c679d17e2ac 1-101
+examples/memory-plugin-shared/plugin-config.test.mjs
+  h_b34c679d17e2ac 58
+examples/memory-plugin-shared/recall-session-wiring.test.mjs
+  h_b34c679d17e2ac 60
+examples/memory-plugin-shared/release-marketplace.test.mjs
+  h_b34c679d17e2ac 2-5,10,16-20,30-224,250,259-260,308-334,337,340-341,412-663
+examples/memory-plugin-shared/sync.mjs
+  h_b34c679d17e2ac 3,109-118,147-160,176-195,421-429,433
+examples/openclaw-plugin/INSTALL-AGENT.md
+  h_b34c679d17e2ac 45,85
+examples/openclaw-plugin/INSTALL-ZH.md
+  h_b34c679d17e2ac 208,408
+examples/openclaw-plugin/INSTALL.md
+  h_b34c679d17e2ac 152,332
+examples/openclaw-plugin/README.md
+  h_b34c679d17e2ac 322,324
+examples/openclaw-plugin/README_CN.md
+  h_b34c679d17e2ac 363,365
+examples/openclaw-plugin/commands/setup.ts
+  h_b34c679d17e2ac 139-144,160,162,226,229,237,242-243,505
+examples/openclaw-plugin/plugin/openviking-session-routing-runtime.ts
+  h_b34c679d17e2ac 12,103
+examples/openclaw-plugin/routing/identity-routing.ts
+  h_b34c679d17e2ac 44-50,55,62-65
+examples/openclaw-plugin/services/context-lifecycle-service.ts
+  h_b34c679d17e2ac 443
+examples/openclaw-plugin/setup-helper/install.js
+  h_b34c679d17e2ac 293-294,301-302,346-349,380,532-537,563,566,573,576-577
+examples/openclaw-plugin/tests/ut/context-engine-afterTurn.test.ts
+  h_b34c679d17e2ac 224-237
+examples/openclaw-plugin/tests/ut/context-engine-assemble.test.ts
+  h_b34c679d17e2ac 120-133
+examples/openclaw-plugin/tests/ut/identity-routing.test.ts
+  h_b34c679d17e2ac 1,52-63
+examples/openclaw-plugin/tests/ut/package-install-contract.test.ts
+  h_b34c679d17e2ac 151
+examples/openclaw-plugin/tests/ut/plugin-modules.test.ts
+  h_b34c679d17e2ac 28,33-49
+examples/openclaw-plugin/tests/ut/setup-command.test.ts
+  h_b34c679d17e2ac 38,41-42
+examples/opencode-plugin/INSTALL-ZH.md
+  h_b34c679d17e2ac 14,41-42
+examples/opencode-plugin/INSTALL.md
+  h_b34c679d17e2ac 14,41-42
+examples/opencode-plugin/README.md
+  h_b34c679d17e2ac 11,20,23,46,54,59-60,208-209
+examples/opencode-plugin/index.mjs
+  h_b34c679d17e2ac 3-5,7,11-16,18-27,32,60-71,94-107
+examples/opencode-plugin/lib/mcp-config.mjs
+  h_b34c679d17e2ac 14-41
+examples/opencode-plugin/lib/memory-recall.mjs
+  h_b34c679d17e2ac 6,8,11,37-38,40-45,50
+examples/opencode-plugin/lib/memory-session.mjs
+  h_b34c679d17e2ac 6,33,49,51-54,59-66,128-130,319,385-395
+examples/opencode-plugin/lib/plugin-runtime.mjs
+  h_b34c679d17e2ac 1-51
+examples/opencode-plugin/lib/session-inject.mjs
+  h_b34c679d17e2ac 7,9-10,29,45-62,66
+examples/opencode-plugin/lib/utils.mjs
+  h_b34c679d17e2ac 59-60,62-64
+examples/opencode-plugin/lib/v2-events.mjs
+  h_b34c679d17e2ac 1-102
+examples/opencode-plugin/lib/v2-plugin.mjs
+  h_b34c679d17e2ac 1-359
+examples/opencode-plugin/lib/viking-uri-guard.mjs
+  h_b34c679d17e2ac 21-24
+examples/opencode-plugin/package.json
+  h_b34c679d17e2ac 3,20,28
+examples/opencode-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 11,25-34
+examples/opencode-plugin/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 1-106
+examples/opencode-plugin/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 1-200
+examples/opencode-plugin/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 1-136
+examples/opencode-plugin/tests/mcp-config.test.mjs
+  h_b34c679d17e2ac 6,38-51,77-96
+examples/opencode-plugin/tests/memory-session.test.mjs
+  h_b34c679d17e2ac 9,69-102,344-470
+examples/opencode-plugin/tests/v2-events.test.mjs
+  h_b34c679d17e2ac 1-85
+examples/opencode-plugin/tests/v2-plugin.test.mjs
+  h_b34c679d17e2ac 1-298
+examples/opencode-plugin/tests/viking-uri-guard.test.mjs
+  h_b34c679d17e2ac 52-60
+examples/pi-coding-agent-extension/DESIGN.md
+  h_b34c679d17e2ac 83,85,91,99-101,103,105-107,115-125,131-136,140-141,144,165-171,174-180,183-185
+examples/pi-coding-agent-extension/README.md
+  h_b34c679d17e2ac 151-152,190-208,216-217,327-328,333-340,399,416-417
+examples/pi-coding-agent-extension/client.ts
+  h_b34c679d17e2ac 42-50,52-53,125,130,142-207
+examples/pi-coding-agent-extension/config.ts
+  h_b34c679d17e2ac 35-36
+examples/pi-coding-agent-extension/index.ts
+  h_b34c679d17e2ac 13,28,42-47,183-185,192-202,238,265-270,336-337,339-342,369-370,374-377,382,386,388-389,393-394,454-457,459-466,473-485
+examples/pi-coding-agent-extension/lib/capture-adapter.mjs
+  h_b34c679d17e2ac 2,38-43,45,47-48,54
+examples/pi-coding-agent-extension/lib/takeover-core.d.mts
+  h_b34c679d17e2ac 11-26,28-30,33,38-43,55-62,64-74,77-79,81-84,88-102,108-109,113,115-129,134-148,162-163,166-167
+examples/pi-coding-agent-extension/lib/takeover-core.mjs
+  h_b34c679d17e2ac 13-25,47-134,240-245,254,269-330,336-338,340-349,352-355,357-360,363-368,376-395,404,411-414,428,430-435,440-444,446-451,457-463,467-470,472-477,480,482,484-499,501-504,509-575,577-580,582,584-586,589-597,600-664,666-688,690-750,752-776,778-787,789,791-797,799-879,881-899,902-913,916-923,925,928-932,934-952,954-972,975-976,984-986,992-994,1007,1010,1012-1013,1022-1038,1045-1046,1048-1049,1054-1057,1073-1090,1092-1094,1096-1098,1111-1130
+examples/pi-coding-agent-extension/package-lock.json
+  h_b34c679d17e2ac 3,9
+examples/pi-coding-agent-extension/package.json
+  h_b34c679d17e2ac 3
+examples/pi-coding-agent-extension/recall.ts
+  h_b34c679d17e2ac 4,52-64,75,84
+examples/pi-coding-agent-extension/scripts/e2e-live.mjs
+  h_b34c679d17e2ac 112,120-128,211-227,230-236,245,251-259,267-273,280-284,289-291
+examples/pi-coding-agent-extension/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 1-106
+examples/pi-coding-agent-extension/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 1-200
+examples/pi-coding-agent-extension/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 1-136
+examples/pi-coding-agent-extension/sync.ts
+  h_b34c679d17e2ac 2-4,24-25,34-43,56-71,88-99,106,108-112,114-119,130,133-134,136,140-141,172,184-186,188-193,207-209,219,226-232,245-253,270-279,291-297,301,305,320,333-361
+examples/pi-coding-agent-extension/takeover.ts
+  h_b34c679d17e2ac 17-30,37-39
+examples/pi-coding-agent-extension/tests/capture-adapter.test.mjs
+  h_b34c679d17e2ac 125-270
+examples/pi-coding-agent-extension/tests/client-archive-overview.test.mjs
+  h_b34c679d17e2ac 1-87
+examples/pi-coding-agent-extension/tests/recall-deferred.test.mjs
+  h_b34c679d17e2ac 138-179
+examples/pi-coding-agent-extension/tests/sync-barrier.test.mjs
+  h_b34c679d17e2ac 3,6,118-138,196-207,318-319,325-423,447-463
+examples/pi-coding-agent-extension/tests/takeover-core.test.mjs
+  h_b34c679d17e2ac 8,10,18-19,23-42,45-58,61-69,74,80-81,84,86-90,98,100-105,108-109,115-117,120-121,137-150,154-156,160,211,213,227-269,272-274,278,280,285-288,292-308,310-420,427-428,430,439-440,443-444,448,451,453-461,465,469-526,531-532,535-544,546,549,551-556,558-559,561-755,770-772,782,784-785,790,801-1027,1030-1034,1041,1047-1108
+examples/pi-coding-agent-extension/tests/takeover-session-manager.test.mjs
+  h_b34c679d17e2ac 1-158
+examples/pi-coding-agent-extension/tests/takeover-system-tools.test.mjs
+  h_b34c679d17e2ac 1-194
+examples/pi-experimental-context-management/shared/credentials.mjs
+  h_b34c679d17e2ac 2,237-246
+examples/skills/openviking-memory/SKILL.md
+  h_b34c679d17e2ac 12,64-67
+examples/skills/openviking-skills/SKILL.md
+  h_b34c679d17e2ac 150-151
+examples/skills/ov-experience-memory/SKILL.md
+  h_b34c679d17e2ac 33
+openviking/config/__init__.py
+  h_b34c679d17e2ac 10-12,18-19,41-42
+openviking/config/account_config.py
+  h_b34c679d17e2ac 5-17,22,24,26-27,31,41,56-57,59-136,141-142,150-156
+openviking/config/account_vector.py
+  h_b34c679d17e2ac 1-188
+openviking/config/binding.py
+  h_b34c679d17e2ac 17,21-27,36,54,57,62,70,72,78-81,118,126-131
+openviking/config/embedding.py
+  h_b34c679d17e2ac 1-301
+openviking/config/manager.py
+  h_b34c679d17e2ac 16-19,28,30,33,38,48,53,56-57,65,74-78,88-118,128-129,160,170-186,188,193-195,208,218-220,224-226,228,232-235,237,266-267,272,274-275,278-279,282-283,289,291-293,295-299,302-307,309,312,315,326,331-337,348,351,358,363,365,370,372,375,377,383-386,390-391,397-401,403,405-418,421-480,500-509,511-548,553-554,558,560-561,563-564,567,569,576-585,603-634,636,640-650,652,657-661,664-670,677-686,698-699,705,710-717,735-748,754-770,776-777
+openviking/config/merge.py
+  h_b34c679d17e2ac 5,9,12-16,26,38
+openviking/config/scope.py
+  h_b34c679d17e2ac 3,5-6,25
+openviking/config/source/__init__.py
+  h_b34c679d17e2ac 5
+openviking/config/source/base.py
+  h_b34c679d17e2ac 19-20,39-45,48,50-52,59-60,67
+openviking/config/source/file_source.py
+  h_b34c679d17e2ac 5,9,16-20,43
+openviking/config/source/memory_source.py
+  h_b34c679d17e2ac 10,22
+openviking/config/validate.py
+  h_b34c679d17e2ac 17-19,30,41-42,86-121,159-165,172-269,327-364
+openviking/config/vector.py
+  h_b34c679d17e2ac 1-248
+openviking/config/vlm.py
+  h_b34c679d17e2ac 1-3,5,7-11,13-19,21-23,26-27,29-33,35,37,39,41,43,46-47,49,51,53,56-59,62-66,69-432
+openviking/connector/auth.py
+  h_b34c679d17e2ac 1-217
+openviking/connector/client.py
+  h_b34c679d17e2ac 57-69
+openviking/connector/delegate.py
+  h_b34c679d17e2ac 29,570-573,636-644
+openviking/core/retrieval_types.py
+  h_b34c679d17e2ac 1-7
+openviking/crypto/providers.py
+  h_b34c679d17e2ac 727-731,739
+openviking/eval/datasets/local_doc_example_glm5.jsonl
+  h_b34c679d17e2ac 15
+openviking/eval/ragas/__init__.py
+  h_b34c679d17e2ac 145-147
+openviking/eval/ragas/pipeline.py
+  h_b34c679d17e2ac 55-58,60-64
+openviking/eval/ragas/playback.py
+  h_b34c679d17e2ac 216,247
+openviking/metrics/collectors/__init__.py
+  h_b34c679d17e2ac 25,50
+openviking/metrics/collectors/queue.py
+  h_b34c679d17e2ac 6,13-90
+openviking/metrics/datasources/http.py
+  h_b34c679d17e2ac 40,64-65
+openviking/metrics/datasources/model_usage.py
+  h_b34c679d17e2ac 11-12,18-20,88-97,100,106-116,119
+openviking/metrics/datasources/probes.py
+  h_b34c679d17e2ac 121-125
+openviking/metrics/global_api.py
+  h_b34c679d17e2ac 47,176-178,310,352
+openviking/models/embedder/base.py
+  h_b34c679d17e2ac 10,13,32-92,97-101,105,181,184-191,195-198,204-210,212-215,218-219,391-393,490-491,675,678,680-688
+openviking/models/embedder/gemini_embedders.py
+  h_b34c679d17e2ac 139,141-147,149,252-260,285
+openviking/models/embedder/jina_embedders.py
+  h_b34c679d17e2ac 33-37,133
+openviking/models/rerank/jev_rerank.py
+  h_b34c679d17e2ac 6-7,28-102,114,117-121,151-155,180,221
+openviking/models/vlm/backends/litellm_vlm.py
+  h_b34c679d17e2ac 17,313-334
+openviking/models/vlm/backends/openai_vlm.py
+  h_b34c679d17e2ac 7,45-46,186
+openviking/models/vlm/backends/volcengine_media.py
+  h_b34c679d17e2ac 298-299
+openviking/models/vlm/backends/volcengine_vlm.py
+  h_b34c679d17e2ac 18,210-211,254-255,273-274,277-295,439-440,489-490
+openviking/models/vlm/base.py
+  h_b34c679d17e2ac 758-761,763,808-810,812-816,820-825,1146-1150
+openviking/models/vlm/token_usage.py
+  h_b34c679d17e2ac 5,8,11,131-149,155,157,174,186,195,204,208,213,230,254-264,266-268
+openviking/observability/http_observability_middleware.py
+  h_b34c679d17e2ac 696
+openviking/observability/usage_audit/README.md
+  h_b34c679d17e2ac 123-131
+openviking/observability/usage_audit/projection.py
+  h_b34c679d17e2ac 263-264
+openviking/parse/accessors/feishu_accessor.py
+  h_b34c679d17e2ac 455-457,1669-1673
+openviking/parse/base.py
+  h_b34c679d17e2ac 57-62,64,67,72-73
+openviking/parse/parsers/README.md
+  h_b34c679d17e2ac 3,7
+openviking/parse/parsers/directory.py
+  h_b34c679d17e2ac 45-48,70-80,340-341,343,360,525,895-899,1013-1015,1017-1020,1057,1059-1062,1169-1173,1178,1195,1272
+openviking/parse/parsers/markdown.py
+  h_b34c679d17e2ac 1452-1453,1455-1456
+openviking/parse/parsers/media/utils.py
+  h_b34c679d17e2ac 6,22,256-257,271-272,338-339,358,367-368,387,427-428,430-431,438,442-445
+openviking/parse/tree_builder.py
+  h_b34c679d17e2ac 33,97-101
+openviking/parse/understanding_api.py
+  h_b34c679d17e2ac 590-594
+openviking/parse/vlm.py
+  h_b34c679d17e2ac 9,47-48,53-54,57,60-63
+openviking/privacy/skill_extractor.py
+  h_b34c679d17e2ac 7,27,29-30,39
+openviking/prompts/templates/memory/cases.yaml
+  h_b34c679d17e2ac 15
+openviking/prompts/templates/memory/entities.yaml
+  h_b34c679d17e2ac 33,39
+openviking/prompts/templates/memory/experiences.yaml
+  h_b34c679d17e2ac 7
+openviking/prompts/templates/memory/experimental_memory/entities.yaml
+  h_b34c679d17e2ac 22,28
+openviking/prompts/templates/memory/preferences.yaml
+  h_b34c679d17e2ac 9
+openviking/prompts/templates/memory/trajectories.yaml
+  h_b34c679d17e2ac 14
+openviking/pyagfs/async_client.py
+  h_b34c679d17e2ac 307,316-317
+openviking/pyagfs/protocols.py
+  h_b34c679d17e2ac 107
+openviking/resource/watch_scheduler.py
+  h_b34c679d17e2ac 14-17,378-382
+openviking/retrieve/__init__.py
+  h_b34c679d17e2ac 6
+openviking/retrieve/context_assembler/expansion.py
+  h_b34c679d17e2ac 15,32,51-56
+openviking/retrieve/context_assembler/gather.py
+  h_b34c679d17e2ac 17,214-215,256,306,308,339
+openviking/retrieve/context_assembler/params.py
+  h_b34c679d17e2ac 10-11,125,130
+openviking/retrieve/context_assembler/pipeline.py
+  h_b34c679d17e2ac 35,61-67,76-100,114,124-125,156-181
+openviking/retrieve/context_assembler/rewrite.py
+  h_b34c679d17e2ac 15,28-32,68,71,84
+openviking/retrieve/hierarchical_retriever.py
+  h_b34c679d17e2ac 4,10-11,15,25,37,49,51,60,98-100,103,107-108,117,119-133,142,154,167,177-181,188-189,195-197,199-201,203-213,215-216,218-234,325,328,354-356
+openviking/retrieve/intent_analyzer.py
+  h_b34c679d17e2ac 9,11,30,51,53-54,56,75
+openviking/retrieve/memory_lifecycle.py
+  h_b34c679d17e2ac 6-7
+openviking/retrieve/skill_package_retriever.py
+  h_b34c679d17e2ac 9,23-24,36,47,52,59-79,99
+openviking/server/api_keys/legacy.py
+  h_b34c679d17e2ac 661,1444-1451,1469
+openviking/server/auth/__init__.py
+  h_b34c679d17e2ac 218-221,230-248,387-402
+openviking/server/bootstrap.py
+  h_b34c679d17e2ac 388-394
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 24,29,33,37,46,63,65,67,70,82,90,257-433,447-448,457,460-463,494,507-508,511,533,535,543-546,549-550,575,579,644,652,720-721,757-760,849-850,864-866,882-885,891-894,902-905,909,912,917,922,932,944,954,969,993-996,1002-1003,1005,1015,1046-1047,1060-1061,1084-1085,1119,1129-1130,1149,1164-1165,1190-1191,1198,1200,1206-1209,1212,1219,1228,1237-1238,1266-1268,1270,1397-1410,1423,1428-1435,1461-1462,1466-1467,1473-1478,1502,1507,1510,1517,1519,1521,1523,1525,1546,1548-1549,1551-1554,1563-1565,1569,1596,1598-1599,1601-1604,1640-1641,1650,1697-1699,1715-1716,1759,1761-1763,1765,1769,1775,1786,1802-1803,1805,1818-1819,1885-1886,1893,1896,1918-1919,1929,1932,1940,1954-1955,1962-1963,1993-1994,2012-2013,2015-2019,2037-2038,2047-2048,2050,2066-2067,2083,2190,2192
+openviking/server/models.py
+  h_b34c679d17e2ac 28-33
+openviking/server/resource_ingest.py
+  h_b34c679d17e2ac 20,36,72
+openviking/server/routers/acl.py
+  h_b34c679d17e2ac 4,12,21,54
+openviking/server/routers/admin.py
+  h_b34c679d17e2ac 6,18,21,23,143-170,252,359-363,467-472,487-488,503,520,661-664,786,796-799,865,892,894
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 30,33,52-53,91,100,256,306,312,340-341,344
+openviking/server/routers/debug.py
+  h_b34c679d17e2ac 29,31,33-41
+openviking/server/routers/filesystem.py
+  h_b34c679d17e2ac 18,21,76-80,103,110-112,129,136-141,143,161,166-168,170,185,271,284-289
+openviking/server/routers/observer.py
+  h_b34c679d17e2ac 13-15,50-52,56,63-65,69,75-78,82,89-91,95,102-104,108,115-117,121,128-130,134
+openviking/server/routers/resources.py
+  h_b34c679d17e2ac 22,107,217,337
+openviking/server/routers/search.py
+  h_b34c679d17e2ac 11,16,49,221-229,298,316,334-339,448,476,485,510,517,522,545,556,575,590,599,613
+openviking/server/routers/skills.py
+  h_b34c679d17e2ac 141,148,326,334,637
+openviking/server/routers/system.py
+  h_b34c679d17e2ac 19,93-94,97-98,157-159,161-162
+openviking/server/routers/webdav.py
+  h_b34c679d17e2ac 237,244
+openviking/server/upload_token_store.py
+  h_b34c679d17e2ac 11-13,36-37,51,65-66,75,88-89,102,115-116,130,144-145,166,179-180
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 23,36-39,44,50-53,82-87,288-292,347-356
+openviking/service/core.py
+  h_b34c679d17e2ac 10,39,62,109-111,146-148,152,155,169,194,220-254,266,279-282,288,300-314,316-323,450,478-480,483,492-494,501,525,530,552,568,580,593-594,600,616-620,679,701-706,713-717,721,762,774,776-779,786-787,790,793
+openviking/service/debug_service.py
+  h_b34c679d17e2ac 6,20,28-81,89,124-125,130-131,138-139,146-147,154,163,166-192,195-197,200-211,218,225-227,230-235,239-242,248,251-253,255-276,278-279,281,284,291-295,300-448,453-456,460,466,472-487,492,495-498,510-519,522-525,528-532,537,540-543,568,570-571,573-578,602-603,605-611,618-619,622-628
+openviking/service/deletion.py
+  h_b34c679d17e2ac 335-337
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 11,37,51-52,57,66-71,212,224,229,232,236,243,249,259-261,271,279-282,299,301-303,310,315,317-319,325,329,338-339,343-346,348-350,352-372,385,391-438,977-981,992-994,996,1004,1012-1030,1032,1034-1041,1082-1089,1236,1251
+openviking/service/memory_compile.py
+  h_b34c679d17e2ac 1-374
+openviking/service/pack_service.py
+  h_b34c679d17e2ac 26-31,34,40-45,49,94,112,142,163
+openviking/service/reindex_executor.py
+  h_b34c679d17e2ac 9,12,114-116,118-119,123,133-138,141-157,197,205-212,236,255-273,277,279-288,290-308,324,326,469-477,495,499-500,514-519,522-523,525-526,552,556,561,576-582,593,595-597,599-603,605-608,610-613,636,638-641,647-649,667,672,675-681,683,687-692,694-697,699-740,742-748,750-754,756-757,759-761,764-772,774-789,792-794,797-815,818,821-823,826-861,863-871,873-917,926,928-938,951,974-979,994,1083,1088-1089,1108,1157-1162,1165-1176,1178-1183,1185-1202,1211,1215-1216,1254-1259,1261-1266,1268-1275,1278-1286,1468-1474,1521-1523,1674-1690
+openviking/service/resource_service.py
+  h_b34c679d17e2ac 23-28,64,151,156,305,327-329,353,473,821-822,825-865,901,913-914,1230,1305,1531,1558,1642,1778-1779,1802-1806,1894-1907,1954-1966,1985,2017,2084,2133-2135,2235
+openviking/service/search_service.py
+  h_b34c679d17e2ac 6,11,49,75-89,118-119,121,135-136,139-140,158-159,173-174,176,189-190,203-204,217,230,233,248
+openviking/service/session_auto_commit.py
+  h_b34c679d17e2ac 9,41-51,53,80-85,87,89,93-100,107-117,119-124,134-142,204,206,265
+openviking/service/session_service.py
+  h_b34c679d17e2ac 50,70,88,94,145,220,656
+openviking/session/__init__.py
+  h_b34c679d17e2ac 14,22,42-46
+openviking/session/archive_store.py
+  h_b34c679d17e2ac 1-508
+openviking/session/checkpoints.py
+  h_b34c679d17e2ac 1-478
+openviking/session/compressor_v3.py
+  h_b34c679d17e2ac 19,90-92,259,263,267,282,284-288,298,703-707,716,738,757,917,1001,1006,1056
+openviking/session/memory/__init__.py
+  h_b34c679d17e2ac 10-13,69-70
+openviking/session/memory/agent_experience_context_provider.py
+  h_b34c679d17e2ac 13,28-30,56,58-62
+openviking/session/memory/consolidation_context_provider.py
+  h_b34c679d17e2ac 1-264
+openviking/session/memory/extract_loop.py
+  h_b34c679d17e2ac 33-39,44,239,468,471,479,873-890,907,941-948,950,952-953,986-1035,1102
+openviking/session/memory/extraction_output_protocol/python_protocol.py
+  h_b34c679d17e2ac 26,84-85,89-90,96,159,220,227-231,274-277,772-776,1057-1060,1106-1108,1135-1144,1234-1242
+openviking/session/memory/memory_updater.py
+  h_b34c679d17e2ac 50-51,53,886-896,938-944,949,957,960-967,976-989,991-998,1004-1008,1025-1039,1065-1070,1117-1320,1360,1369-1372,1378-1382,1385-1387,1390-1404,1407-1411,1413-1419,1482-1485,1497-1500,1590,1593,1596,1600-1604,1610-1611,1616-1620,1632,1637,1646,1651,1654-1661,1666-1676,1683-1685,1700-1703,1707,1715-1716,1723-1725,1763,1853-1855,1864-1867,1968,1970-1975,1985,1987-1992
+openviking/session/memory/patch_merge_context_provider.py
+  h_b34c679d17e2ac 9,20-22,130,132
+openviking/session/memory/schema_model_generator.py
+  h_b34c679d17e2ac 13,162-167,173-174,176-177,191,193-220,223-224,248-250,393
+openviking/session/memory/session_extract_context_provider.py
+  h_b34c679d17e2ac 42,71,88,138-143,146
+openviking/session/memory/streaming_memory_updater.py
+  h_b34c679d17e2ac 20,133,501,590,760,824,917,1008,1011,1028-1033,1040,1075,1117,1550-1551,2135-2177,2206,2211-2218,2221,2223-2233,2240-2243,2248,2252,2289,2302-2303,2309
+openviking/session/memory/tools.py
+  h_b34c679d17e2ac 192-195,332-334,341-344,353-364,377-378,387-389,392-399,407-438
+openviking/session/memory/utils/link_renderer.py
+  h_b34c679d17e2ac 316-351
+openviking/session/session.py
+  h_b34c679d17e2ac 14,21,24-32,34-39,58-62,64,69,78,233-237,429,442-446,468-473,862-864,933,948,961,1095,1113,1124,1202,1449-1451,1652,1744,1749,1773,1958,1987,1996,2003,2044,2054,2130,2175,2283,2354,2420,2579,2583,2587,2593,2622,2628,2639,2645,2649,2667,2676-2677,2692-2695,2697-2701,2703-2707,2709-2712,2714,2716-2718,2720-2736,2738-2757,2759-2773,2775-2777,2779-2781,2783-2790,2792-2793,2861,2911-2913,2915,2925,2937,2939,2966,2970-2971,2974,2980-3034,3040,3056,3069,3081,3085,3088,3090,3092,3101,3110,3118,3130,3132,3143-3144,3154,3158,3173,3178,3182,3184-3191,3193-3194
+openviking/session/tool_output_externalizer.py
+  h_b34c679d17e2ac 1-445
+openviking/session/train/components/gradient_estimator.py
+  h_b34c679d17e2ac 11,51,101-113,118-130
+openviking/session/train/components/policy_optimizer.py
+  h_b34c679d17e2ac 11,53,125-137,143-155
+openviking/session/train/components/rollout_executor.py
+  h_b34c679d17e2ac 13,34,43-64
+openviking/session/train/components/trajectory_analyzer.py
+  h_b34c679d17e2ac 10,78,167-175,181,214-220
+openviking/session/working_memory.py
+  h_b34c679d17e2ac 1-45,48-49,52-54,56-59,61,64-69,72-74,77-79,81-89,91-131,134-164,167-195,198-330,334-372,374-380,382-407,410-565,567-673,678-1060
+openviking/storage/abstract_overview.py
+  h_b34c679d17e2ac 15,32-34,38-39,258-292,303,305-307,323,400-455,545,572-585,621-634,788,805-812
+openviking/storage/acl.py
+  h_b34c679d17e2ac 7-9,64-87,93,164-170,320-322,378,381,384,387-398,400-401,403,410-411,413,415-421,423,425,435-439,453-459,516-518,544-548
+openviking/storage/collection_schemas.py
+  h_b34c679d17e2ac 56,341-353,499,506-507,510,513-519,592-594,697-699,735-738,741,747,751,762-779,884-886,899,904,933-937
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 12,41,54-57,136,140-142,146-150,748-751,754-767,769,772,776-786,958-961,1132
+openviking/storage/context_update_plan.py
+  h_b34c679d17e2ac 14,385,576-580,586-610,616,636-637,650-655,676-720,837,856,866,869-870,955,961-962,1002-1010,1019-1021,1054-1055,1089-1099,1132-1241,1423
+openviking/storage/index_action.py
+  h_b34c679d17e2ac 11-15,80-84
+openviking/storage/observers/base_observer.py
+  h_b34c679d17e2ac 10,31-34
+openviking/storage/observers/filesystem_observer.py
+  h_b34c679d17e2ac 128,137,143-159
+openviking/storage/observers/models_observer.py
+  h_b34c679d17e2ac 51-81
+openviking/storage/observers/queue_observer.py
+  h_b34c679d17e2ac 35-86,90-92
+openviking/storage/observers/retrieval_observer.py
+  h_b34c679d17e2ac 34-38
+openviking/storage/observers/vikingdb_observer.py
+  h_b34c679d17e2ac 34-38,42,46-94,98-100,108-111,115
+openviking/storage/ovpack/operations.py
+  h_b34c679d17e2ac 270,327,332,334,428-429,477-484,503,541,573-574,586,599,633-634,648,701,706,708
+openviking/storage/ovpack/vectors.py
+  h_b34c679d17e2ac 26,44-48,50-59,64-73,81,83-93,103,130,157-158,161,170,183,189,191,215-233
+openviking/storage/queuefs/add_resource_msg.py
+  h_b34c679d17e2ac 65,113,143-149,157-158,166,234
+openviking/storage/queuefs/embedding_msg.py
+  h_b34c679d17e2ac 147-153
+openviking/storage/queuefs/embedding_msg_converter.py
+  h_b34c679d17e2ac 27-28,46-51,61,97-99
+openviking/storage/queuefs/named_queue.py
+  h_b34c679d17e2ac 6,8,268,279-281,284,287,290-316
+openviking/storage/queuefs/queue_manager.py
+  h_b34c679d17e2ac 13,23-25,42,58,71,98,116,130,140,158-159,176-182,189-191,198,210,222-238,269-270
+openviking/storage/queuefs/reindex_msg.py
+  h_b34c679d17e2ac 1-66
+openviking/storage/queuefs/reindex_processor.py
+  h_b34c679d17e2ac 1-186
+openviking/storage/queuefs/semantic_executor.py
+  h_b34c679d17e2ac 10,200-203,222-226,245,372-387,607-616,731-735,925,930,1084-1090,1144-1147,1193-1196,1214,1223,1393-1401,1444-1445,1449-1451,1453,1456-1457,1469-1480,1509,1553,1574,1596-1599,1601-1602,1611,1656-1660,1669
+openviking/storage/queuefs/semantic_msg.py
+  h_b34c679d17e2ac 160-161,176,185-186,192
+openviking/storage/queuefs/semantic_processor.py
+  h_b34c679d17e2ac 10,46-47,80-82,132,142-143,145-157,163-172,282,298-301,321-324,451,463,507,545-548,573-574,580,695,726,775-778,794-795,1010,1040,1079,1250,1289-1293,1295,1297-1300,1349-1372,1374-1376,1394,1482-1483,1493,1517-1518,1604,1630,1640,1653-1654,1693-1694,1804,1821-1825,1829,1831-1834,1865-1866,1898-1899,1925,1941-1943,1965,1969,1986,1990
+openviking/storage/queuefs/semantic_work.py
+  h_b34c679d17e2ac 44,65-72,78-84,90-91,94-96,104-106
+openviking/storage/resource_diff.py
+  h_b34c679d17e2ac 30,118-119
+openviking/storage/resource_rfv.py
+  h_b34c679d17e2ac 1-419
+openviking/storage/resource_rnfv.py
+  h_b34c679d17e2ac 99,109-110,119,121-122,132
+openviking/storage/vectordb/README.md
+  h_b34c679d17e2ac 447-454
+openviking/storage/vectordb/collection/collection.py
+  h_b34c679d17e2ac 69-70,84-85,274,284-285,352-353,373-377,379-386,398-399,423-431
+openviking/storage/vectordb/collection/http_collection.py
+  h_b34c679d17e2ac 17,397-398,414-415,424,568-569,578-579
+openviking/storage/vectordb/collection/local_collection.py
+  h_b34c679d17e2ac 510-511,513-517,531-544,556,592,620,635-644,743-744
+openviking/storage/vectordb/collection/result.py
+  h_b34c679d17e2ac 38-39,47-64
+openviking/storage/vectordb/collection/vikingdb_collection.py
+  h_b34c679d17e2ac 13,89-95,103-104,111-112,149,154-158,269,280-281,297-300,390-391,400-401
+openviking/storage/vectordb/collection/volcengine_api_key_collection.py
+  h_b34c679d17e2ac 16,214,248,364-365,382-385,398-399,406-407
+openviking/storage/vectordb/collection/volcengine_collection.py
+  h_b34c679d17e2ac 14,139-145,153-154,161-162,330,335-339,484,495-496,512-515,605-606,615-616
+openviking/storage/vectordb/engine/_python_api.py
+  h_b34c679d17e2ac 319,327,460,462
+openviking/storage/vectordb/index/cuvs_index.py
+  h_b34c679d17e2ac 2038-2044,2118,2485
+openviking/storage/vectordb/index/local_index.py
+  h_b34c679d17e2ac 132-134,144-149,160-161,174-175,854-865
+openviking/storage/vectordb/service/api_fastapi.py
+  h_b34c679d17e2ac 434-435,662-667
+openviking/storage/vectordb/service/app_models.py
+  h_b34c679d17e2ac 102-103,168-169
+openviking/storage/vectordb_adapters/base.py
+  h_b34c679d17e2ac 127,487,489-517,530-531,546-557,573-576,706-707,724-725
+openviking/storage/vectordb_adapters/factory.py
+  h_b34c679d17e2ac 48-50
+openviking/storage/vectordb_adapters/opengauss/collection.py
+  h_b34c679d17e2ac 1064-1065,1067,1245-1246
+openviking/storage/viking_fs/__init__.py
+  h_b34c679d17e2ac 101,140-142,154-156,159,166-169
+openviking/storage/viking_fs/_access.py
+  h_b34c679d17e2ac 27-28,39,102-109,209,232-235,291-297,330-342,556,592
+openviking/storage/viking_fs/_base.py
+  h_b34c679d17e2ac 15,208-210,218,239-241
+openviking/storage/viking_fs/_grep.py
+  h_b34c679d17e2ac 20,158-162,189-191,194-195,197-216,220-225,233-234,237-247,794-798
+openviking/storage/viking_fs/_ops.py
+  h_b34c679d17e2ac 10,1412,1588-1596,1598-1612,1614-1624,1628,1651,1653,1655,1659-1662,1672-1674,1689,1693-1697,1740-1744,1760-1763,1787,1789-1810,1822,1829,2170-2172,2187-2190,2209,2211-2230
+openviking/storage/viking_fs/_semantic.py
+  h_b34c679d17e2ac 6,11,29-30,205-206,231-234,237-243,256,269,275-276,309-311,403-404,419-425,436,447,454,476-485,511,530-532
+openviking/storage/viking_fs/_snapshot.py
+  h_b34c679d17e2ac 833,848-851,871,884-887
+openviking/storage/viking_fs/_vector.py
+  h_b34c679d17e2ac 89-101
+openviking/storage/viking_vector_index_backend.py
+  h_b34c679d17e2ac 8,12-13,22,30,45-46,54-59,135,168-172,203-206,209-211,214-236,239-243,246-248,251,254,280-289,314-317,323-325,334-355,359-362,379,415,427-432,467,500,512,516,520-540,543-545,548-553,556-559,562-565,567,575,586,626,670,722,731,747,755,760,771,795,802,815,817,826,828,830,843,845,856,858,885,889,891,913,922,931,934,953,974,994,1018,1035,1043,1045,1050,1059-1060,1072,1076-1077,1088-1092,1094,1102,1110,1133,1156-1160,1165-1166,1202,1206,1208-1260,1272,1303,1306,1309,1349-1356,1365-1368,1412,1415-1419,1423,1432,1448-1454,1477,1481,1484,1489,1492,1496,1537-1541,1597-1601,1628,1632,1642,1655,1677,1688,1714,1726,1743,1752,1812,1816,1826,1841-1842,1845,1856-1857,1866,1875-1882,1884-1906,1908-1910,1922,1946-1947,1958-1973,1976-2007,2053,2055,2058-2063,2065-2070,2072-2089,2092-2095,2112,2253-2254,2256,2269-2273,2427,2439,2451,2475,2976-2978,3028-3032,3040,3043-3054,3062-3066,3077
+openviking/storage/vikingdb_manager.py
+  h_b34c679d17e2ac 8,55,250-251,254-255,258-259,262,265-266,269,272-273,408-409,415-416,419-420,436-437,439-456,458,466,468,477,482,484,486,491,493
+openviking/utils/embedding_utils.py
+  h_b34c679d17e2ac 111,113-119,121,131,309,318-319,414-415,465,478,527,540,596,598,643-646,708-710,741,748-762
+openviking/utils/ingest_options.py
+  h_b34c679d17e2ac 7,10,26-31,40-41,44-46,48,57-68,77
+openviking/utils/media_processor.py
+  h_b34c679d17e2ac 95-97
+openviking/utils/model_retry.py
+  h_b34c679d17e2ac 88
+openviking/utils/path_safety.py
+  h_b34c679d17e2ac 45-53,68-75
+openviking/utils/resource_processor.py
+  h_b34c679d17e2ac 15,30,41-45,56,107,113,179,184-191,193,195,198-204,215-226,624,674,689-691,711,730,965-969,998,1003-1004,1011-1017,1049-1051,1071-1072,1091-1092,1118-1122,1182-1185,1193-1195,1199,1232,1234-1239,1256-1258,1282,1310,1350-1351,1379-1387,1390,1397-1412,1417,1434-1435,1438-1448,1452-1464,1480,1484-1549,1551,1559,1687-1690,1693,1695,1697,1706-1707
+openviking/utils/skill_processor.py
+  h_b34c679d17e2ac 20,106,109-112,115,488-498,562,574
+openviking/utils/summarizer.py
+  h_b34c679d17e2ac 181
+openviking/utils/tags.py
+  h_b34c679d17e2ac 99-124
+openviking/utils/time_decay.py
+  h_b34c679d17e2ac 1-134
+openviking_cli/retrieve/types.py
+  h_b34c679d17e2ac 69,289-291,353,378,386-389,395,411-418,439-440
+openviking_cli/utils/config/embedding_config.py
+  h_b34c679d17e2ac 457-463,486,550-556,1056-1058,1132-1133
+openviking_cli/utils/config/memory_config.py
+  h_b34c679d17e2ac 15-33
+openviking_cli/utils/config/open_viking_config.py
+  h_b34c679d17e2ac 9,75,82-94,225
+openviking_cli/utils/config/ovcli_config.py
+  h_b34c679d17e2ac 59-60
+openviking_cli/utils/config/queue_worker_config.py
+  h_b34c679d17e2ac 39
+openviking_cli/utils/config/rerank_config.py
+  h_b34c679d17e2ac 33-36,91-95
+openviking_cli/utils/config/retrieval_config.py
+  h_b34c679d17e2ac 8
+openviking_cli/utils/config/runtime_field.py
+  h_b34c679d17e2ac 8-9,16-19,22-25,65-69,77,106,108-110
+openviking_cli/utils/config/vlm_config.py
+  h_b34c679d17e2ac 12-13,42-57,61-63,71-74,77-80,83,87,92,136-144,242,697-699,702-709,717-723,798,807,818,828,847,857,920,930
+pyproject.toml
+  h_b34c679d17e2ac 13,125,128
+scripts/build_support/readme.py
+  h_b34c679d17e2ac 1-59
+scripts/check-hermes-plugin-install.py
+  h_b34c679d17e2ac 1-201
+scripts/check-hermes-quick-local.py
+  h_b34c679d17e2ac 1-376
+sdk/go/README.md
+  h_b34c679d17e2ac 144-160,172
+sdk/go/acl.go
+  h_b34c679d17e2ac 1-3,18-24
+sdk/go/admin.go
+  h_b34c679d17e2ac 1-3
+sdk/go/agent_evolution.go
+  h_b34c679d17e2ac 1-3
+sdk/go/client.go
+  h_b34c679d17e2ac 1-3
+sdk/go/client_test.go
+  h_b34c679d17e2ac 1-3,133-135,153-161,180,239-241,246-289,291,306-320,331-339,345-350,354-367,370-389,392-397,430,442,448-449,459,461,490-509,665-667,695,734-736,740-742,752-757,794-813,1311-1330,1918-1976
+sdk/go/compile.go
+  h_b34c679d17e2ac 1-3
+sdk/go/errors.go
+  h_b34c679d17e2ac 1-3
+sdk/go/examples/basic_usage/main.go
+  h_b34c679d17e2ac 1-3
+sdk/go/filesystem.go
+  h_b34c679d17e2ac 1-3,15-23,35-38,49-55,76-78,80-84,89-97,109-112,125-131,133-135,144-146,154-158,178,181-183,288-294,339-341,350-351,385-391,398
+sdk/go/helpers.go
+  h_b34c679d17e2ac 1-3
+sdk/go/openviking_assets.go
+  h_b34c679d17e2ac 1-3
+sdk/go/pack.go
+  h_b34c679d17e2ac 1-3
+sdk/go/resources.go
+  h_b34c679d17e2ac 1-3,49-55
+sdk/go/retrieval.go
+  h_b34c679d17e2ac 1-3,33,74,81,114,133
+sdk/go/sessions.go
+  h_b34c679d17e2ac 1-3
+sdk/go/skills.go
+  h_b34c679d17e2ac 1-3
+sdk/go/system.go
+  h_b34c679d17e2ac 1-3,10,55-56,60-61,65-66,70-71,74-79,81
+sdk/go/transport.go
+  h_b34c679d17e2ac 1-3,20,68-72,77,83,90,96,100,103,106,113-116,118
+sdk/go/types.go
+  h_b34c679d17e2ac 1-3,28,161-165,190-211,216-235,247,288,297-313,318-336,341-367,554-555
+sdk/go/upload.go
+  h_b34c679d17e2ac 1-3
+sdk/go/watches.go
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/__init__.py
+  h_b34c679d17e2ac 1-3,26,35,59,74
+sdk/python/openviking_sdk/_utils.py
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/actor_peer.py
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/client.py
+  h_b34c679d17e2ac 1-3,18,56,65,70,685,1066-1068,1070-1110,1120,1122-1125,1142-1146,1161-1164,1166-1202,1211,1213-1218,1232-1236,1252-1254,1258-1259,1395,1400-1406,1410,1873,1883,1887-1888,1896-1900,1903-1907,1910-1914,1917-1921,2173-2183,2557-2559,2561-2600,2602,2617-2619,2636-2639,2641-2676,2678,2690-2693,2703-2706,2767,3041,3044-3052,3196-3206
+sdk/python/openviking_sdk/config.py
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/errors.py
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/message.py
+  h_b34c679d17e2ac 1-3
+sdk/python/openviking_sdk/options.py
+  h_b34c679d17e2ac 1-3,33,37,41,52,68,84,97,101,120,122-132
+sdk/python/openviking_sdk/uploads.py
+  h_b34c679d17e2ac 1-3,22-25,27-34
+sdk/python/tests/conftest.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_actor_peer.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_async_client_behaviors.py
+  h_b34c679d17e2ac 1-3,313,315,324,326,348-364,402-419,477,485,494-495,497-498,500-509,513,730-743,751-789,905-907,912-913,917-931,1245-1263,1367-1385,1488-1490,1492-1499,1502,1514-1525,1527-1529,1540-1542,1556-1559
+sdk/python/tests/test_client_config.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_error_mapping.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_ldap_auth.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_legacy_shims.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_main_package_exports.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_ovcli_config_compat.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_packaging_imports.py
+  h_b34c679d17e2ac 1-3
+sdk/python/tests/test_uploads.py
+  h_b34c679d17e2ac 1-3,9-59
+sdk/python/tests/test_utils.py
+  h_b34c679d17e2ac 1-3
+sdk/typescript/src/client.ts
+  h_b34c679d17e2ac 1-3,14,30,37,48,166-170,195-197,288-290,396-398,428,441,499-526,528-532,535-560,562-566,581,583-612,681,683-685,721,747,751-753,756,1106-1109,1112-1115,1118-1121,1124-1127,1276-1281
+sdk/typescript/src/errors.ts
+  h_b34c679d17e2ac 1-3
+sdk/typescript/src/index.ts
+  h_b34c679d17e2ac 1-3
+sdk/typescript/src/node-files.ts
+  h_b34c679d17e2ac 1-3,69,76-81
+sdk/typescript/src/transport.ts
+  h_b34c679d17e2ac 1-3,67-76,145-151,175
+sdk/typescript/src/types.ts
+  h_b34c679d17e2ac 1-3,15-16,80-84,87,103,108,112,134,143,146,166,169,172,176,189,225-227,234,242-244,246,251,255-264,377-378,415
+sdk/typescript/tests/client.test.ts
+  h_b34c679d17e2ac 1-3,51-55,65,112,116,123,128,188,294-310,347,357,359,367,369,463-469,471-474,477-527,623-624,627-636,642,648-655,659-663,665-668,677-687,689,696-703,757-772,984-1033,1353-1382
+sdk/typescript/tests/node-consumer/index.ts
+  h_b34c679d17e2ac 1-3
+setup.py
+  h_b34c679d17e2ac 30-32,566-567
+src/abi3_engine_backend.cpp
+  h_b34c679d17e2ac 802-809,1336-1337,1342-1343
+src/index/common_structs.h
+  h_b34c679d17e2ac 32
+src/index/detail/index_manager_impl.cpp
+  h_b34c679d17e2ac 5-6,29-30,35-40,43,512-534,537,551-590
+src/index/detail/index_manager_impl.h
+  h_b34c679d17e2ac 25
+src/index/detail/meta/vector_index_meta.h
+  h_b34c679d17e2ac 12-13
+src/index/detail/vector/common/bruteforce.h
+  h_b34c679d17e2ac 265-267,270-273
+src/index/index_engine.cpp
+  h_b34c679d17e2ac 10-11
+src/index/index_engine.h
+  h_b34c679d17e2ac 17-18
+tests/agfs/test_viking_fs_git.py
+  h_b34c679d17e2ac 629-643,652,693,731,772,808,843,914,974
+tests/client/test_http_client_compact.py
+  h_b34c679d17e2ac 92-99
+tests/client/test_rebuild_clients.py
+  h_b34c679d17e2ac 133,135,143,145-146,165,167,173-174,176-178,212,220,224
+tests/config/test_runtime_config.py
+  h_b34c679d17e2ac 414-417,419-436,517,544-549,551-553,687-717,719-766,780-781,791,814-820
+tests/conftest.py
+  h_b34c679d17e2ac 113-131
+tests/connector/test_auth.py
+  h_b34c679d17e2ac 1-289
+tests/engine/test_index_engine.cpp
+  h_b34c679d17e2ac 57,68,79,86,99,112-131,191-192,235-245
+tests/eval/test_ragas_basic.py
+  h_b34c679d17e2ac 62
+tests/integration/test_agent_memory_e2e.py
+  h_b34c679d17e2ac 192
+tests/integration/test_compile_memory_xiaomei.py
+  h_b34c679d17e2ac 1-100,103-126,128-152,154-175,177-200,202-220,223-229,232-1035
+tests/integration/test_compressor_v2_xiaomei.py
+  h_b34c679d17e2ac 7,26,29-30,112,117,131,135,137,141,151,162,165,173,177,179,188,214,219-222,225-226,233,235-238,241-245,247-249,273-278,300-310,313,317,320,337
+tests/integration/test_encryption_integration.py
+  h_b34c679d17e2ac 137
+tests/integration/test_volcengine_kms_encryption_integration.py
+  h_b34c679d17e2ac 256
+tests/metrics/collectors/test_event_collectors.py
+  h_b34c679d17e2ac 12,61-130,303-305,411-413,425-430,432-435,446-454,457-459,465-474
+tests/metrics/integration/test_telemetry_bridge.py
+  h_b34c679d17e2ac 6,10-33
+tests/misc/test_debug_service.py
+  h_b34c679d17e2ac 7-8,144-145,198,201,235-236,240-247,249,285-286,312-319,321,357-358,361-368,370,393-432,443-490,511-512
+tests/misc/test_ovpack_import_policy.py
+  h_b34c679d17e2ac 13,320-334,409-411,815-816,835-836,904-905,925,929,932,938-939,955,1178-1181
+tests/misc/test_readme_long_description.py
+  h_b34c679d17e2ac 1-39
+tests/misc/test_resource_processor_mv.py
+  h_b34c679d17e2ac 681,683,687-688,716-718,722-723
+tests/misc/test_retrieval_enable_intent.py
+  h_b34c679d17e2ac 13,23,29,57
+tests/misc/test_tree_builder_dedup.py
+  h_b34c679d17e2ac 115,131,135
+tests/misc/test_vikingfs_find_without_rerank.py
+  h_b34c679d17e2ac 44,58-60,69,110,120,132-134,159,179,198
+tests/models/test_query_embedding_cache.py
+  h_b34c679d17e2ac 13,15,47,58,71,85,107,122,129,134-215,217,220-221,226,236,242,252-254,256,264
+tests/models/vlm/test_volcengine_media.py
+  h_b34c679d17e2ac 4,8,10,77-126,129-130,133-140
+tests/observability/test_usage_audit_runtime.py
+  h_b34c679d17e2ac 6-7,10,12,15,20-21,23-27,80-172
+tests/parse/test_add_directory.py
+  h_b34c679d17e2ac 354,357-359,366-368,371-372
+tests/parse/test_feishu_accessor.py
+  h_b34c679d17e2ac 1535-1537,1611-1615
+tests/parse/test_markdown_no_split.py
+  h_b34c679d17e2ac 116-128
+tests/parse/test_media_understanding_summary.py
+  h_b34c679d17e2ac 187,224,253,278,305,331
+tests/pyagfs/test_async_client_fs_ctx.py
+  h_b34c679d17e2ac 17,41-52,90-102
+tests/retrieve/test_context_assembler_pipeline.py
+  h_b34c679d17e2ac 51-71,98,175-176,181,196,204,442,448,759-786
+tests/retrieve/test_hierarchical_retriever_image.py
+  h_b34c679d17e2ac 74,96
+tests/retrieve/test_hierarchical_retriever_keywords.py
+  h_b34c679d17e2ac 1-81
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  h_b34c679d17e2ac 4,19,52-55,58-60,62,65-68,73-74,110-112,117-130,132-135,137-145,148-149,151-163,246-249,251-253,255,260-271,273,275-277,283-288,324-329,334,339,342,344,351,353,355,360-361,388,398-399,402-408,422,430
+tests/retrieve/test_intent_analyzer_query_planner.py
+  h_b34c679d17e2ac 95,122,145,170,192,203,208
+tests/retrieve/test_skill_package_results.py
+  h_b34c679d17e2ac 57,61,64-68
+tests/server/test_admin_api.py
+  h_b34c679d17e2ac 22-23,137,191,1384,1466-1468,1478,1644-1671,1675,1687-1696,2200-2201,3247-3248,3319-3359
+tests/server/test_admin_rebuild_api.py
+  h_b34c679d17e2ac 4,30-36,67-68,150-154,158,160-163,241-280,286,341,347-349,357-363,366,370,378,380,383,431,467-468,470,472,474-475,477-479,481-482,486-487,489-491,493-494,497,499,502-505,507-508,510-511,513-515,517-521,524,526,532-537,541-559,565-568,570-574,576-587,589,591-592,599-605,607-612,626,631-632,650,654-656,658,660-661,663,665,668-669,671-675,678-684,688-690,692,694-695,697,699,702,704-708,711-717,721-722,724-725,727-728,730-732,734-744,746,748,750-756,758,761,763-768,771-772,774,778-779,781,783,785-787,789-790,792-803,805-808,812,814-819,822-824,828-829,831-854,856-878,880-885,887,890,893-894,896-901,904-910,914-915,917-940,942-944,947,950-951,953-958,961-964,968-969,971-1001,1003,1006-1007,1009-1014,1017,1020,1022,1024-1027,1030,1032,1036-1037,1039,1042-1044,1049,1055-1062,1066-1069,1073-1076,1078,1080-1082,1084-1087,1089-1092,1094,1100-1102,1106-1109,1121-1123,1129-1130,1143,1165,1189-1222,1229-1230,1232,1245-1246,1262,1290-1291,1293,1306-1307,1311,1316,1319,1332,1336-1337,1342,1347-1348,1354-1355,1357,1359,1362,1463,1468-1469,1473,1489,1514,1519-1520,1524,1540,1565,1567-1568,1571,1586,1615-1616,1619,1634-1640,1665,1670-1671,1675,1691,1735,1737-1740,1742-1743,1745-1749,1751-1755,1758-1759,1768-1777,1780-1782,1785,1807,1852,1892,1949-1954,1956,1969,2044,2054,2058,2102,2174,2181,2187,2225,2232,2242,2287,2294,2321,2362,2369,2404,2482,2487-2488,2492,2508-2511,2543,2548-2549,2553,2569-2571,2575-2577,2579-2580,2582,2584-2587,2590-2595,2602-2609,2611,2614-2615,2619,2654,2668-2672,2679,2682-2684,2690-2691,2704-2705,2715-2719,2728-2729,2735-2736,2745,2753-2754
+tests/server/test_agent_evolution_global_setting.py
+  h_b34c679d17e2ac 387-416
+tests/server/test_api_content.py
+  h_b34c679d17e2ac 7,14,46-56,106-123,126-127,130-136,140-161
+tests/server/test_api_content_write.py
+  h_b34c679d17e2ac 305-370
+tests/server/test_api_key_manager.py
+  h_b34c679d17e2ac 19,650-691
+tests/server/test_api_observer.py
+  h_b34c679d17e2ac 6-7,24-26,31-59,63,68-72,86-98
+tests/server/test_api_search.py
+  h_b34c679d17e2ac 61-98
+tests/server/test_api_search_context.py
+  h_b34c679d17e2ac 98-142
+tests/server/test_api_session_reset.py
+  h_b34c679d17e2ac 92,170
+tests/server/test_api_sessions.py
+  h_b34c679d17e2ac 539,642,659,684
+tests/server/test_api_snapshot.py
+  h_b34c679d17e2ac 287-292,652-657,706-711
+tests/server/test_content_write_service.py
+  h_b34c679d17e2ac 108,110-111,114,116-117,119-120,122-127,129-130,132-140,142-156,158-159,165-173,175-203,208,212-214,216-223,227-229,234-235,237-238,247,250-251,254-311,1259-1260,1282-1286,1289-1290,1579-1640
+tests/server/test_filesystem_router.py
+  h_b34c679d17e2ac 15,173,372,381,385,393,398-400,403,413-415,418-421
+tests/server/test_mcp_endpoint.py
+  h_b34c679d17e2ac 47,725,747,1263-1266,1276-1284,1463,1499,2055-2063,2382-2389,2395-2405,2419-2441
+tests/server/test_mcp_grep_failures.py
+  h_b34c679d17e2ac 47,49-51,55,64
+tests/server/test_mcp_search_bounds.py
+  h_b34c679d17e2ac 24,78,91-103
+tests/server/test_mcp_search_modes.py
+  h_b34c679d17e2ac 105-112
+tests/server/test_privacy_config_service.py
+  h_b34c679d17e2ac 9,215-218,223,350
+tests/server/test_resource_parse_mode_request.py
+  h_b34c679d17e2ac 60
+tests/server/test_resources_temp_upload_token.py
+  h_b34c679d17e2ac 20,31-68,70-143,155,170,207-209,229
+tests/server/test_server_health.py
+  h_b34c679d17e2ac 9,16,54-82,132-136,326
+tests/server/test_upload_token_store.py
+  h_b34c679d17e2ac 9,22,34,46-47,52
+tests/service/test_fs_service.py
+  h_b34c679d17e2ac 12,14-17,107-176,487-493,495-499,507-556,706,715-716,722-728,739-749,762-763,766-779,815,819-821,825-827,829-839,844-848,863-866,869-886,908,912
+tests/service/test_resource_service_connector.py
+  h_b34c679d17e2ac 22,24,430-450,452,454,2312-2385,2880-2927
+tests/service/test_resource_service_watch.py
+  h_b34c679d17e2ac 306-307,406-426,508-515,526-529,536-537,539,602-622,1632-1763
+tests/service/test_task_processing_time.py
+  h_b34c679d17e2ac 13-16,52,54,57,65,171-173,183,207-209
+tests/session/memory/test_consolidation_compile.py
+  h_b34c679d17e2ac 1-1268
+tests/session/memory/test_entities_template.py
+  h_b34c679d17e2ac 26-28
+tests/session/memory/test_extraction_output_protocol.py
+  h_b34c679d17e2ac 80-105,207-228,592,776,1124-1166,1214,1228-1260,1805
+tests/session/memory/test_memory_react.py
+  h_b34c679d17e2ac 14,24-30,228-542
+tests/session/memory/test_memory_react_system_prompt.py
+  h_b34c679d17e2ac 7-10,16-36,289-291,307-310,346-349,368-371,391-394
+tests/session/memory/test_memory_updater.py
+  h_b34c679d17e2ac 44,549-552,1026-1731
+tests/session/memory/test_streaming_memory_updater.py
+  h_b34c679d17e2ac 7,34,49-77,130-134,384-502,1012-1045,1822,1855,1886,1895,1902,1935,1967,1990,2022
+tests/session/test_commit_skill_inference.py
+  h_b34c679d17e2ac 383-386,407-408,412
+tests/session/test_session_retention_integration.py
+  h_b34c679d17e2ac 14-20,22,72,116,227-228,961,966,1014,1024,1082,1092,1126,1196,1558,1586,1745,1757,1782,1797,1895
+tests/session/test_tool_result_externalization.py
+  h_b34c679d17e2ac 9,88
+tests/session/train/test_gradient_estimator_component.py
+  h_b34c679d17e2ac 6,8,255-256,258-259,262,271,273,277
+tests/session/train/test_trajectory_analyzer_component.py
+  h_b34c679d17e2ac 25-50,172,175-184,188,221,252,286
+tests/storage/mock_backend.py
+  h_b34c679d17e2ac 113-114
+tests/storage/test_bulk_upsert.py
+  h_b34c679d17e2ac 8,29-37,199,209,221,229,248,261-262,279,296,309-310,328,347-351
+tests/storage/test_collection_schemas.py
+  h_b34c679d17e2ac 8,10,23-25,37,63-100,116-118,528-535,549-550,552,563,621,633-634,652-655,832,850-853,898,979,1005,1014-1040,1160,1474-1494,1560,1589-1592,2029,2031-2032,2036,2054-2055,2079-2081,2090,2142-2144,2148,2201-2203,2207,2742-2745,2756,3218,3220-3224,3231,3235,3239,3243,3247,3264
+tests/storage/test_context_update_plan.py
+  h_b34c679d17e2ac 309-327,993-1039,1043-1365,1993,1996-1997,2003-2044,2640-2644,2661-2670,2681-2699,2703-2707,2709-2713,2716-2718,2723,2730-2753,2757-2818,3448,3482-3484,3549,3626-3627,3636,3642
+tests/storage/test_embedding_msg.py
+  h_b34c679d17e2ac 27,44,51-58,62-66,141,153-159,163-167,176,184,191,195-200,217,280,291-294,317-320
+tests/storage/test_embedding_msg_converter_tenant.py
+  h_b34c679d17e2ac 4,11,30,36,62-72
+tests/storage/test_memory_semantic_stall.py
+  h_b34c679d17e2ac 24-28,56,96,110,143,178,215
+tests/storage/test_named_queue_middleware.py
+  h_b34c679d17e2ac 112-209,279-285,302-303
+tests/storage/test_queue_duration_binding.py
+  h_b34c679d17e2ac 1-29
+tests/storage/test_queue_manager.py
+  h_b34c679d17e2ac 43,49,141-142,148
+tests/storage/test_queue_observer.py
+  h_b34c679d17e2ac 80-131
+tests/storage/test_reindex_msg.py
+  h_b34c679d17e2ac 1-362
+tests/storage/test_resource_diff_snapshot.py
+  h_b34c679d17e2ac 316-372
+tests/storage/test_resource_rfv.py
+  h_b34c679d17e2ac 1-1065
+tests/storage/test_semantic_executor_incremental.py
+  h_b34c679d17e2ac 141,144,150,153,164,167,170,176-177,223-388
+tests/storage/test_semantic_executor_skip_files.py
+  h_b34c679d17e2ac 56,63,112-115,131,151-154
+tests/storage/test_semantic_executor_stats.py
+  h_b34c679d17e2ac 389-416
+tests/storage/test_semantic_msg_ingest_options.py
+  h_b34c679d17e2ac 4-5,11-13,17-19,29,31,35,52,136-154
+tests/storage/test_semantic_msg_timestamp.py
+  h_b34c679d17e2ac 49-54,60-66
+tests/storage/test_semantic_processor_code_routing.py
+  h_b34c679d17e2ac 9,29-37,62-64,71-73
+tests/storage/test_semantic_processor_language.py
+  h_b34c679d17e2ac 24-32,228-230,456,505
+tests/storage/test_semantic_processor_lock_ownership.py
+  h_b34c679d17e2ac 6-8,12-13,16-21,53,74-140,145
+tests/storage/test_semantic_processor_overview_batching.py
+  h_b34c679d17e2ac 34-42,68-70,109,146-149,152,158-159
+tests/storage/test_semantic_processor_permanent_storage_error.py
+  h_b34c679d17e2ac 14,18-19,38-40,42-43,48-49,116,120-121,125,152-156,164-167,201-203,208-209,215,230-231,234,236,243,246,257,259-260,264,275-276,278,280,289-290
+tests/storage/test_semantic_processor_target_preexisting.py
+  h_b34c679d17e2ac 11-15,122,168,208,237,252,291,324,344
+tests/storage/test_semantic_queue_memory_dedupe.py
+  h_b34c679d17e2ac 21-25,163,218,226-229,266,277-280,339
+tests/storage/test_skill_package_cancellation.py
+  h_b34c679d17e2ac 177-183,190-194,282-285
+tests/storage/test_skill_package_semantics.py
+  h_b34c679d17e2ac 63-66
+tests/storage/test_transfer_merge_binding.py
+  h_b34c679d17e2ac 49,52,97,146,173,221,314,361,404,485
+tests/storage/test_vector_migration.py
+  h_b34c679d17e2ac 102,105,107,110,119-120,126,128-129
+tests/storage/test_vector_transfer.py
+  h_b34c679d17e2ac 79,280,286,387-391,408-412,572-574,580,863,868,917-919,924,1382,1401,1403,1444,1448-1456
+tests/storage/test_viking_fs_cp.py
+  h_b34c679d17e2ac 443
+tests/storage/test_viking_fs_glob.py
+  h_b34c679d17e2ac 22-26
+tests/storage/test_viking_fs_grep.py
+  h_b34c679d17e2ac 52-101,299-320,342-405,1341
+tests/storage/test_viking_fs_tree.py
+  h_b34c679d17e2ac 6,431-471,545,556-557,628,655,660,662-663,665-689,691-693,695-701,703-706,721,724,726,736,753,761,767,771-774,776,778,792-810,822-823,825-835,838-845,847-851,853-865,867-869,871-880
+tests/storage/test_viking_vector_scope_filter.py
+  h_b34c679d17e2ac 4-5,81-90,98,181-215,218-220,230,237,246-252,259,268,276,284,290,294-296,306,325-333,336-339,344,350,361,363-370,376,382-386,393,407,413,459-460,462-476,478,480-482,485-509,541,549
+tests/storage/test_volcengine_clients.py
+  h_b34c679d17e2ac 5-6,238-260,367,375-381,397-404,407-412,431-456
+tests/test_config_loader.py
+  h_b34c679d17e2ac 133,158,168,179,442,480,483
+tests/test_link_renderer.py
+  h_b34c679d17e2ac 611-626
+tests/test_telemetry_runtime.py
+  h_b34c679d17e2ac 10,25,733-734,744-745,747-748,767,772,779,789-790,801-802,804-805,825,830,834,860-863,867-869,888,892-893
+tests/test_token_estimation.py
+  h_b34c679d17e2ac 7,39,41,55,57
+tests/unit/crypto/test_providers_mock.py
+  h_b34c679d17e2ac 309-327
+tests/unit/models/rerank/test_jev_rerank.py
+  h_b34c679d17e2ac 11,45,69,86,101,117,128,137,150,162-268,274-296,327-334
+tests/unit/service/test_core_embedder_lifecycle.py
+  h_b34c679d17e2ac 5,7,11-12,14-15,19,21,34,40-49,53-65,69,76-77,81-94,99,102,104,106
+tests/unit/service/test_session_auto_commit.py
+  h_b34c679d17e2ac 222,474,508,528,551,574,591,601,603,610,616,631,633,641-644,648,674,676,684,704,724,752,775,795,832
+tests/unit/session/memory/test_embedding_template.py
+  h_b34c679d17e2ac 107-112,114,154,201-204,207-214,216-221,223-226,265-268,317-320,370-373,422-425,473-476,524-527
+tests/unit/session/memory/test_extract_loop_match_text.py
+  h_b34c679d17e2ac 1370,1376
+tests/unit/session/test_event_tag_concurrency.py
+  h_b34c679d17e2ac 79
+tests/unit/session/test_extraction_batch.py
+  h_b34c679d17e2ac 4,88-96,132-139,152-172,174-178,180-181,183-184
+tests/unit/session/test_session_commit_resume.py
+  h_b34c679d17e2ac 111,229-230
+tests/unit/session/test_wm_v2_guards.py
+  h_b34c679d17e2ac 17-19,63-64,70-71,75-76,88,92,96,100,104-105,116,121,127,134,138,142,153,162,168,174,182,186,197,202,207,212,218,223,239,246,252,260,271,280,290-311,316,325,333,340,349,358,365,371,385,391,397,408,415-416,420,429,434,513-514,545,548,551,554,557,604,620,635,650,667,683,687,699,718,733,745,761,769,774,784,794,817-825,827
+tests/unit/session/test_working_memory_growth.py
+  h_b34c679d17e2ac 5,43-45,48-49,67,85,103,138,222,259,289,312,321,330,359,377,379,393,395,402,404,423,430-431,461,489,505,519,535,546,565,581
+tests/unit/session/test_working_memory_v2.py
+  h_b34c679d17e2ac 5,52,77,96,117
+tests/unit/test_connector_config.py
+  h_b34c679d17e2ac 41,62-63,69-74
+tests/unit/test_extra_headers_vlm.py
+  h_b34c679d17e2ac 11,13-15,351-359,361-362,364-375,385-387,389-391,491-512,514,521-530,534,538-548,550-552,579-676
+tests/unit/test_find_skills_entrypoint.py
+  h_b34c679d17e2ac 46,70-80
+tests/unit/test_jina_embedder.py
+  h_b34c679d17e2ac 13,350-356
+tests/unit/test_mcp_tool_error_results.py
+  h_b34c679d17e2ac 1-190
+tests/unit/test_model_retry.py
+  h_b34c679d17e2ac 264-267,307-318,323-325,327,330,332
+tests/unit/test_search_service_keywords.py
+  h_b34c679d17e2ac 7,11-12,16-22,24-32
+tests/unit/test_search_type_import_boundary.py
+  h_b34c679d17e2ac 1-18
+tests/unit/test_server_bootstrap_bot_gateway.py
+  h_b34c679d17e2ac 186,189,191,195,197-199,201,204,206,208-211
+tests/unit/test_vectorize_file_strategy.py
+  h_b34c679d17e2ac 56-60,328-354,708-727
+tests/unit/test_vlm_failover.py
+  h_b34c679d17e2ac 10-14,640-641,643-649,652-717
+tests/unit/test_vlm_reasoning_models.py
+  h_b34c679d17e2ac 5-6,14-15,19
+tests/utils/test_ingest_options.py
+  h_b34c679d17e2ac 1-31
+tests/utils/test_resource_processor_processing_mode.py
+  h_b34c679d17e2ac 171,210,296,402,461-462,514-515,569-570,604-605
+tests/vectordb/test_cuvs_index.py
+  h_b34c679d17e2ac 851-852,859-863,869,889-895,905
+tests/vectordb/test_engine_filter_routing_abi.py
+  h_b34c679d17e2ac 13,36
+tests/vectordb/test_local_collection_projection.py
+  h_b34c679d17e2ac 6,10,14,73-144
+tests/vectordb/test_opengauss_adapter_complete.py
+  h_b34c679d17e2ac 1441-1453
+uv.lock
+  h_b34c679d17e2ac 3603-3604
+web-studio/CONTRIBUTING_CN.md
+  h_b34c679d17e2ac 132
+web-studio/index.html
+  h_b34c679d17e2ac 5-6
+web-studio/public/favicon.svg
+  h_b34c679d17e2ac 1
+web-studio/src/components/account-acl-settings.test.tsx
+  h_b34c679d17e2ac 1-79
+web-studio/src/components/account-acl-settings.tsx
+  h_b34c679d17e2ac 1-166
+web-studio/src/components/account-switcher.tsx
+  h_b34c679d17e2ac 249
+web-studio/src/components/app-shell.tsx
+  h_b34c679d17e2ac 317
+web-studio/src/components/resource-acl-identity-recovery.tsx
+  h_b34c679d17e2ac 1-172
+web-studio/src/components/resource-permissions.test.tsx
+  h_b34c679d17e2ac 1-472
+web-studio/src/components/resource-permissions.tsx
+  h_b34c679d17e2ac 1-828
+web-studio/src/hooks/use-acl-management.ts
+  h_b34c679d17e2ac 1-71
+web-studio/src/i18n/locales/en.ts
+  h_b34c679d17e2ac 7,15
+web-studio/src/i18n/locales/en/memory-templates.ts
+  h_b34c679d17e2ac 1-101
+web-studio/src/i18n/locales/en/resources.ts
+  h_b34c679d17e2ac 318
+web-studio/src/i18n/locales/en/workspace.ts
+  h_b34c679d17e2ac 9,213,234,236-237,782-965,967,970,983,1042,1049,1177,1191,1233
+web-studio/src/i18n/locales/zh-CN.ts
+  h_b34c679d17e2ac 7,15
+web-studio/src/i18n/locales/zh-CN/memory-templates.ts
+  h_b34c679d17e2ac 1-91
+web-studio/src/i18n/locales/zh-CN/resources.ts
+  h_b34c679d17e2ac 299
+web-studio/src/i18n/locales/zh-CN/workspace.ts
+  h_b34c679d17e2ac 9,212,232,234-235,750-922,924,927,939,997,1003,1127,1138,1180
+web-studio/src/lib/admin.ts
+  h_b34c679d17e2ac 126
+web-studio/src/lib/memory-templates.test.ts
+  h_b34c679d17e2ac 1-42
+web-studio/src/lib/memory-templates.ts
+  h_b34c679d17e2ac 1-99
+web-studio/src/lib/resource-acl.test.ts
+  h_b34c679d17e2ac 1-122
+web-studio/src/lib/resource-acl.ts
+  h_b34c679d17e2ac 1-105
+web-studio/src/routeTree.gen.ts
+  h_b34c679d17e2ac 22,28,32-34,91-95,121-125,141-155,188,196,203-205,209,217,229-231,235,245,253,260-262,266,277,292-294,298,306,318-320,324,333,348-350,354,364,372,454-460,496-502,524-544,608-625,643,651
+web-studio/src/routes/agent-experience/-lib/api.test.ts
+  h_b34c679d17e2ac 6,10-14,16,89-125
+web-studio/src/routes/agent-experience/-lib/api.ts
+  h_b34c679d17e2ac 57-99
+web-studio/src/routes/agent-experience/index.tsx
+  h_b34c679d17e2ac 48,208,215-221,224-226,233,240,313-344,390,436-440,477,490,493,499,507-511,541-553
+web-studio/src/routes/permissions/-components/permissions-page.tsx
+  h_b34c679d17e2ac 1-311
+web-studio/src/routes/permissions/route.test.tsx
+  h_b34c679d17e2ac 1-174
+web-studio/src/routes/permissions/route.tsx
+  h_b34c679d17e2ac 1-5
+web-studio/src/routes/resources/-components/additional-resource-options.tsx
+  h_b34c679d17e2ac 211-214,225
+web-studio/src/routes/resources/-lib/resource-import-request.test.ts
+  h_b34c679d17e2ac 184-197
+web-studio/src/routes/resources/-lib/resource-import-request.ts
+  h_b34c679d17e2ac 79-83
+web-studio/src/routes/resources/-lib/resource-import-types.ts
+  h_b34c679d17e2ac 11
+web-studio/src/routes/users/-components/memory-templates-page.test.tsx
+  h_b34c679d17e2ac 1-144
+web-studio/src/routes/users/-components/memory-templates-page.tsx
+  h_b34c679d17e2ac 1-619
+web-studio/src/routes/users/-components/user-groups.tsx
+  h_b34c679d17e2ac 114,116,225
+web-studio/src/routes/users/-lib/use-user-group-memberships.test.tsx
+  h_b34c679d17e2ac 1-87
+web-studio/src/routes/users/-lib/use-user-group-memberships.ts
+  h_b34c679d17e2ac 1-51
+web-studio/src/routes/users/groups.tsx
+  h_b34c679d17e2ac 1-31
+web-studio/src/routes/users/index.tsx
+  h_b34c679d17e2ac 1-6
+web-studio/src/routes/users/memory-templates.tsx
+  h_b34c679d17e2ac 1-6
+web-studio/src/routes/users/permissions.tsx
+  h_b34c679d17e2ac 1-6
+web-studio/src/routes/users/route.test.ts
+  h_b34c679d17e2ac 1-16
+web-studio/src/routes/users/route.tsx
+  h_b34c679d17e2ac 3-9,18,21,23,35,102-103,125-127,129-135,138-149,152-178,180-184,186-190,196,273-276,436-438,440,455-470,579,590,617-618,628-648,700-745
+web-studio/src/routes/vikingbot/-components/brand-icons/dingtalk.svg
+  h_b34c679d17e2ac 1
+web-studio/src/routes/vikingbot/-components/brand-icons/discord.svg
+  h_b34c679d17e2ac 1
+web-studio/src/routes/vikingbot/-components/brand-icons/feishu.svg
+  h_b34c679d17e2ac 1
+web-studio/src/routes/vikingbot/-components/brand-icons/slack.svg
+  h_b34c679d17e2ac 1
+web-studio/src/routes/vikingbot/-components/brand-icons/telegram.svg
+  h_b34c679d17e2ac 1
+web-studio/src/routes/vikingbot/-components/platform-icon.tsx
+  h_b34c679d17e2ac 1-5,7-14,18-21,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b8fa76af4d21109df7381fc67d6c21f9c58756a9",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
