@@ -15,6 +15,17 @@
         "ref": "main"
       },
       "category": "productivity"
+    },
+    {
+      "name": "ov-usage",
+      "description": "Shows which OpenViking sources each Claude Code answer consulted, in a sidebar or as cards in the conversation",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/volcengine/OpenViking.git",
+        "path": "examples/claude-code-usage-plugin",
+        "ref": "main"
+      },
+      "category": "productivity"
     }
   ]
 }
