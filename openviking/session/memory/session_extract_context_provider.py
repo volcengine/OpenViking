@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
+from openviking.session.memory.constants import EXPERIENCE_MEMORY_TYPE
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import (
@@ -22,7 +23,6 @@ from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     get_default_registry,
 )
-from openviking.session.memory.constants import EXPERIENCE_MEMORY_TYPE
 from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
