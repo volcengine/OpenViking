@@ -184,7 +184,11 @@ Uninstalling leaves openviking-memory and everything in OpenViking unchanged. To
 
 ## Development
 
-- `hooks/register.tsx`: the sidebar, the cards, the `/openviking-usage` command, and the hooks that record recall and lookups.
+- `hooks/register.tsx`: the hooks, and everything that uses Claude Code's engine handle `$`: session state, reading openviking-memory's files, the `/openviking-usage` command, the sidebar and the cards. Claude Code requires these in the module `hooks.json` names, since it doesn't follow `$` into imported files.
+- `hooks/parse.ts`: pure parsing of recall blocks, the startup context, `viking://` URIs, redaction and text fingerprints.
+- `hooks/sources.ts`: what a source is: its kind, group and relevance, and what one answer consulted.
+- `hooks/openviking.ts`: the formats of openviking-memory's settings and registry record, and the totals across sessions.
+- `hooks/strings.ts`: English and Chinese labels.
 - `types/index.d.ts`: the shape of the values the plugin keeps.
 - `tests/`: run them with `claude plugin test examples/claude-code-usage-plugin`. Check the plugin with `claude plugin validate examples/claude-code-usage-plugin`.
 

@@ -185,7 +185,11 @@ claude plugin uninstall ov-usage@openviking
 
 ## 开发
 
-- `hooks/register.tsx`：侧边栏、卡片、`/openviking-usage` 命令，以及记录召回和查找的 hooks。
+- `hooks/register.tsx`：hooks，以及所有用到 Claude Code 引擎句柄 `$` 的代码：会话状态、读取 openviking-memory 的文件、`/openviking-usage` 命令、侧边栏和卡片。Claude Code 不会跟随 `$` 进入被导入的文件，所以这些代码必须放在 `hooks.json` 指定的模块里。
+- `hooks/parse.ts`：纯解析：召回块、启动上下文、`viking://` URI、脱敏和文本指纹。
+- `hooks/sources.ts`：来源的类型、分组和相关度，以及一次回答参考了哪些来源。
+- `hooks/openviking.ts`：openviking-memory 设置和注册表记录的格式，以及跨会话的累计数据。
+- `hooks/strings.ts`：中英文标签。
 - `types/index.d.ts`：插件保存的数据结构。
 - `tests/`：用 `claude plugin test examples/claude-code-usage-plugin` 运行；用 `claude plugin validate examples/claude-code-usage-plugin` 检查插件。
 

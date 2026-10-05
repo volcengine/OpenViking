@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "check": "claude plugin validate . && tsc -p .",
-    "format": "prettier --no-config --print-width 100 --write \"hooks/*.tsx\" \"tests/*.ts\" \"types/*.ts\"",
+    "format": "prettier --no-config --print-width 100 --write \"hooks/*.ts\" \"hooks/*.tsx\" \"tests/*.ts\" \"types/*.ts\"",
     "test": "claude plugin test ."
   }
 }

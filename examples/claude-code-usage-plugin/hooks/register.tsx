@@ -1,7 +1,5 @@
 import type { EngineInterface, Register, ResolveInput } from "claude-code";
-
 import type {
-  Group,
   Inject,
   Lifetime,
   Lookup,
@@ -9,543 +7,101 @@ import type {
   RecallItem,
   Reply,
   Seen,
-  OvSettings,
   Turn,
   TurnLookup,
 } from "../types";
+import { STRINGS } from "./strings";
+import type { Lang } from "./strings";
+import {
+  HEAD,
+  OV_CLI,
+  ROLE_LINE,
+  TAILS,
+  URI,
+  URI_LINE,
+  fingerprint,
+  parseRecall,
+  parseStartup,
+  redact,
+  stripMuted,
+  urisIn,
+} from "./parse";
+import {
+  OPEN_TOOLS,
+  OV_TOOL,
+  QUIET_TOOLS,
+  WRITE_TOOLS,
+  breakdown,
+  consultedOf,
+  consultedUris,
+  dateOf,
+  describeLookup,
+  gist,
+  isEmptyDoc,
+  isExpanded,
+  isStrong,
+  kindOf,
+  replyFor,
+  shortName,
+  titleOf,
+} from "./sources";
+import type { Category } from "./sources";
+import { EMPTY_SETTINGS, SETTINGS_SCRIPT, lifetimeOf, settingsFrom } from "./openviking";
+import type { InstallRecord, LifetimeStore } from "./openviking";
 
 const PANE = "ov-usage";
+
 const VERSION = "0.1.0";
+
 const TITLE = "OV-Usage";
+
 const ACCENT = "cyan";
 
 const injectRef = { plugin: "ov-usage", key: "inject" } as const;
+
 const lookupsRef = { plugin: "ov-usage", key: "lookups" } as const;
+
 const turnRef = { plugin: "ov-usage", key: "turn" } as const;
+
 const turnCountRef = { plugin: "ov-usage", key: "turnCount" } as const;
+
 const seenRef = { plugin: "ov-usage", key: "seen" } as const;
+
 const mutedRef = { plugin: "ov-usage", key: "muted" } as const;
+
 const lifetimeRef = { plugin: "ov-usage", key: "lifetime" } as const;
+
 const showWeakRef = { plugin: "ov-usage", key: "showWeak" } as const;
+
 const showDetailsRef = { plugin: "ov-usage", key: "showDetails" } as const;
+
 const settingsRef = { plugin: "ov-usage", key: "settings" } as const;
+
 const showSettingsRef = { plugin: "ov-usage", key: "showSettings" } as const;
+
 const langPrefRef = { plugin: "ov-usage", key: "langPref" } as const;
+
 const sysLangRef = { plugin: "ov-usage", key: "sysLang" } as const;
+
 const historyRef = { plugin: "ov-usage", key: "history" } as const;
+
 const viewTurnRef = { plugin: "ov-usage", key: "viewTurn" } as const;
+
 const showHistoryRef = { plugin: "ov-usage", key: "showHistory" } as const;
+
 const cardDetailRef = { plugin: "ov-usage", key: "cardDetail" } as const;
+
 const showAllCardRef = { plugin: "ov-usage", key: "showAllCard" } as const;
+
 const layoutRef = { plugin: "ov-usage", key: "layout" } as const;
+
 const repliesRef = { plugin: "ov-usage", key: "replies" } as const;
+
 const openingRef = { plugin: "ov-usage", key: "opening" } as const;
+
 const MAX_HISTORY = 50;
 
-// A viking:// URI starts with an ASCII scope (user, resources, agent, ~) and
-// stops at whitespace or punctuation, CJK included. Prose that merely mentions
-// "viking://格式的来源URI" in a summary is not a URI.
-const URI = /viking:\/\/(?:~|[A-Za-z][\w.-]*)(?:\/[^\s"'<>)\]`,，。；：！？、（）《》“”]*)?/g;
-// A whole URI as stored: file names may contain spaces, never line breaks or CJK punctuation.
-const IS_URI = /^viking:\/\/(?:~|[A-Za-z][\w.-]*)(?:\/[^\n"'<>)\]`,，。；：！？、（）《》“”]*)?$/;
-// An `ov` or `openviking` CLI invocation at the start of a command or after ; && | (
-const OV_CLI = /(?:^|[;&|(]\s*|\s&&\s*)(?:\S+=\S+\s+)*(?:ov|openviking)\s+(?!-)\S/;
-// A line that is only a URI, after an optional search-result prefix or inside
-// "=== … ===": file names there can contain spaces.
-const URI_LINE =
-  /^\s*(?:-\s*\[[\w-]+\s+\d{1,3}%\]\s+|===\s+)?(viking:\/\/(?:~|[A-Za-z][\w.-]*)\/[^"'<>`]*?)\s*(?:===)?\s*$/;
-
-// The viking:// URIs a tool's output names: whole-line URIs first (spaces
-// allowed), then any others inline.
-function urisIn(text: string): string[] {
-  const found: string[] = [];
-  for (const line of text.split("\n")) {
-    const m = URI_LINE.exec(line);
-    if (m?.[1]) found.push(m[1]);
-  }
-  for (const u of text.match(URI) ?? []) {
-    if (!found.some((f) => f === u || f.startsWith(`${u} `))) found.push(u);
-  }
-  return [...new Set(found)];
-}
-
-const OV_TOOL = /^mcp__.*openviking.*__(\w+)$/;
-const WRITE_TOOLS = new Set(["remember", "write", "edit", "add_resource", "add_skill", "forget"]);
-// Tools that open the files they name; the rest return a list of matches.
-const OPEN_TOOLS = new Set(["read", "ov cli"]);
-// Status checks name no memory, so they are not something an answer referred to.
-const QUIET_TOOLS = new Set(["health"]);
-const LAYER: Record<string, RecallItem["layer"]> = {
-  abstract: "L0",
-  overview: "L1",
-  full: "L2",
-  uri: "URI",
-};
-const LAYER_COLOR: Record<RecallItem["layer"], string> = {
-  L0: "gray",
-  L1: "cyan",
-  L2: "magenta",
-  URI: "blue",
-};
-// ---------- language ----------
-
-type Lang = "en" | "zh";
-
-const STRINGS = {
-  en: {
-    allSessions: "All sessions",
-    thisConversation: "This conversation",
-    settings: "Settings",
-    recallState: (on: boolean) => `Auto-recall ${on ? "on" : "off"}`,
-    captureState: (on: boolean) => `auto-capture ${on ? "on" : "off"}`,
-    on: "on",
-    off: "off",
-    promptsWithMemory: (n: number) =>
-      `Memories auto-added to ${n} ${n === 1 ? "prompt" : "prompts"}`,
-    updatesFrom: (c: number, n: number) =>
-      `${c} memory ${c === 1 ? "update" : "updates"} saved from ${n} ${n === 1 ? "conversation" : "conversations"}`,
-    startupLine: (n: number, role?: string) =>
-      `Startup: ${n} ${n === 1 ? "memory" : "memories"} indexed${role ? ` · your profile: ${role}` : ""}`,
-    thisAnswer: "This answer",
-    usedSection: (n: number) => `✓ ${n} OpenViking ${n === 1 ? "source" : "sources"} consulted`,
-    alreadyInContext: (n: number) => `${n} already in context from earlier prompts`,
-    lowerMatches: (n: number) => `▤ ${n} less relevant ${n === 1 ? "match" : "matches"}`,
-    moreAnswers: (n: number) => `[+${n} more]`,
-    fewer: "[Fewer]",
-    latestBtn: "[Latest]",
-    earlierTitle: "Earlier answers",
-    answerN: (n: number, time: string) => `Answer #${n} · ${time}`,
-    thisSession: "This session",
-    recalledAcross: (n: number, p: number) =>
-      `${n} ${n === 1 ? "memory" : "memories"} recalled across ${p} ${p === 1 ? "prompt" : "prompts"}`,
-    aboutYouLine: (n: number) => `${n} of them about you (preferences, past events, notes)`,
-    usedLine: (n: number) =>
-      `${n} OpenViking ${n === 1 ? "source" : "sources"} consulted this session`,
-    openedLine: (n: number) => `${n} read in full by Claude`,
-    savedLine: (n: number) => `${n} saved to OpenViking`,
-    openedFull: (n: number) => `${n} read in full`,
-    catPrefs: (n: number) => `${n} ${n === 1 ? "preference" : "preferences"}`,
-    catHistory: (n: number) => `${n} past ${n === 1 ? "event" : "events"}`,
-    catWork: (n: number) => `${n} work ${n === 1 ? "memory" : "memories"}`,
-    catDocs: (n: number) => `${n} team ${n === 1 ? "doc" : "docs"}`,
-    catSkills: (n: number) => `${n} ${n === 1 ? "skill" : "skills"}`,
-    waiting: "Send a prompt to see which OpenViking sources it draws on.",
-    nothingRecalled: "Nothing was recalled for this prompt.",
-    emptyIgnored: (n: number) => `${n} empty ${n === 1 ? "document" : "documents"} skipped`,
-    show: "[Show]",
-    hide: "[Hide]",
-    muteThese: "[Mute all]",
-    mute: "[Mute]",
-    muted: (n: number, hits: number) =>
-      `${n} muted for this session${hits ? ` · ${hits} held back from this answer` : ""}`,
-    unmuteAll: "[Unmute all]",
-    lookedUp: "Claude's own lookups",
-    lookupSearch: "Searched",
-    lookupRead: "Read",
-    lookupWrite: "Saved",
-    results: (n: number) => `${n} ${n === 1 ? "result" : "results"}`,
-    failed: "failed",
-    viaLookup: "found by Claude",
-    viaRecall: "auto-recalled",
-    nothingUsed: "No OpenViking sources for this answer.",
-    statusThis: "this answer",
-    statusNone: "no sources for this answer",
-    statusSession: (n: number) => `${n} this session`,
-    statusSaved: (n: number) => `${n} saved`,
-    statusReady: (n: number) => `startup: ${n} ${n === 1 ? "memory" : "memories"} indexed`,
-    rowCardDetail: "Card detail",
-    detailLow: "Low",
-    detailHigh: "High",
-    rowLayout: "Show in",
-    layoutPane: "Sidebar",
-    layoutInline: "In conversation",
-    cardAnswer: "OpenViking · this answer",
-    cardOverview: "OpenViking",
-    opened: "✓ opened",
-    details: "[Details]",
-    hideDetails: "[Hide details]",
-    rowRecall: "Auto-recall",
-    rowCapture: "Auto-capture",
-    rowStartup: "Startup context",
-    rowServer: "Server",
-    rowLanguage: "Language",
-    rowTools: "Memory tools",
-    recallDetail: (th: number, n: number) => ` · threshold ${th} · up to ${n} items`,
-    captureOn: (n: number) => ` · saves to memory every ${n} turns`,
-    captureOff: " · new conversations are not saved to memory",
-    startupDetail: (n: string) => ` · profile ≤${n} tokens`,
-    notSet: "not set",
-    apiKeySet: " · API key set",
-    noApiKey: " · no API key",
-    system: "Follow system",
-    changeIn: "Edit in ~/.openviking/ovcli.conf",
-    configError: (e: string) => `Couldn't read OpenViking's config: ${e}`,
-    mutedToast: "Muted for this session. Nothing in OpenViking was changed.",
-    mutedManyToast: (n: number) =>
-      `Muted ${n} for this session. Nothing in OpenViking was changed.`,
-    injectedToast: (src: string) => `OpenViking: loaded ${src} context`,
-    kinds: {
-      preference: "Your preference",
-      history: "Past event",
-      lesson: "Lesson",
-      notes: "Work note",
-      agents: "From your agents",
-      skill: "Skill",
-      docs: "Team doc",
-    },
-    reasons: {
-      disabled: "Auto-recall is off (autoRecall: false in ovcli.conf).",
-      no_results: "No memory scored above the relevance threshold for this prompt.",
-      short_query: "Prompt too short to trigger recall.",
-      query_filtered: "A recall filter skipped this prompt.",
-      offline: "Can't reach the OpenViking server.",
-    } as Record<string, string>,
-  },
-  zh: {
-    allSessions: "全局",
-    thisConversation: "本次对话",
-    settings: "设置",
-    recallState: (on: boolean) => `召回${on ? "开" : "关"}`,
-    captureState: (on: boolean) => `记录${on ? "开" : "关"}`,
-    on: "开",
-    off: "关",
-    promptsWithMemory: (n: number) => `${n} 次提问自动带上了记忆`,
-    updatesFrom: (c: number, n: number) => `${n} 段对话沉淀了 ${c} 次记忆更新`,
-    startupLine: (n: number, role?: string) =>
-      `启动加载：${n} 条记忆索引${role ? ` · 你的画像：${role}` : ""}`,
-    thisAnswer: "本次回答",
-    usedSection: (n: number) => `✓ 参考了 ${n} 个 OpenViking 来源`,
-    alreadyInContext: (n: number) => `${n} 条之前已在上下文中`,
-    lowerMatches: (n: number) => `▤ ${n} 条低相关`,
-    moreAnswers: (n: number) => `[还有 ${n} 条]`,
-    fewer: "[收起]",
-    latestBtn: "[最新]",
-    earlierTitle: "之前的回答",
-    answerN: (n: number, time: string) => `第 ${n} 次回答 · ${time}`,
-    thisSession: "本会话",
-    recalledAcross: (n: number, p: number) => `${p} 次提问共召回 ${n} 条记忆`,
-    aboutYouLine: (n: number) => `其中 ${n} 条关于你：偏好、经历和笔记`,
-    usedLine: (n: number) => `本会话共参考 ${n} 个 OpenViking 来源`,
-    openedLine: (n: number) => `Claude 完整打开了 ${n} 条`,
-    savedLine: (n: number) => `写回 OpenViking ${n} 条`,
-    openedFull: (n: number) => `${n} 条完整打开`,
-    catPrefs: (n: number) => `${n} 你的偏好`,
-    catHistory: (n: number) => `${n} 你的经历`,
-    catWork: (n: number) => `${n} 你的工作记忆`,
-    catDocs: (n: number) => `${n} 团队文档`,
-    catSkills: (n: number) => `${n} 技能`,
-    waiting: "发送一条消息后，这里会显示 OpenViking 的召回。",
-    nothingRecalled: "这条提问没有召回记忆。",
-    emptyIgnored: (n: number) => `已忽略 ${n} 条空文档`,
-    show: "[展开]",
-    hide: "[收起]",
-    muteThese: "[全部屏蔽]",
-    mute: "[屏蔽]",
-    muted: (n: number, hits: number) =>
-      `本会话已屏蔽 ${n} 条${hits ? ` · 本次回答拦下 ${hits} 条` : ""}`,
-    unmuteAll: "[全部取消屏蔽]",
-    lookedUp: "Claude 主动查找",
-    lookupSearch: "搜索",
-    lookupRead: "读取",
-    lookupWrite: "写入",
-    results: (n: number) => `${n} 条结果`,
-    failed: "失败",
-    viaLookup: "主动查找",
-    viaRecall: "自动召回",
-    nothingUsed: "本次回答没有参考 OpenViking 的内容。",
-    statusThis: "本次",
-    statusNone: "本次未参考",
-    statusSession: (n: number) => `本会话 ${n}`,
-    statusSaved: (n: number) => `写回 ${n}`,
-    statusReady: (n: number) => `启动加载 ${n} 条记忆索引`,
-    rowCardDetail: "卡片详情",
-    detailLow: "简略",
-    detailHigh: "详细",
-    rowLayout: "显示位置",
-    layoutPane: "侧边栏",
-    layoutInline: "对话中",
-    cardAnswer: "OpenViking · 本次回答",
-    cardOverview: "OpenViking",
-    opened: "✓ 已打开",
-    details: "[详情]",
-    hideDetails: "[收起详情]",
-    rowRecall: "自动召回",
-    rowCapture: "自动记录",
-    rowStartup: "启动上下文",
-    rowServer: "服务",
-    rowLanguage: "语言",
-    rowTools: "记忆工具",
-    recallDetail: (th: number, n: number) => ` · 阈值 ${th} · 最多 ${n} 条`,
-    captureOn: (n: number) => ` · 每 ${n} 轮写入`,
-    captureOff: " · 新对话不会写入记忆",
-    startupDetail: (n: string) => ` · 画像 ≤${n} token`,
-    notSet: "未设置",
-    apiKeySet: " · 已设置 API Key",
-    noApiKey: " · 未设置 API Key",
-    system: "跟随系统",
-    changeIn: "在 ~/.openviking/ovcli.conf 中修改",
-    configError: (e: string) => `无法读取 OpenViking 配置：${e}`,
-    mutedToast: "已在本会话屏蔽，OpenViking 数据不受影响",
-    mutedManyToast: (n: number) => `已在本会话屏蔽 ${n} 条，OpenViking 数据不受影响`,
-    injectedToast: (src: string) => `OpenViking：已注入 ${src} 上下文`,
-    kinds: {
-      preference: "你的偏好",
-      history: "你的经历",
-      lesson: "经验教训",
-      notes: "你的笔记",
-      agents: "来自你的 Agent",
-      skill: "技能",
-      docs: "文档",
-    },
-    reasons: {
-      disabled: "自动召回已关闭（ovcli.conf 中 autoRecall: false）。",
-      no_results: "这条提问没有超过相关度阈值的记忆。",
-      short_query: "提问太短，没有触发召回。",
-      query_filtered: "提问被召回过滤规则拦下。",
-      offline: "连不上 OpenViking 服务。",
-    } as Record<string, string>,
-  },
-};
-
-type Strings = (typeof STRINGS)["en"];
-
-// ---------- pure helpers ----------
-
-// Rough token estimate: CJK ≈ 1 token per char, everything else ≈ 4 chars per token.
-function estTokens(text: string) {
-  const cjk = (text.match(/[　-鿿＀-￯]/g) ?? []).length;
-  return Math.max(1, Math.round(cjk + (text.length - cjk) / 4));
-}
-
-// The startup <openviking-context>: profile + memory tree.
-function parseStartup(text: string, at: string): Inject | null {
-  const start = text.indexOf("<openviking-context");
-  if (start < 0) return null;
-  const body = text.slice(start);
-  const source = /source="([^"]+)"/.exec(body)?.[1] ?? "startup";
-  const prof = /<user-profile[^>]*>([\s\S]*?)<\/user-profile>/.exec(body)?.[1] ?? "";
-  const profile = prof
-    .split("\n")
-    .map((l) =>
-      l
-        .replace(/^[-#\s]+/, "")
-        .replace(/（as of [^）]+）/, "")
-        .trim(),
-    )
-    .filter(Boolean);
-  const groups: Group[] = [];
-  for (const line of body.split("\n")) {
-    const dir = /^\s*(viking:\/\/\S+\/)\s*$/.exec(line)?.[1];
-    if (dir) groups.push({ dir, files: [] });
-    const file = /^\s+-\s+(.+)$/.exec(line)?.[1];
-    if (file) groups.at(-1)?.files.push(file.trim());
-  }
-  if (!profile.length && !groups.length) return null;
-  return { at, source, profile, groups };
-}
-
-// A per-prompt recall: <memory uri score detail> items, or a server-assembled digest.
-function parseRecall(text: string): Omit<RecallItem, "firstTurn">[] {
-  const items: Omit<RecallItem, "firstTurn">[] = [];
-  for (const m of text.matchAll(/<memory\s([^>]*?)(?:\/>|>([\s\S]*?)<\/memory>)/g)) {
-    const attrs = m[1] ?? "";
-    const body = (m[2] ?? "")
-      .split("\n")
-      .filter((l) => !/^\s*#{1,6}\s/.test(l))
-      .join("\n")
-      .trim();
-    const uri = /uri="([^"]+)"/.exec(attrs)?.[1];
-    if (!uri) continue;
-    const detail = /detail="(\w+)"/.exec(attrs)?.[1] ?? "abstract";
-    items.push({
-      uri,
-      layer: LAYER[detail] ?? "L0",
-      score: Number(/score="([\d.]+)"/.exec(attrs)?.[1] ?? 0),
-      tokens: estTokens(m[0]),
-      summary: body.replace(/\s+/g, " ").slice(0, 160),
-    });
-  }
-  if (items.length) return items;
-  // Digest form: "- summary 来源：viking://..."
-  for (const line of text.split("\n")) {
-    const uri = line.match(URI)?.[0];
-    if (!uri || !/^\s*-/.test(line)) continue;
-    const summary = line.replace(/^\s*-\s*/, "").replace(/\s*(来源|source)[:：]\s*\S+/i, "");
-    const same = items.find((it) => it.uri === uri);
-    if (same) {
-      same.tokens += estTokens(line);
-      same.summary = `${same.summary} / ${summary}`.slice(0, 160);
-      continue;
-    }
-    items.push({
-      uri,
-      layer: "L0",
-      score: 0,
-      tokens: estTokens(line),
-      summary: summary.slice(0, 160),
-    });
-  }
-  return items;
-}
-
-// Secrets never reach storage or the pane: JWT-like tokens, Bearer headers,
-// sk- keys, and key=value / --api-key style arguments.
-function redact(text: string): string {
-  return text
-    .replace(/[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{40,}/g, "[REDACTED]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]{16,}/gi, "Bearer [REDACTED]")
-    .replace(/sk-[A-Za-z0-9_-]{20,}/g, "[REDACTED]")
-    .replace(
-      /((?:api[_-]?key|token|secret|password|passwd|authorization)["']?\s*[:=]\s*["']?|--(?:api-key|token|password)[=\s]+)[^\s"',;&|]+/gi,
-      "$1[REDACTED]",
-    );
-}
-
-function stripMuted(contexts: readonly string[] | undefined, muted: string[]) {
-  let hits = 0;
-  if (!contexts || !muted.length) return { contexts, hits };
-  const out = contexts.map((c) =>
-    c
-      .replace(
-        /<memory\s[^>]*?uri="([^"]+)"[^>]*?(?:\/>|>[\s\S]*?<\/memory>)\n?/g,
-        (whole, uri: string) => {
-          if (!muted.includes(uri)) return whole;
-          hits += 1;
-          return "";
-        },
-      )
-      // Digest form: one "- summary 来源：viking://..." line per item.
-      .split("\n")
-      .filter((line) => {
-        const uri = /^\s*-/.test(line) ? line.match(URI)?.[0] : undefined;
-        if (!uri || !muted.includes(uri)) return true;
-        hits += 1;
-        return false;
-      })
-      .join("\n"),
-  );
-  return { contexts: out, hits };
-}
-
-function isExpanded(uri: string, lookups: Lookup[]) {
-  return lookups.some((l) => l.kind === "read" && l.target.includes(uri));
-}
-
-// ---------- presentation ----------
-
-type Kind = { icon: string; label: keyof Strings["kinds"]; color: string; personal: boolean };
-
-// What a memory is to the person, from where it lives.
-function kindOf(uri: string): Kind {
-  if (/^viking:\/\/user\/[^/]+\/memories\/(preferences|profile|identity|soul)/.test(uri))
-    return { icon: "★", label: "preference", color: "blue", personal: true };
-  if (/^viking:\/\/user\/[^/]+\/memories\/events\//.test(uri))
-    return { icon: "◷", label: "history", color: "blue", personal: true };
-  if (/^viking:\/\/user\/[^/]+\/memories\/experiences\//.test(uri))
-    return { icon: "◆", label: "lesson", color: "blue", personal: true };
-  if (/^viking:\/\/user\/[^/]+\/memories\//.test(uri))
-    return { icon: "◆", label: "notes", color: "blue", personal: true };
-  if (/^viking:\/\/user\/[^/]+\/peers\//.test(uri))
-    return { icon: "⇄", label: "agents", color: "blue", personal: true };
-  if (/\/skills?\//.test(uri)) return { icon: "⚙", label: "skill", color: "blue", personal: false };
-  return { icon: "▤", label: "docs", color: "gray", personal: false };
-}
-
-// Which group a source counts toward in the answer heading: your preferences,
-// your history (dated events), your work memory (notes, lessons, your agents'
-// memories), team docs, or skills.
-type Category = "prefs" | "history" | "work" | "docs" | "skill";
-const CATEGORY: Record<Kind["label"], Category> = {
-  preference: "prefs",
-  history: "history",
-  lesson: "work",
-  notes: "work",
-  agents: "work",
-  skill: "skill",
-  docs: "docs",
-};
-function categoryOf(uri: string): Category {
-  return CATEGORY[kindOf(uri).label];
-}
-
-const EMPTY =
-  /empty (document|markdown)|no (actual|clear|meaningful) content|no clear primary purpose|无实际|空白|无任何可识别|乱码|无任何有效|没有实际内容/i;
-
-function isEmptyDoc(it: RecallItem) {
-  return EMPTY.test(it.summary);
-}
-
-// Listed as relevant only above a score bar, your own memories included, so
-// the pane never claims more than recall delivered. Digest items carry no
-// score; for those your own memories count.
-const RELEVANT_SCORE = 0.55;
-// Your own memories (preferences, history, notes) score lower for the same
-// usefulness, so they get a lower bar.
-const RELEVANT_SCORE_PERSONAL = 0.5;
-
-function isStrong(it: RecallItem) {
-  if (EMPTY.test(it.summary)) return false;
-  const personal = kindOf(it.uri).personal;
-  if (it.score === 0) return personal;
-  return it.score >= (personal ? RELEVANT_SCORE_PERSONAL : RELEVANT_SCORE);
-}
-
-function titleOf(uri: string): string | null {
-  const name = decodeURIComponent(uri.split("/").filter(Boolean).at(-1) ?? "").replace(/\.md$/, "");
-  if (
-    !name ||
-    name.startsWith(".") ||
-    /^(prompts|summary|index|n_\d+)$|\.aiff|^[0-9a-f-]{12,}$|conversation_/i.test(name)
-  )
-    return null;
-  return name.replace(/[_-]+/g, " ");
-}
-
-function dateOf(uri: string): string {
-  const m = /\/(\d{4})\/(\d{2})\/(\d{2})\//.exec(uri);
-  return m ? `${Number(m[2])}/${Number(m[3])} ` : "";
-}
-
-function gist(summary: string): string {
-  const s = summary
-    .replace(/^#\s*Summary\s*/i, "")
-    .replace(/^(#{1,6}\s*[^#]*?\s+)+(?=[-*\d]|$)/, "")
-    .replace(/^#+\s*/, "")
-    .replace(/^\s*(\d+[.、)]|[-*])\s*/, "")
-    .replace(/\s#+\s[\s\S]*$/, "")
-    .replace(
-      /^(本文档|该文档|这是|This (document|file) (is|records))(的)?(核心|主要)?(目的)?(是|为)?[：:,，]?\s*/i,
-      "",
-    )
-    .trim();
-  return (s.split(/(?<=[。！？.!?])\s*/)[0] ?? s).slice(0, 90);
-}
-
-function shortName(uri: string): string {
-  return titleOf(uri) ?? decodeURIComponent(uri.split("/").slice(-2).join("/"));
-}
-
-// One of Claude's own lookups as a row reads: what it did, and to what.
-function describeLookup(t: Strings, l: TurnLookup) {
-  const isOpen = OPEN_TOOLS.has(l.tool);
-  const isWrite = l.kind === "write";
-  return {
-    icon: isWrite ? "✎" : isOpen ? "▤" : "⌕",
-    verb: isWrite ? t.lookupWrite : isOpen ? t.lookupRead : t.lookupSearch,
-    what: isOpen || isWrite ? l.uris.map(shortName).join(", ") || l.query : `“${l.query}”`,
-    count: !isOpen && !isWrite && !l.isError ? t.results(l.uris.length) : null,
-  };
-}
-
-function headline(it: RecallItem): string {
-  const title = titleOf(it.uri);
-  const g = gist(it.summary);
-  const name = title ?? (g || decodeURIComponent(it.uri.split("/").slice(-2).join("/")));
-  return `${dateOf(it.uri)}${name}${title && g && !g.includes(title) ? ` — ${g}` : ""}`;
-}
-
 // ---------- state ----------
-
 async function getInject($: EngineInterface): Promise<Inject | null> {
   const { value = null } = await $.state.get(injectRef);
   return value;
@@ -661,10 +217,6 @@ async function toggle($: EngineInterface, which: "weak" | "details" | "settings"
   }
 }
 
-// A profile line that states a role (职业 / Role / Job title …).
-const ROLE_LINE =
-  /^(?:职业|角色|岗位|职位|职务|role|job(?:\s+title)?|title|occupation|position)\s*[：:]\s*(.+)$/i;
-
 // The numbers the "all sessions" and "this session" sections show, for the pane and the overview card alike.
 async function sessionTotals($: EngineInterface) {
   const inj = await getInject($);
@@ -721,23 +273,6 @@ async function setLayout($: EngineInterface, layout: "pane" | "inline") {
   await $.store.set("layout", layout);
 }
 
-// A fingerprint of row text, so cards can be matched to rows without keeping
-// any of the prompt's or answer's words (FNV-1a, 32-bit).
-function fingerprint(text: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return `${text.length}:${h.toString(16)}`;
-}
-
-// Endings fingerprinted per answer, longest first. The last text block of an
-// answer can be short (tool calls split an answer into blocks), so its ending
-// is matched at the longest of these lengths it can fill.
-const TAILS = [400, 160, 80, 40, 20];
-const HEAD = 200;
-
 // The text block that ends an answer carries its card; a later block of the
 // same answer takes the card over.
 // With no id (the turn's end, which knows the text alone), an id already noted is kept.
@@ -758,96 +293,6 @@ async function noteReply($: EngineInterface, id: string, text: string) {
     const { isSet } = await $.state.set(repliesRef, next, { ifVersion: held.version });
     if (isSet) return;
   }
-}
-
-// The reply a transcript row draws, by its id, or else by an ending only one answer has.
-function replyFor(replies: Reply[], id: string, text: string): Reply | undefined {
-  const byId = replies.find((r) => r.id !== "" && r.id === id);
-  if (byId) return byId;
-  const end = text.trimEnd();
-  // The longest ending this row can fill; one answer must match it, not two.
-  const k = TAILS.find((size) => end.length >= size);
-  if (k === undefined) return undefined;
-  const mark = fingerprint(end.slice(-k));
-  const hits = replies.filter((r) => r.tails.includes(mark));
-  return hits.length === 1 ? hits[0] : undefined;
-}
-
-// What OpenViking put in front of Claude for one answer: the memories recalled
-// for the prompt (unless auto-recall is off) and what Claude's own reads and
-// searches returned. Nothing is guessed from the answer's wording.
-function consultedOf(turn: Turn, recallHidden: boolean) {
-  const byScore = (a: RecallItem, b: RecallItem) => b.score - a.score;
-  const items = recallHidden ? [] : turn.items.filter((it) => !isEmptyDoc(it));
-  const recalled = new Set(items.map((it) => it.uri));
-  // Relevance of what Claude found: a file it chose to open ranks first, a search
-  // result by the score the search gave it.
-  const relevance = new Map<string, number>();
-  for (const l of turn.lookups ?? []) {
-    if (l.isError || l.kind !== "read") continue;
-    for (const u of l.uris) {
-      if (!IS_URI.test(u) || recalled.has(u)) continue;
-      const r = OPEN_TOOLS.has(l.tool) ? 1 : (l.scores?.[u] ?? 0);
-      relevance.set(u, Math.max(relevance.get(u) ?? 0, r));
-    }
-  }
-  const found = [...relevance.keys()];
-  const strong = items.filter((it) => isStrong(it)).sort(byScore);
-  const weak = items.filter((it) => !isStrong(it)).sort(byScore);
-  // Everything consulted, most relevant first.
-  const ranked = [
-    ...items.map((it) => ({
-      uri: it.uri,
-      from: "recall" as const,
-      score: it.score,
-      isWeak: !isStrong(it),
-    })),
-    ...found.map((u) => ({
-      uri: u,
-      from: "lookup" as const,
-      score: relevance.get(u) ?? 0,
-      isWeak: false,
-    })),
-  ].sort((a, b) => Number(a.isWeak) - Number(b.isWeak) || b.score - a.score);
-  // Of what was consulted: how much is about the person, and how much Claude
-  // opened in full (a read, not just a search hit or a recalled summary).
-  const opened = new Set(
-    (turn.lookups ?? []).filter((l) => !l.isError && OPEN_TOOLS.has(l.tool)).flatMap((l) => l.uris),
-  );
-  const all = ranked.map((r) => r.uri);
-  const byCategory = { prefs: 0, history: 0, work: 0, docs: 0, skill: 0 };
-  for (const u of all) byCategory[categoryOf(u)] += 1;
-  const openedFull = all.filter((u) => opened.has(u)).length;
-  return {
-    strong,
-    weak,
-    found,
-    ranked,
-    byCategory,
-    openedFull,
-    total: strong.length + weak.length + found.length,
-  };
-}
-
-// "1 preference · 1 from your history · 6 work memory · 3 team docs · 1 skill · 2 opened in full", zero groups left out.
-function breakdown(
-  t: Strings,
-  c: { byCategory: Record<Category, number>; openedFull: number },
-): string {
-  const parts = [
-    c.byCategory.prefs ? t.catPrefs(c.byCategory.prefs) : "",
-    c.byCategory.history ? t.catHistory(c.byCategory.history) : "",
-    c.byCategory.work ? t.catWork(c.byCategory.work) : "",
-    c.byCategory.docs ? t.catDocs(c.byCategory.docs) : "",
-    c.byCategory.skill ? t.catSkills(c.byCategory.skill) : "",
-    c.openedFull ? t.openedFull(c.openedFull) : "",
-  ].filter(Boolean);
-  return parts.length ? ` · ${parts.join(" · ")}` : "";
-}
-
-function consultedUris(turn: Turn, recallHidden: boolean): string[] {
-  const c = consultedOf(turn, recallHidden);
-  return [...c.strong, ...c.weak].map((it) => it.uri).concat(c.found);
 }
 
 // Change one turn, the current one and its copy in the history alike. Tool
@@ -877,7 +322,6 @@ async function unmuteAll($: EngineInterface) {
 }
 
 // ---------- files ----------
-
 async function readFileAt(
   $: EngineInterface,
   path: string,
@@ -921,13 +365,6 @@ async function readState(
   }
 }
 
-type InstallRecord = {
-  scope?: string;
-  projectPath?: string;
-  installPath?: string;
-  version?: string;
-};
-
 // The openviking-memory install Claude Code runs hooks from, as its plugin
 // registry records it: an install scoped to this project wins over the user-wide one.
 async function memoryPlugin(
@@ -962,25 +399,12 @@ async function loadLastInject($: EngineInterface) {
   if (parsed) await $.state.set(injectRef, parsed);
 }
 
-// openviking-memory keeps only snapshots of the latest recall and capture, no
-// history, so the totals across sessions are ov-usage's own, kept since install.
-type LifetimeStore = { recalls: number; commitsBySession: Record<string, number> };
-
 async function readLifetimeStore($: EngineInterface): Promise<LifetimeStore> {
   const v = (await $.store.get("lifetime")) as Partial<LifetimeStore> | undefined;
   return {
     recalls: typeof v?.recalls === "number" ? v.recalls : 0,
     commitsBySession:
       v?.commitsBySession && typeof v.commitsBySession === "object" ? v.commitsBySession : {},
-  };
-}
-
-function lifetimeOf(s: LifetimeStore): Lifetime {
-  const counts = Object.values(s.commitsBySession);
-  return {
-    recalls: s.recalls,
-    commits: counts.reduce((a, b) => a + b, 0),
-    conversations: counts.filter((c) => c > 0).length,
   };
 }
 
@@ -998,42 +422,6 @@ async function countLifetime($: EngineInterface, sessionId: string, isRecalled: 
   if (commits > (s.commitsBySession[sessionId] ?? 0)) s.commitsBySession[sessionId] = commits;
   await $.store.set("lifetime", s);
   await $.state.set(lifetimeRef, lifetimeOf(s));
-}
-
-// Runs OpenViking's own config loader so file values, env overrides and defaults all count.
-// The script prints only the keys below; the API key leaves as a boolean.
-// A failure is printed as { error } rather than a stack, so the pane can say what went wrong.
-const SETTINGS_SCRIPT = `
-try {
-  const { loadConfig } = await import(process.env.OV_PLUGIN_SCRIPTS + '/config.mjs')
-  if (typeof loadConfig !== 'function') throw new Error('its config.mjs has no loadConfig')
-  const c = loadConfig(process.cwd())
-  console.log(JSON.stringify({
-    server: c.baseUrl || '', apiKeySet: Boolean(c.apiKey), autoRecall: c.autoRecall !== false,
-    scoreThreshold: c.scoreThreshold, recallLimit: c.recallLimit, recallTokenBudget: c.recallTokenBudget,
-    recallPeerScope: c.recallPeerScope, autoCapture: c.autoCapture !== false,
-    commitTurnThreshold: c.commitTurnThreshold, startupInject: !c.noAutoInject,
-    profileTokenBudget: c.profileTokenBudget, mcpEnabled: c.mcpEnabled !== false, error: null,
-  }))
-} catch (err) {
-  console.log(JSON.stringify({ error: String(err && err.message || err).split('\\n')[0] }))
-}
-`;
-
-// The loader's last output line, checked before it is trusted.
-function settingsFrom(stdout: string): OvSettings {
-  let r: unknown;
-  try {
-    r = JSON.parse(stdout.trim().split("\n").at(-1) ?? "");
-  } catch {
-    throw new Error("its config loader printed no settings");
-  }
-  const rec = (r && typeof r === "object" ? r : {}) as Partial<OvSettings>;
-  if (typeof rec.error === "string" && rec.error) throw new Error(rec.error);
-  if (typeof rec.autoRecall !== "boolean" || typeof rec.autoCapture !== "boolean") {
-    throw new Error("its config loader returned settings in an unknown shape");
-  }
-  return { ...EMPTY_SETTINGS, ...rec, error: null };
 }
 
 async function loadSettings($: EngineInterface) {
@@ -1058,26 +446,9 @@ async function loadSettings($: EngineInterface) {
   }
 }
 
-const EMPTY_SETTINGS: OvSettings = {
-  server: "",
-  apiKeySet: false,
-  autoRecall: false,
-  scoreThreshold: 0,
-  recallLimit: 0,
-  recallTokenBudget: 0,
-  recallPeerScope: "",
-  autoCapture: false,
-  commitTurnThreshold: 0,
-  startupInject: false,
-  profileTokenBudget: 0,
-  mcpEnabled: false,
-  error: null,
-};
-
 // ---------- persistence ----------
 // $.state is wiped when the session's process restarts; $.store survives it.
 // Each session's pane data is saved under its id and restored on resume.
-
 const MAX_SAVED_SESSIONS = 30;
 
 type Snapshot = {
@@ -1298,7 +669,6 @@ async function recordTurn(
 }
 
 // ---------- cards in the conversation ----------
-
 // One source as a card row: its kind's icon and name; at high detail, its full
 // URI under it. Copies of the same document (one name, several URIs) share a row.
 function cardRow(
@@ -1476,7 +846,6 @@ async function overviewCard($: EngineInterface, e: ResolveInput) {
 }
 
 // ---------- hooks ----------
-
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     await loadLang($);
@@ -1736,495 +1105,491 @@ export const register: Register = (on) => {
     return (await handlePress($, e.element)) ? { element: e.element } : next(e);
   });
 
-  on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e);
-    try {
-      const inj = await getInject($);
-      const list = await getLookups($);
-      const seen = await getSeen($);
-      const latest = await getTurn($);
-      const { value: history = [] } = await $.state.get(historyRef);
-      const { value: viewN = null } = await $.state.get(viewTurnRef);
-      const { value: showHistory = false } = await $.state.get(showHistoryRef);
-      // The answer the pane shows: the latest, or one picked from the history.
-      const turn = (viewN !== null ? history.find((h) => h.n === viewN) : undefined) ?? latest;
-      const isPast = turn !== null && latest !== null && turn.n !== latest.n;
-      const clock = (iso: string) => {
-        const d = new Date(iso);
-        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      };
-      const {
-        sessionRecalled,
-        sessionAboutYou,
-        sessionPrompts,
-        opened,
-        saved,
-        used,
-        files,
-        role,
-        life,
-      } = await sessionTotals($);
-      const muted = await getMuted($);
-      const { value: layout = "pane" } = await $.state.get(layoutRef);
-      const { value: cardDetail = "low" } = await $.state.get(cardDetailRef);
-      const { value: showWeak = false } = await $.state.get(showWeakRef);
-      const { value: showDetails = false } = await $.state.get(showDetailsRef);
-      const { value: cfg = null } = await $.state.get(settingsRef);
-      const { value: showSettings = false } = await $.state.get(showSettingsRef);
-      const { value: langPref = "system" } = await $.state.get(langPrefRef);
-      const t = STRINGS[await getLang($)];
+  on("ui.render", { component: "Pane", requestId: PANE }, async ($, e) => renderPane($, e));
+};
 
-      const items = (turn?.items ?? []).filter((it) => !isEmptyDoc(it));
-      const emptyCount = (turn?.items ?? []).length - items.length;
-      const repeats = items.filter((it) => it.firstTurn !== turn?.n).length;
-      const lookups = turn?.lookups ?? [];
-      // Consulted: everything OpenViking put in front of Claude for this answer.
-      const recallHidden = cfg !== null && !cfg.error && !cfg.autoRecall;
-      const c = turn
-        ? consultedOf(turn, recallHidden)
-        : {
-            strong: [],
-            weak: [],
-            found: [],
-            ranked: [],
-            byCategory: { prefs: 0, history: 0, work: 0, docs: 0, skill: 0 },
-            openedFull: 0,
-            total: 0,
-          };
-      const consultedIn = (past: Turn) => consultedOf(past, recallHidden).total;
-      // [details] adds recall's diagnostics: why nothing came back, repeats, empty documents.
-      const showDiag = showDetails && !recallHidden;
-      // Earlier answers: newest first, without the one on screen; three unless expanded.
-      const EARLIER_DEFAULT = 3;
-      const earlier = [...history].reverse().filter((past) => turn === null || past.n !== turn.n);
-      const earlierShown = showHistory ? earlier : earlier.slice(0, EARLIER_DEFAULT);
+// The sidebar: all sessions, this conversation, and the answer it shows.
+async function renderPane($: EngineInterface, e: ResolveInput) {
+  const { Box, Text, Button } = $.ui.resolve(e);
+  try {
+    const inj = await getInject($);
+    const list = await getLookups($);
 
-      // One heading style for every section inside the boxes.
-      const heading = (text: string, extra?: string) => (
-        <Text wrap="wrap">
-          <Text bold color={ACCENT}>
-            {text}
-          </Text>
-          {extra && <Text dimColor>{extra}</Text>}
+    const latest = await getTurn($);
+    const { value: history = [] } = await $.state.get(historyRef);
+    const { value: viewN = null } = await $.state.get(viewTurnRef);
+    const { value: showHistory = false } = await $.state.get(showHistoryRef);
+    // The answer the pane shows: the latest, or one picked from the history.
+    const turn = (viewN !== null ? history.find((h) => h.n === viewN) : undefined) ?? latest;
+    const isPast = turn !== null && latest !== null && turn.n !== latest.n;
+    const clock = (iso: string) => {
+      const d = new Date(iso);
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    };
+    const {
+      sessionRecalled,
+      sessionAboutYou,
+      sessionPrompts,
+      opened,
+      saved,
+      used,
+      files,
+      role,
+      life,
+    } = await sessionTotals($);
+    const muted = await getMuted($);
+    const { value: layout = "pane" } = await $.state.get(layoutRef);
+    const { value: cardDetail = "low" } = await $.state.get(cardDetailRef);
+    const { value: showWeak = false } = await $.state.get(showWeakRef);
+    const { value: showDetails = false } = await $.state.get(showDetailsRef);
+    const { value: cfg = null } = await $.state.get(settingsRef);
+    const { value: showSettings = false } = await $.state.get(showSettingsRef);
+    const { value: langPref = "system" } = await $.state.get(langPrefRef);
+    const t = STRINGS[await getLang($)];
+
+    const items = (turn?.items ?? []).filter((it) => !isEmptyDoc(it));
+    const emptyCount = (turn?.items ?? []).length - items.length;
+    const repeats = items.filter((it) => it.firstTurn !== turn?.n).length;
+    const lookups = turn?.lookups ?? [];
+    // Consulted: everything OpenViking put in front of Claude for this answer.
+    const recallHidden = cfg !== null && !cfg.error && !cfg.autoRecall;
+    const c = turn
+      ? consultedOf(turn, recallHidden)
+      : {
+          strong: [],
+          weak: [],
+          found: [],
+          ranked: [],
+          byCategory: { prefs: 0, history: 0, work: 0, docs: 0, skill: 0 },
+          openedFull: 0,
+          total: 0,
+        };
+    const consultedIn = (past: Turn) => consultedOf(past, recallHidden).total;
+    // [details] adds recall's diagnostics: why nothing came back, repeats, empty documents.
+    const showDiag = showDetails && !recallHidden;
+    // Earlier answers: newest first, without the one on screen; three unless expanded.
+    const EARLIER_DEFAULT = 3;
+    const earlier = [...history].reverse().filter((past) => turn === null || past.n !== turn.n);
+    const earlierShown = showHistory ? earlier : earlier.slice(0, EARLIER_DEFAULT);
+
+    // One heading style for every section inside the boxes.
+    const heading = (text: string, extra?: string) => (
+      <Text wrap="wrap">
+        <Text bold color={ACCENT}>
+          {text}
         </Text>
-      );
+        {extra && <Text dimColor>{extra}</Text>}
+      </Text>
+    );
 
-      const row = (it: RecallItem) => {
-        const kind = kindOf(it.uri);
-        const isOpened = isExpanded(it.uri, list);
-        const title = titleOf(it.uri);
-        const g = gist(it.summary);
-        return (
-          <Box key={`item-${it.uri}`} flexDirection="column" marginTop={1}>
-            <Text wrap="wrap">
-              <Text color={kind.color} bold>
-                {kind.icon} {t.kinds[kind.label]}
-              </Text>
-              {it.score > 0 && <Text dimColor> · {it.score.toFixed(2)}</Text>}
-              {isOpened && <Text color="green"> · {t.opened}</Text>}
-            </Text>
-            <Text bold wrap="wrap">
-              {"  "}
-              {dateOf(it.uri)}
-              {title ?? (g || decodeURIComponent(it.uri.split("/").slice(-2).join("/")))}
-            </Text>
-            {title !== null && g !== "" && !g.includes(title) && (
-              <Text dimColor wrap="wrap">
-                {"  "}
-                {g}
-              </Text>
-            )}
-            {showDetails && (
-              <Box flexWrap="wrap" columnGap={1} marginLeft={2}>
-                <Text dimColor wrap="wrap">
-                  {it.layer} · ~{it.tokens} tokens · {it.uri}
-                </Text>
-                <Button
-                  key={`mute-${it.uri}`}
-                  label={t.mute}
-                  plain
-                  onPress={() => muteUri($, it.uri)}
-                />
-              </Box>
-            )}
-          </Box>
-        );
-      };
-
-      const short = shortName;
-
-      const refRow = (uri: string) => {
-        const kind = kindOf(uri);
-        return (
-          <Box key={`ref-${uri}`} flexDirection="column" marginTop={1}>
-            <Text wrap="wrap">
-              <Text color={kind.color} bold>
-                {kind.icon} {t.kinds[kind.label]}
-              </Text>
-              <Text dimColor> · {t.viaLookup}</Text>
-            </Text>
-            <Text bold wrap="wrap">
-              {"  "}
-              {dateOf(uri)}
-              {short(uri)}
-            </Text>
-            {showDetails && (
-              <Text dimColor wrap="wrap">
-                {"  "}
-                {uri}
-              </Text>
-            )}
-          </Box>
-        );
-      };
-
-      const lookupRow = (l: TurnLookup) => {
-        const { icon, verb, what, count } = describeLookup(t, l);
-        return (
-          <Box key={`lookup-${l.id}`} flexDirection="column">
-            <Text wrap="wrap">
-              <Text bold>
-                {icon} {verb}{" "}
-              </Text>
-              <Text>{what}</Text>
-              {count !== null && <Text dimColor> · {count}</Text>}
-              {l.isError && <Text color="red"> · {t.failed}</Text>}
-            </Text>
-            {showDetails && (
-              <Text dimColor wrap="wrap">
-                {"  "}
-                {l.tool}
-                {l.uris.length ? ` · ${l.uris.slice(0, 5).join(" ")}` : ""}
-              </Text>
-            )}
-          </Box>
-        );
-      };
-
-      const settingRow = (label: string, isOn: boolean | null, rest: string) => (
-        <Text wrap="wrap">
-          <Text bold>{label} </Text>
-          {isOn !== null && <Text color={isOn ? "green" : "yellow"}>{isOn ? t.on : t.off}</Text>}
-          <Text dimColor>{rest}</Text>
-        </Text>
-      );
-
+    const row = (it: RecallItem) => {
+      const kind = kindOf(it.uri);
+      const isOpened = isExpanded(it.uri, list);
+      const title = titleOf(it.uri);
+      const g = gist(it.summary);
       return (
-        <Box flexDirection="column">
-          {/* ======== all sessions ======== */}
-          <Text bold dimColor>
-            {t.allSessions}
+        <Box key={`item-${it.uri}`} flexDirection="column" marginTop={1}>
+          <Text wrap="wrap">
+            <Text color={kind.color} bold>
+              {kind.icon} {t.kinds[kind.label]}
+            </Text>
+            {it.score > 0 && <Text dimColor> · {it.score.toFixed(2)}</Text>}
+            {isOpened && <Text color="green"> · {t.opened}</Text>}
           </Text>
-          <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-            {cfg && (
-              <Box flexWrap="wrap" columnGap={2}>
-                <Button
-                  key="toggle-settings"
-                  label={`[${showSettings ? "▾" : "▸"} ${t.settings}]`}
-                  plain
-                  onPress={() => toggle($, "settings")}
-                />
-                {!cfg.error && (
-                  <Text dimColor>
-                    {t.recallState(cfg.autoRecall)} · {t.captureState(cfg.autoCapture)}
-                  </Text>
-                )}
-              </Box>
-            )}
-            {cfg && showSettings && (
-              <Box flexDirection="column" marginLeft={2} marginBottom={1}>
-                {cfg.error ? (
-                  <Text dimColor wrap="wrap">
-                    {t.configError(cfg.error)}
-                  </Text>
-                ) : (
-                  <Box flexDirection="column">
-                    {settingRow(
-                      t.rowRecall,
-                      cfg.autoRecall,
-                      cfg.autoRecall ? t.recallDetail(cfg.scoreThreshold, cfg.recallLimit) : "",
-                    )}
-                    {settingRow(
-                      t.rowCapture,
-                      cfg.autoCapture,
-                      cfg.autoCapture ? t.captureOn(cfg.commitTurnThreshold) : t.captureOff,
-                    )}
-                    {settingRow(
-                      t.rowStartup,
-                      cfg.startupInject,
-                      cfg.startupInject
-                        ? t.startupDetail(cfg.profileTokenBudget.toLocaleString())
-                        : "",
-                    )}
-                    {settingRow(t.rowTools, cfg.mcpEnabled, "")}
-                    <Text wrap="wrap">
-                      <Text bold>{t.rowServer} </Text>
-                      <Text dimColor>
-                        {cfg.server
-                          .replace(/^[a-z]+:\/\//i, "")
-                          .replace(/^[^@/]*@/, "")
-                          .replace(/[/?#].*$/, "") || t.notSet}
-                      </Text>
-                      <Text color={cfg.apiKeySet ? "green" : "red"}>
-                        {cfg.apiKeySet ? t.apiKeySet : t.noApiKey}
-                      </Text>
+          <Text bold wrap="wrap">
+            {"  "}
+            {dateOf(it.uri)}
+            {title ?? (g || decodeURIComponent(it.uri.split("/").slice(-2).join("/")))}
+          </Text>
+          {title !== null && g !== "" && !g.includes(title) && (
+            <Text dimColor wrap="wrap">
+              {"  "}
+              {g}
+            </Text>
+          )}
+          {showDetails && (
+            <Box flexWrap="wrap" columnGap={1} marginLeft={2}>
+              <Text dimColor wrap="wrap">
+                {it.layer} · ~{it.tokens} tokens · {it.uri}
+              </Text>
+              <Button
+                key={`mute-${it.uri}`}
+                label={t.mute}
+                plain
+                onPress={() => muteUri($, it.uri)}
+              />
+            </Box>
+          )}
+        </Box>
+      );
+    };
+
+    const short = shortName;
+
+    const refRow = (uri: string) => {
+      const kind = kindOf(uri);
+      return (
+        <Box key={`ref-${uri}`} flexDirection="column" marginTop={1}>
+          <Text wrap="wrap">
+            <Text color={kind.color} bold>
+              {kind.icon} {t.kinds[kind.label]}
+            </Text>
+            <Text dimColor> · {t.viaLookup}</Text>
+          </Text>
+          <Text bold wrap="wrap">
+            {"  "}
+            {dateOf(uri)}
+            {short(uri)}
+          </Text>
+          {showDetails && (
+            <Text dimColor wrap="wrap">
+              {"  "}
+              {uri}
+            </Text>
+          )}
+        </Box>
+      );
+    };
+
+    const lookupRow = (l: TurnLookup) => {
+      const { icon, verb, what, count } = describeLookup(t, l);
+      return (
+        <Box key={`lookup-${l.id}`} flexDirection="column">
+          <Text wrap="wrap">
+            <Text bold>
+              {icon} {verb}{" "}
+            </Text>
+            <Text>{what}</Text>
+            {count !== null && <Text dimColor> · {count}</Text>}
+            {l.isError && <Text color="red"> · {t.failed}</Text>}
+          </Text>
+          {showDetails && (
+            <Text dimColor wrap="wrap">
+              {"  "}
+              {l.tool}
+              {l.uris.length ? ` · ${l.uris.slice(0, 5).join(" ")}` : ""}
+            </Text>
+          )}
+        </Box>
+      );
+    };
+
+    const settingRow = (label: string, isOn: boolean | null, rest: string) => (
+      <Text wrap="wrap">
+        <Text bold>{label} </Text>
+        {isOn !== null && <Text color={isOn ? "green" : "yellow"}>{isOn ? t.on : t.off}</Text>}
+        <Text dimColor>{rest}</Text>
+      </Text>
+    );
+
+    return (
+      <Box flexDirection="column">
+        {/* ======== all sessions ======== */}
+        <Text bold dimColor>
+          {t.allSessions}
+        </Text>
+        <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+          {cfg && (
+            <Box flexWrap="wrap" columnGap={2}>
+              <Button
+                key="toggle-settings"
+                label={`[${showSettings ? "▾" : "▸"} ${t.settings}]`}
+                plain
+                onPress={() => toggle($, "settings")}
+              />
+              {!cfg.error && (
+                <Text dimColor>
+                  {t.recallState(cfg.autoRecall)} · {t.captureState(cfg.autoCapture)}
+                </Text>
+              )}
+            </Box>
+          )}
+          {cfg && showSettings && (
+            <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+              {cfg.error ? (
+                <Text dimColor wrap="wrap">
+                  {t.configError(cfg.error)}
+                </Text>
+              ) : (
+                <Box flexDirection="column">
+                  {settingRow(
+                    t.rowRecall,
+                    cfg.autoRecall,
+                    cfg.autoRecall ? t.recallDetail(cfg.scoreThreshold, cfg.recallLimit) : "",
+                  )}
+                  {settingRow(
+                    t.rowCapture,
+                    cfg.autoCapture,
+                    cfg.autoCapture ? t.captureOn(cfg.commitTurnThreshold) : t.captureOff,
+                  )}
+                  {settingRow(
+                    t.rowStartup,
+                    cfg.startupInject,
+                    cfg.startupInject
+                      ? t.startupDetail(cfg.profileTokenBudget.toLocaleString())
+                      : "",
+                  )}
+                  {settingRow(t.rowTools, cfg.mcpEnabled, "")}
+                  <Text wrap="wrap">
+                    <Text bold>{t.rowServer} </Text>
+                    <Text dimColor>
+                      {cfg.server
+                        .replace(/^[a-z]+:\/\//i, "")
+                        .replace(/^[^@/]*@/, "")
+                        .replace(/[/?#].*$/, "") || t.notSet}
                     </Text>
-                    <Box flexWrap="wrap" columnGap={2}>
-                      <Text bold>{t.rowLayout}</Text>
-                      <Button
-                        key="layout-pane"
-                        label={layout === "pane" ? `[● ${t.layoutPane}]` : `[${t.layoutPane}]`}
-                        plain
-                        onPress={() => setLayout($, "pane")}
-                      />
-                      <Button
-                        key="layout-inline"
-                        label={
-                          layout === "inline" ? `[● ${t.layoutInline}]` : `[${t.layoutInline}]`
-                        }
-                        plain
-                        onPress={() => setLayout($, "inline")}
-                      />
-                    </Box>
-                    <Box flexWrap="wrap" columnGap={2}>
-                      <Text bold>{t.rowCardDetail}</Text>
-                      <Button
-                        key="detail-low"
-                        label={cardDetail === "low" ? `[● ${t.detailLow}]` : `[${t.detailLow}]`}
-                        plain
-                        onPress={() => setCardDetail($, "low")}
-                      />
-                      <Button
-                        key="detail-high"
-                        label={cardDetail === "high" ? `[● ${t.detailHigh}]` : `[${t.detailHigh}]`}
-                        plain
-                        onPress={() => setCardDetail($, "high")}
-                      />
-                    </Box>
-                    <Box flexWrap="wrap" columnGap={2}>
-                      <Text bold>{t.rowLanguage}</Text>
-                      <Button
-                        key="lang-en"
-                        label={langPref === "en" ? "[● EN]" : "[EN]"}
-                        plain
-                        onPress={() => setLang($, "en")}
-                      />
-                      <Button
-                        key="lang-zh"
-                        label={langPref === "zh" ? "[● 中文]" : "[中文]"}
-                        plain
-                        onPress={() => setLang($, "zh")}
-                      />
-                      <Button
-                        key="lang-system"
-                        label={langPref === "system" ? `[● ${t.system}]` : `[${t.system}]`}
-                        plain
-                        onPress={() => setLang($, "system")}
-                      />
-                    </Box>
-                    <Text dimColor wrap="wrap">
-                      {t.changeIn}
+                    <Text color={cfg.apiKeySet ? "green" : "red"}>
+                      {cfg.apiKeySet ? t.apiKeySet : t.noApiKey}
+                    </Text>
+                  </Text>
+                  <Box flexWrap="wrap" columnGap={2}>
+                    <Text bold>{t.rowLayout}</Text>
+                    <Button
+                      key="layout-pane"
+                      label={layout === "pane" ? `[● ${t.layoutPane}]` : `[${t.layoutPane}]`}
+                      plain
+                      onPress={() => setLayout($, "pane")}
+                    />
+                    <Button
+                      key="layout-inline"
+                      label={layout === "inline" ? `[● ${t.layoutInline}]` : `[${t.layoutInline}]`}
+                      plain
+                      onPress={() => setLayout($, "inline")}
+                    />
+                  </Box>
+                  <Box flexWrap="wrap" columnGap={2}>
+                    <Text bold>{t.rowCardDetail}</Text>
+                    <Button
+                      key="detail-low"
+                      label={cardDetail === "low" ? `[● ${t.detailLow}]` : `[${t.detailLow}]`}
+                      plain
+                      onPress={() => setCardDetail($, "low")}
+                    />
+                    <Button
+                      key="detail-high"
+                      label={cardDetail === "high" ? `[● ${t.detailHigh}]` : `[${t.detailHigh}]`}
+                      plain
+                      onPress={() => setCardDetail($, "high")}
+                    />
+                  </Box>
+                  <Box flexWrap="wrap" columnGap={2}>
+                    <Text bold>{t.rowLanguage}</Text>
+                    <Button
+                      key="lang-en"
+                      label={langPref === "en" ? "[● EN]" : "[EN]"}
+                      plain
+                      onPress={() => setLang($, "en")}
+                    />
+                    <Button
+                      key="lang-zh"
+                      label={langPref === "zh" ? "[● 中文]" : "[中文]"}
+                      plain
+                      onPress={() => setLang($, "zh")}
+                    />
+                    <Button
+                      key="lang-system"
+                      label={langPref === "system" ? `[● ${t.system}]` : `[${t.system}]`}
+                      plain
+                      onPress={() => setLang($, "system")}
+                    />
+                  </Box>
+                  <Text dimColor wrap="wrap">
+                    {t.changeIn}
+                  </Text>
+                </Box>
+              )}
+            </Box>
+          )}
+          {!recallHidden && life && life.recalls > 0 && (
+            <Text wrap="wrap">{t.promptsWithMemory(life.recalls)}</Text>
+          )}
+          {life && life.commits > 0 && (
+            <Text wrap="wrap">{t.updatesFrom(life.commits, life.conversations)}</Text>
+          )}
+          {inj && <Text wrap="wrap">{t.startupLine(files, role)}</Text>}
+        </Box>
+
+        {/* ======== this conversation ======== */}
+        <Box marginTop={1}>
+          <Text bold dimColor>
+            {t.thisConversation}
+          </Text>
+        </Box>
+        <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+          {(used > 0 || (!recallHidden && sessionRecalled > 0) || saved > 0) && (
+            <Box flexDirection="column" marginBottom={1}>
+              {heading(t.thisSession)}
+              {used > 0 && <Text wrap="wrap">{t.usedLine(used)}</Text>}
+              {!recallHidden && sessionRecalled > 0 && (
+                <Text dimColor={used > 0} wrap="wrap">
+                  {t.recalledAcross(sessionRecalled, Math.max(1, sessionPrompts))}
+                </Text>
+              )}
+              {saved > 0 && <Text wrap="wrap">{t.savedLine(saved)}</Text>}
+              {showDetails && sessionAboutYou > 0 && (
+                <Text dimColor wrap="wrap">
+                  {t.aboutYouLine(sessionAboutYou)}
+                </Text>
+              )}
+              {showDetails && opened > 0 && (
+                <Text dimColor wrap="wrap">
+                  {t.openedLine(opened)}
+                </Text>
+              )}
+            </Box>
+          )}
+          {earlier.length > 0 && (
+            <Box flexDirection="column" marginBottom={1}>
+              {heading(t.earlierTitle)}
+              {earlierShown.map((past) => {
+                const q = past.query.length > 28 ? `${past.query.slice(0, 28)}…` : past.query;
+                return (
+                  <Box key={`row-${past.n}`} flexWrap="wrap" columnGap={1}>
+                    <Button
+                      key={`turn-${past.n}`}
+                      label={`[#${past.n}]`}
+                      plain
+                      onPress={() =>
+                        viewTurn($, latest !== null && past.n === latest.n ? null : past.n)
+                      }
+                    />
+                    <Text dimColor wrap="truncate-end">
+                      {clock(past.at)} “{q}”
+                      {consultedIn(past) > 0 ? (
+                        <Text color="green"> ✓{consultedIn(past)}</Text>
+                      ) : (
+                        ""
+                      )}
                     </Text>
                   </Box>
-                )}
-              </Box>
-            )}
-            {!recallHidden && life && life.recalls > 0 && (
-              <Text wrap="wrap">{t.promptsWithMemory(life.recalls)}</Text>
-            )}
-            {life && life.commits > 0 && (
-              <Text wrap="wrap">{t.updatesFrom(life.commits, life.conversations)}</Text>
-            )}
-            {inj && <Text wrap="wrap">{t.startupLine(files, role)}</Text>}
-          </Box>
-
-          {/* ======== this conversation ======== */}
-          <Box marginTop={1}>
-            <Text bold dimColor>
-              {t.thisConversation}
-            </Text>
-          </Box>
-          <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
-            {(used > 0 || (!recallHidden && sessionRecalled > 0) || saved > 0) && (
-              <Box flexDirection="column" marginBottom={1}>
-                {heading(t.thisSession)}
-                {used > 0 && <Text wrap="wrap">{t.usedLine(used)}</Text>}
-                {!recallHidden && sessionRecalled > 0 && (
-                  <Text dimColor={used > 0} wrap="wrap">
-                    {t.recalledAcross(sessionRecalled, Math.max(1, sessionPrompts))}
-                  </Text>
-                )}
-                {saved > 0 && <Text wrap="wrap">{t.savedLine(saved)}</Text>}
-                {showDetails && sessionAboutYou > 0 && (
-                  <Text dimColor wrap="wrap">
-                    {t.aboutYouLine(sessionAboutYou)}
-                  </Text>
-                )}
-                {showDetails && opened > 0 && (
-                  <Text dimColor wrap="wrap">
-                    {t.openedLine(opened)}
-                  </Text>
-                )}
-              </Box>
-            )}
-            {earlier.length > 0 && (
-              <Box flexDirection="column" marginBottom={1}>
-                {heading(t.earlierTitle)}
-                {earlierShown.map((past) => {
-                  const q = past.query.length > 28 ? `${past.query.slice(0, 28)}…` : past.query;
-                  return (
-                    <Box key={`row-${past.n}`} flexWrap="wrap" columnGap={1}>
-                      <Button
-                        key={`turn-${past.n}`}
-                        label={`[#${past.n}]`}
-                        plain
-                        onPress={() =>
-                          viewTurn($, latest !== null && past.n === latest.n ? null : past.n)
-                        }
-                      />
-                      <Text dimColor wrap="truncate-end">
-                        {clock(past.at)} “{q}”
-                        {consultedIn(past) > 0 ? (
-                          <Text color="green"> ✓{consultedIn(past)}</Text>
-                        ) : (
-                          ""
-                        )}
-                      </Text>
-                    </Box>
-                  );
-                })}
-                {earlier.length > EARLIER_DEFAULT && (
-                  <Button
-                    key="toggle-history"
-                    label={showHistory ? t.fewer : t.moreAnswers(earlier.length - EARLIER_DEFAULT)}
-                    plain
-                    onPress={() => toggle($, "history")}
-                  />
-                )}
-              </Box>
-            )}
-
-            <Box flexWrap="wrap" columnGap={2}>
-              {heading(
-                isPast && turn ? t.answerN(turn.n, clock(turn.at)) : t.thisAnswer,
-                !recallHidden && turn?.latencyMs != null && turn.reason === "ok"
-                  ? ` · ${(turn.latencyMs / 1000).toFixed(1)}s`
-                  : undefined,
-              )}
-              {isPast && (
+                );
+              })}
+              {earlier.length > EARLIER_DEFAULT && (
                 <Button
-                  key="back-latest"
-                  label={t.latestBtn}
+                  key="toggle-history"
+                  label={showHistory ? t.fewer : t.moreAnswers(earlier.length - EARLIER_DEFAULT)}
                   plain
-                  onPress={() => viewTurn($, null)}
-                />
-              )}
-              {turn && (
-                <Button
-                  key="toggle-details"
-                  label={showDetails ? t.hideDetails : t.details}
-                  plain
-                  onPress={() => toggle($, "details")}
+                  onPress={() => toggle($, "history")}
                 />
               )}
             </Box>
-            {turn && turn.query !== "" && (
-              <Text dimColor wrap="truncate-end">
-                “{turn.query}”
-              </Text>
-            )}
-            {!turn && <Text dimColor>{t.waiting}</Text>}
-            {c.total > 0 && (
-              <Box flexDirection="column" marginTop={1}>
-                <Text wrap="wrap">
-                  <Text bold color="green">
-                    {t.usedSection(c.total)}
-                  </Text>
-                  <Text dimColor>{breakdown(t, c)}</Text>
-                </Text>
-                {c.strong.map(row)}
-                {c.found.map(refRow)}
-                {c.weak.length > 0 && (
-                  <Box flexWrap="wrap" columnGap={2} marginTop={1}>
-                    <Text dimColor>{t.lowerMatches(c.weak.length)}</Text>
-                    <Button
-                      key="toggle-weak"
-                      label={showWeak ? t.hide : t.show}
-                      plain
-                      onPress={() => toggle($, "weak")}
-                    />
-                    {showWeak && (
-                      <Button
-                        key="mute-weak"
-                        label={t.muteThese}
-                        plain
-                        onPress={() =>
-                          muteMany(
-                            $,
-                            c.weak.map((it) => it.uri),
-                          )
-                        }
-                      />
-                    )}
-                  </Box>
-                )}
-                {showWeak && c.weak.map(row)}
-              </Box>
-            )}
-            {turn && c.total === 0 && lookups.length === 0 && (
-              <Text dimColor wrap="wrap">
-                {t.nothingUsed}
-              </Text>
-            )}
-            {lookups.length > 0 && (
-              <Box flexDirection="column" marginTop={1}>
-                <Text bold>{t.lookedUp}</Text>
-                {lookups.map(lookupRow)}
-              </Box>
-            )}
+          )}
 
-            {((showDiag &&
-              turn !== null &&
-              (turn.items.length === 0 || repeats > 0 || emptyCount > 0)) ||
-              muted.length > 0) && (
-              <Box flexDirection="column" marginTop={1}>
-                {showDiag && turn !== null && turn.items.length === 0 && (
-                  <Text dimColor wrap="wrap">
-                    {t.reasons[turn.reason] ?? t.nothingRecalled}
-                  </Text>
-                )}
-                {showDiag && repeats > 0 && <Text dimColor>{t.alreadyInContext(repeats)}</Text>}
-                {showDiag && emptyCount > 0 && <Text dimColor>{t.emptyIgnored(emptyCount)}</Text>}
-                {muted.length > 0 && (
-                  <Box flexWrap="wrap" columnGap={2}>
-                    <Text dimColor>{t.muted(muted.length, turn?.mutedHits ?? 0)}</Text>
-                    <Button
-                      key="unmute-all"
-                      label={t.unmuteAll}
-                      plain
-                      onPress={() => unmuteAll($)}
-                    />
-                  </Box>
-                )}
-              </Box>
+          <Box flexWrap="wrap" columnGap={2}>
+            {heading(
+              isPast && turn ? t.answerN(turn.n, clock(turn.at)) : t.thisAnswer,
+              !recallHidden && turn?.latencyMs != null && turn.reason === "ok"
+                ? ` · ${(turn.latencyMs / 1000).toFixed(1)}s`
+                : undefined,
+            )}
+            {isPast && (
+              <Button
+                key="back-latest"
+                label={t.latestBtn}
+                plain
+                onPress={() => viewTurn($, null)}
+              />
+            )}
+            {turn && (
+              <Button
+                key="toggle-details"
+                label={showDetails ? t.hideDetails : t.details}
+                plain
+                onPress={() => toggle($, "details")}
+              />
             )}
           </Box>
-          <Box marginTop={2}>
-            <Text dimColor>OV-Usage {VERSION}</Text>
-          </Box>
+          {turn && turn.query !== "" && (
+            <Text dimColor wrap="truncate-end">
+              “{turn.query}”
+            </Text>
+          )}
+          {!turn && <Text dimColor>{t.waiting}</Text>}
+          {c.total > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text wrap="wrap">
+                <Text bold color="green">
+                  {t.usedSection(c.total)}
+                </Text>
+                <Text dimColor>{breakdown(t, c)}</Text>
+              </Text>
+              {c.strong.map(row)}
+              {c.found.map(refRow)}
+              {c.weak.length > 0 && (
+                <Box flexWrap="wrap" columnGap={2} marginTop={1}>
+                  <Text dimColor>{t.lowerMatches(c.weak.length)}</Text>
+                  <Button
+                    key="toggle-weak"
+                    label={showWeak ? t.hide : t.show}
+                    plain
+                    onPress={() => toggle($, "weak")}
+                  />
+                  {showWeak && (
+                    <Button
+                      key="mute-weak"
+                      label={t.muteThese}
+                      plain
+                      onPress={() =>
+                        muteMany(
+                          $,
+                          c.weak.map((it) => it.uri),
+                        )
+                      }
+                    />
+                  )}
+                </Box>
+              )}
+              {showWeak && c.weak.map(row)}
+            </Box>
+          )}
+          {turn && c.total === 0 && lookups.length === 0 && (
+            <Text dimColor wrap="wrap">
+              {t.nothingUsed}
+            </Text>
+          )}
+          {lookups.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text bold>{t.lookedUp}</Text>
+              {lookups.map(lookupRow)}
+            </Box>
+          )}
+
+          {((showDiag &&
+            turn !== null &&
+            (turn.items.length === 0 || repeats > 0 || emptyCount > 0)) ||
+            muted.length > 0) && (
+            <Box flexDirection="column" marginTop={1}>
+              {showDiag && turn !== null && turn.items.length === 0 && (
+                <Text dimColor wrap="wrap">
+                  {t.reasons[turn.reason] ?? t.nothingRecalled}
+                </Text>
+              )}
+              {showDiag && repeats > 0 && <Text dimColor>{t.alreadyInContext(repeats)}</Text>}
+              {showDiag && emptyCount > 0 && <Text dimColor>{t.emptyIgnored(emptyCount)}</Text>}
+              {muted.length > 0 && (
+                <Box flexWrap="wrap" columnGap={2}>
+                  <Text dimColor>{t.muted(muted.length, turn?.mutedHits ?? 0)}</Text>
+                  <Button key="unmute-all" label={t.unmuteAll} plain onPress={() => unmuteAll($)} />
+                </Box>
+              )}
+            </Box>
+          )}
         </Box>
-      );
-    } catch (err) {
-      return (
-        <Box flexDirection="column">
-          <Text color="red" wrap="wrap">
-            OV-Usage {VERSION}: the pane failed to draw
-          </Text>
-          <Text dimColor wrap="wrap">
-            {String((err as Error)?.message ?? err).slice(0, 300)}
-          </Text>
+        <Box marginTop={2}>
+          <Text dimColor>OV-Usage {VERSION}</Text>
         </Box>
-      );
-    }
-  });
-};
+      </Box>
+    );
+  } catch (err) {
+    return (
+      <Box flexDirection="column">
+        <Text color="red" wrap="wrap">
+          OV-Usage {VERSION}: the pane failed to draw
+        </Text>
+        <Text dimColor wrap="wrap">
+          {String((err as Error)?.message ?? err).slice(0, 300)}
+        </Text>
+      </Box>
+    );
+  }
+}
