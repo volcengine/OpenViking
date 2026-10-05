@@ -117,6 +117,15 @@ context under such presets with no error. Pre-step injection also makes each
 injection a session event that replays, is visible to compaction, and never
 reaches `request/header`.
 
+### What triggers recall
+
+Recall runs on a pre-step whose entering batch contains user-authored input.
+The query is built only from those messages: user-role messages with
+`source.kind` absent or `user`. Messages that DSH or other plugins inject
+(`time-context`, `plugin:*` notices, this plugin's own blocks) and tool results
+are excluded, using the same rule capture uses. A batch made only of injected
+context sends no search request.
+
 ### How the tool surface is mounted
 
 `mcp.mjs` mounts `@deepseek-ai/dsh-mcp-client` on `servers/mcp-proxy.mjs`, the
