@@ -381,6 +381,23 @@ test("autoRecall false stops the recall request", async () => {
   assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]), null);
 });
 
+// A batch of injected context alone (time-context, job notices) carries no
+// user query, so it must not trigger a recall request.
+test("injected context alone does not trigger recall", async () => {
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON() {
+      throw new Error("recall must not run without user input");
+    },
+  }, { ...config(), minQueryLength: 0 }, { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: { ...config(), minQueryLength: 0 } });
+
+  assert.equal(await runtime.recallMessage({}, [{
+    role: "user",
+    content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+    source: { kind: "time-context" },
+  }]), null);
+});
+
 // recall-core reads options.excludeUris, but the DSH runtime built its options
 // without it, so nothing a user configured could stop a subtree from being
 // recalled: generated directory files came back as ordinary hits.

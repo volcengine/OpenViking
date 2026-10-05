@@ -131,7 +131,7 @@ export class OpenVikingRuntime {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
-    if (query.length < state.config.minQueryLength) return null;
+    if (!query || query.length < state.config.minQueryLength) return null;
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
