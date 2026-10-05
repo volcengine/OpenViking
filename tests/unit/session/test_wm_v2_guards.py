@@ -8,12 +8,14 @@ so they don't need a running OpenViking server.
 """
 
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
+from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session import working_memory as wm
 from openviking.session.session import Session, SessionMeta
 from openviking.session.working_memory import WM_SEVEN_SECTIONS
@@ -614,6 +616,17 @@ class TestMergeWmSectionsEdgeCases:
         assert "Original Title" in merged
         assert "Running" in merged
 
+    @pytest.mark.parametrize("header", WM_SEVEN_SECTIONS)
+    @pytest.mark.parametrize("operation", [{}, {"content": "New state"}, {"items": ["New fact"]}])
+    def test_provided_section_without_op_fails(self, header, operation):
+        """显式提供的操作缺少 op 时必须报错，不能冒充成功的 KEEP。"""
+        old_wm = _make_wm(current_state="Old state", session_title="Original title")
+        ops = {section: {"op": "KEEP"} for section in WM_SEVEN_SECTIONS}
+        ops[header] = operation
+
+        with pytest.raises(ValueError, match=rf"{header}.*op"):
+            wm.merge_wm_sections(old_wm, ops)
+
     def test_unknown_op_defaults_to_keep(self):
         old_wm = _make_wm(current_state="Running")
         ops = {
@@ -807,3 +820,33 @@ async def test_hydrated_extraction_output_redacts_inline_images():
     assert original.parts[0].tool_output == "externalized preview"
     assert image_data not in hydrated[0].parts[0].tool_output
     assert "base64_chars=50000" in hydrated[0].parts[0].tool_output
+
+
+async def test_wm_update_missing_op_propagates_without_creation_fallback(monkeypatch):
+    """模型返回缺少 op 的章节时，摘要入口应失败而非返回旧摘要或重新生成。"""
+    response = VLMResponse(
+        tool_calls=[
+            ToolCall(
+                id="missing-op",
+                name="update_working_memory",
+                arguments={"sections": {"Current State": {"content": "New state"}}},
+            )
+        ],
+        finish_reason="tool_calls",
+    )
+    vlm = SimpleNamespace(
+        is_available=lambda: True, get_completion_async=AsyncMock(return_value=response)
+    )
+    session = Session(
+        viking_fs=Mock(), vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
+    )
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config", lambda: SimpleNamespace()
+    )
+    message = Message(id="user-1", role="user", parts=[TextPart(text="Update the state.")])
+
+    with pytest.raises(ValueError, match="Current State.*op"):
+        await session._generate_archive_summary_async(
+            [message], latest_archive_overview=_make_wm(current_state="Old state")
+        )
+    assert vlm.get_completion_async.await_count == 1
