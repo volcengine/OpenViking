@@ -187,11 +187,14 @@ test("a byte cap keeps the whole block under it with profile, index and catalog"
   assert.ok(Buffer.byteLength(uncapped.block) > 9500);
 });
 
-test("when the cap cannot hold everything, the memory index goes before the catalog", async () => {
+test("when the cap drops the memory index, the block identifies the omitted scope", async () => {
   const { fetchJSON } = fakeServer({ profile: HEAVY_PROFILE, memories: HEAVY_MEMORIES, skills: HEAVY_SKILLS });
   const result = await buildProfileBlock(fetchJSON, 10000, "", { ...CATALOG, sessionStartMaxBytes: 1000 });
-  assert.ok(Buffer.byteLength(result.block) <= 1000 || !result.block.includes("<available-"), result.block);
-  assert.doesNotMatch(result.block, /<available-memories>/);
+  assert.ok(Buffer.byteLength(result.block) <= 1000, result.block);
+  assert.match(result.block, /<available-memories>/);
+  assert.match(result.block, /omitted the complete memory index: 300 preference entries/);
+  assert.match(result.block, /use `memory_recall` to retrieve them/);
+  assert.doesNotMatch(result.block, /owner\/pref-\d+\.md/);
 });
 
 test("the two roots share no client-side cap, so shared skills survive a full private root", async () => {

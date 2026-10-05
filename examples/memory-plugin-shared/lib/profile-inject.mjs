@@ -415,16 +415,37 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     ? [`<available-memories>`, ...prefBlock.lines, ...entBlock.lines, `</available-memories>`]
     : [];
   let skillLines = skills.lines;
+  let memoryIndexOmitted = false;
   const render = () => [...profileLines, ...memoryLines, ...skillLines].join("\n");
   let block = render();
-  // The estimate can still run over on multi-byte punctuation; the index goes
-  // first, then the catalog.
-  if (sessionStartMaxBytes > 0 && utf8Bytes(block) > sessionStartMaxBytes) {
-    memoryLines = [];
+  // The estimate can still run over on multi-byte punctuation. Replace the
+  // index first, but keep its omission visible while the cap has room.
+  if (
+    sessionStartMaxBytes > 0
+    && utf8Bytes(block) > sessionStartMaxBytes
+    && memoryLines.length > 0
+  ) {
+    const omitted = [];
+    if (prefs.length > 0) omitted.push(`${prefs.length} preference entries`);
+    if (ents.length > 0) omitted.push(`${ents.length} entity entries`);
+    memoryLines = [
+      "<available-memories>",
+      `  SessionStart byte cap omitted the complete memory index: ${omitted.join(" and ")}; use \`memory_recall\` to retrieve them.`,
+      "</available-memories>",
+    ];
+    memoryIndexOmitted = true;
     block = render();
   }
   if (sessionStartMaxBytes > 0 && utf8Bytes(block) > sessionStartMaxBytes) {
     skillLines = [];
+    block = render();
+  }
+  if (
+    sessionStartMaxBytes > 0
+    && utf8Bytes(block) > sessionStartMaxBytes
+    && memoryIndexOmitted
+  ) {
+    memoryLines = [];
     block = render();
   }
   if (!block) return null;
