@@ -46,7 +46,7 @@ const SETTINGS = {
   recallTokenBudget: 2000,
   recallPeerScope: "actor",
   autoCapture: true,
-  commitTurnThreshold: 8,
+  commitTokenThreshold: 20000,
   startupInject: true,
   profileTokenBudget: 10000,
   mcpEnabled: true,
@@ -293,7 +293,7 @@ for (const surface of ["terminal", "desktop"] as const) {
       expect(text).toContain("ov.example.com");
       expect(text).toContain("API key set");
       expect(text).toContain("threshold 0.45");
-      expect(text).toContain("saves to memory every 8 turns");
+      expect(text).toContain("saves to memory every 20,000 tokens");
       expect(text).not.toContain(API_KEY);
     });
 

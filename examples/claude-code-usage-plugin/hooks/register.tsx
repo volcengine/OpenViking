@@ -14,7 +14,6 @@ import { STRINGS } from "./strings";
 import type { Lang } from "./strings";
 import {
   HEAD,
-  OV_CLI,
   ROLE_LINE,
   TAILS,
   URI,
@@ -23,14 +22,14 @@ import {
   parseRecall,
   parseStartup,
   redact,
+  replyFor,
   stripMuted,
   urisIn,
 } from "./parse";
 import {
   OPEN_TOOLS,
-  OV_TOOL,
   QUIET_TOOLS,
-  WRITE_TOOLS,
+  classifyToolCall,
   breakdown,
   consultedOf,
   consultedUris,
@@ -41,7 +40,6 @@ import {
   isExpanded,
   isStrong,
   kindOf,
-  replyFor,
   shortName,
   titleOf,
 } from "./sources";
@@ -457,9 +455,9 @@ type Snapshot = {
   turnCount: number;
   seen: Seen[];
   muted: string[];
-  history?: Turn[];
-  replies?: Reply[];
-  opening?: Opening | null;
+  history: Turn[];
+  replies: Reply[];
+  opening: Opening | null;
   savedAt: number;
 };
 
@@ -719,7 +717,7 @@ async function answerCard($: EngineInterface, e: ResolveInput, turn: Turn) {
   const { value: showAll = false } = await $.state.get(showAllCardRef);
   const recallHidden = await isRecallHidden($);
   const c = consultedOf(turn, recallHidden);
-  const lookups = turn.lookups ?? [];
+  const lookups = turn.lookups;
   if (c.total === 0 && lookups.length === 0) return null;
   // One row per document name, ranked by its best source; top 10 unless expanded.
   const groups: {
@@ -1030,32 +1028,29 @@ export const register: Register = (on) => {
 
   // Every lookup or write Claude makes against OpenViking.
   on("tool.call", async ($, e, next) => {
-    const mcp = OV_TOOL.exec(e.tool);
-    const cmd =
-      e.tool === "Bash" ? String((e as unknown as { command?: string }).command ?? "") : "";
-    // Only a real `ov` / `openviking` CLI call counts; a command that merely
-    // mentions a viking:// path (writing docs, grepping, scripts) is not a lookup.
-    const bash = cmd !== "" && OV_CLI.test(cmd);
-    if (!mcp && !bash) return next(e);
+    const cmd = e.tool === "Bash" ? e.command : "";
+    const call = classifyToolCall(e.tool, cmd);
+    if (!call) return next(e);
 
-    const args = e as unknown as Record<string, unknown>;
-    const name = mcp?.[1] ?? "ov cli";
+    // OpenViking's MCP tool names depend on the server's name in each install, so
+    // their arguments are read by name rather than through one declared type.
+    const args: Record<string, unknown> = { ...e };
+    const name = call.name;
     const uriList = Array.isArray(args.uris) ? args.uris.join(" ") : undefined;
     // A shell command is never stored; only the viking:// URIs it names.
-    const cmdUris = bash ? [...new Set(cmd.match(URI) ?? [])].join(" ") : "";
+    const cmdUris = call.isCli ? [...new Set(cmd.match(URI) ?? [])].join(" ") : "";
     const target = redact(
-      String(mcp ? (args.uri ?? uriList ?? args.path ?? args.target ?? "") : cmdUris),
+      String(call.isCli ? cmdUris : (args.uri ?? uriList ?? args.path ?? args.target ?? "")),
     );
     const one: Lookup = {
       id: e.tool_use_id,
       tool: name,
-      kind:
-        WRITE_TOOLS.has(name) || /\bov\s+(add|write|remember|rm|mv|edit)\b/.test(cmd)
-          ? "write"
-          : "read",
+      kind: call.kind,
       query: redact(
         String(
-          mcp ? (args.query ?? args.uri ?? uriList ?? args.pattern ?? args.path ?? "") : cmdUris,
+          call.isCli
+            ? cmdUris
+            : (args.query ?? args.uri ?? uriList ?? args.pattern ?? args.path ?? ""),
         ),
       ).slice(0, 80),
       target,
@@ -1092,7 +1087,7 @@ export const register: Register = (on) => {
         scores,
         isError,
       };
-      await editTurn($, turn.n, (t) => ({ ...t, lookups: [...(t.lookups ?? []), ref] }));
+      await editTurn($, turn.n, (t) => ({ ...t, lookups: [...t.lookups, ref] }));
     }
     await refreshStatus($);
     await saveSession($);
@@ -1320,7 +1315,7 @@ async function renderPane($: EngineInterface, e: ResolveInput) {
                   {settingRow(
                     t.rowCapture,
                     cfg.autoCapture,
-                    cfg.autoCapture ? t.captureOn(cfg.commitTurnThreshold) : t.captureOff,
+                    cfg.autoCapture ? t.captureOn(cfg.commitTokenThreshold) : t.captureOff,
                   )}
                   {settingRow(
                     t.rowStartup,

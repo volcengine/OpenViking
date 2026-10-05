@@ -36,7 +36,7 @@ try {
     server: c.baseUrl || '', apiKeySet: Boolean(c.apiKey), autoRecall: c.autoRecall !== false,
     scoreThreshold: c.scoreThreshold, recallLimit: c.recallLimit, recallTokenBudget: c.recallTokenBudget,
     recallPeerScope: c.recallPeerScope, autoCapture: c.autoCapture !== false,
-    commitTurnThreshold: c.commitTurnThreshold, startupInject: !c.noAutoInject,
+    commitTokenThreshold: c.commitTokenThreshold, startupInject: !c.noAutoInject,
     profileTokenBudget: c.profileTokenBudget, mcpEnabled: c.mcpEnabled !== false, error: null,
   }))
 } catch (err) {
@@ -69,7 +69,7 @@ export const EMPTY_SETTINGS: OvSettings = {
   recallTokenBudget: 0,
   recallPeerScope: "",
   autoCapture: false,
-  commitTurnThreshold: 0,
+  commitTokenThreshold: 0,
   startupInject: false,
   profileTokenBudget: 0,
   mcpEnabled: false,

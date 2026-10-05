@@ -1,7 +1,8 @@
 // Pure parsing of what OpenViking and Claude Code hand the plugin: recall blocks,
-// the startup context, viking:// URIs, secrets to redact, and text fingerprints.
+// the startup context, viking:// URIs, secrets to redact, and the text
+// fingerprints that match an answer to its row in the transcript.
 
-import type { Group, Inject, RecallItem } from "../types";
+import type { Group, Inject, RecallItem, Reply } from "../types";
 
 // A viking:// URI starts with an ASCII scope (user, resources, agent, ~) and
 // stops at whitespace or punctuation, CJK included. Prose that merely mentions
@@ -12,9 +13,6 @@ export const URI =
 // A whole URI as stored: file names may contain spaces, never line breaks or CJK punctuation.
 export const IS_URI =
   /^viking:\/\/(?:~|[A-Za-z][\w.-]*)(?:\/[^\n"'<>)\]`,，。；：！？、（）《》“”]*)?$/;
-
-// An `ov` or `openviking` CLI invocation at the start of a command or after ; && | (
-export const OV_CLI = /(?:^|[;&|(]\s*|\s&&\s*)(?:\S+=\S+\s+)*(?:ov|openviking)\s+(?!-)\S/;
 
 // A line that is only a URI, after an optional search-result prefix or inside
 // "=== … ===": file names there can contain spaces.
@@ -179,3 +177,16 @@ export function fingerprint(text: string): string {
 export const TAILS = [400, 160, 80, 40, 20];
 
 export const HEAD = 200;
+
+// The reply a transcript row draws, by its id, or else by an ending only one answer has.
+export function replyFor(replies: Reply[], id: string, text: string): Reply | undefined {
+  const byId = replies.find((r) => r.id !== "" && r.id === id);
+  if (byId) return byId;
+  const end = text.trimEnd();
+  // The longest ending this row can fill; one answer must match it, not two.
+  const k = TAILS.find((size) => end.length >= size);
+  if (k === undefined) return undefined;
+  const mark = fingerprint(end.slice(-k));
+  const hits = replies.filter((r) => r.tails.includes(mark));
+  return hits.length === 1 ? hits[0] : undefined;
+}

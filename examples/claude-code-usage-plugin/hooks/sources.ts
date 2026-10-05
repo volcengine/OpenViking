@@ -1,20 +1,33 @@
 // What a source is to the person: its kind, group and relevance, and what one
 // answer consulted.
 
-import type { Lookup, RecallItem, Reply, Turn, TurnLookup } from "../types";
+import type { Lookup, RecallItem, Turn, TurnLookup } from "../types";
 import type { Strings } from "./strings";
-import { IS_URI, TAILS, fingerprint } from "./parse";
+import { IS_URI } from "./parse";
 
-export const OV_TOOL = /^mcp__.*openviking.*__(\w+)$/;
+const OV_TOOL = /^mcp__.*openviking.*__(\w+)$/;
 
-export const WRITE_TOOLS = new Set([
-  "remember",
-  "write",
-  "edit",
-  "add_resource",
-  "add_skill",
-  "forget",
-]);
+const WRITE_TOOLS = new Set(["remember", "write", "edit", "add_resource", "add_skill", "forget"]);
+
+// An `ov` or `openviking` CLI invocation at the start of a command or after ; && | (
+const OV_CLI = /(?:^|[;&|(]\s*|\s&&\s*)(?:\S+=\S+\s+)*(?:ov|openviking)\s+(?!-)\S/;
+
+// `ov` subcommands that change what OpenViking holds.
+const OV_CLI_WRITE = /\bov\s+(add|write|remember|rm|mv|edit)\b/;
+
+export type ToolCallKind = { name: string; kind: "read" | "write"; isCli: boolean };
+
+// Whether a tool call is one of Claude's own OpenViking lookups or writes: a tool
+// of an OpenViking MCP server, or an `ov` / `openviking` CLI call through Bash. A
+// command that only mentions a viking:// path (writing docs, grepping) is not one.
+export function classifyToolCall(tool: string, command: string): ToolCallKind | null {
+  const mcp = OV_TOOL.exec(tool)?.[1];
+  if (mcp) return { name: mcp, kind: WRITE_TOOLS.has(mcp) ? "write" : "read", isCli: false };
+  if (tool === "Bash" && OV_CLI.test(command)) {
+    return { name: "ov cli", kind: OV_CLI_WRITE.test(command) ? "write" : "read", isCli: true };
+  }
+  return null;
+}
 
 // Tools that open the files they name; the rest return a list of matches.
 export const OPEN_TOOLS = new Set(["read", "ov cli"]);
@@ -133,19 +146,6 @@ export function describeLookup(t: Strings, l: TurnLookup) {
   };
 }
 
-// The reply a transcript row draws, by its id, or else by an ending only one answer has.
-export function replyFor(replies: Reply[], id: string, text: string): Reply | undefined {
-  const byId = replies.find((r) => r.id !== "" && r.id === id);
-  if (byId) return byId;
-  const end = text.trimEnd();
-  // The longest ending this row can fill; one answer must match it, not two.
-  const k = TAILS.find((size) => end.length >= size);
-  if (k === undefined) return undefined;
-  const mark = fingerprint(end.slice(-k));
-  const hits = replies.filter((r) => r.tails.includes(mark));
-  return hits.length === 1 ? hits[0] : undefined;
-}
-
 // What OpenViking put in front of Claude for one answer: the memories recalled
 // for the prompt (unless auto-recall is off) and what Claude's own reads and
 // searches returned. Nothing is guessed from the answer's wording.
@@ -156,7 +156,7 @@ export function consultedOf(turn: Turn, recallHidden: boolean) {
   // Relevance of what Claude found: a file it chose to open ranks first, a search
   // result by the score the search gave it.
   const relevance = new Map<string, number>();
-  for (const l of turn.lookups ?? []) {
+  for (const l of turn.lookups) {
     if (l.isError || l.kind !== "read") continue;
     for (const u of l.uris) {
       if (!IS_URI.test(u) || recalled.has(u)) continue;
@@ -185,7 +185,7 @@ export function consultedOf(turn: Turn, recallHidden: boolean) {
   // Of what was consulted: how much is about the person, and how much Claude
   // opened in full (a read, not just a search hit or a recalled summary).
   const opened = new Set(
-    (turn.lookups ?? []).filter((l) => !l.isError && OPEN_TOOLS.has(l.tool)).flatMap((l) => l.uris),
+    turn.lookups.filter((l) => !l.isError && OPEN_TOOLS.has(l.tool)).flatMap((l) => l.uris),
   );
   const all = ranked.map((r) => r.uri);
   const byCategory = { prefs: 0, history: 0, work: 0, docs: 0, skill: 0 };

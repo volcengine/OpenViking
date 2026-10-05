@@ -34,7 +34,7 @@ const SETTINGS = {
   recallTokenBudget: 2000,
   recallPeerScope: "actor",
   autoCapture: true,
-  commitTurnThreshold: 8,
+  commitTokenThreshold: 20000,
   startupInject: true,
   profileTokenBudget: 4000,
   mcpEnabled: true,

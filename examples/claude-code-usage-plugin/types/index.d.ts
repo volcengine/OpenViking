@@ -18,7 +18,7 @@ export type TurnLookup = {
   kind: "read" | "write";
   query: string;
   uris: string[];
-  // relevance a search gave each result (0–1); absent for reads and older turns
+  // relevance a search gave each result (0–1); absent for reads
   scores?: Record<string, number>;
   isError: boolean;
 };
@@ -45,8 +45,8 @@ export type Turn = {
   tokensUsed: number | null;
   items: RecallItem[];
   mutedHits: number;
-  // searches and reads Claude ran for this answer (absent in turns saved before 0.10)
-  lookups?: TurnLookup[];
+  // searches and reads Claude ran for this answer
+  lookups: TurnLookup[];
   // last-recall.json reason: ok, disabled, no_results, short_query, offline, ...
   reason: string;
 };
@@ -69,7 +69,7 @@ export type OvSettings = {
   recallTokenBudget: number;
   recallPeerScope: string;
   autoCapture: boolean;
-  commitTurnThreshold: number;
+  commitTokenThreshold: number;
   startupInject: boolean;
   profileTokenBudget: number;
   mcpEnabled: boolean;
