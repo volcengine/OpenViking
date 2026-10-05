@@ -94,7 +94,7 @@ None of this is sent to Claude, so none of it adds tokens.
 - **Earlier answers** (sidebar): any earlier answer in this conversation. `✓3` means 3 OpenViking sources were consulted for it.
 - **All sessions**: how many prompts auto-recall added memories to, and how many memory updates OpenViking saved, from how many conversations. OV-Usage counts these itself from the day you install it, because openviking-memory keeps no history of its own. `/openviking-usage clear` resets them.
 - **Startup**: how many memory files the startup context indexed, and your role if your profile has a line labeled as one (职业, 角色, Role, Job title, Occupation and similar).
-- **Settings** (sidebar): read-only. Shows auto-recall and its threshold, auto-capture, the startup profile, the server, and whether an API key is set (never the key itself). This is also where you choose the layout, card detail and language.
+- **Settings** (sidebar): read-only. Shows auto-recall and its threshold, auto-capture and how much conversation it collects before saving to memory (openviking-memory's `commitTokenThreshold`, 20,000 tokens by default), the startup profile, the server, and whether an API key is set (never the key itself). This is also where you choose the layout, card detail and language.
 
 If auto-recall is off in your OpenViking config (`"autoRecall": false` in `~/.openviking/ovcli.conf`), OV-Usage hides everything about it, including under [details]: recalled files, recall counts and recall timing. Turning it back on brings them back.
 
@@ -185,8 +185,8 @@ Uninstalling leaves openviking-memory and everything in OpenViking unchanged. To
 ## Development
 
 - `hooks/register.tsx`: the hooks, and everything that uses Claude Code's engine handle `$`: session state, reading openviking-memory's files, the `/openviking-usage` command, the sidebar and the cards. Claude Code requires these in the module `hooks.json` names, since it doesn't follow `$` into imported files.
-- `hooks/parse.ts`: pure parsing of recall blocks, the startup context, `viking://` URIs, redaction and text fingerprints.
-- `hooks/sources.ts`: what a source is: its kind, group and relevance, and what one answer consulted.
+- `hooks/parse.ts`: pure parsing of recall blocks, the startup context, `viking://` URIs and redaction, plus the text fingerprints that match an answer to its row in the transcript.
+- `hooks/sources.ts`: which tool calls are OpenViking lookups or writes (`classifyToolCall`), what a source is (its kind, group and relevance), and what one answer consulted.
 - `hooks/openviking.ts`: the formats of openviking-memory's settings and registry record, and the totals across sessions.
 - `hooks/strings.ts`: English and Chinese labels.
 - `types/index.d.ts`: the shape of the values the plugin keeps.

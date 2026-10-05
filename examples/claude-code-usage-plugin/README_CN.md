@@ -95,7 +95,7 @@ OV · 本次 ✓12 (★1 ◷1 ◆6 ▤3 ⚙1) · 本会话 45 · 写回 1
 - **之前的回答**（侧边栏）：本次对话中任意一次之前的回答。`✓3` 表示这次回答参考了 3 个 OpenViking 来源。
 - **全局**：自动召回为多少次提问带上了记忆，以及 OpenViking 从多少段对话中沉淀了多少次记忆更新。openviking-memory 本身不保留历史，所以这些数据由 OV-Usage 从安装当天开始自行统计。`/openviking-usage clear` 会清零。
 - **启动加载**：启动上下文索引了多少个记忆文件；如果你的画像中有标明角色的一行（职业、角色、Role、Job title、Occupation 等），也会显示角色。
-- **设置**（侧边栏）：只读。显示自动召回及其阈值、自动记录、启动画像、服务地址，以及是否设置了 API Key（从不显示 Key 本身）。显示位置、卡片详情和语言也在这里选择。
+- **设置**（侧边栏）：只读。显示自动召回及其阈值、自动记录及其写入记忆的频率（openviking-memory 的 `commitTokenThreshold`，默认每 20,000 token 写入一次）、启动画像、服务地址，以及是否设置了 API Key（从不显示 Key 本身）。显示位置、卡片详情和语言也在这里选择。
 
 如果 OpenViking 配置中关闭了自动召回（`~/.openviking/ovcli.conf` 中的 `"autoRecall": false`），OV-Usage 会隐藏所有与之相关的内容，包括 [详情] 中的召回文件、召回次数和召回耗时。重新打开后会恢复显示。
 
@@ -186,8 +186,8 @@ claude plugin uninstall ov-usage@openviking
 ## 开发
 
 - `hooks/register.tsx`：hooks，以及所有用到 Claude Code 引擎句柄 `$` 的代码：会话状态、读取 openviking-memory 的文件、`/openviking-usage` 命令、侧边栏和卡片。Claude Code 不会跟随 `$` 进入被导入的文件，所以这些代码必须放在 `hooks.json` 指定的模块里。
-- `hooks/parse.ts`：纯解析：召回块、启动上下文、`viking://` URI、脱敏和文本指纹。
-- `hooks/sources.ts`：来源的类型、分组和相关度，以及一次回答参考了哪些来源。
+- `hooks/parse.ts`：纯解析：召回块、启动上下文、`viking://` URI 和脱敏，以及把回答对应到对话记录中某一行的文本指纹。
+- `hooks/sources.ts`：判断哪些工具调用是对 OpenViking 的查找或写入（`classifyToolCall`），来源的类型、分组和相关度，以及一次回答参考了哪些来源。
 - `hooks/openviking.ts`：openviking-memory 设置和注册表记录的格式，以及跨会话的累计数据。
 - `hooks/strings.ts`：中英文标签。
 - `types/index.d.ts`：插件保存的数据结构。
