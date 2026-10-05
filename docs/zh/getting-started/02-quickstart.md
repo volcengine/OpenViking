@@ -64,18 +64,19 @@ ov health
 
 ## 3. 导入文档
 
-在当前目录创建 `ov-launch-plan.md`，内容如下：
+本例导入一条真实的团队信息：OpenViking 每周发布由哪四位 GitHub 用户轮流负责。在当前目录创建 `ov-release-rotation.md`，内容如下：
 
 ```markdown
-# OpenViking 海外发布计划
+# OpenViking 发布轮值
 
-Zayn 负责 OpenViking 的海外发布。新加坡团队先上线托管服务，两周后发布自托管版本。
+OpenViking 每周五发布一个新版本。
+发布负责人按顺序轮换：qin-ctx、zhoujh01、ZaynJarvis、t0saki。
 ```
 
 将它导入新的资源目录：
 
 ```bash
-ov add-resource ./ov-launch-plan.md --to viking://resources/ov-launch-plan --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
 ```
 
 CLI 会自动上传本地文件。`--wait` 等待处理完成，命令成功后再继续。若省略该参数，保存返回的 `task_id`，用 `ov task status <task_id>` 查询到 `completed` 后再使用结果。详见[后台任务](../api/17-tasks.md)。
@@ -83,12 +84,12 @@ CLI 会自动上传本地文件。`--wait` 等待处理完成，命令成功后�
 ## 4. 浏览与检索
 
 ```bash
-ov tree viking://resources/ov-launch-plan
-ov overview viking://resources/ov-launch-plan
-ov find "谁负责 OpenViking 的海外发布？" --uri viking://resources/ov-launch-plan
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "谁负责 OpenViking 的每周发布？" --uri viking://resources/ov-release-rotation
 ```
 
-`tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。读取某条命中时，把返回的 URI 传给 `ov read`：
+`tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。这个问题的答案就在导入的文件中，所以该文件排在结果第一位。读取某条命中时，把返回的 URI 传给 `ov read`：
 
 ```bash
 ov read "<returned-file-uri>"

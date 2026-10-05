@@ -64,18 +64,19 @@ This checks that the server responds; the import below also exercises model proc
 
 ## 3. Import a document
 
-Save the following as `ov-launch-plan.md` in your current directory:
+This example imports a real team fact: the four GitHub users who take turns owning the weekly OpenViking release. Save the following as `ov-release-rotation.md` in your current directory:
 
 ```markdown
-# OpenViking overseas launch
+# OpenViking release rotation
 
-Zayn owns the OpenViking overseas launch. The Singapore team ships the managed service first and the self-hosted edition two weeks later.
+OpenViking ships a new release every Friday.
+Release owners rotate in this order: qin-ctx, zhoujh01, ZaynJarvis, t0saki.
 ```
 
 Import it into a new resource directory:
 
 ```bash
-ov add-resource ./ov-launch-plan.md --to viking://resources/ov-launch-plan --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
 ```
 
 The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).
@@ -83,12 +84,12 @@ The CLI uploads the local file automatically. `--wait` waits for processing; con
 ## 4. Browse and search
 
 ```bash
-ov tree viking://resources/ov-launch-plan
-ov overview viking://resources/ov-launch-plan
-ov find "Who owns the overseas launch?" --uri viking://resources/ov-launch-plan
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "Who owns the weekly OpenViking release?" --uri viking://resources/ov-release-rotation
 ```
 
-`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. To read a match, pass its returned URI to `ov read`:
+`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. The imported file answers the question, so it is the top match. To read a match, pass its returned URI to `ov read`:
 
 ```bash
 ov read "<returned-file-uri>"
