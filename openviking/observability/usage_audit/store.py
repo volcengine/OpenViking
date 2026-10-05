@@ -49,6 +49,16 @@ class UsageAuditStore(Protocol):
     ) -> dict[str, int]:
         """Return successful find/search counts for one account/user scope and date."""
 
+    async def get_experience_usage(
+        self,
+        *,
+        account_id: str,
+        resource_uri: str,
+        start_date_utc: str | None = None,
+        end_date_utc: str | None = None,
+    ) -> dict[str, int]:
+        """Return recall/inject counts for one Experience over inclusive UTC dates."""
+
     async def get_token_series(
         self,
         *,

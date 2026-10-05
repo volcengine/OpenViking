@@ -3,7 +3,7 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -246,9 +246,14 @@ class UsageReporterSinkConfig(BaseModel):
 
 
 class UsageReporterConfig(BaseModel):
-    """Usage event reporter configuration."""
+    """Usage event reporter configuration.
 
-    enabled: bool = False
+    ``"auto"`` reports only for accounts whose Agent Evolution is on, since the
+    events describe Experience use; ``true`` reports for every account and
+    ``false`` turns reporting off.
+    """
+
+    enabled: Union[bool, Literal["auto"]] = "auto"
     extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
 

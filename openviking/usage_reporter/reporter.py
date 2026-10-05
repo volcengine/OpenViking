@@ -25,6 +25,11 @@ class UsageReporter:
     extractors: list[UsageExtractor] = field(default_factory=list)
     sinks: list[UsageSink] = field(default_factory=list)
     sink_timeout_seconds: float = 5.0
+    # Report only for accounts whose Agent Evolution is on (the "auto" mode).
+    follows_agent_evolution: bool = False
+
+    def reports_for(self, *, agent_evolution_enabled: bool) -> bool:
+        return agent_evolution_enabled or not self.follows_agent_evolution
 
     async def extract(
         self,
