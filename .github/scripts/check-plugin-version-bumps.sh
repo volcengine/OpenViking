@@ -22,6 +22,7 @@ cd "$ROOT"
 # <plugin directory>:<manifest holding the version>
 PLUGINS=(
   "examples/claude-code-memory-plugin:examples/claude-code-memory-plugin/.claude-plugin/plugin.json"
+  "examples/claude-code-usage-plugin:examples/claude-code-usage-plugin/.claude-plugin/plugin.json"
   "examples/codex-memory-plugin:examples/codex-memory-plugin/.codex-plugin/plugin.json"
   "examples/agent-hook-plugin:examples/agent-hook-plugin/plugin.json"
   "examples/opencode-plugin:examples/opencode-plugin/package.json"

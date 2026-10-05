@@ -1,0 +1,13 @@
+{
+  "name": "ov-usage",
+  "version": "0.1.0",
+  "description": "Shows which OpenViking sources each Claude Code answer consulted, as a card under the answer",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": ["openviking", "memory", "observability", "context-engine"]
+}

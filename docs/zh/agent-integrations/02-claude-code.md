@@ -111,6 +111,16 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 
 插件会在 Claude Code 的输入框下方显示一行 OpenViking 状态栏，用于指示：连接状态、召回条数、捕获进度以及当前会话状态。关于状态栏各部分的详细含义与自定义配置方法，请参阅 [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md)。
 
+## 可选：查看 OpenViking 的贡献（OV-Usage）
+
+OV-Usage 是一个独立的可选插件，在每次回答下方加一张卡片，列出这次回答用到的 OpenViking 来源：自动召回加入了什么，Claude 自己搜索、读取了什么。卡片默认只占一行，展开后显示完整列表。需要 Claude Code 2.1.286 或更高版本，并已安装 openviking-memory。
+
+```bash
+claude plugin install ov-usage@openviking
+```
+
+详见 [OV-Usage README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-usage-plugin/README_CN.md)。
+
 ## 故障排查
 
 | 现象 | 原因 | 修复 |

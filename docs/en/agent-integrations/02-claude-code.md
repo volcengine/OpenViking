@@ -111,6 +111,16 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 
 The plugin renders an OpenViking status indicator beneath your Claude Code input box, allowing you to check connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for a complete glossary of segments and personalization recipes.
 
+## Optional: see what OpenViking contributed (OV-Usage)
+
+OV-Usage is a separate, opt-in plugin. It adds a card under each answer listing the OpenViking sources the answer used: what auto-recall added, and what Claude searched for and read on its own. The card is one line by default and expands to the full list. It needs Claude Code 2.1.286 or newer, and openviking-memory installed.
+
+```bash
+claude plugin install ov-usage@openviking
+```
+
+See the [OV-Usage README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-usage-plugin/README.md) for details.
+
 ## Troubleshooting
 
 | Issue | Cause | Solution |
