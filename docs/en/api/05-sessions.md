@@ -58,6 +58,8 @@ Create a new session. Sessions are containers for conversations, storing message
 
 New `idle_timeout_seconds` inputs must be `0` (off) or at least `300`; values above `604800` are clamped to that maximum. For stored-data compatibility, existing positive values below 300 continue to be read unchanged. Other fields have a minimum of `0` and are clamped to their ranges. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
 
+Successful message writes (single and batch), session creation, and config updates return `result.idle_auto_commit_at`: the earliest idle check time as an ISO 8601 UTC timestamp, or `null` when idle auto-commit is disabled or there is no pending content. This scheduling hint includes the minimum commit interval; automatic commits revalidate the latest state under the Session lock before archiving.
+
 #### 3. Usage Examples
 
 **HTTP API**

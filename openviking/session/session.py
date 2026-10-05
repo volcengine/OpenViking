@@ -1491,6 +1491,7 @@ class Session:
         record_idle_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        pre_commit_check: Optional[Callable[["Session"], Optional[Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1503,6 +1504,9 @@ class Session:
         Phase 2 (Memory extraction): Runs through the persistent QueueFS queue.
 
         Args:
+            pre_commit_check: Condition checked after reloading metadata under the
+                Session lock. Return a skip result or None to archive. Metadata
+                read failures propagate without committing stale state.
             keep_recent_count: Number of most-recent messages to keep in the
                 live session after commit. ``0`` (default) preserves the old
                 behavior of archiving everything. The plugin's afterTurn path
@@ -1618,13 +1622,20 @@ class Session:
         publication_lease: Optional[Any] = None
         async with self._state_lock():
             self._messages = await self._read_live_messages_strict()
-            await self._load_meta()
+            found_meta = await self._load_meta()
+            if pre_commit_check is not None and not found_meta:
+                raise NotFoundError(f"Session metadata missing: {self.session_id}")
             if (
                 memory_policy is None
                 and self._meta.memory_policy is None
                 and in_memory_default_memory_policy is not None
             ):
                 self._meta.memory_policy = in_memory_default_memory_policy
+
+            if pre_commit_check is not None:
+                skipped = pre_commit_check(self)
+                if skipped is not None:
+                    return skipped
 
             effective_event_tags = _resolve_event_search_tags(
                 event_tags, self._meta.event_search_tags

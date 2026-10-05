@@ -8,7 +8,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
@@ -688,44 +688,51 @@ class SessionService:
             )
             return False
 
-        task = asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
+        task = asyncio.create_task(self._run_auto_commit_background(session_id, ctx, reason_hint))
         self._auto_commit_tasks.add(task)
         task.add_done_callback(self._auto_commit_tasks.discard)
         return True
 
-    async def run_auto_commit(self, session_id: str, ctx: RequestContext, *, reason: str) -> None:
-        """Run one best-effort automatic commit and release the in-flight claim."""
-        claim = (ctx.account_id, ctx.user.user_id, session_id)
-        try:
-            tracker = get_task_tracker()
-            if await tracker.has_running(
-                "session_commit",
-                session_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            ):
-                return
-
-            # Reload so a stale in-memory session can't drive the decision;
-            # commit_async re-reads again under its own path lock.
-            session = await self.get(session_id, ctx, auto_create=False)
-            policy = session.meta.auto_commit_policy
-            if not self._should_run_auto_commit(session, policy, reason):
-                return
-
-            # Idle timeout commits the whole backlog but must not persist a
-            # keep_recent_count of 0, which would wipe the stored preference.
-            if reason == "idle_timeout":
-                await session.commit_async(
-                    keep_recent_count=0,
-                    persist_keep_recent_count=False,
-                    record_auto_commit_success=True,
-                )
+    def idle_auto_commit_at(self, session: Session) -> Optional[str]:
+        """Earliest idle check time from this session snapshot; None disables it."""
+        if not self._session_auto_commit_config.enabled:
+            return None
+        timeout = get_idle_timeout_seconds(session.meta.auto_commit_policy)
+        if timeout is None or not has_idle_uncommitted_content(session.meta.to_dict()):
+            return None
+        value = compute_next_check_at(session.meta.last_message_at, timeout)
+        if value is None:
+            return None
+        when = parse_iso_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        when = when.astimezone(timezone.utc)
+        interval = get_min_commit_interval_seconds(session.meta.auto_commit_policy)
+        if interval and session.meta.last_auto_commit_at:
+            try:
+                previous = _parse_utc_timestamp(session.meta.last_auto_commit_at)
+            except (TypeError, ValueError):
+                pass
             else:
-                await session.commit_async(
-                    keep_recent_count=get_keep_recent_count(policy),
-                    record_auto_commit_success=True,
-                )
+                when = max(when, previous + timedelta(seconds=interval))
+        return when.isoformat()
+
+    def _auto_commit_skip(self, session_id: str, session: Session, reason: str) -> Dict[str, Any]:
+        return {
+            "session_id": session_id,
+            "status": "skipped",
+            "archived": False,
+            "task_id": None,
+            "reason": reason,
+            "idle_auto_commit_at": self.idle_auto_commit_at(session),
+        }
+
+    async def _run_auto_commit_background(
+        self, session_id: str, ctx: RequestContext, reason: str
+    ) -> None:
+        """Best-effort adapter for the local scheduler; callers may await the executor."""
+        try:
+            await self.run_auto_commit(session_id, ctx, reason=reason)
         except Exception as exc:
             logger.error(
                 "automatic session commit failed session_hash=%s trigger=%s error_type=%s",
@@ -736,7 +743,36 @@ class SessionService:
             )
         finally:
             async with self._auto_commit_inflight_lock:
-                self._auto_commit_inflight.discard(claim)
+                self._auto_commit_inflight.discard((ctx.account_id, ctx.user.user_id, session_id))
+
+    async def run_auto_commit(
+        self, session_id: str, ctx: RequestContext, *, reason: str
+    ) -> Dict[str, Any]:
+        """Await conditional Phase 1 and return its result; execution errors propagate."""
+        if reason not in ("idle_timeout", "message_write"):
+            raise ValueError(f"Unknown automatic commit reason: {reason}")
+        session = await self.get(session_id, ctx, auto_create=False)
+
+        def check(current: Session) -> Optional[Dict[str, Any]]:
+            if self._should_run_auto_commit(current, current.meta.auto_commit_policy, reason):
+                return None
+            return self._auto_commit_skip(session_id, current, "not_due")
+
+        skipped = check(session)
+        if skipped is not None:
+            return skipped
+        if await get_task_tracker().has_running(
+            "session_commit", session_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+        ):
+            return self._auto_commit_skip(session_id, session, "busy")
+        return await session.commit_async(
+            keep_recent_count=0
+            if reason == "idle_timeout"
+            else get_keep_recent_count(session.meta.auto_commit_policy),
+            persist_keep_recent_count=reason != "idle_timeout",
+            record_auto_commit_success=True,
+            pre_commit_check=check,
+        )
 
     @staticmethod
     def _has_uncommitted_content(session: Session) -> bool:

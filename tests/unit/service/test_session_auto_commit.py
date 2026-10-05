@@ -190,7 +190,12 @@ class _FakeAutoCommitSession:
         keep_recent_count: int = 0,
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
+        pre_commit_check=None,
     ):
+        if pre_commit_check is not None:
+            skipped = pre_commit_check(self)
+            if skipped is not None:
+                return skipped
         self.commit_calls.append(
             (keep_recent_count, persist_keep_recent_count, record_auto_commit_success)
         )
@@ -843,3 +848,59 @@ async def test_scheduler_reuses_async_agfs_client_between_scans(monkeypatch):
     await scheduler._scan_once()
 
     assert created_clients == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_commit_failure_propagates_but_background_adapter_releases_claim(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={"idle_timeout_seconds": 1},
+            message_count=1,
+            last_message_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    async def fail(**kwargs):
+        raise OSError("commit failed")
+
+    monkeypatch.setattr(session, "commit_async", fail)
+    with pytest.raises(OSError, match="commit failed"):
+        await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="idle_timeout")
+    claim = ("acct_a", "user_b", "session_a")
+    service._auto_commit_inflight.add(claim)
+    await service._run_auto_commit_background("session_a", _auto_commit_ctx(), "idle_timeout")
+    assert claim not in service._auto_commit_inflight
+
+
+def test_idle_schedule_hint_requires_enabled_policy_and_content(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={"idle_timeout_seconds": 60},
+            message_count=1,
+            last_message_at="2026-10-05T12:00:00+00:00",
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+    assert service.idle_auto_commit_at(session) == "2026-10-05T12:01:00+00:00"
+    session.meta.message_count = 0
+    assert service.idle_auto_commit_at(session) is None
+
+
+def test_idle_schedule_hint_respects_minimum_commit_interval(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={"idle_timeout_seconds": 60, "min_commit_interval_seconds": 120},
+            message_count=1,
+            last_message_at="2026-10-05T12:00:00+00:00",
+            last_auto_commit_at="2026-10-05T12:00:30+00:00",
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+    assert service.idle_auto_commit_at(session) == "2026-10-05T12:02:30+00:00"
+    session.meta.message_count = 1
+    session.meta.auto_commit_policy = None
+    assert service.idle_auto_commit_at(session) is None
+    session.meta.auto_commit_policy = {"idle_timeout_seconds": 60}
+    service.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=False))
+    assert service.idle_auto_commit_at(session) is None

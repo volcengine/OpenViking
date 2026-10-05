@@ -978,6 +978,7 @@ async def test_write_responses_return_pending_tokens_for_commit_policy(
         "session_id": session_id,
         "message_count": 3,
         "pending_tokens": after_batch,
+        "idle_auto_commit_at": None,
         "added": 0,
     }
 

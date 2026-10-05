@@ -57,6 +57,8 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 
 新传入的 `idle_timeout_seconds` 必须为 `0`（关闭）或不小于 `300`，超过 `604800` 时会被 clamp 到该上限；为兼容存量数据，已经保存的小于 300 的正值仍按原值读取。其他字段最小值为 `0`，并会被 clamp 到各自范围。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
 
+消息写入（单条和批量）、创建会话和配置更新会返回 `result.idle_auto_commit_at`：最早 idle 检查时间，格式为 UTC ISO 8601；策略关闭或无待归档内容时为 `null`。该调度时间也考虑最小提交间隔；自动提交在 Session 锁内重新检查最新状态后才会归档。
+
 #### 3. 使用示例
 
 **HTTP API**
