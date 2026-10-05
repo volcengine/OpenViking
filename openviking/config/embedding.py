@@ -218,6 +218,11 @@ class AccountEmbeddingProvider:
         prepared = resource.embedder.prepare_embedding_input(content)
         return account_id, resource.fingerprint, repr(prepared)
 
+    async def supports_multimodal(self, account_id: str) -> bool:
+        """Report the current resource's multimodal capability without borrowing it."""
+        resource = await self._resource_for(account_id)
+        return bool(resource.embedder.supports_multimodal)
+
     async def embed(self, account_id: str, content, *, is_query: bool = False):
         resource = await self._borrow(account_id)
         try:
@@ -293,6 +298,9 @@ class AccountBoundEmbedder:
 
     async def query_embedding_cache_key(self, content):
         return await self.provider.query_cache_key(self.account_id, content)
+
+    async def supports_multimodal_async(self) -> bool:
+        return await self.provider.supports_multimodal(self.account_id)
 
     async def embed_async(self, content, is_query=False):
         return await self.embed_compatible(content, is_query=is_query)
