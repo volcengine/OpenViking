@@ -156,6 +156,8 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if search_type == "semantic" and self.embedder:
+            # Hot path: the capability comes from the in-memory account config and
+            # cached embedder resource (no I/O, no model call, nothing borrowed).
             if image_query and not await embedder_supports_multimodal(self.embedder):
                 raise InvalidArgumentError("Image search requires a multimodal embedding model.")
             with telemetry.measure("search.embed_query"):
