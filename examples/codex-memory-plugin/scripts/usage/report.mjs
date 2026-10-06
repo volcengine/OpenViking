@@ -2,14 +2,9 @@
 
 import { usageEnabled, usageOutput } from "./settings.mjs";
 import { runHook } from "./hook-io.mjs";
-import { consulted, expandedLines, summaryLine } from "./sources.mjs";
+import { formatReport } from "./display.mjs";
 import { pruneSessions, pruneTurns, readTurn, writeRecall } from "./state.mjs";
 import { readTranscriptRecall } from "./transcript.mjs";
-
-function expandedView() {
-  const value = String(process.env.OPENVIKING_USAGE_VIEW || "summary").trim().toLowerCase();
-  return value === "expanded" || value === "full" || value === "details";
-}
 
 await runHook(async (input) => {
   if (!usageEnabled()) return {};
@@ -18,16 +13,15 @@ await runHook(async (input) => {
   if (!sessionId || !turnId) return {};
 
   const recalled = await readTranscriptRecall(input.transcript_path, turnId);
-  await writeRecall(sessionId, turnId, recalled);
+  const turn = await readTurn(sessionId, turnId);
+  if (recalled.length) {
+    turn.recalled = recalled;
+    await writeRecall(sessionId, turnId, recalled);
+  }
+  const message = formatReport(turn);
+  if (!message) return {};
+
   await pruneTurns(sessionId, turnId);
   await pruneSessions(sessionId);
-
-  const turn = await readTurn(sessionId, turnId);
-  const result = consulted(turn);
-  if (!result.rows.length && !turn.lookups.length) return {};
-
-  const message = expandedView()
-    ? expandedLines(turn, result).join("\n")
-    : summaryLine(result);
   return usageOutput() === "terminal" ? { systemMessage: message } : {};
 }, "report");

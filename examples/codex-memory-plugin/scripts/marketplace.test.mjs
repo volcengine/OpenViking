@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, readdirSync, statSync, utimesSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, readdirSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,13 +99,14 @@ test("usage wrapper credits successful output without inferring executed reads",
     assert.doesNotMatch(readFileSync(join(dir, "ov-usage", "wrapper", "turn-turn", "lookup-lookup.json"), "utf8"), /checklist/);
     const code = `text(await tools.mcp__openviking_memory__find({query:"checklist"}));
       text(await tools.mcp__openviking_memory__read({uris:["${failedUri}"]}));`;
-    const success = text({ content: [text(`Found: ${uri}`)] });
+    const success = text({ statusCode: 200, status_code: 200, content: [text(`Found: ${uri}`)] });
     const failure = text({ isError: true, content: [text(`Cannot read ${failedUri}`)] });
     const report = run(code, [success, failure]);
     assert.match(report, /OpenViking · 1 source/);
     assert.match(report, /checklist/);
     assert.doesNotMatch(report, /failed\.md|1 read/);
     assert.match(run(code, [failure]), /OpenViking · 0 sources/);
+    assert.match(run(code, [text({ exit_code: 1, content: [text(uri)] })]), /OpenViking · 0 sources/);
     const nested = run(code, [text({ results: [
       { value: { content: [text(uri)] } },
       { value: { isError: true, content: [text(failedUri)] } },
@@ -141,13 +142,20 @@ test("usage reporting retains the current session and turn while pruning older m
   const root = join(dir, "ov-usage");
   const active = join(root, "active");
   const current = join(active, "turn-current");
-  const report = () => JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", "report.mjs")], {
-    input: JSON.stringify({ session_id: "active", turn_id: "current" }),
-    env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
-      OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "terminal" }, encoding: "utf8",
-  }));
+  const run = (script, input) => JSON.parse(execFileSync(process.execPath,
+    [join(scriptsDir, "usage", `${script}.mjs`)], {
+      input: JSON.stringify(input),
+      env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
+        OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "terminal" }, encoding: "utf8",
+    }));
+  const report = (session_id = "active", turn_id = "current") => run("report", { session_id, turn_id });
   try {
-    mkdirSync(current, { recursive: true });
+    assert.deepEqual(report("empty"), {});
+    assert.equal(existsSync(root), false);
+    run("track-lookup", { session_id: "active", turn_id: "current", tool_use_id: "read",
+      tool_name: "mcp__openviking_memory__read", tool_input: { uris: ["viking://resources/team/a.md"] },
+      tool_response: { statusCode: 200, content: [] } });
+    assert.equal("id" in readJson(join(current, "lookup-read.json")), false);
     // Future mtimes also check that retention explicitly protects the current IDs.
     const future = new Date(Date.now() + 60000);
     for (let i = 0; i < 20; i += 1) {
@@ -160,12 +168,13 @@ test("usage reporting retains the current session and turn while pruning older m
     }
     utimesSync(active, new Date(0), new Date(0));
     utimesSync(current, new Date(0), new Date(0));
-    const before = Date.now();
-    assert.deepEqual(report(), {});
+    assert.match(report().systemMessage, /OpenViking · 1 source · 1 team doc · 1 read/);
     assert.ok(existsSync(current));
-    assert.ok(statSync(active).mtimeMs >= before);
-    assert.ok(statSync(current).mtimeMs >= before);
     assert.equal(readdirSync(root).length, 20);
+    assert.equal(readdirSync(active).length, 50);
+    assert.deepEqual(report("empty"), {});
+    assert.deepEqual(report("active", "empty-turn"), {});
+    assert.equal(existsSync(join(root, "empty")), false);
     assert.equal(readdirSync(active).length, 50);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

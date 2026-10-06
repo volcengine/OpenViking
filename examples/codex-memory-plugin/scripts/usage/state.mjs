@@ -49,7 +49,7 @@ export async function writeRecall(sessionId, turnId, recalled) {
 export async function writeLookup(sessionId, turnId, toolUseId, lookup) {
   await writeJsonAtomic(
     join(turnDir(sessionId, turnId), `lookup-${safeId(toolUseId)}.json`),
-    { ...lookup, id: String(toolUseId || "") },
+    lookup,
   );
 }
 

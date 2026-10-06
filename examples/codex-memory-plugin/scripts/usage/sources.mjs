@@ -131,7 +131,7 @@ export function classifyCall(tool, input = {}) {
 
 function resultFailed(response) {
   return response.isError === true || response.is_error === true ||
-    ["exit_code", "exitCode", "status_code", "statusCode"].some(
+    ["exit_code", "exitCode"].some(
       (key) => typeof response[key] === "number" && response[key] !== 0,
     );
 }
