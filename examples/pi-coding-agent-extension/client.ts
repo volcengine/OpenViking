@@ -47,6 +47,7 @@ export interface OVCommitResult {
   status?: "accepted" | "skipped" | string;
   /** Whether phase 1 created an archive. */
   archived?: boolean;
+  effective_enable_working_memory?: boolean;
   reason?: string;
   task_id?: string;
   /** `null` on a `skipped` commit — the server sends the key either way. */
@@ -123,10 +124,11 @@ export class OVClient {
     sessionId: string,
     keepRecentCount = this.cfg.commitKeepRecentCount,
     timeoutMs = 30000,
+    enableWorkingMemory?: boolean,
   ): Promise<OVCommitResponse> {
     const res = await this.fetchJSON<OVCommitResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount }) },
+      { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount, enable_working_memory: enableWorkingMemory }) },
       { timeoutMs },
     );
     if (res.ok && res.result && !res.result.trace_id && res.traceId) {
@@ -156,12 +158,12 @@ export class OVClient {
    * (null), so a poller cannot be fooled by an empty write. Takeover reads it
    * inside pi event handlers, so one read is capped well below their budget.
    */
-  async readArchiveOverview(archiveUri: string): Promise<string | null> {
+  async readArchiveOverview(archiveUri: string, timeoutMs = 5000): Promise<string | null> {
     const base = String(archiveUri ?? "").trim().replace(/\/+$/, "");
     if (!base) return null;
     const res = await this.fetchJSON<string>(
       `/api/v1/content/read?uri=${encodeURIComponent(`${base}/.overview.md`)}`,
-      undefined, { timeoutMs: 5000 },
+      undefined, { timeoutMs },
     );
     if (!res.ok) {
       if (res.status === 404) return null;
@@ -177,17 +179,20 @@ export class OVClient {
    * Terminal state of one archive, from the markers the server itself uses
    * (`Session._archive_terminal_state`): `.done` once commit phase 2 completed
    * — it is written last, after the Working Memory when that is enabled, and
-   * records `working_memory_enabled: false` when it is not — and `.failed.json`
+   * records `enable_working_memory: false` when it is not — and `.failed.json`
    * once phase 2 failed for good. "pending" while neither exists; null when the
    * server could not be asked. Unlike task records, the markers do not expire.
    */
-  async getArchiveState(archiveUri: string): Promise<"completed" | "failed" | "pending" | null> {
+  async getArchiveState(archiveUri: string, timeoutMs = 10000): Promise<"completed" | "failed" | "pending" | null> {
     const base = String(archiveUri ?? "").trim().replace(/\/+$/, "");
     if (!base) return null;
+    const deadline = Date.now() + timeoutMs;
     for (const [marker, state] of [[".done", "completed"], [".failed.json", "failed"]] as const) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
       const res = await this.fetchJSON<string>(
         `/api/v1/content/read?uri=${encodeURIComponent(`${base}/${marker}`)}`,
-        undefined, { timeoutMs: 5000 },
+        undefined, { timeoutMs: Math.min(5000, remaining) },
       );
       if (res.ok) return state;
       if (res.status !== 404) return null;

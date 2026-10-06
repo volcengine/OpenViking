@@ -1,6 +1,7 @@
 import copy
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,6 +13,7 @@ from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
+from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.session.manager import SessionManager
@@ -906,3 +908,58 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
     )
     assert persisted_session.metadata["openviking"]["last_synced_local_index"] == -1
     assert persisted_session.metadata["openviking"]["last_commit_local_index"] == -1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation", [True, False, None])
+@pytest.mark.parametrize("manual", [True, False])
+async def test_wm_compaction_only_clears_history_after_confirmation(
+    make_loop, temp_dir, monkeypatch, confirmation, manual
+):
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://ov.local"},
+    )
+    loop = make_loop(config=config)
+    key = SessionKey(type="cli", channel_id="default", chat_id="wm-compaction")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this constraint")
+    session.add_message("assistant", "Recorded")
+    await loop.sessions.save(session)
+    original = copy.deepcopy(session.messages)
+    commit_result = {"status": "accepted", "archived": True}
+    if confirmation is not None:
+        commit_result["effective_enable_working_memory"] = confirmation
+    client = SimpleNamespace(
+        session_owner_user_id=lambda: None,
+        append_messages=AsyncMock(return_value={"added": 2}),
+        get_session=AsyncMock(return_value={"pending_tokens": 0}),
+        commit_session=AsyncMock(return_value=commit_result),
+    )
+    hook = OpenVikingCompactHook()
+    monkeypatch.setattr(hook, "_get_client", AsyncMock(return_value=(client, False)))
+    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", hook.execute)
+    monkeypatch.setattr(loop, "_check_cmd_auth", lambda _: True)
+    loop._summarize_compact_chunk = AsyncMock(side_effect=AssertionError("WM handles compaction"))
+    if manual:
+        response = await loop._process_message(
+            InboundMessage(session_key=key, sender_id="user", content="/compact")
+        )
+        assert response is not None
+        if confirmation is not True:
+            assert "history was kept" in response.content
+    else:
+        success = await loop._submit_openviking_session_and_clear_if_committed(
+            session, force_commit=True
+        )
+        assert success is (confirmation is True)
+    assert client.commit_session.await_args.kwargs["enable_working_memory"] is True
+    loop._summarize_compact_chunk.assert_not_awaited()
+    persisted = loop.sessions._load(key)
+    if confirmation is True:
+        assert persisted.messages == []
+    else:
+        assert persisted.messages == original
+        loop._get_ov_client = AsyncMock(side_effect=AssertionError("Keep the full local history"))
+        history = await loop._build_prompt_history(session)
+        assert [m["content"] for m in history] == [m["content"] for m in original]

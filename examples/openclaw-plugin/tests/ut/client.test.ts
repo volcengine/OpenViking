@@ -838,3 +838,14 @@ describe("cloud recall compression", () => {
     },
   );
 });
+
+it.each([true, false, undefined])("sends the WM override using the renamed API field (%s)", async (enabled) => {
+  const transport = vi.fn().mockResolvedValue(okResponse({
+    status: "accepted", effective_enable_working_memory: enabled ?? false,
+  }));
+  const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+  const result = await client.commitSession("s", { enableWorkingMemory: enabled });
+  expect(result.effective_enable_working_memory).toBe(enabled ?? false);
+  const body = JSON.parse(String(transport.mock.calls[0][1].body));
+  expect(body).toEqual(enabled === undefined ? {} : { enable_working_memory: enabled });
+});

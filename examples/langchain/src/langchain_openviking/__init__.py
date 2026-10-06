@@ -32,6 +32,7 @@ __all__ = [
     "get_openviking_cancellation_progress",
     "has_request_actor_peer_support",
     "with_openviking_context",
+    "with_openviking_memory",
 ]
 
 if find_spec("langchain") is not None:
@@ -91,6 +92,10 @@ def __getattr__(name: str) -> Any:
         from langchain_openviking.client import OpenVikingCommitPolicy
 
         return OpenVikingCommitPolicy
+    if name == "with_openviking_memory":
+        from langchain_openviking.context import with_openviking_memory
+
+        return with_openviking_memory
     if name == "with_openviking_context":
         from langchain_openviking.context import with_openviking_context
 

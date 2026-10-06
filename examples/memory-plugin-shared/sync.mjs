@@ -175,6 +175,11 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "openclaw-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
     committed: true,
   },

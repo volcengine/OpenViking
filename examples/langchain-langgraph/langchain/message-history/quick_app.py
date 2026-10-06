@@ -1,14 +1,13 @@
-"""Deterministic LangChain app using OpenViking-backed chat history."""
+"""Deterministic host-owned chat history with OpenViking memory capture."""
 
 from __future__ import annotations
 
+from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
-from langchain_core.runnables.history import RunnableWithMessageHistory
-
 from langchain_openviking import (
     InMemoryOpenVikingClient,
-    OpenVikingChatMessageHistory,
+    with_openviking_memory,
 )
 from langchain_openviking.client import extract_message_text
 
@@ -22,12 +21,12 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
             return AIMessage(content="OpenViking history remembers azure.")
         return AIMessage(content="OpenViking history is waiting for a preference.")
 
-    return RunnableWithMessageHistory(
+    # Use a durable host history provider in production (see native_history.py).
+    histories = {}
+    return with_openviking_memory(
         RunnableLambda(answer),
-        lambda session_id: OpenVikingChatMessageHistory(
-            session_id=session_id,
-            client=client,
-        ),
+        client=client,
+        history_factory=lambda sid: histories.setdefault(sid, InMemoryChatMessageHistory()),
     )
 
 

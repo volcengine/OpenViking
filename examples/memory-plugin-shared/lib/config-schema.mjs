@@ -159,7 +159,7 @@ export const KNOBS = [
   { name: "noAutoInject", type: "bool", default: false, env: "OPENVIKING_NO_AUTO_INJECT", capability: "session" },
   { name: "profileTokenBudget", type: "int", default: 10000, min: 500, max: 50000, env: "OPENVIKING_PROFILE_TOKEN_BUDGET", aliases: ["profileBudget"], capability: "session" },
   { name: "resumeContextBudget", type: "int", default: 32000, min: 1024, max: 128000, env: "OPENVIKING_RESUME_CONTEXT_BUDGET", capability: "session" },
-  { name: "resumeArchiveInject", type: "bool", default: true, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
+  { name: "resumeArchiveInject", type: "bool", default: false, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
   { name: "resumeArchiveTokenBudget", type: "int", default: 32000, min: 0, max: 128000, env: "OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET", capability: "session" },
   { name: "resumeArchiveMaxChars", type: "int", default: 6000, min: 1000, max: 200000, env: "OPENVIKING_RESUME_ARCHIVE_MAX_CHARS", capability: "session" },
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
@@ -183,7 +183,7 @@ export const KNOBS = [
   { name: "repoContext", type: "bool", default: true, capability: "session" },
   { name: "repoContextCacheTtlMs", type: "int", default: 60000, min: 1000, max: 3600000, capability: "session" },
 
-  { name: "takeoverEnabled", type: "bool", default: true, env: "OPENVIKING_TAKEOVER", capability: "session" },
+  { name: "takeoverEnabled", type: "bool", default: false, env: "OPENVIKING_TAKEOVER", capability: "session" },
   { name: "takeoverTokenThreshold", type: "int", default: 30000, min: 1, max: 1000000, capability: "session" },
   { name: "takeoverKeepRecentTurns", type: "int", default: 3, min: 0, max: 100, capability: "session" },
   { name: "takeoverOverviewBudget", type: "int", default: 3000, min: 100, max: 50000, capability: "session" },

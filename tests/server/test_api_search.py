@@ -1327,3 +1327,44 @@ async def test_glob_forwards_tags_and_tag_projection_to_filesystem_service(monke
 
     assert seen["tags"] == ["env=prod"]
     assert seen["include_tags"] is True
+
+
+@pytest.mark.parametrize("multimodal", [True, False])
+async def test_find_image_query_uses_account_embedder_capability(
+    client: httpx.AsyncClient, service, monkeypatch, multimodal: bool
+):
+    from openviking.models.embedder.base import DenseEmbedderBase
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    seen = []
+
+    class ImageEmbedder(DenseEmbedderBase):
+        def __init__(self, dimension: int):
+            super().__init__(model_name="test-image-embedder")
+            self._dimension = dimension
+
+        @property
+        def supports_multimodal(self) -> bool:
+            return multimodal
+
+        def embed(self, content, is_query: bool = False) -> EmbedResult:
+            if is_query:
+                seen.append(content)
+            return EmbedResult(dense_vector=[0.1] * self._dimension)
+
+        def get_dimension(self) -> int:
+            return self._dimension
+
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: ImageEmbedder(self.dimension))
+    await service.embedding_provider.invalidate(UserIdentifier.the_default_user().account_id)
+    image_url = "data:image/png;base64,iVBORw0KGgo="
+
+    response = await client.post("/api/v1/search/find", json={"query": "", "image_url": image_url})
+
+    if multimodal:
+        assert response.status_code == 200, response.text
+        assert seen and seen[-1][-1] == {"type": "image_url", "image_url": {"url": image_url}}
+    else:
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+        assert not seen

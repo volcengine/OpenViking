@@ -21,7 +21,9 @@ export function createSessionInject({ config, sessionManager }) {
     const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, config)
     if (profile?.block) parts.push(profile.block)
 
-    const archive = await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)
+    const archive = config.resumeArchiveInject
+      ? await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)
+      : ""
     if (archive) parts.push(archive)
 
     if (parts.length === 0) {

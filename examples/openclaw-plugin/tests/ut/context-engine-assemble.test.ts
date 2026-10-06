@@ -7,6 +7,7 @@ import { RuntimeQueryConfigStore } from "../../query-config.js";
 import { RecallTraceMemoryStore } from "../../recall-trace.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
+  contextManagementMode: "openviking",
   mode: "remote",
   baseUrl: "http://127.0.0.1:1933",
   autoCapture: false,
@@ -957,4 +958,28 @@ describe("cloud recall digest injection", () => {
     expect(JSON.stringify(result.messages)).not.toContain("RAW SHOULD NOT APPEAR");
     expect(JSON.stringify(result.messages).includes("Prefer Rust")).toBe(!noRelevant);
   });
+});
+
+
+it("native mode preserves host history and recall without reading OV history", async () => {
+  const { engine, client } = makeEngine({ latest_archive_overview: "obsolete OV summary" }, { cfgOverrides: { contextManagementMode: "native", autoRecall: true } });
+  client.searchContext.mockResolvedValue({ entries: [], rendered: "Remember Rust.", stats: {} });
+  const messages = [{ role: "user", content: "earlier host constraint" }, { role: "assistant", content: "native summary" }];
+  const result = await engine.assemble({ sessionId: "native", messages, prompt: "next question" });
+  expect(result.messages).toBe(messages);
+  expect(result.systemPromptAddition).toContain("Remember Rust.");
+  expect(client.getSessionContext).not.toHaveBeenCalled();
+  expect(client.searchContext).toHaveBeenCalledOnce();
+});
+
+it("keeps native history when a completed archive has no summary", async () => {
+  const { engine, logger } = makeEngine({
+    latest_archive_overview: "", pre_archive_abstracts: [],
+    messages: [{ role: "assistant", parts: [{ type: "text", text: "retained tail" }] }],
+    stats: { ...makeStats(), totalArchives: 1 },
+  });
+  const messages = [{ role: "user", content: "earlier constraint" }];
+  const result = await engine.assemble({ sessionId: "no-wm", messages, prompt: "Continue" });
+  expect(result.messages).toBe(messages);
+  expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no summary"));
 });

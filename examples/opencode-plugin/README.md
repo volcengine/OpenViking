@@ -1,5 +1,7 @@
 # OpenViking OpenCode Plugin
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 A unified OpenCode plugin for OpenViking repository retrieval and long-term memory.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the

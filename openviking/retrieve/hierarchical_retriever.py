@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
-from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.embedder.base import (
+    EmbedResult,
+    embed_compat,
+    embedder_supports_multimodal,
+)
 from openviking.models.rerank import RerankClient
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -152,7 +156,9 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if search_type == "semantic" and self.embedder:
-            if image_query and not getattr(self.embedder, "supports_multimodal", False):
+            # Hot path: the capability comes from the in-memory account config and
+            # cached embedder resource (no I/O, no model call, nothing borrowed).
+            if image_query and not await embedder_supports_multimodal(self.embedder):
                 raise InvalidArgumentError("Image search requires a multimodal embedding model.")
             with telemetry.measure("search.embed_query"):
                 embedding_input = getattr(query, "embedding_input", None) or query.query

@@ -1,5 +1,7 @@
 # OpenViking Memory Extension for Pi Coding Agent
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -75,7 +77,7 @@ Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the c
       "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000,
       "commitTokenThreshold": 20000,
-      "takeoverEnabled": true,
+      "takeoverEnabled": false,
       "takeoverTokenThreshold": 30000,
       "takeoverKeepRecentTurns": 3,
       "takeoverOverviewBudget": 3000,
@@ -187,7 +189,7 @@ integrations should configure category `quotas` when they need exact ceilings.
 
 ### Context takeover
 
-Takeover is enabled by default. OpenViking commits archived history, reads the
+Takeover is disabled by default; Pi manages compaction. When explicitly enabled, OpenViking commits archived history, reads the
 overview of that exact archive, then the `context` hook replaces covered
 conversation turns with a synthetic `[OpenViking Session Context]` user message
 while keeping the recent live tail. The boundary advances only after every
@@ -209,7 +211,7 @@ filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `takeoverEnabled`        | `true`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
+| `takeoverEnabled`        | `false`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
 | `takeoverTokenThreshold` | `30000`    | Synced-token pressure that triggers commit and boundary advance           |
 | `takeoverKeepRecentTurns`| `3`        | Recent user turns retained in full fidelity                              |
 | `takeoverOverviewBudget` | `3000`     | Token budget for the injected archive overview                           |
