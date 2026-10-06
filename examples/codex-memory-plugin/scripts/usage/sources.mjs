@@ -79,7 +79,50 @@ const CLI_CALL = /(?:^|[;&|(]\s*)(?:\S+=\S+\s+)*(?:ov|openviking)\s+([a-z][\w-]*
 
 // Return null for writes, health checks, and unrelated tools. The shell command
 // itself is never returned or stored.
+// Inspect wrapper source without executing it or persisting its code. Mask
+// strings and comments so example calls cannot be mistaken for real calls.
+function wrappedCalls(source) {
+  const masked = source.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (part) => " ".repeat(part.length));
+  const calls = [];
+  const pattern = /\btools\.(mcp__\w*openviking\w*__\w+)\s*\(/g;
+  for (const match of masked.matchAll(pattern)) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let end = start;
+    for (; end < masked.length && depth; end += 1) {
+      if (masked[end] === "(") depth += 1;
+      if (masked[end] === ")") depth -= 1;
+    }
+    if (depth === 0) calls.push({ tool: match[1], args: source.slice(start, end - 1) });
+  }
+  return calls;
+}
+
+function classifyWrapped(source) {
+  const opened = [];
+  const queries = [];
+  for (const { tool, args } of wrappedCalls(source)) {
+    const method = MCP_TOOL.exec(tool)?.[1];
+    if (method === "read") {
+      // Literal URI arguments only; variable-backed reads are not inferred.
+      const values = args.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g) || [];
+      opened.push(...values.flatMap((value) => urisIn(value.slice(1, -1))));
+    } else if (MCP_SEARCH.has(method)) {
+      // Do not persist the wrapper or arbitrary argument expressions.
+      queries.push("OpenViking lookup through functions.exec");
+    }
+  }
+  return opened.length || queries.length
+    ? { opened: [...new Set(opened)], query: queries.length ? queries[0] : null }
+    : null;
+}
+
 export function classifyCall(tool, input = {}) {
+  if (["functions.exec", "exec"].includes(tool)) {
+    const source = typeof input === "string" ? input : input.code ?? input.source ?? "";
+    return typeof source === "string" ? classifyWrapped(source) : null;
+  }
   const mcp = MCP_TOOL.exec(String(tool || ""))?.[1];
   if (mcp === "read") {
     const raw = Array.isArray(input.uris)
@@ -114,6 +157,10 @@ export function classifyCall(tool, input = {}) {
 
 export function toolResponseText(response) {
   if (typeof response === "string") return response;
+  if (Array.isArray(response?.content)) {
+    return response.content.filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text).join("\n");
+  }
   try {
     return JSON.stringify(response ?? "");
   } catch {

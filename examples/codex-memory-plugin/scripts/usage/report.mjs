@@ -30,4 +30,4 @@ await runHook(async (input) => {
     ? expandedLines(turn, result).join("\n")
     : summaryLine(result);
   return { systemMessage: message };
-});
+}, "report");

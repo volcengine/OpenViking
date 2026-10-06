@@ -84,7 +84,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|mcp__.*openviking.*__.*",
+        "matcher": "Bash|(?:functions\\.)?exec|mcp__.*openviking.*__.*",
         "hooks": [
           {
             "type": "command",

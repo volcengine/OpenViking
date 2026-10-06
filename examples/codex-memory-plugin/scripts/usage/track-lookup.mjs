@@ -30,4 +30,4 @@ await runHook(async (input) => {
   };
   await writeLookup(sessionId, turnId, input.tool_use_id, lookup);
   return {};
-});
+}, "track-lookup");
