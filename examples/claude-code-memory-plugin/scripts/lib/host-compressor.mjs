@@ -123,6 +123,8 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
   return async (prompt) => {
     const args = [
       "-p",
+      // A one-shot utility call must not leave a resumable transcript behind.
+      "--no-session-persistence",
       "--model", model,
       "--effort", effort,
       "--strict-mcp-config",
