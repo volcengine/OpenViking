@@ -545,3 +545,11 @@ the hook preserves the existing raw-context / legacy retrieval fallback.
 `auto` uses `rewrite: "auto"` when the Codex executable or its compressor profile
 is unavailable (including a cached runtime failure). A first local failure still
 uses the deterministic fallback for that turn; later turns use the server.
+
+## OV-Usage source summaries
+
+Built in by default: independent PostToolUse and Stop hooks report automatic recall and explicit OpenViking lookups. The default is a one-line summary; `OPENVIKING_USAGE_VIEW=expanded` lists source URIs and lookups, and `OPENVIKING_USAGE_VIEW=off` disables reporting and metadata writes. Empty turns produce no summary. Reporting failures return empty hook output and do not wrap recall or capture.
+
+The observer reads at most the last 8 MiB of the current rollout in memory and stores only source metadata and redacted, truncated lookup terms for up to 50 turns across 20 sessions under `~/.openviking/codex-plugin-state/ov-usage`. It makes no network calls. Rollout parsing is best effort; source availability does not establish actual reliance. No project-directory gate is added. Review updated hooks with `/hooks`.
+
+Run `node --test examples/codex-memory-plugin/scripts/usage/tests/*.test.mjs` to verify reporting.

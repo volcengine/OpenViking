@@ -62,6 +62,12 @@ Hook 关闭时，MCP 工具仍可能正常使用。自动召回需要 `UserPromp
 启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次用户输入前自动召回相关记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
 TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确认插件已启用。
 
+## OpenViking 来源汇总
+
+memory 插件默认内置 OV-Usage。每次回答后，独立的 Stop hook 汇总自动召回和显式 OpenViking MCP、`ov` CLI 查询。汇总展示本轮可用来源，不能证明回答实际采用了每个来源；缺失或无法识别的 rollout 记录会省略自动召回归因。
+
+启动 Codex 前设置 `OPENVIKING_USAGE_VIEW=expanded` 可查看来源 URI 和查询详情，设置为 `off` 可关闭汇总及其本地元数据写入。用 `/hooks` 审阅并信任更新后的 hooks。汇总失败不会阻断记忆召回或捕获。当前使用 hook 的 `systemMessage` 输出，尚未实现交互式展开/折叠按钮。
+
 ## 工作原理
 
 插件按以下事件处理记忆：
