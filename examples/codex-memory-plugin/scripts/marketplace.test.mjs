@@ -46,12 +46,12 @@ test("usage hook delivers current-turn footer context without restarting the ans
   try {
     const first = run("one", "viking://resources/team/a.md");
     assert.equal(first.hookSpecificOutput.hookEventName, "PostToolUse");
-    assert.match(first.hookSpecificOutput.additionalContext, /OV · 1 source · 1 team doc · 1 read/);
+    assert.match(first.hookSpecificOutput.additionalContext, /OpenViking · 1 source · 1 team doc · 1 read/);
     assert.equal(first.decision, undefined);
     const second = run("one", "viking://resources/team/b.md");
-    assert.match(second.hookSpecificOutput.additionalContext, /OV · 2 sources · 2 team docs · 2 read/);
+    assert.match(second.hookSpecificOutput.additionalContext, /OpenViking · 2 sources · 2 team docs · 2 read/);
     const failed = run("two", "viking://resources/team/c.md", { tool_response: { isError: true } });
-    assert.match(failed.hookSpecificOutput.additionalContext, /OV · 0 sources/);
+    assert.match(failed.hookSpecificOutput.additionalContext, /OpenViking · 0 sources/);
     assert.doesNotMatch(failed.hookSpecificOutput.additionalContext, /1 read/);
     assert.deepEqual(run("off", "viking://resources/team/a.md", {}, { OPENVIKING_USAGE_VIEW: "off" }), {});
     assert.deepEqual(run("other", "ignored", { tool_name: "unrelated" }), {});
@@ -84,7 +84,7 @@ test("usage excludes failed wrapped reads and does not claim complete file reads
   const failed = { ...call, isError: toolResponseFailed(response), found: [] };
   assert.equal(consulted({ lookups: [failed] }).rows.length, 0);
   const result = consulted({ lookups: [{ ...call, isError: false, found: [] }] });
-  assert.equal(summaryLine(result), "OV · 1 source · 1 team doc · 1 read");
+  assert.equal(summaryLine(result), "OpenViking · 1 source · 1 team doc · 1 read");
 });
 
 function readJson(path) {

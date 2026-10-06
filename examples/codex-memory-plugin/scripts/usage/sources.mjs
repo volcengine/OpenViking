@@ -249,7 +249,7 @@ export function summaryLine(result) {
     .filter((group) => result.byGroup[group] > 0)
     .map((group) => plural(result.byGroup[group], NOUN[group]));
   return [
-    "OV",
+    "OpenViking",
     plural(result.rows.length, ["source", "sources"]),
     ...groups,
     result.readCount ? `${result.readCount} read` : "",
