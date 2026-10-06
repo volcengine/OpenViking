@@ -86,7 +86,7 @@ that it depends on OV history. Middleware defaults to
 `include_session_context=False`. Put it before native summarization middleware
 so raw messages are captured before the framework replaces them. Message capture
 watermarks are persisted in graph state. See the runnable
-[native history example](../../../examples/langchain-langgraph/langgraph/middleware/native_history.py)
+[native history example](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/middleware/native_history.py)
 and its pinned requirements for LangChain summarization with a SQLite checkpointer.
 
 VikingBot is an exception to the host-history default: it still uses OV Working
@@ -99,7 +99,7 @@ confirm WM generation, the commit is treated as unsuccessful and local history
 is kept for retry. This change does not replace VikingBot's local compaction.
 
 Some old OV-managed conversations no longer have a full host transcript. Stop
-writes and use the [history export tool](../../../examples/session-history-export/README.md)
+writes and use the [history export tool](https://github.com/volcengine/OpenViking/blob/main/examples/session-history-export/README.md)
 to prepare a new host conversation through its supported file/context input.
 Verify the host has the necessary history before continuing there. Export alone
 is **not** an imported or verified migration; the tool never edits private host
