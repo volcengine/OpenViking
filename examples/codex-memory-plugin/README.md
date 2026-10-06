@@ -11,6 +11,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 
 - **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
+- **OV-Usage source summaries** after each answer: show sources made available through automatic recall and explicit OpenViking lookups, with optional source URI and query details.
 - **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
@@ -51,7 +52,7 @@ After install:
 codex             # first run: pick "Trust all and continue" at the hook review prompt
 ```
 
-Startup stops on `6 hooks need review` — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
+Startup may stop at a hook review prompt — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
 
 ### B. Codex marketplace install
 
@@ -60,8 +61,7 @@ This path uses the same checked-in stdio MCP proxy as the installer path. Authen
 The repo ships a Codex marketplace catalog at `.agents/plugins/marketplace.json`, so you can install with Codex's native commands:
 
 ```bash
-# 1. add the OpenViking marketplace (use volcengine/OpenViking once merged
-#    upstream, or <your-fork>/OpenViking while testing a fork)
+# 1. add the OpenViking marketplace
 codex plugin marketplace add volcengine/OpenViking
 
 # 2. install the plugin from that marketplace
@@ -69,16 +69,16 @@ codex plugin marketplace add volcengine/OpenViking
 codex plugin add openviking-memory@openviking
 ```
 
-To test the unreleased Codex OV-Usage branch, use this source in step 1 instead:
+To test a contribution before it is merged, select its fork and branch explicitly
+instead of the source in step 1:
 
 ```bash
-codex plugin marketplace add wongzw/OpenViking --ref feat/codex-ov-usage
+codex plugin marketplace add <owner>/OpenViking --ref <branch>
 codex plugin add openviking-memory@openviking
 ```
 
-The public one-line installer installs the published release; it does not install
-this fork branch. A `read` count records a successful read request and may include
-partial reads; it does not claim the entire file was read.
+The public one-line installer installs the published release. Features available
+only on a contribution branch require the branch-specific marketplace install.
 
 Then enable plugin hooks (if your Codex build doesn't already) by adding to `~/.codex/config.toml`:
 
@@ -559,6 +559,75 @@ uses the deterministic fallback for that turn; later turns use the server.
 
 ## OV-Usage source summaries
 
-Built in by default: independent PostToolUse and Stop hooks report automatic recall and explicit OpenViking lookups. The default is a one-line summary; `OPENVIKING_USAGE_VIEW=expanded` lists source URIs and lookups, and `OPENVIKING_USAGE_VIEW=off` disables reporting and metadata writes. Empty turns produce no summary. Reporting failures return empty hook output and do not wrap recall or capture. With `OPENVIKING_DEBUG=1`, failures write a generic notice to the existing Codex debug log; exception text and hook input are never logged. Logging failures are also ignored.
+OV-Usage is built into the memory plugin; no separate plugin is needed. Independent
+`PostToolUse` and `Stop` hooks summarize automatic recall and explicit OpenViking
+lookups. A typical summary is:
 
-The observer reads at most the last 8 MiB of the current rollout in memory and stores only source metadata and redacted, truncated lookup terms for up to 50 turns across 20 sessions under `~/.openviking/codex-plugin-state/ov-usage`. It makes no network calls. Rollout parsing is best effort; source availability does not establish actual reliance. No project-directory gate is added. Review updated hooks with `/hooks`.
+```text
+OV · 3 sources · 1 past event · 2 team docs · 1 read
+```
+
+Sources were made available during the turn; the count does not prove that the
+answer relied on each source. `read` counts distinct sources read successfully, including
+partial reads, and does not mean the entire file was read. Failed lookups are
+excluded from source counts.
+
+### Configure the output
+
+Set `OPENVIKING_USAGE_VIEW` before launching Codex:
+
+| Value | Behavior |
+| --- | --- |
+| `summary` (default) | One-line source and read counts |
+| `expanded` | Source titles, URIs, and lookup details |
+| `off` | Disable reporting and new usage metadata writes |
+
+```bash
+OPENVIKING_USAGE_VIEW=expanded codex
+```
+
+Output uses the hook's `systemMessage`; interactive expand/collapse controls are
+not implemented. Turns with no recall or lookups produce no summary.
+
+### Verify after installation
+
+1. Run `codex plugin list` and confirm `openviking-memory@openviking` is enabled.
+2. Start a new Codex session with your OpenViking server configured. Review and
+   trust the updated hooks at startup or with `/hooks`, including `PostToolUse`
+   and `Stop`.
+3. Ask the agent to find and read a known OpenViking document. Check the source
+   summary; with `expanded`, check that its URI matches the document.
+
+Working MCP tools alone do not establish that hooks are enabled. If a summary is
+missing, check hook trust and `OPENVIKING_USAGE_VIEW`, then restart Codex after
+changing environment variables. With `OPENVIKING_DEBUG=1`, reporting failures
+write a generic notice to the existing Codex debug log. Exception text and hook
+input are never logged; reporting and logging failures leave memory hooks intact.
+
+### Limits and local storage
+
+The observer recognizes direct OpenViking MCP calls, `ov`/`openviking` CLI calls
+through `Bash`, and literal MCP calls nested in `functions.exec` or `exec`.
+Variable-backed wrapped read URIs are not inferred. Wrapped-call parsing and
+automatic-recall attribution from Codex rollout records are best effort; missing
+or unrecognized records can omit attribution.
+
+The observer reads at most the last 8 MiB of the current rollout in memory and
+stores source metadata and redacted, truncated lookup terms under
+`~/.openviking/codex-plugin-state/ov-usage`. Completed-turn reporting prunes storage
+to at most 50 turns per session across 20 sessions. Disabling reporting does not
+delete existing metadata. The observer makes no network calls and adds no
+project-directory gate.
+
+### Contributor validation
+
+From the repository root:
+
+```bash
+node --test examples/codex-memory-plugin/scripts/*.test.mjs
+```
+
+The marketplace contract tests cover package wiring and usage attribution;
+other plugin tests exercise recall and capture with local mocks. Validate the
+installed package and a fresh interactive session as well: passing script tests
+does not establish visible output in the Codex UI.
