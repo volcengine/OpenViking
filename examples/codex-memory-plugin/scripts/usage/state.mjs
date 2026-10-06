@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -29,6 +29,9 @@ async function writeJsonAtomic(path, value) {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   await rename(temporary, path);
+  const now = new Date();
+  await Promise.all([dirname(path), dirname(dirname(path))]
+    .map((dir) => utimes(dir, now, now)));
 }
 
 export async function readJson(path, fallback = null) {
@@ -83,12 +86,14 @@ async function directoriesByMtime(path, filter = () => true) {
   return stamped.sort((a, b) => b.mtime - a.mtime);
 }
 
-export async function pruneTurns(sessionId) {
+export async function pruneTurns(sessionId, turnId) {
   const dirs = await directoriesByMtime(sessionDir(sessionId), (name) => name.startsWith("turn-"));
-  await Promise.all(dirs.slice(MAX_TURNS).map((entry) => rm(entry.path, { recursive: true, force: true })));
+  const others = dirs.filter((entry) => entry.path !== turnDir(sessionId, turnId));
+  await Promise.all(others.slice(MAX_TURNS - 1).map((entry) => rm(entry.path, { recursive: true, force: true })));
 }
 
-export async function pruneSessions() {
+export async function pruneSessions(sessionId) {
   const dirs = await directoriesByMtime(rootDir());
-  await Promise.all(dirs.slice(MAX_SESSIONS).map((entry) => rm(entry.path, { recursive: true, force: true })));
+  const others = dirs.filter((entry) => entry.path !== sessionDir(sessionId));
+  await Promise.all(others.slice(MAX_SESSIONS - 1).map((entry) => rm(entry.path, { recursive: true, force: true })));
 }

@@ -5,7 +5,7 @@ import { runHook } from "./hook-io.mjs";
 import {
   classifyCall,
   toolResponseFailed,
-  toolResponseText,
+  successfulResponseText,
   urisIn,
 } from "./sources.mjs";
 import { readTurn, writeLookup, writeRecall } from "./state.mjs";
@@ -21,14 +21,16 @@ await runHook(async (input) => {
   const call = classifyCall(input.tool_name, input.tool_input || {});
   if (!call) return {};
 
-  const responseText = toolResponseText(input.tool_response);
+  const wrapped = ["functions.exec", "exec"].includes(input.tool_name);
+  const responseText = successfulResponseText(input.tool_response);
   const lookup = {
     query: call.query,
     opened: call.opened,
     found: call.query !== null
       ? urisIn(responseText).filter((uri) => !call.opened.includes(uri))
       : [],
-    isError: toolResponseFailed(input.tool_response),
+    // Successful wrapped output remains usable even when another result failed.
+    isError: toolResponseFailed(input.tool_response) && (!wrapped || !responseText),
   };
   await writeLookup(sessionId, turnId, input.tool_use_id, lookup);
   const recalled = await readTranscriptRecall(input.transcript_path, turnId);

@@ -608,15 +608,21 @@ input are never logged; reporting and logging failures leave memory hooks intact
 ### Limits and local storage
 
 The observer recognizes direct OpenViking MCP calls, `ov`/`openviking` CLI calls
-through `Bash`, and literal MCP calls nested in `functions.exec` or `exec`.
-Variable-backed wrapped read URIs are not inferred. Wrapped-call parsing and
-automatic-recall attribution from Codex rollout records are best effort; missing
-or unrecognized records can omit attribution.
+through `Bash`, and MCP lookups nested in `functions.exec` or `exec`.
+For wrappers, only source URIs present in successful output count; failed result
+blocks are excluded independently. Wrapper code cannot prove which reads ran,
+so wrapped lookups do not increment the read count. Bodies returned without a
+source URI cannot be attributed. Experience files use the same generic
+`find`/`search` and `read` tools as other sources.
+
+Wrapper detection and automatic-recall attribution from Codex rollout records
+are best effort; missing or unrecognized records can omit attribution.
 
 The observer reads at most the last 8 MiB of the current rollout in memory and
 stores source metadata and redacted, truncated lookup terms under
 `~/.openviking/codex-plugin-state/ov-usage`. Completed-turn reporting prunes storage
-to at most 50 turns per session across 20 sessions. Disabling reporting does not
+to at most 50 turns per session across 20 sessions, retaining the current session
+and turn and ordering other metadata by write activity. Disabling reporting does not
 delete existing metadata. The observer makes no network calls and adds no
 project-directory gate.
 

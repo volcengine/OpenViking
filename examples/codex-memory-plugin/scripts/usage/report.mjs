@@ -19,8 +19,8 @@ await runHook(async (input) => {
 
   const recalled = await readTranscriptRecall(input.transcript_path, turnId);
   await writeRecall(sessionId, turnId, recalled);
-  await pruneTurns(sessionId);
-  await pruneSessions();
+  await pruneTurns(sessionId, turnId);
+  await pruneSessions(sessionId);
 
   const turn = await readTurn(sessionId, turnId);
   const result = consulted(turn);

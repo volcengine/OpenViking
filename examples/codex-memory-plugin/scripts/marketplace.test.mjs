@@ -12,13 +12,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, readdirSync, statSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MCP_PROXY_ENV_VARS } from "./shared/mcp-proxy-config.mjs";
-import { classifyCall, consulted, summaryLine, toolResponseFailed } from "./usage/sources.mjs";
 import { answerContext } from "./usage/display.mjs";
 import { usageOutput } from "./usage/settings.mjs";
 
@@ -76,15 +75,102 @@ test("usage footer supports recall alone and keeps expanded source titles as dat
   }
 });
 
-test("usage excludes failed wrapped reads and does not claim complete file reads", () => {
+test("usage wrapper credits successful output without inferring executed reads", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-usage-wrapper-"));
   const uri = "viking://resources/team/checklist.md";
-  const call = classifyCall("functions.exec", `await tools.mcp__openviking_memory__read({uris:["${uri}"], limit:1})`);
-  assert.deepEqual(call.opened, [uri]);
-  const response = { content: [{ type: "text", text: JSON.stringify({ isError: true }) }] };
-  const failed = { ...call, isError: toolResponseFailed(response), found: [] };
-  assert.equal(consulted({ lookups: [failed] }).rows.length, 0);
-  const result = consulted({ lookups: [{ ...call, isError: false, found: [] }] });
-  assert.equal(summaryLine(result), "OpenViking · 1 source · 1 team doc · 1 read");
+  const failedUri = "viking://resources/team/failed.md";
+  const hook = join(scriptsDir, "usage", "track-lookup.mjs");
+  const run = (code, content) => JSON.parse(execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ session_id: "wrapper", turn_id: "turn", tool_use_id: "lookup",
+      tool_name: "functions.exec", tool_input: { code }, tool_response: { content } }),
+    env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
+      OPENVIKING_USAGE_VIEW: "expanded", OPENVIKING_USAGE_OUTPUT: "desktop" },
+    encoding: "utf8",
+  })).hookSpecificOutput?.additionalContext || "";
+  const text = (value) => ({ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) });
+  try {
+    for (const code of [
+      `async function unused() { await tools.mcp__openviking_memory__read({uris:["${uri}"]}); }`,
+      `await tools.mcp__openviking_memory__read({uris:paths /* "${uri}" */});`,
+      `if (false) await tools.mcp__openviking_memory__read({uris:["${uri}"]});`,
+    ]) {
+      const report = run(code, [text("no source returned")]);
+      assert.doesNotMatch(report, /1 source|1 read/);
+      assert.doesNotMatch(readFileSync(join(dir, "ov-usage", "wrapper", "turn-turn", "lookup-lookup.json"), "utf8"), /checklist/);
+    }
+    const code = `text(await tools.mcp__openviking_memory__find({query:"checklist"}));
+      text(await tools.mcp__openviking_memory__read({uris:["${failedUri}"]}));`;
+    const success = text({ content: [text(`Found: ${uri}`)] });
+    const failure = text({ isError: true, content: [text(`Cannot read ${failedUri}`)] });
+    const report = run(code, [success, failure]);
+    assert.match(report, /OpenViking · 1 source/);
+    assert.match(report, /checklist/);
+    assert.doesNotMatch(report, /failed\.md|1 read/);
+    assert.doesNotMatch(run(code, [failure]), /1 source|1 read/);
+    const nested = run(code, [text({ results: [
+      { value: { content: [text(uri)] } },
+      { value: { isError: true, content: [text(failedUri)] } },
+    ] })]);
+    assert.match(nested, /OpenViking · 1 source/);
+    assert.doesNotMatch(nested, /failed\.md|1 read/);
+    // A successful read body without its URI cannot identify a wrapped source.
+    assert.doesNotMatch(run(`text(await tools.mcp__openviking_memory__read({uris:["${uri}"]}));`,
+      [text({ content: [text("body only")] })]), /1 source|1 read/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("usage attributes Experience through the registered generic search and read tools", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-usage-experience-"));
+  const uri = "viking://user/test/memories/experiences/hook-review.md";
+  const run = (method, input, response) => JSON.parse(execFileSync(process.execPath,
+    [join(scriptsDir, "usage", "track-lookup.mjs")], {
+      input: JSON.stringify({ session_id: "experience", turn_id: "turn", tool_use_id: method,
+        tool_name: `mcp__openviking_memory__${method}`, tool_input: input, tool_response: response }),
+      env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
+        OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "desktop" }, encoding: "utf8",
+    })).hookSpecificOutput.additionalContext;
+  try {
+    assert.match(run("find", { query: "hook review", target_uri: "viking://~/memories/experiences" },
+      { content: [{ type: "text", text: uri }] }), /OpenViking · 1 source · 1 work memory/);
+    assert.match(run("read", { uris: [uri] }, { content: [{ type: "text", text: "procedure" }] }),
+      /OpenViking · 1 source · 1 work memory · 1 read/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("usage reporting retains the current session and turn while pruning older metadata", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-usage-retention-"));
+  const root = join(dir, "ov-usage");
+  const active = join(root, "active");
+  const current = join(active, "turn-current");
+  const report = () => JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", "report.mjs")], {
+    input: JSON.stringify({ session_id: "active", turn_id: "current" }),
+    env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
+      OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "terminal" }, encoding: "utf8",
+  }));
+  try {
+    mkdirSync(current, { recursive: true });
+    // Future mtimes also check that retention explicitly protects the current IDs.
+    const future = new Date(Date.now() + 60000);
+    for (let i = 0; i < 20; i += 1) {
+      const path = join(root, `other-${i}`);
+      mkdirSync(path); utimesSync(path, future, future);
+    }
+    for (let i = 0; i < 50; i += 1) {
+      const path = join(active, `turn-other-${i}`);
+      mkdirSync(path); utimesSync(path, future, future);
+    }
+    utimesSync(active, new Date(0), new Date(0));
+    utimesSync(current, new Date(0), new Date(0));
+    const before = Date.now();
+    assert.deepEqual(report(), {});
+    assert.ok(existsSync(current));
+    assert.ok(statSync(active).mtimeMs >= before);
+    assert.ok(statSync(current).mtimeMs >= before);
+    assert.equal(readdirSync(root).length, 20);
+    assert.equal(readdirSync(active).length, 50);
+    assert.deepEqual(report(), {});
+    assert.ok(existsSync(current));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 function readJson(path) {

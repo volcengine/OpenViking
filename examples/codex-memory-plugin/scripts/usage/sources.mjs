@@ -77,45 +77,19 @@ const CLI_READ = new Set(["read", "cat", "abstract", "overview"]);
 const CLI_SEARCH = new Set(["find", "search", "grep", "glob", "ls", "tree"]);
 const CLI_CALL = /(?:^|[;&|(]\s*)(?:\S+=\S+\s+)*(?:ov|openviking)\s+([a-z][\w-]*)([^;&|\n]*)/g;
 
-// Return null for writes, health checks, and unrelated tools. The shell command
-// itself is never returned or stored.
-// Inspect wrapper source without executing it or persisting its code. Mask
-// strings and comments so example calls cannot be mistaken for real calls.
-function wrappedCalls(source) {
+// Wrapper source only identifies a possible lookup, not an executed read.
+// Count source URIs from successful output; never infer reads from arguments.
+function classifyWrapped(source) {
   const masked = source.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
     (part) => " ".repeat(part.length));
-  const calls = [];
   const pattern = /\btools\.(mcp__\w*openviking\w*__\w+)\s*\(/g;
   for (const match of masked.matchAll(pattern)) {
-    const start = match.index + match[0].length;
-    let depth = 1;
-    let end = start;
-    for (; end < masked.length && depth; end += 1) {
-      if (masked[end] === "(") depth += 1;
-      if (masked[end] === ")") depth -= 1;
-    }
-    if (depth === 0) calls.push({ tool: match[1], args: source.slice(start, end - 1) });
-  }
-  return calls;
-}
-
-function classifyWrapped(source) {
-  const opened = [];
-  const queries = [];
-  for (const { tool, args } of wrappedCalls(source)) {
-    const method = MCP_TOOL.exec(tool)?.[1];
-    if (method === "read") {
-      // Literal URI arguments only; variable-backed reads are not inferred.
-      const values = args.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g) || [];
-      opened.push(...values.flatMap((value) => urisIn(value.slice(1, -1))));
-    } else if (MCP_SEARCH.has(method)) {
-      // Do not persist the wrapper or arbitrary argument expressions.
-      queries.push("OpenViking lookup through functions.exec");
+    const method = MCP_TOOL.exec(match[1])?.[1];
+    if (method === "read" || MCP_SEARCH.has(method)) {
+      return { opened: [], query: "OpenViking lookup through functions.exec" };
     }
   }
-  return opened.length || queries.length
-    ? { opened: [...new Set(opened)], query: queries.length ? queries[0] : null }
-    : null;
+  return null;
 }
 
 export function classifyCall(tool, input = {}) {
@@ -155,17 +129,34 @@ export function classifyCall(tool, input = {}) {
     : null;
 }
 
-export function toolResponseText(response) {
-  if (typeof response === "string") return response;
-  if (Array.isArray(response?.content)) {
-    return response.content.filter((part) => part?.type === "text" && typeof part.text === "string")
-      .map((part) => part.text).join("\n");
+function resultFailed(response) {
+  return response.isError === true || response.is_error === true ||
+    ["exit_code", "exitCode", "status_code", "statusCode"].some(
+      (key) => typeof response[key] === "number" && response[key] !== 0,
+    );
+}
+
+// A wrapper can emit several independent results. Exclude failed result blocks
+// without discarding successful siblings. Opaque output cannot prove a read.
+export function successfulResponseText(response, depth = 0) {
+  if (depth > 8) return "";
+  if (typeof response === "string") {
+    try {
+      return successfulResponseText(JSON.parse(response), depth + 1);
+    } catch {
+      return response;
+    }
   }
-  try {
-    return JSON.stringify(response ?? "");
-  } catch {
-    return String(response ?? "");
+  if (!response || typeof response !== "object") return "";
+  if (Array.isArray(response)) {
+    return response.map((part) => successfulResponseText(part, depth + 1)).join("\n");
   }
+  if (resultFailed(response)) return "";
+  if (Array.isArray(response.content)) {
+    return response.content.filter((part) => part?.type === "text")
+      .map((part) => successfulResponseText(part.text, depth + 1)).join("\n");
+  }
+  return Object.values(response).map((part) => successfulResponseText(part, depth + 1)).join("\n");
 }
 
 export function toolResponseFailed(response, depth = 0) {
@@ -174,10 +165,7 @@ export function toolResponseFailed(response, depth = 0) {
     try { return toolResponseFailed(JSON.parse(response), depth + 1); } catch { return false; }
   }
   if (!response || typeof response !== "object") return false;
-  if (response.isError === true || response.is_error === true) return true;
-  for (const key of ["exit_code", "exitCode", "status_code", "statusCode"]) {
-    if (typeof response[key] === "number" && response[key] !== 0) return true;
-  }
+  if (resultFailed(response)) return true;
   return Array.isArray(response.content) && response.content.some(
     (part) => part?.type === "text" && toolResponseFailed(part.text, depth + 1),
   );
