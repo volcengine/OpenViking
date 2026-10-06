@@ -7,11 +7,26 @@ import test from "node:test";
 const STATE_DIR = await mkdtemp(join(tmpdir(), "ov-session-state-"));
 process.env.OPENVIKING_CODEX_STATE_DIR = STATE_DIR;
 
-const { clearEnded, markEnded, readEndedAt, withSessionLock } = await import("./session-state.mjs");
+const { clearEnded, loadState, markEnded, PEER_PIN_VERSION, readEndedAt, withSessionLock } = await import("./session-state.mjs");
 
 async function exists(path) {
   try { await stat(path); return true; } catch { return false; }
 }
+
+test("the no-remote worktree derivation bump invalidates an older peer pin", async () => {
+  assert.equal(PEER_PIN_VERSION, 4);
+  await writeFile(join(STATE_DIR, "peer-bump.json"), JSON.stringify({
+    codexSessionId: "peer-bump",
+    workspacePeerId: "linked-worktree-peer",
+    peerPinVersion: 3,
+    capturedTurnCount: 7,
+  }));
+
+  const state = await loadState("peer-bump");
+  assert.equal(state.workspacePeerId, "");
+  assert.equal(state.peerPinVersion, PEER_PIN_VERSION);
+  assert.equal(state.capturedTurnCount, 7, "unrelated capture progress is preserved");
+});
 
 test("releasing a lock taken over by someone else leaves it alone", async () => {
   const dir = join(STATE_DIR, "takeover.lock");

@@ -305,6 +305,14 @@ export function resolveWorkspaceIdentity({ cwd = "", env = process.env, cache = 
   }
 
   const { root, rootKind, git, gitRoot } = findWorkspaceRoot(key, env);
+  // Without a remote, the default peer falls back to `git_root`. A linked
+  // worktree's root is its checkout path, but its common directory points back
+  // to the main repository. Use that main root so a local-only repository does
+  // not split its memories across worktrees. For a bare common directory there
+  // is no main checkout, so the shared common directory is the stable fallback.
+  const localRepositoryRoot = git?.kind === "worktree"
+    ? (parse(git.commonDir).base === ".git" ? dirname(git.commonDir) : git.commonDir)
+    : gitRoot;
   // Only the normalized form is kept. The raw URL may carry a token, and this
   // file outlives the process — writing it here would undo the care
   // `normalizeGitRemote` takes to drop userinfo.
@@ -323,7 +331,7 @@ export function resolveWorkspaceIdentity({ cwd = "", env = process.env, cache = 
       // The enclosing repository's root, which is not the workspace root when a
       // marker file below it won. Empty outside a repository, so the `git`
       // preset resolves to nothing there rather than to a bare path.
-      git_root: git ? legacySanitize(gitRoot) : "",
+      git_root: git ? legacySanitize(localRepositoryRoot) : "",
       cwd: legacySanitize(key),
       dir: root ? sanitizePeerId(root.split(/[/\\]/).filter(Boolean).pop() || "") : "",
     },

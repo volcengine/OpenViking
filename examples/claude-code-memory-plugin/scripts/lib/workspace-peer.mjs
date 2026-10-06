@@ -4,7 +4,7 @@ import { resolveEffectivePeerId } from "../shared/workspace-peer.mjs";
 // A pin freezes one session's peer for its whole lifetime, so a pin written
 // under an older derivation rule would outlive that rule. Bump this whenever
 // the derivation changes; entries stamped with anything else are re-derived.
-export const PIN_VERSION = 3;
+export const PIN_VERSION = 4;
 
 function stateName(sessionId) {
   const safe = String(sessionId || "").replace(/[^a-zA-Z0-9_-]/g, "_");

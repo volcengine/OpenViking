@@ -109,6 +109,24 @@ test("a linked worktree resolves back to the repository it shares", async () => 
   assert.equal(readGitRemoteUrl(found.git.commonDir), "git@github.com:volcengine/OpenViking.git");
 });
 
+test("a linked worktree without a remote uses the main repository root", async () => {
+  const main = await tempRoot("main-local");
+  const mainGit = await makeRepo(main);
+  const worktreeGitDir = join(mainGit, "worktrees", "feature");
+  await mkdir(worktreeGitDir, { recursive: true });
+  await writeFile(join(worktreeGitDir, "commondir"), "../..\n");
+
+  const linked = await tempRoot("linked-local");
+  await writeFile(join(linked, ".git"), `gitdir: ${worktreeGitDir}\n`);
+
+  const env = { HOME: "/nonexistent-home" };
+  const mainIdentity = resolveWorkspaceIdentity({ cwd: main, env, cache: false });
+  const linkedIdentity = resolveWorkspaceIdentity({ cwd: linked, env, cache: false });
+  assert.equal(linkedIdentity.gitKind, "worktree");
+  assert.equal(linkedIdentity.vars.git_remote, "");
+  assert.equal(linkedIdentity.vars.git_root, mainIdentity.vars.git_root);
+});
+
 test("a submodule keeps its own identity instead of the superproject's", async () => {
   const parent = await tempRoot("parent");
   const parentGit = await makeRepo(parent, { remote: "git@github.com:volcengine/OpenViking.git" });

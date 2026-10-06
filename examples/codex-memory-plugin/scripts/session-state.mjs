@@ -114,7 +114,7 @@ function lockPath(codexSessionId) {
 // session's lifetime, so a pin written under an older derivation rule would
 // outlive that rule; bump this whenever the derivation changes. The rest of the
 // state (ovSessionId, capture progress) stays valid across a bump and is kept.
-export const PEER_PIN_VERSION = 3;
+export const PEER_PIN_VERSION = 4;
 export const CAPTURE_FORMAT_VERSION = 2;
 
 function defaultState(codexSessionId) {
