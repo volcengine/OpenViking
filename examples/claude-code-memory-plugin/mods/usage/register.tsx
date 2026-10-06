@@ -19,6 +19,19 @@ const MAX_TURNS = 50;
 const MAX_SESSIONS = 20;
 const ACCENT = "cyan";
 
+// Card bookkeeping must never break the memory hooks it watches: a failure here
+// is logged to the debug log and the hook's own result goes through unchanged.
+async function safely<T>($: EngineInterface, what: string, fn: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await fn();
+  } catch (err) {
+    $.ui.log(`openviking-usage: ${what} failed: ${err instanceof Error ? err.message : String(err)}`, {
+      to: "debug",
+    });
+    return undefined;
+  }
+}
+
 // Read, change, write back against the version read: tool calls run in parallel.
 async function editTurns($: EngineInterface, fn: (turns: Turn[]) => Turn[]) {
   for (let i = 0; i < 10; i++) {
@@ -126,7 +139,7 @@ async function card($: EngineInterface, e: ResolveInput, turn: Turn) {
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
-    await restore($);
+    await safely($, "restore", () => restore($));
     await $.command.register({
       name: "openviking-usage",
       description: "Expand or collapse the OpenViking cards under answers",
@@ -147,39 +160,47 @@ export const register: Register = (on) => {
   // Each prompt starts an answer; openviking-memory's recall block says what it injected.
   on("classic.UserPromptSubmit", async ($, e, next) => {
     const res = await next(e);
-    const block = (res.additionalContext ?? []).find(
-      (c) =>
-        c.includes("<openviking-context") &&
-        !/source="(startup|resume|compact|skill-experience)"/.test(c),
-    );
-    const prev = await lastTurn($);
-    const turn: Turn = {
-      n: (prev?.n ?? 0) + 1,
-      recalled: block ? parseRecall(block) : [],
-      lookups: [],
-    };
-    await editTurns($, (list) => [...list, turn].slice(-MAX_TURNS));
-    await save($);
+    await safely($, "record prompt", async () => {
+      const block = (res.additionalContext ?? []).find(
+        (c) =>
+          c.includes("<openviking-context") &&
+          !/source="(startup|resume|compact|skill-experience)"/.test(c),
+      );
+      const prev = await lastTurn($);
+      const turn: Turn = {
+        n: (prev?.n ?? 0) + 1,
+        recalled: block ? parseRecall(block) : [],
+        lookups: [],
+      };
+      await editTurns($, (list) => [...list, turn].slice(-MAX_TURNS));
+      await save($);
+    });
     return res;
   });
 
   // Claude's own OpenViking reads and searches, through MCP or the `ov` CLI.
   on("tool.call", async ($, e, next) => {
-    const call = classifyCall(e.tool, { ...e } as Record<string, unknown>);
-    const turn = call ? await lastTurn($) : undefined;
-    if (!call || !turn) return next(e);
+    const found = await safely($, "classify tool call", async () => {
+      const call = classifyCall(e.tool, { ...e } as Record<string, unknown>);
+      const turn = call ? await lastTurn($) : undefined;
+      return call && turn ? { call, turn } : undefined;
+    });
+    if (!found) return next(e);
+    const { call, turn } = found;
     const ran = await next(e);
-    const text = "text" in ran && typeof ran.text === "string" ? ran.text : "";
-    const lookup: Lookup = {
-      id: e.tool_use_id,
-      query: call.query,
-      opened: call.opened,
-      found: call.query !== null ? urisIn(text).filter((u) => !call.opened.includes(u)) : [],
-      isError: ran.deny !== undefined || ran.isError === true,
-    };
-    await editTurns($, (list) =>
-      list.map((t) => (t.n === turn.n ? { ...t, lookups: [...t.lookups, lookup] } : t)),
-    );
+    await safely($, "record lookup", async () => {
+      const text = "text" in ran && typeof ran.text === "string" ? ran.text : "";
+      const lookup: Lookup = {
+        id: e.tool_use_id,
+        query: call.query,
+        opened: call.opened,
+        found: call.query !== null ? urisIn(text).filter((u) => !call.opened.includes(u)) : [],
+        isError: ran.deny !== undefined || ran.isError === true,
+      };
+      await editTurns($, (list) =>
+        list.map((t) => (t.n === turn.n ? { ...t, lookups: [...t.lookups, lookup] } : t)),
+      );
+    });
     return ran;
   });
 
@@ -187,30 +208,34 @@ export const register: Register = (on) => {
   on("session.append", async ($, e, next) => {
     const res = await next(e);
     if (res.deny !== undefined || e.agentId || e.door !== "response") return res;
-    const hasText = (res.message.content ?? []).some(
-      (b) => b && typeof b === "object" && "type" in b && b.type === "text",
-    );
-    const turn = hasText ? await lastTurn($) : undefined;
-    if (turn) {
-      const { value: list = [] } = await $.state.get(repliesRef);
-      const kept = [...list.filter((r) => r.n !== turn.n), { id: res.uuid, n: turn.n }];
-      await $.state.set(repliesRef, kept.slice(-MAX_TURNS));
-    }
+    await safely($, "record reply", async () => {
+      const hasText = (res.message.content ?? []).some(
+        (b) => b && typeof b === "object" && "type" in b && b.type === "text",
+      );
+      const turn = hasText ? await lastTurn($) : undefined;
+      if (turn) {
+        const { value: list = [] } = await $.state.get(repliesRef);
+        const kept = [...list.filter((r) => r.n !== turn.n), { id: res.uuid, n: turn.n }];
+        await $.state.set(repliesRef, kept.slice(-MAX_TURNS));
+      }
+    });
     return res;
   });
 
   on("turn.complete", async ($, e, next) => {
     const done = await next(e);
-    await save($);
+    await safely($, "save", () => save($));
     return done;
   });
 
   on("ui.render", { component: "AssistantMessage" }, async ($, e, next) => {
-    const { value: replies = [] } = await $.state.get(repliesRef);
-    const n = replies.find((r) => r.id === e.requestId)?.n;
-    const { value: turns = [] } = await $.state.get(turnsRef);
-    const turn = n === undefined ? undefined : turns.find((t) => t.n === n);
-    const below = turn ? await card($, e, turn) : null;
+    const below = await safely($, "draw card", async () => {
+      const { value: replies = [] } = await $.state.get(repliesRef);
+      const n = replies.find((r) => r.id === e.requestId)?.n;
+      const { value: turns = [] } = await $.state.get(turnsRef);
+      const turn = n === undefined ? undefined : turns.find((t) => t.n === n);
+      return turn ? await card($, e, turn) : null;
+    });
     if (!below) return next(e);
     const { Box } = $.ui.resolve(e);
     return (
