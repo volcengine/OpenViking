@@ -214,10 +214,11 @@ export const register: Register = (on) => {
         (b): b is { type: "text"; text: string } =>
           !!b && typeof b === "object" && "type" in b && b.type === "text" && "text" in b,
       );
-      const turn = texts.length ? await lastTurn($) : undefined;
-      if (turn) {
+      const last = texts.at(-1);
+      const turn = last ? await lastTurn($) : undefined;
+      if (last && turn) {
         const { value: list = [] } = await $.state.get(repliesRef);
-        const reply = { id: res.uuid, n: turn.n, text: hashText(texts[texts.length - 1].text) };
+        const reply = { id: res.uuid, n: turn.n, text: hashText(last.text) };
         const kept = [...list.filter((r) => r.n !== turn.n), reply];
         await $.state.set(repliesRef, kept.slice(-MAX_TURNS));
       }
