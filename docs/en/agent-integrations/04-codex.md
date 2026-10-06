@@ -64,9 +64,9 @@ For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confir
 
 ## OpenViking source summaries
 
-The memory plugin includes OV-Usage by default. After each answer, an independent Stop hook summarizes automatic recall and explicit OpenViking MCP or `ov` CLI lookups. The summary shows sources made available during the turn; it does not prove the answer relied on every source. Missing or unrecognized rollout records omit automatic-recall attribution.
+The memory plugin includes OV-Usage by default. Reports summarize automatic recall and explicit OpenViking MCP or `ov` CLI lookups. They count sources made available, not proven reliance. Missing or unrecognized rollout records can omit automatic-recall attribution.
 
-Set `OPENVIKING_USAGE_VIEW=expanded` before launching Codex for source URIs and lookup details, or `OPENVIKING_USAGE_VIEW=off` to disable reporting and its local metadata writes. Review and trust the updated hooks with `/hooks`. Reporting errors do not block memory recall or capture. This implementation uses hook `systemMessage` output; interactive expand/collapse controls are not implemented.
+Set `OPENVIKING_USAGE_OUTPUT=terminal` for a single informational Stop-hook message, or `desktop` for a model-rendered answer footer with no duplicate Stop message. The default `auto` selects terminal when `TERM_PROGRAM` or a non-`dumb` `TERM` is present, and desktop otherwise; this heuristic can be overridden when a desktop client inherits terminal variables. Set `OPENVIKING_USAGE_VIEW=expanded` for source details or `off` to disable reporting and local metadata writes. Review updated hooks with `/hooks`. Footer display follows higher-priority formatting requirements. Reporting failures do not block recall or capture. Interactive expand/collapse controls are not implemented.
 
 See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md).
 

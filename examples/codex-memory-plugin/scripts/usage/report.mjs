@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { usageEnabled } from "./settings.mjs";
+import { usageEnabled, usageOutput } from "./settings.mjs";
 import { runHook } from "./hook-io.mjs";
 import { consulted, expandedLines, summaryLine } from "./sources.mjs";
 import { pruneSessions, pruneTurns, readTurn, writeRecall } from "./state.mjs";
@@ -29,5 +29,5 @@ await runHook(async (input) => {
   const message = expandedView()
     ? expandedLines(turn, result).join("\n")
     : summaryLine(result);
-  return { systemMessage: message };
+  return usageOutput() === "terminal" ? { systemMessage: message } : {};
 }, "report");

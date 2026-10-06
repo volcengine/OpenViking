@@ -8,7 +8,9 @@ import {
   toolResponseText,
   urisIn,
 } from "./sources.mjs";
-import { writeLookup } from "./state.mjs";
+import { readTurn, writeLookup, writeRecall } from "./state.mjs";
+import { readTranscriptRecall } from "./transcript.mjs";
+import { answerContext } from "./display.mjs";
 
 await runHook(async (input) => {
   if (!usageEnabled()) return {};
@@ -29,5 +31,10 @@ await runHook(async (input) => {
     isError: toolResponseFailed(input.tool_response),
   };
   await writeLookup(sessionId, turnId, input.tool_use_id, lookup);
-  return {};
+  const recalled = await readTranscriptRecall(input.transcript_path, turnId);
+  await writeRecall(sessionId, turnId, recalled);
+  const additionalContext = answerContext(await readTurn(sessionId, turnId), turnId);
+  return additionalContext ? {
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext },
+  } : {};
 }, "track-lookup");

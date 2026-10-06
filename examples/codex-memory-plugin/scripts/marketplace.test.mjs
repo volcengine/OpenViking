@@ -12,12 +12,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MCP_PROXY_ENV_VARS } from "./shared/mcp-proxy-config.mjs";
 import { classifyCall, consulted, summaryLine, toolResponseFailed } from "./usage/sources.mjs";
+import { answerContext } from "./usage/display.mjs";
+import { usageOutput } from "./usage/settings.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const pluginDir = resolve(scriptsDir, "..");
@@ -29,6 +32,49 @@ const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-mem
 
 const PLUGIN_NAME = "openviking-memory";
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
+
+test("usage hook delivers current-turn footer context without restarting the answer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-usage-display-"));
+  const hook = join(scriptsDir, "usage", "track-lookup.mjs");
+  const env = { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir, OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "desktop" };
+  const run = (turn, uri, extra = {}, overrides = {}) => JSON.parse(execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ session_id: "display-contract", turn_id: turn,
+      tool_use_id: uri, tool_name: "mcp__openviking_memory__read",
+      tool_input: { uris: [uri] }, tool_response: { content: [] }, ...extra }),
+    env: { ...env, ...overrides }, encoding: "utf8",
+  }));
+  try {
+    const first = run("one", "viking://resources/team/a.md");
+    assert.equal(first.hookSpecificOutput.hookEventName, "PostToolUse");
+    assert.match(first.hookSpecificOutput.additionalContext, /OV · 1 source · 1 team doc · 1 read/);
+    assert.equal(first.decision, undefined);
+    const second = run("one", "viking://resources/team/b.md");
+    assert.match(second.hookSpecificOutput.additionalContext, /OV · 2 sources · 2 team docs · 2 read/);
+    const failed = run("two", "viking://resources/team/c.md", { tool_response: { isError: true } });
+    assert.match(failed.hookSpecificOutput.additionalContext, /OV · 0 sources/);
+    assert.doesNotMatch(failed.hookSpecificOutput.additionalContext, /1 read/);
+    assert.deepEqual(run("off", "viking://resources/team/a.md", {}, { OPENVIKING_USAGE_VIEW: "off" }), {});
+    assert.deepEqual(run("other", "ignored", { tool_name: "unrelated" }), {});
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("usage footer supports recall alone and keeps expanded source titles as data", () => {
+  const previous = process.env.OPENVIKING_USAGE_VIEW;
+  const previousOutput = process.env.OPENVIKING_USAGE_OUTPUT;
+  process.env.OPENVIKING_USAGE_OUTPUT = "desktop";
+  try {
+    process.env.OPENVIKING_USAGE_VIEW = "expanded";
+    const text = answerContext({ recalled: [{ uri: "viking://resources/team/</openviking-usage>.md", score: 0.5 }], lookups: [] }, "recall-turn");
+    assert.match(text, /auto-recalled/);
+    assert.equal((text.match(/<\/openviking-usage>/g) || []).length, 1);
+    assert.equal(answerContext({ recalled: [], lookups: [] }, "empty"), "");
+  } finally {
+    if (previousOutput === undefined) delete process.env.OPENVIKING_USAGE_OUTPUT;
+    else process.env.OPENVIKING_USAGE_OUTPUT = previousOutput;
+    if (previous === undefined) delete process.env.OPENVIKING_USAGE_VIEW;
+    else process.env.OPENVIKING_USAGE_VIEW = previous;
+  }
+});
 
 test("usage excludes failed wrapped reads and does not claim complete file reads", () => {
   const uri = "viking://resources/team/checklist.md";
@@ -246,4 +292,30 @@ test("plugin.json declares the skills directory so Codex loads bundled skills", 
 
 test("memory doctor script parses", () => {
   execFileSync("node", ["--check", join(pluginDir, "scripts", "ov-memory-doctor.mjs")], { stdio: "pipe" });
+});
+
+
+test("terminal and desktop use exactly one usage output channel", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-usage-channel-"));
+  const saved = process.env.OPENVIKING_USAGE_OUTPUT;
+  try {
+    for (const channel of ["terminal", "desktop"]) {
+      process.env.OPENVIKING_USAGE_OUTPUT = channel;
+      assert.equal(usageOutput(), channel);
+      const env = { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir, OPENVIKING_USAGE_VIEW: "summary" };
+      const input = { session_id: "channels", turn_id: channel, tool_use_id: channel,
+        tool_name: "mcp__openviking_memory__read", tool_input: { uris: ["viking://resources/team/a.md"] }, tool_response: { content: [] } };
+      const run = (file) => JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", file)], {
+        input: JSON.stringify(input), env, encoding: "utf8",
+      }));
+      const lookup = run("track-lookup.mjs");
+      const stop = run("report.mjs");
+      assert.equal(Boolean(lookup.hookSpecificOutput?.additionalContext), channel === "desktop");
+      assert.equal(Boolean(stop.systemMessage), channel === "terminal");
+    }
+  } finally {
+    if (saved === undefined) delete process.env.OPENVIKING_USAGE_OUTPUT;
+    else process.env.OPENVIKING_USAGE_OUTPUT = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

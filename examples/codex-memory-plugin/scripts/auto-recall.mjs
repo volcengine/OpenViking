@@ -23,12 +23,15 @@ import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
+import { answerContext } from "./usage/display.mjs";
+import { parseRecall } from "./usage/sources.mjs";
 
 let cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 let effectivePeer = { peerId: "" };
 
 let emitted = false;
+let usageTurnId = null;
 let activeCompressor = null;
 let recallDeadline = null;
 const RECALL_DIGEST_CACHE_PATH = join(getStateDir(), "recall-digest.json");
@@ -58,7 +61,9 @@ function emit(additionalContext) {
   output({
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext: wrappedContext,
+      additionalContext: [wrappedContext, usageTurnId ? answerContext({
+        recalled: parseRecall(wrappedContext), lookups: [],
+      }, usageTurnId) : ""].filter(Boolean).join("\n"),
     },
   });
 }
@@ -90,6 +95,7 @@ runHookStage({
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {
   const { input, cwd } = stage;
+  usageTurnId = input.turn_id || null;
   cfg = stage.cfg;
   effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   fetchJSON = makeFetchJSON();
