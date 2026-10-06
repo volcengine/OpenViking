@@ -200,3 +200,12 @@ export function summaryLine(c: ReturnType<typeof consulted>): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+// A short fingerprint of a reply's text, so the card can find its reply where the
+// surface names rows by API message id (the desktop) without storing the text.
+export function hashText(s: string): string {
+  let h = 5381;
+  const t = s.trim();
+  for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+  return `${t.length}:${(h >>> 0).toString(36)}`;
+}

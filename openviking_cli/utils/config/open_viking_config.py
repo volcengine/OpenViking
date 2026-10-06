@@ -26,6 +26,7 @@ from .consts import (
     OPENVIKING_CONFIG_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from .context_gateway_config import ContextGatewayConfig
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
@@ -316,6 +317,8 @@ class OpenVikingConfig(BaseModel):
         default_factory=ConnectorConfig,
         description="External Connector service configuration for data import",
     )
+
+    context_gateway: ContextGatewayConfig = Field(default_factory=ContextGatewayConfig)
 
     enable_watch_scheduler: bool = Field(
         default=True,

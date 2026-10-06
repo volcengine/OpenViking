@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="990" viewBox="0 0 1600 990">
+<rect x="0" y="0" width="1600" height="990" rx="20" fill="#FFFFFF"/>
+<text x="40" y="52" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="24" font-weight="700" fill="#1F2329" text-anchor="start">Where Context Gateway runs and where its data lives</text>
+<rect x="320" y="90" width="890" height="822" rx="14" fill="#FCFBFF" stroke="#B7A3F0" stroke-width="1.5" stroke-dasharray="8 6"/>
+<text x="340" y="122" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#6425D0" text-anchor="start">Your deployment · gateway and OpenViking on one host or apart</text>
+<text x="340" y="146" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">They talk only over HTTP: separate containers in Compose, one Pod in Helm, or separate machines</text>
+<text x="40" y="142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#3370FF" text-anchor="start">Clients</text>
+<rect x="40" y="160" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="198" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">Claude Code · Codex</text>
+<rect x="40" y="242" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="280" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">Chat apps · SDK apps</text>
+<rect x="40" y="324" width="220" height="64" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="150" y="362" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">Low-code · other agents</text>
+<rect x="40" y="412" width="220" height="90" rx="10" fill="#F5F9FF" stroke="#3370FF" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="56" y="438" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Change two settings</text>
+<text x="56" y="463" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">Base URL → gateway</text>
+<text x="56" y="487" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">API key → gateway key</text>
+<polyline points="260,192 274,192" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="260,274 274,274" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="260,356 274,356" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="274,192 274,356" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<rect x="350" y="170" width="130" height="490" rx="10" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<polyline points="393,290 411,290" fill="none" stroke="#8F959E" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="411,290 431,276" fill="none" stroke="#8F959E" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="411,290 431,304" fill="none" stroke="#8F959E" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="411" cy="290" r="4" fill="#8F959E"/>
+<text x="415" y="336" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">Reverse</text>
+<text x="415" y="358" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">proxy</text>
+<text x="415" y="384" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Caddy /</text>
+<text x="415" y="405" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">nginx /</text>
+<text x="415" y="426" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Ingress</text>
+<text x="415" y="460" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Single public</text>
+<text x="415" y="481" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">entry · HTTPS</text>
+<text x="415" y="502" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Routes by path</text>
+<text x="415" y="610" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">Optional for</text>
+<text x="415" y="631" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">a local trial</text>
+<rect x="560" y="170" width="340" height="220" rx="10" fill="#F3EEFF" stroke="#7F3BF5" stroke-width="2.5"/>
+<text x="580" y="208" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="700" fill="#1F2329" text-anchor="start">Context Gateway</text>
+<rect x="783.4" y="190" width="61" height="24" rx="12" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.2"/>
+<text x="813.9" y="207.4" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="600" fill="#7F3BF5" text-anchor="middle">:1935</text>
+<rect x="578" y="226" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="652" y="247.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Recall memories</text>
+<rect x="738" y="226" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="812" y="247.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Replay verbatim</text>
+<rect x="578" y="268" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="652" y="289.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Save turns</text>
+<rect x="738" y="268" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
+<text x="812" y="289.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Compact history</text>
+<text x="580" y="336" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">Optional: runs OpenViking tools</text>
+<rect x="632.8" y="352" width="251.2" height="26" rx="13" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.2"/>
+<text x="758.4" y="370.04" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="middle">Optional OpenViking component</text>
+<rect x="560" y="510" width="340" height="180" rx="10" fill="#E6DCFF" stroke="#6425D0" stroke-width="2"/>
+<text x="580" y="548" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="20" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking Server</text>
+<rect x="786" y="530" width="61" height="24" rx="12" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.2"/>
+<text x="816.5" y="547.4" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="600" fill="#6425D0" text-anchor="middle">:1933</text>
+<text x="580" y="582" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">Search · sessions ·</text>
+<text x="580" y="603" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">memory extraction · embedding</text>
+<rect x="704" y="638" width="180" height="36" rx="8" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.2"/>
+<text x="794" y="662" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="600" fill="#1F2329" text-anchor="middle">Studio admin UI</text>
+<polyline points="642.5,690 642.5,742" fill="none" stroke="#6425D0" stroke-width="1.5" stroke-linejoin="round"/>
+<ellipse cx="642.5" cy="846" rx="82.5" ry="16" fill="#FAF8FF" stroke="#6425D0" stroke-width="1.5"/>
+<rect x="560" y="758" width="165" height="88" fill="#FAF8FF" stroke="none"/>
+<line x1="560" y1="758" x2="560" y2="846" stroke="#6425D0" stroke-width="1.5"/>
+<line x1="725" y1="758" x2="725" y2="846" stroke="#6425D0" stroke-width="1.5"/>
+<ellipse cx="642.5" cy="758" rx="82.5" ry="16" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.5"/>
+<text x="642.5" y="798" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">AGFS file store</text>
+<text x="642.5" y="822" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Session and</text>
+<text x="642.5" y="841" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">memory content</text>
+<polyline points="817.5,690 817.5,742" fill="none" stroke="#6425D0" stroke-width="1.5" stroke-linejoin="round"/>
+<ellipse cx="817.5" cy="846" rx="82.5" ry="16" fill="#FAF8FF" stroke="#6425D0" stroke-width="1.5"/>
+<rect x="735" y="758" width="165" height="88" fill="#FAF8FF" stroke="none"/>
+<line x1="735" y1="758" x2="735" y2="846" stroke="#6425D0" stroke-width="1.5"/>
+<line x1="900" y1="758" x2="900" y2="846" stroke="#6425D0" stroke-width="1.5"/>
+<ellipse cx="817.5" cy="758" rx="82.5" ry="16" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.5"/>
+<text x="817.5" y="806" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="700" fill="#1F2329" text-anchor="middle">Vector DB</text>
+<text x="817.5" y="832" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Search index</text>
+<text x="730" y="892" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="middle">The source of truth for sessions and memories</text>
+<polyline points="900,380 1065,430" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round" stroke-dasharray="2 5"/>
+<ellipse cx="1065" cy="788" rx="125" ry="18" fill="#FAF8FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<rect x="940" y="448" width="250" height="340" fill="#FAF8FF" stroke="none"/>
+<line x1="940" y1="448" x2="940" y2="788" stroke="#7F3BF5" stroke-width="1.5"/>
+<line x1="1190" y1="448" x2="1190" y2="788" stroke="#7F3BF5" stroke-width="1.5"/>
+<ellipse cx="1065" cy="448" rx="125" ry="18" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="1065" y="490" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#1F2329" text-anchor="middle">Gateway local state</text>
+<text x="1065" y="513" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Two encrypted SQLite files</text>
+<rect x="952" y="526" width="226" height="122" rx="8" fill="#FFFFFF" stroke="#D9CCFB" stroke-width="1"/>
+<text x="962" y="548" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#7F3BF5" text-anchor="start">Management DB</text>
+<text x="962" y="566" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">Upstreams, provider keys,</text>
+<text x="962" y="584" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">users' OpenViking keys,</text>
+<text x="962" y="602" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">gateway key hashes,</text>
+<text x="962" y="620" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">context profiles,</text>
+<text x="962" y="638" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">request logs (metadata)</text>
+<rect x="952" y="656" width="226" height="122" rx="8" fill="#FFFFFF" stroke="#D9CCFB" stroke-width="1"/>
+<text x="962" y="678" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="700" fill="#7F3BF5" text-anchor="start">Conversation state DB</text>
+<text x="962" y="696" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">Added memory text,</text>
+<text x="962" y="714" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">summaries, tool calls,</text>
+<text x="962" y="732" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">turns waiting to be saved;</text>
+<text x="962" y="750" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">deleted 30 days after</text>
+<text x="962" y="768" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="start">last use</text>
+<text x="1065" y="832" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Single host, 1–64 workers</text>
+<text x="1260" y="142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#FF8800" text-anchor="start">Upstream model providers</text>
+<rect x="1260" y="160" width="300" height="180" rx="10" fill="#FFF3E8" stroke="#FF8800" stroke-width="1.5"/>
+<text x="1410" y="210" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">Anthropic · OpenAI · DeepSeek</text>
+<text x="1410" y="240" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">Volcano Engine Ark</text>
+<text x="1410" y="270" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">BytePlus ModelArk</text>
+<text x="1410" y="300" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="middle">Compatible self-hosted APIs</text>
+<text x="1260" y="368" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Sees the full model input,</text>
+<text x="1260" y="390" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">including added memories</text>
+<polyline points="274,274 341,274" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="350,274 340,278 340,270" fill="#646A73"/>
+<rect x="275.4" y="249.7" width="73.2" height="18.2" rx="3" fill="#FFFFFF"/>
+<text x="312" y="263" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Requests</text>
+<rect x="264.15" y="283.65" width="95.7" height="16.9" rx="3" fill="#FFFFFF"/>
+<text x="312" y="296" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">full history</text>
+<rect x="271.95" y="301.65" width="80.1" height="16.9" rx="3" fill="#FFFFFF"/>
+<text x="312" y="314" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">every turn</text>
+<polyline points="480,250 551,250" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="560,250 550,254 550,246" fill="#646A73"/>
+<text x="520" y="216" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">Model APIs</text>
+<text x="520" y="236" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#1F2329" text-anchor="middle">Uploads</text>
+<polyline points="480,610 551,610" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="560,610 550,614 550,606" fill="#646A73"/>
+<text x="520" y="580" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">All other</text>
+<text x="520" y="598" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="13" font-weight="400" fill="#646A73" text-anchor="middle">paths</text>
+<polyline points="900,232 1251,232" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1260,232 1250,236 1250,228" fill="#646A73"/>
+<rect x="899.75" y="205.75" width="316.5" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="1058" y="220" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Same API: original request + memories</text>
+<polyline points="1260,302 909,302" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="900,302 910,298 910,306" fill="#646A73"/>
+<rect x="990.5" y="311.75" width="159" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="1070" y="326" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Reply streams back</text>
+<polyline points="650,401 650,499" fill="none" stroke="#7F3BF5" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="650,510 644.5,498 655.5,498" fill="#7F3BF5"/>
+<polygon points="650,390 655.5,402 644.5,402" fill="#7F3BF5"/>
+<text x="664" y="418" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">As the user, with their</text>
+<text x="664" y="436.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="start">own OpenViking key</text>
+<text x="664" y="455" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="start">① Search OpenViking (≤ 2 s)</text>
+<text x="664" y="473.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="start">② Save the conversation</text>
+<text x="664" y="492" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="start">③ OpenViking tools (optional)</text>
+<polyline points="596,510 596,399" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="596,390 600,400 592,400" fill="#7F3BF5"/>
+<text x="588" y="440" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="end">Studio</text>
+<text x="588" y="461" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#7F3BF5" text-anchor="end">admin calls</text>
+<circle cx="1400" cy="618" r="12" fill="#FFFFFF" stroke="#646A73" stroke-width="2"/>
+<path d="M 1380 654 Q 1380 634 1400 634 Q 1420 634 1420 654 Z" fill="#FFFFFF" stroke="#646A73" stroke-width="2"/>
+<text x="1400" y="680" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="600" fill="#1F2329" text-anchor="middle">Admin</text>
+<polyline points="1400,692 1400,858 920,858 920,656 909,656" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="900,656 910,652 910,660" fill="#646A73"/>
+<rect x="1212.1" y="870.7" width="379.8" height="18.2" rx="3" fill="#FFFFFF"/>
+<text x="1402" y="884" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Issues gateway keys and adds upstreams in Studio</text>
+<polyline points="40,951 68,951" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<text x="76" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Every request</text>
+<text x="181.3" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<polyline points="207.7,951 235.7,951" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<text x="243.7" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Admin or optional</text>
+<text x="378.7" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<circle cx="411.1000000000001" cy="951" r="6" fill="#FF8800"/>
+<text x="423.1" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">OpenViking down: chats continue without memory</text>
+<text x="790" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">  ·  </text>
+<circle cx="822.4" cy="951" r="6" fill="#F54A45"/>
+<text x="834.4" y="956" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Gateway down: every model call through it fails</text>
+</svg>

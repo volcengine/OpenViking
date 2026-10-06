@@ -2,7 +2,10 @@ const workspace = {
   appShell: {
     footer: {
       agentIntegrations: 'Agent Integrations',
+      beta: 'Beta',
       connection: 'Connection Settings',
+      contextGateway: 'Context Gateway',
+      contextGatewayBeta: 'Context Gateway · Beta',
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',

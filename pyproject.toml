@@ -89,6 +89,16 @@ dependencies = [
 
 
 [project.optional-dependencies]
+context-gateway = [
+    "aiohttp>=3.13.3",
+    "async-timeout>=5.0.1",
+    "orjson>=3.11.7",
+    "packaging>=24.0",
+]
+context-gateway-fast = [
+    "uvloop>=0.21; sys_platform != 'win32'",
+    "httptools>=0.6",
+]
 test = [
   "pytest>=7.0.0",
   "pytest-asyncio>=0.21.0",
@@ -203,6 +213,7 @@ Issues = "https://github.com/volcengine/openviking/issues"
 ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
 openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
 openviking-server = "openviking_cli.server_bootstrap:main"  # also: `openviking-server ingest ...`
+openviking-context-gateway = "context_gateway.cli:main"
 vikingbot = "vikingbot.cli.commands:app"
 
 [tool.setuptools_scm]
@@ -213,10 +224,11 @@ git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 
 [tool.setuptools.packages.find]
 where = [".", "bot"]
-include = ["openviking*", "vikingbot*"]
+include = ["openviking*", "vikingbot*", "context_gateway*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
+context_gateway = ["client-rules.json"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
 openviking = [
     "prompts/templates/**/*.yaml",

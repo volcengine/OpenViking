@@ -2,6 +2,7 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   classifyCall,
   consulted,
+  hashText,
   parseRecall,
   redact,
   summaryLine,
@@ -92,5 +93,14 @@ describe("one answer", () => {
     expect(redact("Bearer abcdefghijklmnopqrstuvwxyz sk-abcdefghijklmnopqrstuvwx")).toBe(
       "Bearer [REDACTED] [REDACTED]",
     );
+  });
+});
+
+describe("reply fingerprint", () => {
+  test("ignores surrounding whitespace, tells different replies apart, keeps no text", () => {
+    const reply = "L0 is the abstract, L1 the overview.";
+    expect(hashText(`\n${reply}  `)).toBe(hashText(reply));
+    expect(hashText(reply)).not.toBe(hashText("L0 is the abstract, L1 the overview!"));
+    expect(hashText(reply)).not.toContain("abstract");
   });
 });

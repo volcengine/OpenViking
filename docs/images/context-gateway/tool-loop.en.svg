@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="994" viewBox="0 0 1500 994">
+<rect x="0" y="0" width="1500" height="994" rx="20" fill="#FFFFFF"/>
+<text x="40" y="52" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="24" font-weight="700" fill="#1F2329" text-anchor="start">What happens in one reply when OpenViking tools are on</text>
+<text x="40" y="80" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">The client sends one message and gets one reply; the gateway and the model handle every search, read and write in between</text>
+<rect x="30" y="290" width="1440" height="236" rx="10" fill="#FCFBFF" stroke="#7F3BF5" stroke-width="1.5" stroke-dasharray="6 4"/>
+<rect x="30" y="612" width="1050" height="92" rx="8" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5" stroke-dasharray="6 4"/>
+<polyline points="170,150 170,706" fill="none" stroke="#8F959E" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="4 6"/>
+<polyline points="560,150 560,706" fill="none" stroke="#8F959E" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="4 6"/>
+<polyline points="950,150 950,706" fill="none" stroke="#8F959E" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="4 6"/>
+<polyline points="1320,150 1320,706" fill="none" stroke="#8F959E" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="4 6"/>
+<rect x="50" y="100" width="240" height="50" rx="10" fill="#EAF2FF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="170" y="122" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">Client</text>
+<text x="170" y="142" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Chat apps · API apps · SDKs</text>
+<rect x="440" y="100" width="240" height="50" rx="10" fill="#F3EEFF" stroke="#7F3BF5" stroke-width="2.5"/>
+<text x="560" y="131" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">Context Gateway</text>
+<rect x="830" y="100" width="240" height="50" rx="10" fill="#FFF3E8" stroke="#FF8800" stroke-width="1.5"/>
+<text x="950" y="131" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">Upstream model</text>
+<rect x="1200" y="100" width="240" height="50" rx="10" fill="#E6DCFF" stroke="#6425D0" stroke-width="1.5"/>
+<text x="1320" y="131" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="18" font-weight="700" fill="#1F2329" text-anchor="middle">OpenViking</text>
+<polyline points="170,190 551,190" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="560,190 550,194 550,186" fill="#646A73"/>
+<rect x="215.75" y="165.75" width="298.5" height="19.5" rx="3" fill="#FFFFFF"/>
+<text x="365" y="180" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Sends one message (no tools needed)</text>
+<circle cx="194" cy="190" r="13" fill="#7F3BF5"/>
+<text x="194" y="195.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<polyline points="560,246 941,246" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="950,246 940,250 940,242" fill="#7F3BF5"/>
+<rect x="596.75" y="221.75" width="316.5" height="19.5" rx="3" fill="#FFFFFF"/>
+<text x="755" y="236" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Request + memories + OpenViking tools</text>
+<circle cx="584" cy="246" r="13" fill="#7F3BF5"/>
+<text x="584" y="251.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="755" y="270" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Tools are fixed when the conversation starts</text>
+<rect x="44" y="279" width="53.6" height="22" rx="11" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.2"/>
+<text x="70.8" y="295.04" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="700" fill="#7F3BF5" text-anchor="middle">Loop</text>
+<polyline points="950,320 569,320" fill="none" stroke="#FF8800" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="560,320 570,316 570,324" fill="#FF8800"/>
+<rect x="599" y="295.75" width="312" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="755" y="310" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Streams text + calls openviking_find</text>
+<circle cx="926" cy="320" r="13" fill="#7F3BF5"/>
+<text x="926" y="325.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<polyline points="560,348 179,348" fill="none" stroke="#3370FF" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="170,348 180,344 180,352" fill="#3370FF"/>
+<rect x="242.75" y="323.75" width="244.5" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="365" y="338" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Text streams on to the client</text>
+<polyline points="560,394 1311,394" fill="none" stroke="#6425D0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1320,394 1310,398 1310,390" fill="#6425D0"/>
+<rect x="754.75" y="369.75" width="370.5" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="940" y="384" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Runs the call with the user's OpenViking key</text>
+<circle cx="584" cy="394" r="13" fill="#7F3BF5"/>
+<text x="584" y="399.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<polyline points="1320,440 569,440" fill="none" stroke="#6425D0" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="560,440 570,436 570,444" fill="#6425D0"/>
+<rect x="876.25" y="415.75" width="127.5" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="940" y="430" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Search results</text>
+<rect x="822.9" y="452" width="234.2" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.2"/>
+<text x="940" y="469.04" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#F54A45" text-anchor="middle">No client permission prompt</text>
+<polyline points="560,422 179,422" fill="none" stroke="#3370FF" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="170,422 180,418 180,426" fill="#3370FF"/>
+<rect x="183.9" y="409" width="374.2" height="26" rx="13" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.2"/>
+<text x="371" y="427.04" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">&gt; OpenViking find: "last release date" — done</text>
+<text x="371" y="401" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Notice line</text>
+<polyline points="560,508 941,508" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="950,508 940,512 940,504" fill="#7F3BF5"/>
+<rect x="603.5" y="483.75" width="303" height="19.5" rx="3" fill="#FCFBFF"/>
+<text x="755" y="498" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Re-asks the model with call + result</text>
+<circle cx="584" cy="508" r="13" fill="#7F3BF5"/>
+<text x="584" y="513.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+<text x="540" y="474" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#7F3BF5" text-anchor="end">Repeats until the model stops calling</text>
+<text x="540" y="495" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="end">5 rounds or 100k new tokens: further calls refused</text>
+<text x="540" y="515" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="end">30 s per call: that call errors · 120 s total: request fails</text>
+<polyline points="1440,508 1456,508 1456,320 1447,320" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="1438,320 1448,316 1448,324" fill="#7F3BF5"/>
+<polyline points="950,566 569,566" fill="none" stroke="#FF8800" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="560,566 570,562 570,570" fill="#FF8800"/>
+<rect x="587.75" y="541.75" width="334.5" height="19.5" rx="3" fill="#FFFFFF"/>
+<text x="755" y="556" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Final answer (no more OpenViking calls)</text>
+<circle cx="926" cy="566" r="13" fill="#7F3BF5"/>
+<text x="926" y="571.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">6</text>
+<polyline points="560,594 179,594" fill="none" stroke="#3370FF" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="170,594 180,590 180,598" fill="#3370FF"/>
+<rect x="211.25" y="569.75" width="307.5" height="19.5" rx="3" fill="#FFFFFF"/>
+<text x="365" y="584" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">One coherent reply: notices + answer</text>
+<rect x="44" y="620" width="246.8" height="24" rx="12" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.2"/>
+<text x="167.4" y="637.04" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#3370FF" text-anchor="middle">Mixed: the client's own tools</text>
+<polyline points="950,658 569,658" fill="none" stroke="#FF8800" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<polygon points="560,658 570,654 570,662" fill="#FF8800"/>
+<rect x="585.5" y="633.75" width="339" height="19.5" rx="3" fill="#F5F6F7"/>
+<text x="755" y="648" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Model also calls client tools, e.g. Bash</text>
+<polyline points="560,690 179,690" fill="none" stroke="#3370FF" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="170,690 180,686 180,694" fill="#3370FF"/>
+<rect x="191" y="665.75" width="348" height="19.5" rx="3" fill="#F5F6F7"/>
+<text x="365" y="680" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="middle">Client runs them, with its usual approval</text>
+<text x="40" y="744" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">What the client sees</text>
+<rect x="40" y="756" width="680" height="124" rx="14" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<text x="64" y="790" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">&gt; OpenViking find: "last release date" — done</text>
+<text x="64" y="818" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">&gt; OpenViking read: viking://user/alice/memories/events/release.md — done</text>
+<text x="64" y="856" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="16" font-weight="400" fill="#1F2329" text-anchor="start">The release was set for October 20, per the September 28 review notes.</text>
+<text x="40" y="904" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">Notice lines show only the tool name and its target, such as the query or URI;</text>
+<text x="40" y="924" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">users never see full arguments or results, and the model never sees the notices</text>
+<text x="760" y="744" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">Next turn: tool round trips restored as is</text>
+<ellipse cx="850" cy="856" rx="80" ry="16" fill="#FAF8FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<rect x="770" y="778" width="160" height="78" fill="#FAF8FF" stroke="none"/>
+<line x1="770" y1="778" x2="770" y2="856" stroke="#7F3BF5" stroke-width="1.5"/>
+<line x1="930" y1="778" x2="930" y2="856" stroke="#7F3BF5" stroke-width="1.5"/>
+<ellipse cx="850" cy="778" rx="80" ry="16" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="850" y="820" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="700" fill="#1F2329" text-anchor="middle">Gateway state</text>
+<text x="850" y="843" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">keeps tool round trips</text>
+<polyline points="934,818 949,818" fill="none" stroke="#7F3BF5" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="958,818 948,822 948,814" fill="#7F3BF5"/>
+<rect x="962" y="798" width="93.2" height="40" rx="6" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
+<text x="1008.6" y="823.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Message 1</text>
+<rect x="1063.2" y="798" width="93.2" height="40" rx="6" fill="#EDE6FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="1109.8" y="823.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Tool call</text>
+<rect x="1164.4" y="798" width="93.2" height="40" rx="6" fill="#EDE6FF" stroke="#7F3BF5" stroke-width="1.5"/>
+<text x="1211" y="823.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Tool result</text>
+<rect x="1265.6" y="798" width="93.2" height="40" rx="6" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
+<text x="1312.2" y="823.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Answer 1</text>
+<rect x="1366.8" y="798" width="93.2" height="40" rx="6" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.5"/>
+<text x="1413.4" y="823.5" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Message 2</text>
+<polyline points="1063.2,792 1063.2,788 1257.6,788 1257.6,792" fill="none" stroke="#7F3BF5" stroke-width="1.5" stroke-linejoin="round"/>
+<text x="1160.4" y="782" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="13" font-weight="600" fill="#7F3BF5" text-anchor="middle">Restored by the gateway</text>
+<text x="962" y="868" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">The model remembers what it found; the prefix is unchanged,</text>
+<text x="962" y="889" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#1F2329" text-anchor="start">so the prompt cache keeps hitting</text>
+<polyline points="40,959 68,959" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round"/>
+<text x="76" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Always</text>
+<polyline points="152.6,959 180.6,959" fill="none" stroke="#646A73" stroke-width="2" stroke-linejoin="round" stroke-dasharray="6 4"/>
+<text x="188.6" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Return or branch</text>
+<circle cx="344.09999999999997" cy="959" r="6" fill="#7F3BF5"/>
+<text x="356.1" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Gateway</text>
+<circle cx="446.79999999999995" cy="959" r="6" fill="#3370FF"/>
+<text x="458.8" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Client</text>
+<circle cx="541.4" cy="959" r="6" fill="#FF8800"/>
+<text x="553.4" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">Upstream model</text>
+<circle cx="696.75" cy="959" r="6" fill="#6425D0"/>
+<text x="708.75" y="964" font-family="Inter, -apple-system, BlinkMacSystemFont, &apos;Segoe UI&apos;, &apos;PingFang SC&apos;, &apos;Hiragino Sans GB&apos;, &apos;Microsoft YaHei&apos;, &apos;Noto Sans SC&apos;, &apos;Noto Sans CJK SC&apos;, sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">OpenViking</text>
+</svg>

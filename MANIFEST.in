@@ -12,6 +12,7 @@ include Cargo.lock
 graft crates/ragfs
 graft crates/ragfs-python
 recursive-include openviking *.yaml
+recursive-include context_gateway *.json
 
 # sdist should be source-only: never ship runtime binaries from working tree
 prune openviking/bin

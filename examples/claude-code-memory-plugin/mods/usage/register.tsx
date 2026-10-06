@@ -5,6 +5,7 @@ import {
   classifyCall,
   consulted,
   groupOf,
+  hashText,
   parseRecall,
   summaryLine,
   titleOf,
@@ -209,13 +210,16 @@ export const register: Register = (on) => {
     const res = await next(e);
     if (res.deny !== undefined || e.agentId || e.door !== "response") return res;
     await safely($, "record reply", async () => {
-      const hasText = (res.message.content ?? []).some(
-        (b) => b && typeof b === "object" && "type" in b && b.type === "text",
+      const texts = (res.message.content ?? []).filter(
+        (b): b is { type: "text"; text: string } =>
+          !!b && typeof b === "object" && "type" in b && b.type === "text" && "text" in b,
       );
-      const turn = hasText ? await lastTurn($) : undefined;
-      if (turn) {
+      const last = texts.at(-1);
+      const turn = last ? await lastTurn($) : undefined;
+      if (last && turn) {
         const { value: list = [] } = await $.state.get(repliesRef);
-        const kept = [...list.filter((r) => r.n !== turn.n), { id: res.uuid, n: turn.n }];
+        const reply = { id: res.uuid, n: turn.n, text: hashText(last.text) };
+        const kept = [...list.filter((r) => r.n !== turn.n), reply];
         await $.state.set(repliesRef, kept.slice(-MAX_TURNS));
       }
     });
@@ -231,7 +235,13 @@ export const register: Register = (on) => {
   on("ui.render", { component: "AssistantMessage" }, async ($, e, next) => {
     const below = await safely($, "draw card", async () => {
       const { value: replies = [] } = await $.state.get(repliesRef);
-      const n = replies.find((r) => r.id === e.requestId)?.n;
+      // The terminal names the row by its uuid; the desktop by API message id, so
+      // fall back to the reply's text.
+      const text = typeof e.props.text === "string" ? hashText(e.props.text) : undefined;
+      const n = (
+        replies.find((r) => r.id === e.requestId) ??
+        (text ? replies.find((r) => r.text === text) : undefined)
+      )?.n;
       const { value: turns = [] } = await $.state.get(turnsRef);
       const turn = n === undefined ? undefined : turns.find((t) => t.n === n);
       return turn ? await card($, e, turn) : null;

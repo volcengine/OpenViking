@@ -526,6 +526,15 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
+### [上下文网关管理](25-context-gateway.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/context-gateway/{path}` | 读取调用方账号的网关概览、日志、上游、上下文配置、密钥或工具 |
+| POST | `/api/v1/admin/context-gateway/{path}` | 签发网关密钥、测试上游或重置对话保存 |
+| PUT | `/api/v1/admin/context-gateway/{path}` | 创建或替换上游、上下文配置 |
+| DELETE | `/api/v1/admin/context-gateway/{path}` | 删除上游或上下文配置、吊销密钥或删除用户的网关数据 |
+
 ### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |

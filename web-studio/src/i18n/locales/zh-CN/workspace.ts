@@ -2,7 +2,10 @@ const workspace = {
   appShell: {
     footer: {
       agentIntegrations: 'Agent 接入',
+      beta: 'Beta',
       connection: '连接设置',
+      contextGateway: '上下文网关',
+      contextGatewayBeta: '上下文网关 · Beta',
       docs: '文档站',
       github: 'GitHub',
       sdkApi: 'SDK 与 API',

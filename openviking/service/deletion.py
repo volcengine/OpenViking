@@ -304,6 +304,11 @@ class DeletionService:
         try:
             # Settle each started operation before propagating cancellation;
             # the durable message can then resume cleanup after restart.
+            gateway_config = getattr(getattr(self._service, "_config", None), "context_gateway", None)
+            if gateway_config is not None and gateway_config.enabled:
+                from openviking.service.context_gateway_deletion import delete_gateway_data
+
+                await run_to_completion(lambda: delete_gateway_data(gateway_config, account_id, user_id))
             scheduler = self._service.watch_scheduler
             if scheduler is not None:
                 await run_to_completion(lambda: scheduler.delete_tasks(account_id, user_id))

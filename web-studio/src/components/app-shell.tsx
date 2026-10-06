@@ -21,6 +21,7 @@ import {
   SparklesIcon,
   SunIcon,
   UsersRoundIcon,
+  WaypointsIcon,
   WorkflowIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -45,6 +46,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -315,6 +317,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     useAppConnection()
   const settingsActive = pathname === '/settings'
   const usersActive = pathname === '/users' || pathname.startsWith('/users/')
+  const contextGatewayActive =
+    pathname === '/context-gateway' || pathname.startsWith('/context-gateway/')
   const { canManageUsers } = resolveStudioManagementCapabilities({
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
     isRoleLoading: isConnectionRoleLoading,
@@ -428,6 +432,27 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     <span>{t('footer.connection', { ns: 'appShell' })}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {canManageUsers ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/context-gateway" />}
+                      isActive={contextGatewayActive}
+                      tooltip={t('footer.contextGatewayBeta', {
+                        ns: 'appShell',
+                      })}
+                      className="h-9 pr-12"
+                    >
+                      <WaypointsIcon />
+                      <span>
+                        {t('footer.contextGateway', { ns: 'appShell' })}
+                      </span>
+                    </SidebarMenuButton>
+                    {/* Hidden while the sidebar is collapsed; the tooltip says Beta then. */}
+                    <SidebarMenuBadge className="h-4.5 rounded-full border border-sidebar-border px-1.5 text-[10px] font-medium text-sidebar-foreground/55 peer-data-[size=default]/menu-button:top-[9px]">
+                      {t('footer.beta', { ns: 'appShell' })}
+                    </SidebarMenuBadge>
+                  </SidebarMenuItem>
+                ) : null}
                 {canManageUsers ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton

@@ -23,11 +23,13 @@ import { Route as PermissionsRouteRouteImport } from './routes/permissions/route
 import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as FilesystemRouteRouteImport } from './routes/filesystem/route'
+import { Route as ContextGatewayRouteRouteImport } from './routes/context-gateway/route'
 import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as VikingbotIndexRouteImport } from './routes/vikingbot/index'
 import { Route as UsersIndexRouteImport } from './routes/users/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as ContextGatewayIndexRouteImport } from './routes/context-gateway/index'
 import { Route as CompileIndexRouteImport } from './routes/compile/index'
 import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
 import { Route as UsersPermissionsRouteImport } from './routes/users/permissions'
@@ -35,8 +37,15 @@ import { Route as UsersMemoryTemplatesRouteImport } from './routes/users/memory-
 import { Route as UsersGroupsRouteImport } from './routes/users/groups'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
+import { Route as ContextGatewayRequestsRouteImport } from './routes/context-gateway/requests'
+import { Route as ContextGatewayKeysRouteImport } from './routes/context-gateway/keys'
+import { Route as ContextGatewayConnectRouteImport } from './routes/context-gateway/connect'
 import { Route as CompileNewRouteImport } from './routes/compile/new'
 import { Route as AgentExperienceExperienceUriRouteImport } from './routes/agent-experience/$experienceUri'
+import { Route as ContextGatewayUpstreamsIndexRouteImport } from './routes/context-gateway/upstreams/index'
+import { Route as ContextGatewayProfilesIndexRouteImport } from './routes/context-gateway/profiles/index'
+import { Route as ContextGatewayUpstreamsUpstreamIdRouteImport } from './routes/context-gateway/upstreams/$upstreamId'
+import { Route as ContextGatewayProfilesProfileIdRouteImport } from './routes/context-gateway/profiles/$profileId'
 import { Route as CompileTasksTaskIdRouteImport } from './routes/compile/tasks/$taskId'
 
 const PlaygroundRoute = PlaygroundRouteImport.update({
@@ -109,6 +118,11 @@ const FilesystemRouteRoute = FilesystemRouteRouteImport.update({
   path: '/filesystem',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ContextGatewayRouteRoute = ContextGatewayRouteRouteImport.update({
+  id: '/context-gateway',
+  path: '/context-gateway',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentExperienceRouteRoute = AgentExperienceRouteRouteImport.update({
   id: '/agent-experience',
   path: '/agent-experience',
@@ -133,6 +147,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => SessionsRouteRoute,
+} as any)
+const ContextGatewayIndexRoute = ContextGatewayIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ContextGatewayRouteRoute,
 } as any)
 const CompileIndexRoute = CompileIndexRouteImport.update({
   id: '/compile/',
@@ -169,6 +188,21 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
   path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ContextGatewayRequestsRoute = ContextGatewayRequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => ContextGatewayRouteRoute,
+} as any)
+const ContextGatewayKeysRoute = ContextGatewayKeysRouteImport.update({
+  id: '/keys',
+  path: '/keys',
+  getParentRoute: () => ContextGatewayRouteRoute,
+} as any)
+const ContextGatewayConnectRoute = ContextGatewayConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
+  getParentRoute: () => ContextGatewayRouteRoute,
+} as any)
 const CompileNewRoute = CompileNewRouteImport.update({
   id: '/compile/new',
   path: '/compile/new',
@@ -180,6 +214,30 @@ const AgentExperienceExperienceUriRoute =
     path: '/$experienceUri',
     getParentRoute: () => AgentExperienceRouteRoute,
   } as any)
+const ContextGatewayUpstreamsIndexRoute =
+  ContextGatewayUpstreamsIndexRouteImport.update({
+    id: '/upstreams/',
+    path: '/upstreams/',
+    getParentRoute: () => ContextGatewayRouteRoute,
+  } as any)
+const ContextGatewayProfilesIndexRoute =
+  ContextGatewayProfilesIndexRouteImport.update({
+    id: '/profiles/',
+    path: '/profiles/',
+    getParentRoute: () => ContextGatewayRouteRoute,
+  } as any)
+const ContextGatewayUpstreamsUpstreamIdRoute =
+  ContextGatewayUpstreamsUpstreamIdRouteImport.update({
+    id: '/upstreams/$upstreamId',
+    path: '/upstreams/$upstreamId',
+    getParentRoute: () => ContextGatewayRouteRoute,
+  } as any)
+const ContextGatewayProfilesProfileIdRoute =
+  ContextGatewayProfilesProfileIdRouteImport.update({
+    id: '/profiles/$profileId',
+    path: '/profiles/$profileId',
+    getParentRoute: () => ContextGatewayRouteRoute,
+  } as any)
 const CompileTasksTaskIdRoute = CompileTasksTaskIdRouteImport.update({
   id: '/compile/tasks/$taskId',
   path: '/compile/tasks/$taskId',
@@ -189,6 +247,7 @@ const CompileTasksTaskIdRoute = CompileTasksTaskIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
+  '/context-gateway': typeof ContextGatewayRouteRouteWithChildren
   '/filesystem': typeof FilesystemRouteRoute
   '/home': typeof HomeRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
@@ -205,6 +264,9 @@ export interface FileRoutesByFullPath {
   '/playground': typeof PlaygroundRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
+  '/context-gateway/connect': typeof ContextGatewayConnectRoute
+  '/context-gateway/keys': typeof ContextGatewayKeysRoute
+  '/context-gateway/requests': typeof ContextGatewayRequestsRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
@@ -212,10 +274,15 @@ export interface FileRoutesByFullPath {
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
+  '/context-gateway/': typeof ContextGatewayIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
   '/vikingbot/': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
+  '/context-gateway/profiles/$profileId': typeof ContextGatewayProfilesProfileIdRoute
+  '/context-gateway/upstreams/$upstreamId': typeof ContextGatewayUpstreamsUpstreamIdRoute
+  '/context-gateway/profiles/': typeof ContextGatewayProfilesIndexRoute
+  '/context-gateway/upstreams/': typeof ContextGatewayUpstreamsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -232,6 +299,9 @@ export interface FileRoutesByTo {
   '/playground': typeof PlaygroundRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
+  '/context-gateway/connect': typeof ContextGatewayConnectRoute
+  '/context-gateway/keys': typeof ContextGatewayKeysRoute
+  '/context-gateway/requests': typeof ContextGatewayRequestsRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
@@ -239,15 +309,21 @@ export interface FileRoutesByTo {
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience': typeof AgentExperienceIndexRoute
   '/compile': typeof CompileIndexRoute
+  '/context-gateway': typeof ContextGatewayIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/users': typeof UsersIndexRoute
   '/vikingbot': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
+  '/context-gateway/profiles/$profileId': typeof ContextGatewayProfilesProfileIdRoute
+  '/context-gateway/upstreams/$upstreamId': typeof ContextGatewayUpstreamsUpstreamIdRoute
+  '/context-gateway/profiles': typeof ContextGatewayProfilesIndexRoute
+  '/context-gateway/upstreams': typeof ContextGatewayUpstreamsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
+  '/context-gateway': typeof ContextGatewayRouteRouteWithChildren
   '/filesystem': typeof FilesystemRouteRoute
   '/home': typeof HomeRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
@@ -264,6 +340,9 @@ export interface FileRoutesById {
   '/playground': typeof PlaygroundRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
+  '/context-gateway/connect': typeof ContextGatewayConnectRoute
+  '/context-gateway/keys': typeof ContextGatewayKeysRoute
+  '/context-gateway/requests': typeof ContextGatewayRequestsRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/users/groups': typeof UsersGroupsRoute
@@ -271,16 +350,22 @@ export interface FileRoutesById {
   '/users/permissions': typeof UsersPermissionsRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
+  '/context-gateway/': typeof ContextGatewayIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/users/': typeof UsersIndexRoute
   '/vikingbot/': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
+  '/context-gateway/profiles/$profileId': typeof ContextGatewayProfilesProfileIdRoute
+  '/context-gateway/upstreams/$upstreamId': typeof ContextGatewayUpstreamsUpstreamIdRoute
+  '/context-gateway/profiles/': typeof ContextGatewayProfilesIndexRoute
+  '/context-gateway/upstreams/': typeof ContextGatewayUpstreamsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/agent-experience'
+    | '/context-gateway'
     | '/filesystem'
     | '/home'
     | '/monitoring'
@@ -297,6 +382,9 @@ export interface FileRouteTypes {
     | '/playground'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
+    | '/context-gateway/connect'
+    | '/context-gateway/keys'
+    | '/context-gateway/requests'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
@@ -304,10 +392,15 @@ export interface FileRouteTypes {
     | '/users/permissions'
     | '/agent-experience/'
     | '/compile/'
+    | '/context-gateway/'
     | '/sessions/'
     | '/users/'
     | '/vikingbot/'
     | '/compile/tasks/$taskId'
+    | '/context-gateway/profiles/$profileId'
+    | '/context-gateway/upstreams/$upstreamId'
+    | '/context-gateway/profiles/'
+    | '/context-gateway/upstreams/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -324,6 +417,9 @@ export interface FileRouteTypes {
     | '/playground'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
+    | '/context-gateway/connect'
+    | '/context-gateway/keys'
+    | '/context-gateway/requests'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
@@ -331,14 +427,20 @@ export interface FileRouteTypes {
     | '/users/permissions'
     | '/agent-experience'
     | '/compile'
+    | '/context-gateway'
     | '/sessions'
     | '/users'
     | '/vikingbot'
     | '/compile/tasks/$taskId'
+    | '/context-gateway/profiles/$profileId'
+    | '/context-gateway/upstreams/$upstreamId'
+    | '/context-gateway/profiles'
+    | '/context-gateway/upstreams'
   id:
     | '__root__'
     | '/'
     | '/agent-experience'
+    | '/context-gateway'
     | '/filesystem'
     | '/home'
     | '/monitoring'
@@ -355,6 +457,9 @@ export interface FileRouteTypes {
     | '/playground'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
+    | '/context-gateway/connect'
+    | '/context-gateway/keys'
+    | '/context-gateway/requests'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/users/groups'
@@ -362,15 +467,21 @@ export interface FileRouteTypes {
     | '/users/permissions'
     | '/agent-experience/'
     | '/compile/'
+    | '/context-gateway/'
     | '/sessions/'
     | '/users/'
     | '/vikingbot/'
     | '/compile/tasks/$taskId'
+    | '/context-gateway/profiles/$profileId'
+    | '/context-gateway/upstreams/$upstreamId'
+    | '/context-gateway/profiles/'
+    | '/context-gateway/upstreams/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentExperienceRouteRoute: typeof AgentExperienceRouteRouteWithChildren
+  ContextGatewayRouteRoute: typeof ContextGatewayRouteRouteWithChildren
   FilesystemRouteRoute: typeof FilesystemRouteRoute
   HomeRouteRoute: typeof HomeRouteRoute
   MonitoringRouteRoute: typeof MonitoringRouteRoute
@@ -492,6 +603,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FilesystemRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/context-gateway': {
+      id: '/context-gateway'
+      path: '/context-gateway'
+      fullPath: '/context-gateway'
+      preLoaderRoute: typeof ContextGatewayRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/agent-experience': {
       id: '/agent-experience'
       path: '/agent-experience'
@@ -526,6 +644,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/sessions/'
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof SessionsRouteRoute
+    }
+    '/context-gateway/': {
+      id: '/context-gateway/'
+      path: '/'
+      fullPath: '/context-gateway/'
+      preLoaderRoute: typeof ContextGatewayIndexRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
     }
     '/compile/': {
       id: '/compile/'
@@ -576,6 +701,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/context-gateway/requests': {
+      id: '/context-gateway/requests'
+      path: '/requests'
+      fullPath: '/context-gateway/requests'
+      preLoaderRoute: typeof ContextGatewayRequestsRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
+    '/context-gateway/keys': {
+      id: '/context-gateway/keys'
+      path: '/keys'
+      fullPath: '/context-gateway/keys'
+      preLoaderRoute: typeof ContextGatewayKeysRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
+    '/context-gateway/connect': {
+      id: '/context-gateway/connect'
+      path: '/connect'
+      fullPath: '/context-gateway/connect'
+      preLoaderRoute: typeof ContextGatewayConnectRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
     '/compile/new': {
       id: '/compile/new'
       path: '/compile/new'
@@ -589,6 +735,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/agent-experience/$experienceUri'
       preLoaderRoute: typeof AgentExperienceExperienceUriRouteImport
       parentRoute: typeof AgentExperienceRouteRoute
+    }
+    '/context-gateway/upstreams/': {
+      id: '/context-gateway/upstreams/'
+      path: '/upstreams'
+      fullPath: '/context-gateway/upstreams/'
+      preLoaderRoute: typeof ContextGatewayUpstreamsIndexRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
+    '/context-gateway/profiles/': {
+      id: '/context-gateway/profiles/'
+      path: '/profiles'
+      fullPath: '/context-gateway/profiles/'
+      preLoaderRoute: typeof ContextGatewayProfilesIndexRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
+    '/context-gateway/upstreams/$upstreamId': {
+      id: '/context-gateway/upstreams/$upstreamId'
+      path: '/upstreams/$upstreamId'
+      fullPath: '/context-gateway/upstreams/$upstreamId'
+      preLoaderRoute: typeof ContextGatewayUpstreamsUpstreamIdRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
+    }
+    '/context-gateway/profiles/$profileId': {
+      id: '/context-gateway/profiles/$profileId'
+      path: '/profiles/$profileId'
+      fullPath: '/context-gateway/profiles/$profileId'
+      preLoaderRoute: typeof ContextGatewayProfilesProfileIdRouteImport
+      parentRoute: typeof ContextGatewayRouteRoute
     }
     '/compile/tasks/$taskId': {
       id: '/compile/tasks/$taskId'
@@ -612,6 +786,32 @@ const AgentExperienceRouteRouteChildren: AgentExperienceRouteRouteChildren = {
 
 const AgentExperienceRouteRouteWithChildren =
   AgentExperienceRouteRoute._addFileChildren(AgentExperienceRouteRouteChildren)
+
+interface ContextGatewayRouteRouteChildren {
+  ContextGatewayConnectRoute: typeof ContextGatewayConnectRoute
+  ContextGatewayKeysRoute: typeof ContextGatewayKeysRoute
+  ContextGatewayRequestsRoute: typeof ContextGatewayRequestsRoute
+  ContextGatewayIndexRoute: typeof ContextGatewayIndexRoute
+  ContextGatewayProfilesProfileIdRoute: typeof ContextGatewayProfilesProfileIdRoute
+  ContextGatewayUpstreamsUpstreamIdRoute: typeof ContextGatewayUpstreamsUpstreamIdRoute
+  ContextGatewayProfilesIndexRoute: typeof ContextGatewayProfilesIndexRoute
+  ContextGatewayUpstreamsIndexRoute: typeof ContextGatewayUpstreamsIndexRoute
+}
+
+const ContextGatewayRouteRouteChildren: ContextGatewayRouteRouteChildren = {
+  ContextGatewayConnectRoute: ContextGatewayConnectRoute,
+  ContextGatewayKeysRoute: ContextGatewayKeysRoute,
+  ContextGatewayRequestsRoute: ContextGatewayRequestsRoute,
+  ContextGatewayIndexRoute: ContextGatewayIndexRoute,
+  ContextGatewayProfilesProfileIdRoute: ContextGatewayProfilesProfileIdRoute,
+  ContextGatewayUpstreamsUpstreamIdRoute:
+    ContextGatewayUpstreamsUpstreamIdRoute,
+  ContextGatewayProfilesIndexRoute: ContextGatewayProfilesIndexRoute,
+  ContextGatewayUpstreamsIndexRoute: ContextGatewayUpstreamsIndexRoute,
+}
+
+const ContextGatewayRouteRouteWithChildren =
+  ContextGatewayRouteRoute._addFileChildren(ContextGatewayRouteRouteChildren)
 
 interface SessionsRouteRouteChildren {
   SessionsIndexRoute: typeof SessionsIndexRoute
@@ -658,6 +858,7 @@ const VikingbotRouteRouteWithChildren = VikingbotRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentExperienceRouteRoute: AgentExperienceRouteRouteWithChildren,
+  ContextGatewayRouteRoute: ContextGatewayRouteRouteWithChildren,
   FilesystemRouteRoute: FilesystemRouteRoute,
   HomeRouteRoute: HomeRouteRoute,
   MonitoringRouteRoute: MonitoringRouteRoute,
