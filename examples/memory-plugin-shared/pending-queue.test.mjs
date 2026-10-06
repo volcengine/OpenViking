@@ -74,3 +74,26 @@ test("claimForReplay atomically claims a file only once", async () => {
     assert.deepEqual(await readdir(dir), [firstClaim]);
   });
 });
+
+test("claimForReplay refreshes mtime so old backlog claims are not recovered immediately", async () => {
+  await withPendingDir(async (dir) => {
+    const { utimes, stat } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    await enqueue("addMessage", "queue-mtime", { role: "user", content: "old message" });
+    const [{ filename }] = await listPending();
+
+    // Simulate an offline backlog item enqueued 15 minutes ago
+    const old = new Date(Date.now() - 15 * 60_000);
+    await utimes(join(dir, filename), old, old);
+
+    const claimed = await claimForReplay(filename);
+    assert.match(claimed, /\.processing$/);
+
+    const s = await stat(join(dir, claimed));
+    assert.ok(Date.now() - s.mtimeMs < 10_000, "claimed file mtime should be fresh");
+
+    // listPending (which recovers processing files older than 10m) must not prematurely recover it
+    const pending = await listPending();
+    assert.equal(pending.length, 0);
+  });
+});

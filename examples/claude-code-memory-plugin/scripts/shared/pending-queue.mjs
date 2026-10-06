@@ -21,7 +21,7 @@
  *                                  (default: 50)
  */
 
-import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -267,12 +267,15 @@ export async function claimForReplay(filename) {
   if (!filename.endsWith(".json")) return null;
   const dir = getPendingDir();
   const claimed = processingFilename(filename);
+  const claimedPath = join(dir, claimed);
   try {
-    await rename(join(dir, filename), join(dir, claimed));
-    return claimed;
+    await rename(join(dir, filename), claimedPath);
   } catch {
     return null;
   }
+  const now = new Date();
+  await utimes(claimedPath, now, now).catch(() => {});
+  return claimed;
 }
 
 /**
