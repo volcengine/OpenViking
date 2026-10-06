@@ -152,7 +152,7 @@ Restart OpenCode after installation. In an OpenCode session, the plugin should e
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
-OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction, session deletion, and plugin cleanup. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
+OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction and session deletion. Plugin cleanup commits every session that has new messages since its last commit. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
 
 OpenCode 1.15.7 does not call plugin disposal hooks. A short-lived v1 CLI run can also exit before asynchronous capture finishes; this behavior predates v2 support. Keep the v1 service running to let idle capture finish. OpenCode 1.18.32 calls the disposal hook when its instance is disposed.
 

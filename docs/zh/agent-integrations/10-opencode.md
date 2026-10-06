@@ -152,7 +152,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
-OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction 和 session 删除会强制提交；插件 cleanup 会提交自上次提交以来有新消息的所有 session。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
 
 OpenCode 1.15.7 不会调用插件 dispose。v1 的短时 CLI 运行也可能在异步捕获完成前退出，这一行为在 v2 适配前已存在。使用常驻 v1 服务可以让 idle 捕获完成；OpenCode 1.18.32 会在 instance dispose 时调用插件的 dispose。
 

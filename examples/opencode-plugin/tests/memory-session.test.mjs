@@ -18,13 +18,14 @@ async function withTempDir(prefix, fn) {
   }
 }
 
-async function withCaptureServer(fn) {
+async function withCaptureServer(fn, { beforeRespond } = {}) {
   const requests = []
   const server = createServer(async (req, res) => {
     let body = ""
     req.setEncoding("utf8")
     for await (const chunk of req) body += chunk
     requests.push({ method: req.method, url: req.url, body })
+    await beforeRespond?.(req)
 
     res.setHeader("Content-Type", "application/json")
     if (req.url === "/health") {
@@ -574,4 +575,119 @@ test("explicit commit writes the response trace_id to the plugin log", async () 
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+test("a session is not committed again with nothing new since its last commit", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const commitIfNew = { commit: true, onlyIfUncommitted: true, reason: "cleanup" }
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-short" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-short", sessionID: "oc-short", role: "user" } },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: { id: "part-short", messageID: "msg-short", sessionID: "oc-short", type: "text", text: "A short session." },
+        },
+      })
+
+      await manager.flushSession("oc-short", commitIfNew)
+      await manager.flushSession("oc-short", commitIfNew)
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      const commits = requests.filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+      assert.deepEqual(commits.map((request) => request.url), ["/api/v1/sessions/oc-oc-short/commit"])
+    })
+  })
+})
+
+test("cleanup does not commit a session with no transcript", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-empty" } } })
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      assert.equal(requests.some((request) => request.url?.endsWith("/commit")), false)
+    })
+  })
+})
+
+async function addUserMessage(manager, sessionId, messageId, text) {
+  await manager.handleEvent({
+    type: "message.updated",
+    properties: { info: { id: messageId, sessionID: sessionId, role: "user" } },
+  })
+  await manager.handleEvent({
+    type: "message.part.updated",
+    properties: {
+      part: { id: `${messageId}-part`, messageID: messageId, sessionID: sessionId, type: "text", text },
+    },
+  })
+}
+
+test("a message captured in the same millisecond as a commit is still committed", async (t) => {
+  t.mock.method(Date, "now", () => 1000)
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const commitIfNew = { commit: true, onlyIfUncommitted: true, reason: "cleanup" }
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-same-ms" } } })
+      await addUserMessage(manager, "oc-same-ms", "msg-first", "First message.")
+      await manager.flushSession("oc-same-ms", commitIfNew)
+      await addUserMessage(manager, "oc-same-ms", "msg-second", "Second message.")
+      await manager.flushSession("oc-same-ms", { reason: "session.idle" })
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      const commits = requests.filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+      assert.equal(commits.length, 2)
+    })
+  })
+})
+
+test("a message captured while a commit is in flight is not marked committed by its response", async () => {
+  let markCommitStarted
+  let releaseCommit
+  const commitStarted = new Promise((resolve) => { markCommitStarted = resolve })
+  const commitGate = new Promise((resolve) => { releaseCommit = resolve })
+  let commitCount = 0
+  const beforeRespond = async (req) => {
+    if (!req.url?.endsWith("/commit")) return
+    commitCount += 1
+    if (commitCount === 1) {
+      markCommitStarted()
+      await commitGate
+    }
+  }
+
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const commitIfNew = { commit: true, onlyIfUncommitted: true, reason: "cleanup" }
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-in-flight" } } })
+      await addUserMessage(manager, "oc-in-flight", "msg-first", "First message.")
+      const firstCommit = manager.flushSession("oc-in-flight", commitIfNew)
+      await commitStarted
+
+      await addUserMessage(manager, "oc-in-flight", "msg-second", "Second message.")
+      await manager.flushSession("oc-in-flight", { reason: "session.idle" })
+      releaseCommit()
+      await firstCommit
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      const commits = requests.filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+      assert.equal(commits.length, 2)
+    })
+  }, { beforeRespond })
 })
