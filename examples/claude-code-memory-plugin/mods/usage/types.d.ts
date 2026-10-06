@@ -20,7 +20,7 @@ export type Reply = { id: string; n: number };
 
 declare module "claude-code" {
   interface PluginState {
-    "ov-usage": {
+    "openviking-memory": {
       // this session's answers, oldest first (last 50)
       turns: Turn[];
       replies: Reply[];

@@ -111,15 +111,11 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 
 插件会在 Claude Code 的输入框下方显示一行 OpenViking 状态栏，用于指示：连接状态、召回条数、捕获进度以及当前会话状态。关于状态栏各部分的详细含义与自定义配置方法，请参阅 [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md)。
 
-## 可选：查看 OpenViking 的贡献（OV-Usage）
+## 来源卡片
 
-OV-Usage 是一个独立的可选插件，在每次回答下方加一张卡片，列出这次回答用到的 OpenViking 来源：自动召回加入了什么，Claude 自己搜索、读取了什么。卡片默认只占一行，展开后显示完整列表。需要 Claude Code 2.1.286 或更高版本，并已安装 openviking-memory。
+插件会在每次回答下方加一行卡片，列出这次回答用到的 OpenViking 来源：自动召回加进提示的内容，以及 Claude 自己搜索、读取的内容。例如 `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`。用卡片上的按钮展开单张卡片，或用 `/openviking-usage expand`、`/openviking-usage collapse` 展开或折叠全部卡片。卡片默认折叠。
 
-```bash
-claude plugin install ov-usage@openviking
-```
-
-详见 [OV-Usage README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-usage-plugin/README_CN.md)。
+卡片需要 Claude Code 2.1.286 或更高版本，并启用插件 hooks 模块。版本更早或模块未启用时不显示卡片，召回、捕获等 hook 照常工作。详见插件 README 的[来源卡片](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#来源卡片)。
 
 ## 故障排查
 

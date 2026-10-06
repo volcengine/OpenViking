@@ -7,7 +7,7 @@ import {
   summaryLine,
   titleOf,
   urisIn,
-} from "../hooks/sources";
+} from "./sources";
 
 const EVENT = "viking://user/t/memories/events/2026/10/03/web版本未更新排查请求.md";
 const PREF = "viking://user/t/memories/preferences/me/按钮状态.md";
@@ -81,6 +81,11 @@ describe("one answer", () => {
       "OV · 3 sources · 1 preference · 1 past event · 1 team doc · 1 read in full",
     );
     expect(titleOf(EVENT)).toBe("10/3 web版本未更新排查请求");
+  });
+
+  test("a title with a literal % does not throw", () => {
+    expect(titleOf("viking://resources/docs/50% off.md")).toBe("50% off");
+    expect(titleOf("viking://resources/docs/a%20b.md")).toBe("a b");
   });
 
   test("secrets are redacted", () => {

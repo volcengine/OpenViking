@@ -111,15 +111,11 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 
 The plugin renders an OpenViking status indicator beneath your Claude Code input box, allowing you to check connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for a complete glossary of segments and personalization recipes.
 
-## Optional: see what OpenViking contributed (OV-Usage)
+## Source cards
 
-OV-Usage is a separate, opt-in plugin. It adds a card under each answer listing the OpenViking sources the answer used: what auto-recall added, and what Claude searched for and read on its own. The card is one line by default and expands to the full list. It needs Claude Code 2.1.286 or newer, and openviking-memory installed.
+Under each answer, the plugin adds a one-line card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. For example: `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`. Expand a card with its button, or expand and collapse every card with `/openviking-usage expand` and `/openviking-usage collapse`. Cards are collapsed by default.
 
-```bash
-claude plugin install ov-usage@openviking
-```
-
-See the [OV-Usage README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-usage-plugin/README.md) for details.
+The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before. See [Source cards](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#source-cards) in the plugin README.
 
 ## Troubleshooting
 

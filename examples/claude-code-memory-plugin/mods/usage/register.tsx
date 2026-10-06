@@ -1,5 +1,5 @@
 import type { EngineInterface, Register, ResolveInput } from "claude-code";
-import type { Lookup, Turn } from "../types";
+import type { Lookup, Turn } from "./types";
 import {
   ICON,
   classifyCall,
@@ -11,9 +11,9 @@ import {
   urisIn,
 } from "./sources";
 
-const turnsRef = { plugin: "ov-usage", key: "turns" } as const;
-const repliesRef = { plugin: "ov-usage", key: "replies" } as const;
-const expandedRef = { plugin: "ov-usage", key: "expanded" } as const;
+const turnsRef = { plugin: "openviking-memory", key: "turns" } as const;
+const repliesRef = { plugin: "openviking-memory", key: "replies" } as const;
+const expandedRef = { plugin: "openviking-memory", key: "expanded" } as const;
 
 const MAX_TURNS = 50;
 const MAX_SESSIONS = 20;
@@ -40,22 +40,22 @@ async function lastTurn($: EngineInterface): Promise<Turn | undefined> {
 async function save($: EngineInterface) {
   const id = await $.session.id();
   if (!id) return;
-  await $.store.set(`session:${id}`, {
+  await $.store.set(`usage:session:${id}`, {
     turns: (await $.state.get(turnsRef)).value ?? [],
     replies: (await $.state.get(repliesRef)).value ?? [],
     expanded: (await $.state.get(expandedRef)).value ?? [],
   });
-  const index = ((await $.store.get("sessions")) as string[] | undefined) ?? [];
+  const index = ((await $.store.get("usage:sessions")) as string[] | undefined) ?? [];
   const next = [...index.filter((k) => k !== id), id];
-  for (const old of next.slice(0, -MAX_SESSIONS)) await $.store.delete(`session:${old}`);
-  await $.store.set("sessions", next.slice(-MAX_SESSIONS));
+  for (const old of next.slice(0, -MAX_SESSIONS)) await $.store.delete(`usage:session:${old}`);
+  await $.store.set("usage:sessions", next.slice(-MAX_SESSIONS));
 }
 
 async function restore($: EngineInterface) {
   if ((await $.state.get(turnsRef)).value?.length) return; // a hot reload keeps $.state
   const id = await $.session.id();
   const snap = id
-    ? ((await $.store.get(`session:${id}`)) as Record<string, never> | undefined)
+    ? ((await $.store.get(`usage:session:${id}`)) as Record<string, never> | undefined)
     : undefined;
   if (!snap) return;
   await $.state.set(turnsRef, snap.turns ?? []);
