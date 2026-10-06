@@ -168,13 +168,19 @@ export function toolResponseText(response) {
   }
 }
 
-export function toolResponseFailed(response) {
+export function toolResponseFailed(response, depth = 0) {
+  if (depth > 4) return false;
+  if (typeof response === "string") {
+    try { return toolResponseFailed(JSON.parse(response), depth + 1); } catch { return false; }
+  }
   if (!response || typeof response !== "object") return false;
   if (response.isError === true || response.is_error === true) return true;
   for (const key of ["exit_code", "exitCode", "status_code", "statusCode"]) {
     if (typeof response[key] === "number" && response[key] !== 0) return true;
   }
-  return false;
+  return Array.isArray(response.content) && response.content.some(
+    (part) => part?.type === "text" && toolResponseFailed(part.text, depth + 1),
+  );
 }
 
 export function groupOf(uri) {
@@ -235,7 +241,7 @@ export function consulted(turn = {}) {
   );
   const byGroup = { prefs: 0, history: 0, work: 0, docs: 0, skill: 0 };
   for (const row of list) byGroup[groupOf(row.uri)] += 1;
-  return { rows: list, byGroup, readInFull: list.filter((row) => row.isOpened).length };
+  return { rows: list, byGroup, readCount: list.filter((row) => row.isOpened).length };
 }
 
 export function summaryLine(result) {
@@ -246,7 +252,7 @@ export function summaryLine(result) {
     "OV",
     plural(result.rows.length, ["source", "sources"]),
     ...groups,
-    result.readInFull ? `${result.readInFull} read in full` : "",
+    result.readCount ? `${result.readCount} read` : "",
   ].filter(Boolean).join(" · ");
 }
 
@@ -256,7 +262,7 @@ export function expandedLines(turn, result = consulted(turn)) {
     const detail = row.from === "recall"
       ? `auto-recalled${row.score > 0 ? ` ${row.score.toFixed(2)}` : ""}`
       : "found by Codex";
-    lines.push(`  ${ICON[groupOf(row.uri)]} ${titleOf(row.uri)} · ${detail}${row.isOpened ? " · read in full" : ""}\n    ${row.uri}`);
+    lines.push(`  ${ICON[groupOf(row.uri)]} ${titleOf(row.uri)} · ${detail}${row.isOpened ? " · read" : ""}\n    ${row.uri}`);
   }
   if ((turn.lookups || []).length) lines.push("Codex lookups");
   for (const lookup of turn.lookups || []) {

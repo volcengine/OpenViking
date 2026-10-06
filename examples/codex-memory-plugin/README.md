@@ -69,6 +69,17 @@ codex plugin marketplace add volcengine/OpenViking
 codex plugin add openviking-memory@openviking
 ```
 
+To test the unreleased Codex OV-Usage branch, use this source in step 1 instead:
+
+```bash
+codex plugin marketplace add wongzw/OpenViking --ref feat/codex-ov-usage
+codex plugin add openviking-memory@openviking
+```
+
+The public one-line installer installs the published release; it does not install
+this fork branch. A `read` count records a successful read request and may include
+partial reads; it does not claim the entire file was read.
+
 Then enable plugin hooks (if your Codex build doesn't already) by adding to `~/.codex/config.toml`:
 
 ```toml

@@ -17,6 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MCP_PROXY_ENV_VARS } from "./shared/mcp-proxy-config.mjs";
+import { classifyCall, consulted, summaryLine, toolResponseFailed } from "./usage/sources.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const pluginDir = resolve(scriptsDir, "..");
@@ -28,6 +29,17 @@ const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-mem
 
 const PLUGIN_NAME = "openviking-memory";
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
+
+test("usage excludes failed wrapped reads and does not claim complete file reads", () => {
+  const uri = "viking://resources/team/checklist.md";
+  const call = classifyCall("functions.exec", `await tools.mcp__openviking_memory__read({uris:["${uri}"], limit:1})`);
+  assert.deepEqual(call.opened, [uri]);
+  const response = { content: [{ type: "text", text: JSON.stringify({ isError: true }) }] };
+  const failed = { ...call, isError: toolResponseFailed(response), found: [] };
+  assert.equal(consulted({ lookups: [failed] }).rows.length, 0);
+  const result = consulted({ lookups: [{ ...call, isError: false, found: [] }] });
+  assert.equal(summaryLine(result), "OV · 1 source · 1 team doc · 1 read");
+});
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf-8"));
