@@ -554,7 +554,7 @@ lookups; the recall hook also supplies a footer for turns with recall alone.
 A typical summary is:
 
 ```text
-OV · 3 sources · 1 past event · 2 team docs · 1 read
+OpenViking · 3 sources · 1 past event · 2 team docs · 1 read
 ```
 
 Sources were made available during the turn; the count does not prove that the
