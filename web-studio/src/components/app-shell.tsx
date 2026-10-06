@@ -12,6 +12,7 @@ import {
   GithubIcon,
   KeyRoundIcon,
   MoonIcon,
+  SlidersHorizontalIcon,
   ActivityIcon,
   BotIcon,
   PanelsTopLeftIcon,
@@ -314,13 +315,15 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
     useAppConnection()
   const settingsActive = pathname === '/settings'
+  const modelsActive = pathname === '/models'
   const usersActive = pathname === '/users' || pathname.startsWith('/users/')
-  const { canManageUsers } = resolveStudioManagementCapabilities({
-    hasControlCredential: Boolean(connection.adminApiKey.trim()),
-    isRoleLoading: isConnectionRoleLoading,
-    role: connectionRole,
-    serverMode,
-  })
+  const { canManageAccounts, canManageUsers } =
+    resolveStudioManagementCapabilities({
+      hasControlCredential: Boolean(connection.adminApiKey.trim()),
+      isRoleLoading: isConnectionRoleLoading,
+      role: connectionRole,
+      serverMode,
+    })
   const crossDeviceVerifyActive =
     pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
   const visibleNavItems = NAV_ITEMS
@@ -428,6 +431,19 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     <span>{t('footer.connection', { ns: 'appShell' })}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {canManageAccounts ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/models" />}
+                      isActive={modelsActive}
+                      tooltip={t('footer.models', { ns: 'appShell' })}
+                      className="h-9"
+                    >
+                      <SlidersHorizontalIcon />
+                      <span>{t('footer.models', { ns: 'appShell' })}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
                 {canManageUsers ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton

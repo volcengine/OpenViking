@@ -5,6 +5,7 @@ const workspace = {
       connection: '连接设置',
       docs: '文档站',
       github: 'GitHub',
+      models: '账号模型',
       sdkApi: 'SDK 与 API',
       users: '用户与权限',
     },
@@ -747,6 +748,120 @@ const workspace = {
     },
   },
   settings: {
+    models: {
+      title: '账号模型设置',
+      description: '为账号 {{account}} 配置 VLM 和查询规划器覆盖项。',
+      loading: '正在加载账号模型设置…',
+      credentialCount: '{{count}} 个凭证',
+      credentialCount_other: '{{count}} 个凭证',
+      credentialTitle: '凭证 {{index}}',
+      timeoutSeconds: '{{value}} 秒',
+      state: {
+        explicit: '已为此账号配置',
+        inherited: '继承集群配置',
+        clusterDefault: '集群默认值',
+      },
+      sections: {
+        vlm: {
+          title: 'VLM',
+          description: '用于多模态理解的模型服务。',
+          inheritedDescription: '此账号使用集群 VLM 配置。',
+        },
+        queryPlanner: {
+          title: '查询规划器',
+          description: '用于检索意图分析的模型服务。',
+          inheritedDescription:
+            '此账号会先使用账号 VLM，再使用集群查询规划器或 VLM。',
+          precedence:
+            '顺序：账号查询规划器、账号 VLM、集群查询规划器、集群 VLM。',
+        },
+      },
+      fields: {
+        model: '默认模型',
+        timeout: '超时时间',
+        timeoutHint: '留空以使用集群超时时间。',
+        credentials: '凭证',
+        provider: '提供商',
+        credentialModel: '凭证模型',
+        apiBase: 'API 基础 URL',
+        apiKey: 'API 密钥',
+        apiKeyHint:
+          '保存的值默认保持隐藏。选择显示后才能查看。编辑其他字段时会保留此密钥的原始值。',
+        advanced: '高级凭证字段',
+        credentialId: '凭证 ID',
+        apiVersion: 'API 版本',
+        reasoningEffort: '推理强度',
+        maxTokens: '最大输出 Token 数',
+        keepaliveExpiry: '连接保活时间',
+        forwardApiKey: '通过 LiteLLM 转发 API 密钥',
+        extraHeaders: '额外请求头（JSON）',
+        extraRequestBody: '额外请求体（JSON）',
+      },
+      placeholders: {
+        model: '模型名称或部署 ID',
+        clusterDefault: '使用集群值',
+        outerModel: '使用默认模型',
+        apiBase: 'https://api.example.com/v1',
+        optional: '可选',
+        jsonObject: '{"key": "value"}',
+      },
+      values: {
+        no: '否',
+        providerDefault: '提供商默认值',
+        yes: '是',
+      },
+      editor: {
+        title: '配置{{section}}',
+        description: '保存时会替换此配置节及其完整的有序凭证列表。',
+        credentialsHint: '系统会按顺序尝试凭证。保存时会替换完整列表。',
+      },
+      actions: {
+        addCredential: '添加凭证',
+        cancel: '取消',
+        configure: '为此账号配置',
+        confirmInherit: '继承集群配置',
+        edit: '编辑',
+        hideApiKey: '隐藏 API 密钥',
+        inherit: '继承集群配置',
+        removeCredential: '删除凭证 {{index}}',
+        reset: '重置',
+        resetting: '正在重置…',
+        revealApiKey: '显示 API 密钥',
+        save: '保存配置',
+        saving: '正在保存…',
+      },
+      reset: {
+        title: '重置{{section}}？',
+        description:
+          '账号覆盖项将被删除。此账号会继续使用继承顺序中的下一项模型配置。',
+      },
+      accessDenied: {
+        title: '需要 Root 权限',
+        description: '只有已验证的 Root 凭证才能查看和修改账号模型凭证。',
+        action: '打开连接设置',
+      },
+      errors: {
+        loadFailed: '无法加载账号模型设置',
+        saveFailed: '无法保存此配置',
+      },
+      toast: {
+        saved: '账号模型配置已保存',
+        inheritanceRestored: '已恢复集群继承',
+      },
+      validation: {
+        credentialsRequired: '请至少添加一个凭证。',
+        headersMustBeStrings: '额外请求头必须是值为字符串的 JSON 对象。',
+        invalidJsonObject: '{{field}} 必须是有效的 JSON 对象。',
+        keepaliveNonNegative: '连接保活时间必须大于或等于零。',
+        maxTokensPositiveInteger: '最大输出 Token 数必须是正整数。',
+        modelRequired: '请输入默认模型。',
+        providerRequired: '请为每个凭证选择提供商。',
+        providerUnsupported: '请选择支持的提供商。',
+        streamUnsupported:
+          '额外请求体不能设置 stream，因为 OpenViking 返回完整响应。',
+        timeoutPositive: '超时时间必须大于零。',
+      },
+    },
     acl: {
       page: {
         advanced: '高级设置',

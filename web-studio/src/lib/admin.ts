@@ -14,6 +14,10 @@ import {
 } from '#/lib/ov-client'
 
 import type { UserMemoryPolicy } from './user-memory-policy'
+import type {
+  AccountModelConfiguration,
+  AccountModelSettingsPatch,
+} from './account-model-config'
 
 export type AdminUserRole = 'admin' | 'root' | 'user'
 
@@ -582,6 +586,36 @@ export async function updateUserMemorySettings(
       path: { account_id: accountId, user_id: userId },
       headers: { 'Content-Type': 'application/json' },
       body: { memory_policy: memoryPolicy },
+    }),
+  )
+}
+
+const accountConfigurationUrl =
+  '/api/v1/admin/accounts/{account_id}/configuration'
+
+export function fetchAccountModelConfiguration(
+  connection: AdminConnection,
+  accountId: string,
+): Promise<AccountModelConfiguration> {
+  return getOvResult<AccountModelConfiguration>(
+    createAdminClient(connection).get({
+      url: accountConfigurationUrl,
+      path: { account_id: accountId },
+    }),
+  )
+}
+
+export function patchAccountModelConfiguration(
+  connection: AdminConnection,
+  accountId: string,
+  settings: AccountModelSettingsPatch,
+): Promise<AccountModelConfiguration> {
+  return getOvResult<AccountModelConfiguration>(
+    createAdminClient(connection).patch({
+      url: accountConfigurationUrl,
+      path: { account_id: accountId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { settings },
     }),
   )
 }

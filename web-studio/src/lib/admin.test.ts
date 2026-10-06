@@ -1,13 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Client from '#/gen/ov-client/client'
-import { fetchAdminUsersPage } from './admin'
+import {
+  fetchAccountModelConfiguration,
+  fetchAdminUsersPage,
+  patchAccountModelConfiguration,
+} from './admin'
 
-const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
+const { getMock, patchMock } = vi.hoisted(() => ({
+  getMock: vi.fn(),
+  patchMock: vi.fn(),
+}))
 vi.mock('#/gen/ov-client/client', async (importOriginal) => {
   const original = await importOriginal<typeof Client>()
   return {
     ...original,
-    createClient: () => ({ ...original.createClient(), get: getMock }),
+    createClient: () => ({
+      ...original.createClient(),
+      get: getMock,
+      patch: patchMock,
+    }),
   }
 })
 
@@ -21,6 +32,7 @@ const connection = {
 describe('fetchAdminUsersPage', () => {
   beforeEach(() => {
     getMock.mockReset()
+    patchMock.mockReset()
   })
 
   it('requests only the selected page and uses server totals', async () => {
@@ -69,5 +81,53 @@ describe('fetchAdminUsersPage', () => {
       }),
     ).rejects.toMatchObject({ message: 'Request failed' })
     expect(getMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('account model configuration', () => {
+  beforeEach(() => {
+    getMock.mockReset()
+    patchMock.mockReset()
+  })
+
+  it('loads explicit settings for the selected account', async () => {
+    getMock.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: {
+        status: 'ok',
+        result: { account_id: 'acme', settings: {} },
+      },
+    })
+
+    await expect(
+      fetchAccountModelConfiguration(connection, 'acme'),
+    ).resolves.toEqual({ account_id: 'acme', settings: {} })
+    expect(getMock).toHaveBeenCalledWith({
+      url: '/api/v1/admin/accounts/{account_id}/configuration',
+      path: { account_id: 'acme' },
+    })
+  })
+
+  it('sends section reset as null without changing other sections', async () => {
+    patchMock.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: {
+        status: 'ok',
+        result: { account_id: 'acme', settings: {} },
+      },
+    })
+
+    await patchAccountModelConfiguration(connection, 'acme', {
+      query_planner: null,
+    })
+
+    expect(patchMock).toHaveBeenCalledWith({
+      url: '/api/v1/admin/accounts/{account_id}/configuration',
+      path: { account_id: 'acme' },
+      headers: { 'Content-Type': 'application/json' },
+      body: { settings: { query_planner: null } },
+    })
   })
 })

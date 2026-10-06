@@ -5,6 +5,7 @@ const workspace = {
       connection: 'Connection Settings',
       docs: 'Documentation',
       github: 'GitHub',
+      models: 'Account Models',
       sdkApi: 'SDK & API',
       users: 'Users & Permissions',
     },
@@ -779,6 +780,127 @@ const workspace = {
     },
   },
   settings: {
+    models: {
+      title: 'Account model settings',
+      description:
+        'Configure VLM and Query Planner overrides for Account {{account}}.',
+      loading: 'Loading account model settings...',
+      credentialCount: '{{count}} credential',
+      credentialCount_other: '{{count}} credentials',
+      credentialTitle: 'Credential {{index}}',
+      timeoutSeconds: '{{value}} seconds',
+      state: {
+        explicit: 'Configured for this Account',
+        inherited: 'Inherited from Cluster',
+        clusterDefault: 'Cluster default',
+      },
+      sections: {
+        vlm: {
+          title: 'VLM',
+          description: 'Model service used for multimodal understanding.',
+          inheritedDescription:
+            'This Account uses the Cluster VLM configuration.',
+        },
+        queryPlanner: {
+          title: 'Query Planner',
+          description: 'Model service used for retrieval intent analysis.',
+          inheritedDescription:
+            'This Account uses its Account VLM first, then the Cluster Query Planner or VLM.',
+          precedence:
+            'Order: Account Query Planner, Account VLM, Cluster Query Planner, then Cluster VLM.',
+        },
+      },
+      fields: {
+        model: 'Default model',
+        timeout: 'Timeout',
+        timeoutHint: 'Leave empty to use the Cluster timeout.',
+        credentials: 'Credentials',
+        provider: 'Provider',
+        credentialModel: 'Credential model',
+        apiBase: 'API base URL',
+        apiKey: 'API key',
+        apiKeyHint:
+          'The saved value stays masked until you choose to reveal it. Editing another field keeps this exact key.',
+        advanced: 'Advanced credential fields',
+        credentialId: 'Credential ID',
+        apiVersion: 'API version',
+        reasoningEffort: 'Reasoning effort',
+        maxTokens: 'Maximum output tokens',
+        keepaliveExpiry: 'Keep-alive expiry',
+        forwardApiKey: 'Forward API key through LiteLLM',
+        extraHeaders: 'Extra headers (JSON)',
+        extraRequestBody: 'Extra request body (JSON)',
+      },
+      placeholders: {
+        model: 'Model name or deployment ID',
+        clusterDefault: 'Use Cluster value',
+        outerModel: 'Use the default model',
+        apiBase: 'https://api.example.com/v1',
+        optional: 'Optional',
+        jsonObject: '{"key": "value"}',
+      },
+      values: {
+        no: 'No',
+        providerDefault: 'Provider default',
+        yes: 'Yes',
+      },
+      editor: {
+        title: 'Configure {{section}}',
+        description:
+          'Saving replaces this section and its complete ordered credential list.',
+        credentialsHint:
+          'Credentials are tried in order. Saving replaces the complete list.',
+      },
+      actions: {
+        addCredential: 'Add credential',
+        cancel: 'Cancel',
+        configure: 'Configure for this Account',
+        confirmInherit: 'Inherit from Cluster',
+        edit: 'Edit',
+        hideApiKey: 'Hide API key',
+        inherit: 'Inherit from Cluster',
+        removeCredential: 'Remove credential {{index}}',
+        reset: 'Reset',
+        resetting: 'Resetting...',
+        revealApiKey: 'Reveal API key',
+        save: 'Save configuration',
+        saving: 'Saving...',
+      },
+      reset: {
+        title: 'Reset {{section}}?',
+        description:
+          'The Account override will be deleted. This Account will continue with the next model configuration in the inheritance order.',
+      },
+      accessDenied: {
+        title: 'Root access required',
+        description:
+          'Account model credentials are visible and writable only with a validated Root credential.',
+        action: 'Open connection settings',
+      },
+      errors: {
+        loadFailed: 'Could not load account model settings',
+        saveFailed: 'Could not save this configuration',
+      },
+      toast: {
+        saved: 'Account model configuration saved',
+        inheritanceRestored: 'Cluster inheritance restored',
+      },
+      validation: {
+        credentialsRequired: 'Add at least one credential.',
+        headersMustBeStrings:
+          'Extra headers must be a JSON object with string values.',
+        invalidJsonObject: '{{field}} must be a valid JSON object.',
+        keepaliveNonNegative: 'Keep-alive expiry must be zero or greater.',
+        maxTokensPositiveInteger:
+          'Maximum output tokens must be a positive integer.',
+        modelRequired: 'Enter a default model.',
+        providerRequired: 'Select a provider for each credential.',
+        providerUnsupported: 'Select a supported provider.',
+        streamUnsupported:
+          'Extra request body cannot set stream because OpenViking returns complete responses.',
+        timeoutPositive: 'Timeout must be greater than zero.',
+      },
+    },
     acl: {
       page: {
         advanced: 'Advanced settings',
