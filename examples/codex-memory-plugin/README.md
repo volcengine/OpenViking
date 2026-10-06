@@ -69,17 +69,6 @@ codex plugin marketplace add volcengine/OpenViking
 codex plugin add openviking-memory@openviking
 ```
 
-To test a contribution before it is merged, select its fork and branch explicitly
-instead of the source in step 1:
-
-```bash
-codex plugin marketplace add <owner>/OpenViking --ref <branch>
-codex plugin add openviking-memory@openviking
-```
-
-The public one-line installer installs the published release. Features available
-only on a contribution branch require the branch-specific marketplace install.
-
 Then enable plugin hooks (if your Codex build doesn't already) by adding to `~/.codex/config.toml`:
 
 ```toml
