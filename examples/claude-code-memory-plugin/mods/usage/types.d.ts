@@ -15,8 +15,9 @@ export type Turn = {
   lookups: Lookup[];
 };
 
-// The transcript row an answer's card is drawn under, by its row id.
-export type Reply = { id: string; n: number };
+// The transcript row an answer's card is drawn under: its row id (the terminal's
+// requestId) and a hash of its text, since the desktop names rows by API message id.
+export type Reply = { id: string; n: number; text?: string };
 
 declare module "claude-code" {
   interface PluginState {

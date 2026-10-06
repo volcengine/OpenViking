@@ -403,7 +403,7 @@ Claude's own lookups
 
 **数据。** 模块读取本插件 `UserPromptSubmit` hook 返回的 `<openviking-context>` 块，以及 Claude 发起的 OpenViking MCP 调用和 `ov` CLI 调用。它不发网络请求，不向 OpenViking 写任何内容。
 
-它在 Claude Code 的插件存储里保存每次回答的来源 URI、分数、脱敏后的搜索词和卡片所在的对话行 id，保留最近 20 个会话，所以 `claude --continue` 之后卡片还在。不保存 shell 命令和提示原文。卡片不会发给 Claude，不消耗 token。
+它在 Claude Code 的插件存储里保存每次回答的来源 URI、分数、脱敏后的搜索词，以及卡片所在对话行的 id 和该行回答文本的哈希（桌面端靠这个哈希找到卡片对应的回答），保留最近 20 个会话，所以 `claude --continue` 之后卡片还在。不保存 shell 命令和提示原文。卡片不会发给 Claude，不消耗 token。
 
 **开发。** `claude plugin test examples/claude-code-memory-plugin` 会运行 `mods/usage/sources.test.ts`。用 `claude --plugin-dir examples/claude-code-memory-plugin` 启动一次、生成 `.claude-plugin/types/` 后，可以用 `tsc -p examples/claude-code-memory-plugin/mods/usage` 做类型检查。
 
