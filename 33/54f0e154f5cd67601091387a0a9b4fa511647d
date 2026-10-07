@@ -1,0 +1,36 @@
+bot/README.md
+  h_b34c679d17e2ac 323
+bot/README_CN.md
+  h_b34c679d17e2ac 320
+bot/tests/test_exec_tool.py
+  h_b34c679d17e2ac 47-56
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 108-109
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 36
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 250-254,258-260
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 20,493
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 124
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 79-86,395,1353,1355-1357,1485,1520-1524,1622-1627
+bot/vikingbot/compile/skill_resources.py
+  h_b34c679d17e2ac 30
+bot/vikingbot/config/schema.py
+  h_b34c679d17e2ac 802
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3354f0e154f5cd67601091387a0a9b4fa511647d",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
