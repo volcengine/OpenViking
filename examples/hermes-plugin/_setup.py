@@ -285,23 +285,26 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
         return _SETUP_CANCELLED
 
 
-def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, ovcli_path: Path) -> None:
+def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, ovcli_path: Path, update_process_env: bool = True, stop_previous: bool = True) -> None:
     ov = _ov()
-    _stop_previous_quick_local(provider_config, env_path.parent, ovcli_path=ovcli_path)
+    if stop_previous:
+        _stop_previous_quick_local(provider_config, env_path.parent, ovcli_path=ovcli_path)
     quick_local.clear_managed_settings(provider_config)
     for key in ("endpoint", "api_key", "root_api_key", "account", "user", "agent", "api_key_type"):
         provider_config.pop(key, None)
     provider_config["use_ovcli_config"] = True
     # Record the path only when it is not the default location (or the env var points elsewhere).
-    if os.environ.get(ov._OVCLI_CONFIG_ENV, "").strip() or ovcli_path.expanduser() != ov._default_ovcli_config_path().expanduser():
+    if not update_process_env or os.environ.get(ov._OVCLI_CONFIG_ENV, "").strip() or ovcli_path.expanduser() != ov._default_ovcli_config_path().expanduser():
         provider_config["ovcli_config_path"] = str(ovcli_path)
     else:
         provider_config.pop("ovcli_config_path", None)
     config["memory"]["provider"] = "openviking"
     config["memory"]["openviking"] = provider_config
-    ov._write_env_vars(env_path, {}, remove_keys=ov._OPENVIKING_ENV_KEYS)
-    for key in ov._OPENVIKING_ENV_KEYS:
-        os.environ.pop(key, None)
+    removed_keys = (*ov._OPENVIKING_ENV_KEYS, ov._OVCLI_CONFIG_ENV)
+    ov._write_env_vars(env_path, {}, remove_keys=removed_keys)
+    if update_process_env:
+        for key in removed_keys:
+            os.environ.pop(key, None)
 
 
 def _save_hermes_only_config(*, config: dict, provider_config: dict, env_path: Path, values: dict) -> None:

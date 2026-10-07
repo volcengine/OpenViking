@@ -94,6 +94,8 @@ def check(host, repository, root, timeout):
         for name in (
             "__init__.py",
             "_setup.py",
+            "_desktop.py",
+            "config_schema.py",
             "quick_local.py",
             "local_server.py",
             "local_packages.py",

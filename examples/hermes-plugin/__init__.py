@@ -762,7 +762,7 @@ def _profile_identity(path: Path) -> str:
         return str(path.expanduser())
 
 
-def _discover_ovcli_profiles() -> list[_OvcliProfile]:
+def _discover_ovcli_profiles(*, env: Optional[dict] = None) -> list[_OvcliProfile]:
     """env-pointed config, then saved ``ovcli.conf.<name>`` files, then the active
     ``ovcli.conf`` — which is only listed on its own when no saved profile has
     identical connection values and nothing else was found."""
@@ -775,7 +775,7 @@ def _discover_ovcli_profiles() -> list[_OvcliProfile]:
             seen_paths.add(identity)
             profiles.append(profile)
 
-    env_path = os.environ.get(_OVCLI_CONFIG_ENV, "").strip()
+    env_path = (os.environ if env is None else env).get(_OVCLI_CONFIG_ENV, "").strip()
     if env_path:
         add(Path(env_path).expanduser(), source="env", name=_OVCLI_CONFIG_ENV)
 
@@ -1484,6 +1484,20 @@ class OpenVikingMemoryProvider(MemoryProvider):
             save_config(config)
         finally:
             reset_hermes_home_override(token)
+
+    def get_desktop_config(self, *, hermes_home: str) -> dict:
+        from . import _desktop
+        return _desktop.snapshot(hermes_home=hermes_home, probe_health=False)
+
+    def handle_desktop_config_action(self, action: str, payload: dict, *, hermes_home: str) -> dict:
+        from . import _desktop
+        if action == "save":
+            return _desktop.save(values=payload.get("values") or {}, hermes_home=hermes_home,
+                                 overwrite=payload.get("overwrite") is True,
+                                 confirmations=payload.get("confirmations") or {})
+        if action == "health":
+            return _desktop.snapshot(hermes_home=hermes_home, probe_health=True)["summary"]["status"]
+        raise ValueError("Unknown OpenViking setup action.")
 
     def get_status_config(self, provider_config: dict) -> dict:
         provider_config = dict(provider_config or {})

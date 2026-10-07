@@ -198,6 +198,27 @@ OPENVIKING_ENDPOINT=http://127.0.0.1:1933
 # OPENVIKING_USER=default
 ```
 
+### Desktop setup
+
+On Hermes Desktop with provider-managed setup support, open **Settings → Memory &
+Context → Persistent memory**, select **OpenViking**, and choose **Configure**.
+The external plugin must be installed and selected by Hermes.
+
+Choose **Quick Local**, **OpenViking Cloud**, **Existing Profiles**, or **Custom
+Server**. Select Personal or Shared, then choose **Save setup**. Shared asks for
+confirmation because it changes conversation sharing. Custom servers support
+local connections without a key, user keys, or root keys with an account and user.
+Keys are saved in the selected OpenViking CLI profile and are not returned to the form.
+
+Quick Local uses the same installer and validation as `hermes memory setup`.
+It runs on the connected Hermes host, which can differ from the Desktop computer.
+The form shows progress. You can close it and return while setup continues.
+The OpenViking server remains running after Desktop closes. Start a new chat after
+setup succeeds. Follow any connection or gateway restart notice shown by setup.
+
+Older Hermes versions do not show this form. Continue to use
+`hermes memory setup openviking`; existing CLI setup and memory behavior are unchanged.
+
 ## Config
 
 OpenViking's server config is separate from Hermes:

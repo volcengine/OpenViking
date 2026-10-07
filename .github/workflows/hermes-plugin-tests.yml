@@ -28,6 +28,15 @@ jobs:
   hermes-plugin-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - name: baseline
+            ref: 5bba024d8ddd388f56f354c1f789be825e3d8a3c
+          # Reviewed companion: exercises Desktop setup instead of skipping it.
+          - name: desktop-setup
+            ref: 29d4956856295189a59ee2eeadc435d46719fd15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,7 +46,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: NousResearch/hermes-agent
-          ref: 5bba024d8ddd388f56f354c1f789be825e3d8a3c
+          ref: ${{ matrix.host.ref }}
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -86,7 +95,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hermes-plugin-install-logs
+          name: hermes-plugin-install-logs-${{ matrix.host.name }}
           path: |
             ${{ runner.temp }}/hermes-plugin-install/*.log
             ${{ runner.temp }}/hermes-plugin-install/evidence.json

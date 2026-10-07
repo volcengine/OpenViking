@@ -97,7 +97,12 @@ bundled provider. Hermes PR [#114569](https://github.com/NousResearch/hermes-age
 adds catalog recovery for configured providers that no longer resolve. The
 bundled provider takes precedence while it remains present.
 
-This plugin does not add a Desktop `config_schema.py`.
+Desktop setup is declared in `config_schema.py` and handled by `_desktop.py`.
+The schema is published only when Hermes advertises `PROVIDER_SETUP_API_VERSION >= 1`.
+Older hosts load the provider normally without importing the new setup types.
+Desktop and CLI share connection validation, profile linking, usage presets, and
+Quick Local provisioning. Desktop does not mutate the process environment.
+Test the external loader with the bundled OpenViking directory absent.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
 those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
 profile runtime through Hermes PM, or the earlier Hermes uv installer on the
@@ -107,7 +112,8 @@ tested release baseline. It does not add server dependencies to Hermes.
 
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
-It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
+It uses Python 3.14 and reviewed Hermes commits for the existing baseline and
+the optional Desktop setup capability, with test retries disabled.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.
 These regression tests use mock responses and local test servers; live-service
