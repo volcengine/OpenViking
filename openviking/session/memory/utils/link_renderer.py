@@ -18,7 +18,6 @@ class MarkdownLink:
 class LinkRenderer:
     """Renders and strips local markdown links in memory file content based on StoredLink metadata."""
 
-    _LINK_START_RE = re.compile(r"\[(?P<text>[^\]]+)\]\(")
     _LINK_TITLE_SUFFIX_RE = re.compile(
         r"""\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))\s*\Z""",
         re.DOTALL,
@@ -102,15 +101,28 @@ class LinkRenderer:
     @staticmethod
     def iter_markdown_links(content: str) -> Iterator[MarkdownLink]:
         """Yield parsed inline Markdown links with their source spans."""
+        openers: List[int] = []
         position = 0
-        while opener := LinkRenderer._LINK_START_RE.search(content, position):
-            parsed = LinkRenderer._parse_inline_markdown_link(content, opener.end())
-            if parsed is None:
-                position = opener.start() + 1
+        while position < len(content):
+            char = content[position]
+            if char == "\\":
+                position += 2
                 continue
-            target, end = parsed
-            yield MarkdownLink(opener.start(), end, opener.group("text"), target)
-            position = end
+            if char == "[":
+                openers.append(position)
+            elif char == "]" and openers:
+                start = openers.pop()
+                if position > start + 1 and content.startswith("(", position + 1):
+                    parsed = LinkRenderer._parse_inline_markdown_link(content, position + 2)
+                    if parsed is not None:
+                        target, end = parsed
+                        yield MarkdownLink(start, end, content[start + 1 : position], target)
+                        # A surrounding array/bracket is not part of this link;
+                        # Markdown links cannot contain another link either.
+                        openers.clear()
+                        position = end
+                        continue
+            position += 1
 
     @staticmethod
     def _replace_markdown_links(content: str, replacement: Callable[[MarkdownLink], str]) -> str:
