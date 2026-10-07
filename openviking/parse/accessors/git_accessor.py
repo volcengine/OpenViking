@@ -13,7 +13,6 @@ import os
 import shutil
 import stat
 import tempfile
-import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple, Union
@@ -35,6 +34,9 @@ from openviking.utils.git_auth import (
     parse_git_http_auth_config,
     raise_git_auth_error,
 )
+from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.remote_fetch import download_remote_file
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -150,6 +152,8 @@ class GitAccessor(DataAccessor):
                             temp_local_dir,
                             github_token=github_token,
                         )
+                    except PermissionDeniedError:
+                        raise
                     except Exception as zip_exc:
                         logger.warning(
                             f"[GitAccessor] GitHub ZIP download failed, falling back to git clone: {zip_exc}"
@@ -177,6 +181,8 @@ class GitAccessor(DataAccessor):
                         local_dir, repo_name = await self._gitlab_zip_download(
                             repo_url, branch or commit, temp_local_dir
                         )
+                    except PermissionDeniedError:
+                        raise
                     except Exception as zip_exc:
                         logger.warning(
                             f"[GitAccessor] GitLab ZIP download failed, falling back to git clone: {zip_exc}"
@@ -383,6 +389,7 @@ class GitAccessor(DataAccessor):
         env: Optional[dict[str, str]] = None,
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
+        await asyncio.to_thread(ensure_public_remote_target, url)
         name = self._get_repo_name(url)
         logger.info(f"[GitAccessor] Cloning {url} to {target_dir}...")
 
@@ -481,18 +488,14 @@ class GitAccessor(DataAccessor):
 
         github_token = github_token or os.environ.get("GITHUB_TOKEN")
 
-        # Download (blocking HTTP; run in thread pool)
-        def _download() -> None:
-            headers = {"User-Agent": "OpenViking"}
-            if github_token:
-                headers["Authorization"] = f"token {github_token}"
-
-            req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+        headers = {"User-Agent": "OpenViking"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
 
         try:
-            await asyncio.to_thread(_download)
+            await download_remote_file(zip_url, zip_path, headers=headers)
+        except PermissionDeniedError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
 
@@ -576,16 +579,12 @@ class GitAccessor(DataAccessor):
         extract_dir = os.path.join(target_dir, "_extracted")
         os.makedirs(extract_dir, exist_ok=True)
 
-        # Download (blocking HTTP; run in thread pool)
-        def _download() -> None:
-            headers = {"User-Agent": "OpenViking"}
-
-            req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+        headers = {"User-Agent": "OpenViking"}
 
         try:
-            await asyncio.to_thread(_download)
+            await download_remote_file(zip_url, zip_path, headers=headers)
+        except PermissionDeniedError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
 
