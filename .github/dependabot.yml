@@ -16,7 +16,7 @@ updates:
       interval: "weekly"
     labels:
       - "dependencies"
-      - "python"
+      - "python:uv"
     # 忽略主要版本更新，避免破坏性变更
     ignore:
       - dependency-name: "*"
