@@ -1,0 +1,18 @@
+bot/tests/test_opensandbox_runtime.py
+  h_b34c679d17e2ac 203-218
+bot/vikingbot/sandbox/backends/opensandbox.py
+  h_b34c679d17e2ac 6,220,351-368,373,386
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "416d94bf674fa21823194664b8a9e227bf4b6455",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
