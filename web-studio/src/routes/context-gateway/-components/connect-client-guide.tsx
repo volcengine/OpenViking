@@ -17,14 +17,16 @@ import {
 } from '#/components/ui/card'
 import { cn } from '#/lib/utils'
 
-import type { Upstream } from '../-lib/api'
+import type { Protocol, Upstream } from '../-lib/api'
 import {
   CLIENT_IDS,
-  CLIENT_PROTOCOLS,
   KEY_PLACEHOLDER,
   MODEL_PLACEHOLDER,
   SESSION_PLACEHOLDER,
+  activeProtocols,
   clientSnippets,
+  defaultProtocol,
+  protocolChoices,
   servingUpstreams,
 } from '../-lib/client-guides'
 import type { ClientId } from '../-lib/client-guides'
@@ -46,6 +48,7 @@ export const CLIENT_STEPS: Record<ClientId, string[]> = {
   'open-webui': ['connection', 'headers', 'env'],
   opencode: ['config', 'key', 'start'],
   pi: ['config', 'key'],
+  dsh: ['config', 'key', 'start'],
   ark: ['endpoints', 'python'],
 }
 
@@ -57,6 +60,7 @@ const CLIENT_NOTES: Record<ClientId, string[]> = {
   'open-webui': ['sharedMemory', 'tasks'],
   opencode: ['plugin'],
   pi: ['extension'],
+  dsh: ['webUi', 'oneProtocol', 'plugin'],
   ark: ['routing'],
 }
 
@@ -71,6 +75,8 @@ const MAX_LISTED_UPSTREAMS = 3
 
 type ClientGuideProps = {
   client: ClientId
+  /** Protocol from the URL; ignored unless the client supports it. */
+  protocol?: Protocol
   /** Gateway address the snippets point at. */
   baseUrl: string
   /** Configured upstreams; leave undefined while loading so no warning shows. */
@@ -78,7 +84,12 @@ type ClientGuideProps = {
 }
 
 /** Client picker (deep-linked through `?client=`) and the selected client's setup. */
-export function ClientGuide({ client, baseUrl, upstreams }: ClientGuideProps) {
+export function ClientGuide({
+  client,
+  protocol,
+  baseUrl,
+  upstreams,
+}: ClientGuideProps) {
   const { t } = useTranslation('contextGateway')
   return (
     <Card className="gap-0 py-0">
@@ -129,15 +140,30 @@ export function ClientGuide({ client, baseUrl, upstreams }: ClientGuideProps) {
             )
           })}
         </nav>
-        <ClientPanel client={client} baseUrl={baseUrl} upstreams={upstreams} />
+        <ClientPanel
+          client={client}
+          protocol={protocol}
+          baseUrl={baseUrl}
+          upstreams={upstreams}
+        />
       </div>
     </Card>
   )
 }
 
-function ClientPanel({ client, baseUrl, upstreams }: ClientGuideProps) {
+function ClientPanel({
+  client,
+  protocol,
+  baseUrl,
+  upstreams,
+}: ClientGuideProps) {
   const { t } = useTranslation('contextGateway')
-  const snippets = clientSnippets(client, { baseUrl })
+  // Without a valid pick, start from a protocol an upstream already serves.
+  const picked =
+    protocol && protocolChoices(client).includes(protocol)
+      ? protocol
+      : defaultProtocol(client, upstreams)
+  const snippets = clientSnippets(client, { baseUrl, protocol: picked })
   const placeholders = PLACEHOLDERS.filter(([token]) =>
     snippets.some((snippet) => snippet.code.includes(token)),
   )
@@ -160,7 +186,11 @@ function ClientPanel({ client, baseUrl, upstreams }: ClientGuideProps) {
         </p>
       </div>
 
-      <ProtocolRequirement client={client} upstreams={upstreams} />
+      <ProtocolRequirement
+        client={client}
+        protocol={picked}
+        upstreams={upstreams}
+      />
 
       {placeholders.length ? (
         <div className="grid gap-1.5 rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
@@ -232,21 +262,26 @@ function ClientPanel({ client, baseUrl, upstreams }: ClientGuideProps) {
   )
 }
 
-/** The protocol a client calls, with the upstreams serving it or a warning when none does. */
+/**
+ * The protocols a client calls, with a picker when it is set up for one at a
+ * time, and the upstreams serving them or a warning when none does.
+ */
 function ProtocolRequirement({
   client,
+  protocol,
   upstreams,
-}: Pick<ClientGuideProps, 'client' | 'upstreams'>) {
+}: Pick<ClientGuideProps, 'client' | 'upstreams'> & { protocol: Protocol }) {
   const { t } = useTranslation('contextGateway')
-  const protocols = CLIENT_PROTOCOLS[client]
-  const serving = upstreams && servingUpstreams(client, upstreams)
+  const choices = protocolChoices(client)
+  const protocols = activeProtocols(client, protocol)
+  const serving = upstreams && servingUpstreams(client, upstreams, protocol)
   const names = serving?.map((upstream) => upstream.name) ?? []
   const listed = names
     .slice(0, MAX_LISTED_UPSTREAMS)
     .join(t('connect.guide.separator'))
   const more = names.length - MAX_LISTED_UPSTREAMS
   const protocolNames = protocols
-    .map((protocol) => protocolLabel(t, protocol))
+    .map((item) => protocolLabel(t, item))
     .join(' / ')
 
   return (
@@ -255,9 +290,16 @@ function ProtocolRequirement({
         <span className="text-muted-foreground">
           {t('connect.guide.protocol')}
         </span>
-        {protocols.map((protocol) => (
-          <ProtocolBadge key={protocol} protocol={protocol} />
-        ))}
+        {choices.length ? (
+          <ProtocolPicker
+            client={client}
+            choices={choices}
+            protocol={protocol}
+            upstreams={upstreams}
+          />
+        ) : (
+          protocols.map((item) => <ProtocolBadge key={item} protocol={item} />)
+        )}
         {names.length ? (
           <span className="min-w-0 text-muted-foreground">
             {more > 0
@@ -290,12 +332,76 @@ function ProtocolRequirement({
           }
         >
           <p>
-            {t('connect.guide.noUpstream.description', {
-              protocols: protocolNames,
-            })}
+            {t(
+              choices.length
+                ? 'connect.guide.noUpstream.descriptionPicked'
+                : 'connect.guide.noUpstream.description',
+              { protocols: protocolNames },
+            )}
           </p>
         </Notice>
       ) : null}
+    </div>
+  )
+}
+
+/** Segmented links between a client's protocols, kept in `?protocol=`. */
+function ProtocolPicker({
+  client,
+  choices,
+  protocol,
+  upstreams,
+}: {
+  client: ClientId
+  choices: Protocol[]
+  protocol: Protocol
+  upstreams?: Upstream[]
+}) {
+  const { t } = useTranslation('contextGateway')
+  return (
+    <div
+      role="group"
+      aria-label={t('connect.guide.protocol')}
+      className="inline-flex flex-wrap rounded-md border p-0.5"
+    >
+      {choices.map((choice) => {
+        const active = choice === protocol
+        const missing =
+          upstreams !== undefined &&
+          servingUpstreams(client, upstreams, choice).length === 0
+        return (
+          <Link
+            key={choice}
+            to="/context-gateway/connect"
+            search={{ client, protocol: choice }}
+            replace
+            resetScroll={false}
+            aria-current={active ? 'true' : undefined}
+            title={
+              missing ? t('connect.guide.noUpstream.protocolHint') : undefined
+            }
+            className={cn(
+              'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+              active
+                ? 'bg-muted font-medium text-foreground'
+                : 'text-muted-foreground',
+            )}
+          >
+            {protocolLabel(t, choice)}
+            {missing ? (
+              <>
+                <TriangleAlertIcon
+                  aria-hidden
+                  className="size-3 text-amber-600 dark:text-amber-400"
+                />
+                <span className="sr-only">
+                  {t('connect.guide.noUpstream.protocolHint')}
+                </span>
+              </>
+            ) : null}
+          </Link>
+        )
+      })}
     </div>
   )
 }

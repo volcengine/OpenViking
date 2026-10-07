@@ -33,8 +33,11 @@ const connect = {
       title: '请先添加 {{protocols}} 上游',
       description:
         '已启用的上游都不支持 {{protocols}}。网关只会把请求转发给协议相同的上游。',
+      descriptionPicked:
+        '已启用的上游都不支持 {{protocols}}。网关只会把请求转发给协议相同的上游。请添加一个，或者换一种协议配置客户端。',
       action: '添加上游',
       hint: '还没有适用于这个客户端的已启用上游',
+      protocolHint: '还没有使用这种协议的已启用上游',
     },
     placeholders: '替换占位符',
     goodToKnow: '注意事项',
@@ -134,7 +137,8 @@ const connect = {
     },
     opencode: {
       name: 'OpenCode',
-      intro: '开源的命令行编程 Agent。把网关添加为一个 OpenAI 兼容服务商即可。',
+      intro:
+        '开源的命令行编程 Agent。把网关添加为一个自定义服务商，协议选你的上游使用的那种。',
       steps: {
         config:
           '在 `~/.config/opencode/opencode.json` 中添加这个服务商，与已有的设置合并。',
@@ -149,10 +153,11 @@ const connect = {
     },
     pi: {
       name: 'pi',
-      intro: '命令行编程 Agent。把网关添加为一个自定义服务商即可。',
+      intro:
+        '命令行编程 Agent。把网关添加为一个自定义服务商，协议选你的上游使用的那种。',
       steps: {
         config:
-          '在 pi 的模型配置 `~/.pi/agent/models.json` 中添加这个服务商。`apiKey` 填的是保存网关密钥的环境变量名。',
+          '在 pi 的模型配置 `~/.pi/agent/models.json` 中添加这个服务商。`apiKey` 从环境变量读取网关密钥，开头的 `$` 不能省，否则 pi 会把变量名本身当作密钥发出去。',
         key: '启动 pi 前先导出这个环境变量。',
       },
       identity:
@@ -160,6 +165,28 @@ const connect = {
       notes: {
         extension:
           '如果 pi 自己的 OpenViking 扩展处于启用状态，网关会让出这些对话，两者选一个使用即可。',
+      },
+    },
+    dsh: {
+      name: 'DSH',
+      intro:
+        'DeepSeek 推出的开源 Agent 框架 DeepSeek Harness。把网关添加为一个自定义模型服务商，协议选你的上游使用的那种。',
+      steps: {
+        config:
+          '在 profile 配置中添加这个服务商，`dsh web` 使用的 profile 是 `web`。如果文件里已经有 `llm-pi-ai` 条目，就把 `openviking` 加到它的 `providers` 下，不要再写第二个条目。',
+        key: '在运行 DSH 的环境里设置网关密钥。`apiKeyEnv` 填的就是这个环境变量名。',
+        start:
+          '启动 `dsh web`，在模型选择器中选择 `openviking` 服务商下的 `<model>`。',
+      },
+      identity:
+        '除非 DSH 发送了“{{section}}”中列出的某个请求头，否则网关会根据历史匹配它的对话。',
+      notes: {
+        webUi:
+          '也可以在 Web UI 的 Settings → Models → Add model provider → Custom model API 中添加，它写入的是同一个文件。',
+        oneProtocol:
+          'DSH 的一个服务商只使用一种协议。要通过多种协议使用网关，就为每种协议各声明一个服务商。',
+        plugin:
+          '如果同一个 profile 里装了 OpenViking 的 DSH 插件，网关会让出这些对话。',
       },
     },
     ark: {

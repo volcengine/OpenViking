@@ -465,7 +465,7 @@ print(reply.choices[0].message.content)
   "providers": {
     "openviking": {
       "baseUrl": "https://ov.example.com/v1",
-      "apiKey": "OPENVIKING_GATEWAY_KEY",
+      "apiKey": "$OPENVIKING_GATEWAY_KEY",
       "api": "openai-completions",
       "models": [
         {
@@ -477,7 +477,7 @@ print(reply.choices[0].message.content)
 }
 ```
 
-`apiKey` 填的是保存网关密钥的环境变量名，启动 pi 前先导出它。上游必须使用 Chat Completions。除非 pi 发送了[网关如何识别对话](#网关如何识别对话)中列出的某个请求头，否则网关会根据历史匹配它的对话。如果 pi 自己的 OpenViking 扩展处于启用状态，网关会让出这些对话，两者选一个使用即可。
+`apiKey` 从环境变量 `OPENVIKING_GATEWAY_KEY` 读取网关密钥，启动 pi 前先导出它。开头的 `$` 不能省，pi 会把不带 `$` 的字符串直接当作密钥发送。上游必须使用 Chat Completions。除非 pi 发送了[网关如何识别对话](#网关如何识别对话)中列出的某个请求头，否则网关会根据历史匹配它的对话。如果 pi 自己的 OpenViking 扩展处于启用状态，网关会让出这些对话，两者选一个使用即可。
 
 ### 火山方舟与 BytePlus 方舟 SDK
 

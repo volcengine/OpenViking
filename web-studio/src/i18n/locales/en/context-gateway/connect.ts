@@ -34,8 +34,11 @@ const connect = {
       title: 'Add an upstream for {{protocols}} first',
       description:
         'None of the enabled upstreams speaks {{protocols}}. The gateway only forwards a request to an upstream that speaks the same protocol.',
+      descriptionPicked:
+        'None of the enabled upstreams speaks {{protocols}}. The gateway only forwards a request to an upstream that speaks the same protocol. Add one, or set the client up with another protocol.',
       action: 'Add upstream',
       hint: 'No enabled upstream for this client yet',
+      protocolHint: 'No enabled upstream speaks this protocol yet',
     },
     placeholders: 'Replace the placeholders',
     goodToKnow: 'Good to know',
@@ -142,7 +145,7 @@ const connect = {
     opencode: {
       name: 'OpenCode',
       intro:
-        'Open-source coding agent for the terminal. Add the gateway as an OpenAI-compatible provider.',
+        'Open-source coding agent for the terminal. Add the gateway as a custom provider, using the protocol your upstream speaks.',
       steps: {
         config:
           'Add the provider to `~/.config/opencode/opencode.json`, merged with any settings already there.',
@@ -158,10 +161,11 @@ const connect = {
     },
     pi: {
       name: 'pi',
-      intro: 'Command-line coding agent. Add the gateway as a custom provider.',
+      intro:
+        'Command-line coding agent. Add the gateway as a custom provider, using the protocol your upstream speaks.',
       steps: {
         config:
-          "Add the provider to pi's model configuration, `~/.pi/agent/models.json`. `apiKey` is the name of the environment variable that holds the gateway key.",
+          "Add the provider to pi's model configuration, `~/.pi/agent/models.json`. `apiKey` reads the gateway key from an environment variable; keep the leading `$`, or pi sends the name itself as the key.",
         key: 'Export that variable before you start pi.',
       },
       identity:
@@ -169,6 +173,28 @@ const connect = {
       notes: {
         extension:
           "If pi's own OpenViking extension is active, the gateway steps aside for those conversations. Use one or the other.",
+      },
+    },
+    dsh: {
+      name: 'DSH',
+      intro:
+        'DeepSeek Harness, an open-source agent harness. Add the gateway as a custom model provider, using the protocol your upstream speaks.',
+      steps: {
+        config:
+          'Add the provider to the profile configuration. `web` is the profile `dsh web` uses. If the file already has an `llm-pi-ai` entry, add `openviking` under its `providers` instead of a second entry.',
+        key: 'Put the gateway key in the environment DSH runs in. `apiKeyEnv` names this variable.',
+        start:
+          'Start `dsh web` and pick `<model>` from the `openviking` provider in the model picker.',
+      },
+      identity:
+        'Unless DSH sends one of the headers listed under “{{section}}”, the gateway matches its conversations by their history.',
+      notes: {
+        webUi:
+          'You can also declare it in the Web UI under Settings → Models → Add model provider → Custom model API, which writes the same file.',
+        oneProtocol:
+          'A DSH provider speaks one protocol. To use the gateway over several, declare one provider per protocol.',
+        plugin:
+          'If the OpenViking plugin for DSH is installed in the same profile, the gateway steps aside for those conversations.',
       },
     },
     ark: {

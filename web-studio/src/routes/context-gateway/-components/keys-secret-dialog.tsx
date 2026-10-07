@@ -15,8 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 
 import type { IssuedKey, Upstream } from '../-lib/api'
 import {
-  CLIENT_PROTOCOLS,
   clientSnippets,
+  defaultProtocol,
   servingUpstreams,
 } from '../-lib/client-guides'
 import type { ClientId } from '../-lib/client-guides'
@@ -154,9 +154,15 @@ export function KeysSecretDialog({
                   ))}
                 </TabsList>
                 {SECRET_CLIENTS.map((client) => {
-                  const reachable = servingUpstreams(client, keyUpstreams)
+                  const protocol = defaultProtocol(client, keyUpstreams)
+                  const reachable = servingUpstreams(
+                    client,
+                    keyUpstreams,
+                    protocol,
+                  )
                   const snippets = clientSnippets(client, {
                     baseUrl,
+                    protocol,
                     key: issued.key,
                     model: snippetModel(issued.models, reachable),
                   })
@@ -172,10 +178,7 @@ export function KeysSecretDialog({
                       {reachable.length === 0 ? (
                         <Notice tone="warning">
                           {t('keys.secret.noProtocol', {
-                            protocol: protocolLabel(
-                              t,
-                              CLIENT_PROTOCOLS[client][0],
-                            ),
+                            protocol: protocolLabel(t, protocol),
                             client: t(`connect.clients.${client}.name`),
                           })}
                         </Notice>

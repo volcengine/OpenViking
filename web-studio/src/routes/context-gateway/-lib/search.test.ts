@@ -31,15 +31,23 @@ it('reads the profile to duplicate', () => {
   })
 })
 
-it('keeps known clients and drops anything else', () => {
+it('keeps known clients and protocols and drops anything else', () => {
   expect(parseConnectSearch({ client: 'codex' })).toStrictEqual({
     client: 'codex',
+    protocol: undefined,
   })
-  expect(parseConnectSearch({ client: 'cursor' })).toStrictEqual({
-    client: undefined,
-  })
+  expect(
+    parseConnectSearch({ client: 'pi', protocol: 'anthropic' }),
+  ).toStrictEqual({ client: 'pi', protocol: 'anthropic' })
+  expect(
+    parseConnectSearch({ client: 'cursor', protocol: 'grpc' }),
+  ).toStrictEqual({ client: undefined, protocol: undefined })
   expect(parseConnectSearch({ client: 3 })).toStrictEqual({
     client: undefined,
+    protocol: undefined,
   })
-  expect(parseConnectSearch({})).toStrictEqual({ client: undefined })
+  expect(parseConnectSearch({})).toStrictEqual({
+    client: undefined,
+    protocol: undefined,
+  })
 })

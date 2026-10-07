@@ -47,10 +47,13 @@ const HEADER_SENDERS: Record<string, string> = {
 const UPSTREAM_KEY_EXAMPLE = `${UPSTREAM_KEY_HEADER}: <provider-api-key>`
 const PLUGIN_HEADER_EXAMPLE = 'X-OpenViking-Plugin: <plugin-name>'
 
-/** Gateway address and client setup guides (`?client=` picks the client). */
+/**
+ * Gateway address and client setup guides (`?client=` picks the client,
+ * `?protocol=` the protocol for clients set up per protocol).
+ */
 export function ConnectPage() {
   const { t, i18n } = useTranslation('contextGateway')
-  const { client = CLIENT_IDS[0] } = route.useSearch()
+  const { client = CLIENT_IDS[0], protocol } = route.useSearch()
   const info = useConnectionInfo()
   const upstreams = useUpstreams()
 
@@ -81,6 +84,7 @@ export function ConnectPage() {
           <AddressCard info={info.data} />
           <ClientGuide
             client={client}
+            protocol={protocol}
             baseUrl={info.data.base_url}
             upstreams={upstreams.data}
           />

@@ -1,5 +1,7 @@
+import type { Protocol } from './api'
 import { CLIENT_IDS } from './client-guides'
 import type { ClientId } from './client-guides'
+import { PROTOCOLS } from './upstream-schema'
 
 /*
  * `validateSearch` parsers for the gateway pages. Each returns its key even
@@ -39,16 +41,22 @@ export function parseProfileEditorSearch(
   return { from: typeof from === 'string' && from ? from : undefined }
 }
 
-export type ConnectSearch = { client?: ClientId }
+export type ConnectSearch = { client?: ClientId; protocol?: Protocol }
 
-/** `/context-gateway/connect?client=codex`. */
+/**
+ * `/context-gateway/connect?client=pi&protocol=anthropic`. The page checks
+ * that the client supports the protocol.
+ */
 export function parseConnectSearch(
   search: Record<string, unknown>,
 ): ConnectSearch {
-  const { client } = search
+  const { client, protocol } = search
   return {
     client: CLIENT_IDS.includes(client as ClientId)
       ? (client as ClientId)
+      : undefined,
+    protocol: PROTOCOLS.includes(protocol as Protocol)
+      ? (protocol as Protocol)
       : undefined,
   }
 }

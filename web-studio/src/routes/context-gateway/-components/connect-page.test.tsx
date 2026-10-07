@@ -276,6 +276,46 @@ describe('ConnectPage', () => {
     )
   })
 
+  it('switches the snippet and upstream check with the picked protocol', async () => {
+    const router = renderPage(
+      '/context-gateway/connect?client=pi&protocol=anthropic',
+    )
+    expect(await screen.findByRole('heading', { name: 'pi' })).toBeTruthy()
+    expect(
+      await screen.findByText('Add an upstream for Anthropic Messages first'),
+    ).toBeTruthy()
+    expect(
+      snippetTexts().some((code) => code.includes('"anthropic-messages"')),
+    ).toBe(true)
+
+    const picker = within(
+      screen.getByRole('group', { name: 'Calls the gateway with' }),
+    )
+    fireEvent.click(picker.getByRole('link', { name: 'Responses' }))
+    expect(
+      await screen.findByText('Available upstreams: Team Responses'),
+    ).toBeTruthy()
+    expect(router.state.location.search).toEqual({
+      client: 'pi',
+      protocol: 'responses',
+    })
+    expect(
+      snippetTexts().some((code) => code.includes('"openai-responses"')),
+    ).toBe(true)
+    expect(screen.queryByText(/^Add an upstream for/)).toBeNull()
+  })
+
+  it('starts a per-protocol client on a protocol an upstream serves', async () => {
+    api.listUpstreams.mockResolvedValue([UPSTREAMS[1]])
+    renderPage('/context-gateway/connect?client=dsh')
+    expect(
+      await screen.findByText('Available upstreams: Team Responses'),
+    ).toBeTruthy()
+    expect(
+      snippetTexts().some((code) => code.includes('api: openai-responses')),
+    ).toBe(true)
+  })
+
   it('lists the upstreams that need the client’s own provider key', async () => {
     renderPage()
     expect(

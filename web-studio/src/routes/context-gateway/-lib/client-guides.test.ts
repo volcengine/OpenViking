@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import type { Upstream } from './api'
 import {
   CLIENT_IDS,
   clientSnippets,
+  defaultProtocol,
   gatewayDocsUrl,
+  protocolChoices,
+  servingUpstreams,
   shellQuote,
 } from './client-guides'
 
@@ -94,6 +98,65 @@ describe('clientSnippets', () => {
     )
   })
 
+  it('reads the pi key from the environment and follows the picked protocol', () => {
+    const config = (protocol?: 'chat' | 'responses' | 'anthropic') =>
+      JSON.parse(
+        clientSnippets('pi', { baseUrl: base, protocol }).find(
+          (item) => item.id === 'config',
+        )!.code,
+      ).providers.openviking
+    expect(config()).toMatchObject({
+      baseUrl: 'https://ov.example.com/v1',
+      apiKey: '$OPENVIKING_GATEWAY_KEY',
+      api: 'openai-completions',
+    })
+    expect(config('responses')).toMatchObject({
+      baseUrl: 'https://ov.example.com/v1',
+      api: 'openai-responses',
+    })
+    expect(config('anthropic')).toMatchObject({
+      baseUrl: 'https://ov.example.com',
+      api: 'anthropic-messages',
+    })
+  })
+
+  it('declares a DSH provider per protocol', () => {
+    const config = (protocol: 'chat' | 'anthropic') =>
+      clientSnippets('dsh', { baseUrl: base, protocol }).find(
+        (item) => item.id === 'config',
+      )!.code
+    expect(config('chat')).toBe(
+      [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      openviking:',
+        '        api: openai-completions',
+        '        baseURL: "https://ov.example.com/v1"',
+        '        apiKeyEnv: OPENVIKING_GATEWAY_KEY',
+        '        models:',
+        '          - id: "<model>"',
+      ].join('\n'),
+    )
+    expect(config('anthropic')).toContain('api: anthropic-messages')
+    expect(config('anthropic')).toContain('baseURL: "https://ov.example.com"\n')
+  })
+
+  it('picks the OpenCode SDK package by protocol, always under /v1', () => {
+    const provider = (protocol: 'chat' | 'responses' | 'anthropic') =>
+      JSON.parse(
+        clientSnippets('opencode', { baseUrl: base, protocol }).find(
+          (item) => item.id === 'config',
+        )!.code,
+      ).provider.openviking
+    expect(provider('chat').npm).toBe('@ai-sdk/openai-compatible')
+    expect(provider('responses').npm).toBe('@ai-sdk/openai')
+    expect(provider('anthropic')).toMatchObject({
+      npm: '@ai-sdk/anthropic',
+      options: { baseURL: 'https://ov.example.com/v1' },
+    })
+  })
+
   it('maps Ark-addressed clients to the native paths', () => {
     expect(code('ark', 'endpoints')).toContain('https://ov.example.com/api/v3')
     expect(code('ark', 'endpoints')).toContain(
@@ -115,4 +178,31 @@ it('links the docs in the UI language', () => {
   expect(gatewayDocsUrl('operations', 'zh-CN')).toBe(
     'https://docs.openviking.ai/zh/guides/22-context-gateway-operations',
   )
+})
+
+describe('protocols', () => {
+  const upstream = (protocol: Upstream['protocol'], enabled = true): Upstream =>
+    ({ name: protocol, protocol, enabled }) as Upstream
+
+  it('offers a choice only to clients set up per protocol', () => {
+    expect(protocolChoices('pi')).toEqual(['chat', 'anthropic', 'responses'])
+    expect(protocolChoices('ark')).toEqual([])
+    expect(protocolChoices('claude-code')).toEqual([])
+  })
+
+  it('defaults to a protocol an enabled upstream speaks', () => {
+    expect(defaultProtocol('pi')).toBe('chat')
+    expect(
+      defaultProtocol('pi', [upstream('chat', false), upstream('anthropic')]),
+    ).toBe('anthropic')
+  })
+
+  it('narrows serving upstreams to the picked protocol', () => {
+    const upstreams = [upstream('anthropic'), upstream('responses')]
+    expect(servingUpstreams('dsh', upstreams)).toHaveLength(2)
+    expect(servingUpstreams('dsh', upstreams, 'chat')).toHaveLength(0)
+    expect(servingUpstreams('dsh', upstreams, 'anthropic')).toHaveLength(1)
+    // Ark reaches every protocol with one setup, whatever is picked.
+    expect(servingUpstreams('ark', upstreams, 'chat')).toHaveLength(2)
+  })
 })

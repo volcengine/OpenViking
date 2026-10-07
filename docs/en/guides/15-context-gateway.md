@@ -465,7 +465,7 @@ Add a provider to pi's model configuration, `~/.pi/agent/models.json`:
   "providers": {
     "openviking": {
       "baseUrl": "https://ov.example.com/v1",
-      "apiKey": "OPENVIKING_GATEWAY_KEY",
+      "apiKey": "$OPENVIKING_GATEWAY_KEY",
       "api": "openai-completions",
       "models": [
         {
@@ -477,7 +477,7 @@ Add a provider to pi's model configuration, `~/.pi/agent/models.json`:
 }
 ```
 
-`apiKey` names the environment variable that holds your gateway key; export it before starting pi. The upstream must speak Chat Completions. Unless pi sends one of the headers listed in [How conversations are recognized](#how-conversations-are-recognized), the gateway matches its conversations from their history. If pi's own OpenViking extension is active, the gateway steps aside for those conversations; use one or the other.
+`apiKey` reads your gateway key from the `OPENVIKING_GATEWAY_KEY` environment variable; export it before starting pi. Keep the leading `$`: pi sends a bare string as the key itself. The upstream must speak Chat Completions. Unless pi sends one of the headers listed in [How conversations are recognized](#how-conversations-are-recognized), the gateway matches its conversations from their history. If pi's own OpenViking extension is active, the gateway steps aside for those conversations; use one or the other.
 
 ### Volcano Engine Ark and BytePlus ModelArk SDKs
 
