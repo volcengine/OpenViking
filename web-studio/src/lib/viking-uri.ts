@@ -70,6 +70,15 @@ export function joinUri(baseUri: string, child: string): string {
   }
 
   const normalizedBase = normalizeDirUri(baseUri)
+  // The bare scheme root (`viking://`) has no real scope segment of its own,
+  // so it never has directory-semantic sidecars to summarize. Without this
+  // guard, joining `.abstract.md`/`.overview.md` onto the root produces
+  // `viking://.abstract.md`, which the server rejects with
+  // "Invalid scope '.abstract.md'" since that fragment gets parsed as the
+  // scope instead of a filename.
+  if (normalizedBase === 'viking://' && isDirectorySemanticSidecarUri(raw)) {
+    return normalizedBase
+  }
   return `${normalizedBase}${raw.replace(/^\//, '')}`
 }
 
