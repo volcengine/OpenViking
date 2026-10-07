@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +18,60 @@ from openviking.server.config import ServerConfig
 from openviking.utils.agfs_utils import resolve_queuefs_mount_point
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.utils.config.storage_config import StorageConfig
+
+
+def _fake_vikingbot_code(records: list[bytes]) -> str:
+    writes = "\n".join(
+        f"os.write({1 if index % 2 == 0 else 2}, {record!r})"
+        for index, record in enumerate(records)
+    )
+    ready = (
+        "open(os.environ['VIKINGBOT_STARTUP_STATUS'], 'w').write("
+        "'{\"status\":\"ready\",\"pid\":%d}' % os.getpid())"
+    )
+    return f"import os\nimport time\n{writes}\n{ready}\ntime.sleep(5)\n"
+
+
+def test_vikingbot_log_rotation_bounds_live_merged_output(tmp_path, monkeypatch):
+    record_size = 16
+    old_records = [f"old-{index:02d}-{'o' * 8}\n".encode() for index in range(8)]
+    records = [f"{index:02d}-{'x' * 12}\n".encode() for index in range(16)]
+    expected = b"".join(old_records + records)
+    assert all(len(record) == record_size for record in old_records + records)
+
+    active_log = tmp_path / "vikingbot.log"
+    active_log.write_bytes(b"".join(old_records))
+
+    child_code = _fake_vikingbot_code(records)
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _command: sys.executable)
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "Popen",
+        lambda _command, **kwargs: real_popen([sys.executable, "-c", child_code], **kwargs),
+    )
+    monkeypatch.setattr(bootstrap, "VIKINGBOT_LOG_MAX_BYTES", 64, raising=False)
+    monkeypatch.setattr(bootstrap, "VIKINGBOT_LOG_BACKUP_COUNT", 2, raising=False)
+
+    real_sleep = time.sleep
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _seconds: real_sleep(0.1))
+    bot_process = bootstrap._start_vikingbot_gateway(True, str(tmp_path))
+    assert bot_process is not None
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if active_log.exists() and active_log.read_bytes().endswith(records[-1]):
+            break
+        real_sleep(0.01)
+
+    bootstrap._stop_vikingbot_gateway(bot_process)
+
+    log_files = [tmp_path / "vikingbot.log.2", tmp_path / "vikingbot.log.1", active_log]
+    assert all(path.exists() for path in log_files)
+    assert all(path.stat().st_size <= 64 for path in log_files)
+    assert b"".join(path.read_bytes() for path in log_files) == expected[-192:]
+    assert bot_process.log_thread is not None
+    assert not bot_process.log_thread.is_alive()
 
 
 def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
