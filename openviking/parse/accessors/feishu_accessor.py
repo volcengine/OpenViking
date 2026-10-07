@@ -2326,6 +2326,24 @@ class FeishuAccessor(DataAccessor):
                     doc_title = self._extract_text_from_elements(b.page.elements)
                 break
 
+        # The block list includes the blocks nested in table cells, which the
+        # table block already renders, so they must not be emitted again.
+        table_descendants: set[str] = set()
+        pending = [
+            child_id
+            for b in blocks
+            if self._detect_block_attr(b) == "table"
+            for child_id in (b.children or [])
+        ]
+        while pending:
+            block_id = pending.pop()
+            if block_id in table_descendants:
+                continue
+            table_descendants.add(block_id)
+            child = block_map.get(block_id)
+            if child is not None:
+                pending.extend(child.children or [])
+
         # Convert blocks to markdown
         markdown_lines = []
         ordered_counter: Dict[str, int] = {}
@@ -2333,6 +2351,8 @@ class FeishuAccessor(DataAccessor):
         for block in blocks:
             if block.page is not None:
                 continue  # Skip page container
+            if block.block_id in table_descendants:
+                continue
 
             line = self._block_to_markdown(
                 block,
