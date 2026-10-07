@@ -3030,6 +3030,10 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
+        # By default the API returns formulas instead of their results and
+        # dates as serial numbers; request the values the sheet displays.
+        request.add_query("valueRenderOption", "FormattedValue")
+        request.add_query("dateTimeRenderOption", "FormattedString")
         response = self._call_api(client.request, request, feishu_access_token)
         if not response.success():
             _raise_from_lark_response(
