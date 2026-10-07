@@ -1252,6 +1252,80 @@ async def cancel_watch(to_uri: str) -> str:
     return f"Watch cancelled: {to_uri}"
 
 
+@mcp.tool()
+async def patch_watch(
+    to_uri: str,
+    watch_interval: Optional[float] = None,
+    is_active: Optional[bool] = None,
+    reason: Optional[str] = None,
+    instruction: Optional[str] = None,
+) -> str:
+    """Partially update a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking").
+
+    Args:
+        to_uri: Target URI of the watch task.
+        watch_interval: Auto-refresh cadence in minutes. Omit to keep the current cadence; must be > 0 (use is_active=false to pause without losing the cadence).
+        is_active: Flip to pause (false) or resume (true) the watch. Orthogonal to watch_interval.
+        reason: Optional human-readable reason for the change.
+        instruction: Optional instruction text for the watch processor.
+    """
+    from openviking.resource import watch_manager as _wm_mod
+
+    if watch_interval is None and is_active is None and reason is None and instruction is None:
+        return "Error: patch_watch needs at least one field to change (watch_interval, is_active, reason, or instruction)."
+    if watch_interval is not None and watch_interval <= 0:
+        return (
+            "Error: watch_interval must be > 0. "
+            "Use is_active=false to pause without losing the cadence."
+        )
+
+    service = get_service()
+    ctx = _get_ctx()
+    to_uri = _resolve_mcp_workspace_uri(to_uri, ctx)
+    scheduler = getattr(service, "watch_scheduler", None)
+    if scheduler is None or not scheduler.is_running:
+        return "Error: Watch scheduler not running"
+    wm = scheduler.watch_manager
+    if wm is None:
+        return "Error: Watch scheduler not running"
+    task = await wm.get_task_by_uri(
+        to_uri,
+        ctx.account_id,
+        ctx.user.user_id,
+        str(ctx.role),
+    )
+    if task is None:
+        return f"No watch task found for {to_uri}"
+    try:
+        # ValueError only fires past the lookup race (task deleted concurrently,
+        # or a cadence/resume combination WatchManager rejects). Report the same
+        # "no watch task" post-condition as the pre-check for consistency.
+        updated = await wm.update_task(
+            task.task_id,
+            ctx.account_id,
+            ctx.user.user_id,
+            str(ctx.role),
+            reason=reason,
+            instruction=instruction,
+            watch_interval=watch_interval,
+            is_active=is_active,
+        )
+    except _wm_mod.PermissionDeniedError:
+        return f"Permission denied for {to_uri}"
+    except ValueError:
+        return f"No watch task found for {to_uri}"
+    status = "active" if updated.is_active else "paused"
+    nxt = (
+        updated.next_execution_time.isoformat()
+        if updated.next_execution_time
+        else "n/a"
+    )
+    return (
+        f"Watch updated: {updated.to_uri}  "
+        f"interval={updated.watch_interval:g}m  {status}  next={nxt}"
+    )
+
+
 # -- grep ------------------------------------------------------------------
 
 
