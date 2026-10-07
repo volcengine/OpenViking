@@ -220,47 +220,69 @@ const OpenVikingCodingAgent = ({ t }) => {
       <H2 id="quick-start">{T({ en: 'Quick Start', zh: '快速开始' })}</H2>
 
       <P>{T({
-        en: <>You need a running OpenViking server, either <A href={LOCAL_DEPLOY_DOC}>deployed locally</A> or the hosted service on <A href={CLOUD_CONSOLE}>Volcengine</A>. The server must support the viking://~ home alias, which the plugin uses to address your own memory space. Claude Code and Codex share one installer, which asks which client to set up:</>,
-        zh: <>先要有一个可用的 OpenViking 服务：<A href={LOCAL_DEPLOY_DOC}>本地部署</A>，或火山引擎的<A href={CLOUD_CONSOLE}>托管服务</A>。服务端需要支持 viking://~ 家目录别名，插件用它读写你自己的记忆空间。Claude Code 和 Codex 共用一个安装脚本，运行时会询问要装哪个，一条命令即可覆盖两者：</>,
+        en: <>You need a running OpenViking server, either <A href={LOCAL_DEPLOY_DOC}>deployed locally</A> or the hosted service on <A href={CLOUD_CONSOLE}>Volcengine</A>. Then run the installer and answer its prompts: tick the tools to set up (it detects which ones you have), then pick a server. Choose Self-hosted / local for a server on this machine, Volcengine OpenViking Cloud for the hosted service, or Custom URL for any other address. If auth is on, enter a user key, not the root key.</>,
+        zh: <>先要有一个可用的 OpenViking 服务：<A href={LOCAL_DEPLOY_DOC}>本地部署</A>，或火山引擎的<A href={CLOUD_CONSOLE}>托管服务</A>。然后运行安装脚本，按提示勾选工具（脚本会自动检测本机装了哪些）、选择服务：本机的服务选「自建 / 本地」，火山引擎托管服务选「火山引擎 OpenViking 云服务」，其他地址选「自定义 URL」。开了鉴权的话，填 user key，不是 root key。</>,
       })}</P>
 
-      <Pre lang="bash" filename="terminal">{`curl -fsSL https://openviking.ai/install | bash
-
-# or pick the client up front
-curl -fsSL https://openviking.ai/install | bash -s -- --harness claude
-curl -fsSL https://openviking.ai/install | bash -s -- --harness codex`}</Pre>
+      <Pre lang="bash" filename="terminal">{T({
+        en: `curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.`,
+        zh: `curl -fsSL https://openviking.ai/install | bash
+# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。`,
+      })}</Pre>
 
       <P>{T({
-        en: 'The installer downloads plugins from the OpenViking documentation site and never contacts github.com. If openviking.ai is slow to reach, openviking.net serves the same script, and so does the Volcengine TOS mirror:',
-        zh: '安装器从 OpenViking 文档站下载插件，不访问 github.com。openviking.ai 访问不畅时，可以换成 openviking.net，或者运行火山引擎 TOS 上的同一个安装器：',
+        en: 'Or let your agent install it. Paste this into Claude Code or Codex, and have your server address ready, plus its API key if auth is on:',
+        zh: '也可以让 agent 替你装：把下面这段话发给 Claude Code 或 Codex，并准备好服务地址；服务开了鉴权的话，还要它的 API key。',
       })}</P>
 
-      <Pre lang="bash" filename="terminal">{`bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)`}</Pre>
+      <Pre lang="text" filename="prompt" lineNumbers={false}>{T({
+        en: `Install the OpenViking memory plugin for me by running:
+
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+
+<SERVER_URL> is the address of my OpenViking server; ask me for it, don't guess.
+If the server has auth turned on, it needs a user key (a root key can't read or
+write memories): check whether one is already saved; if not, ask me for it and
+pass it with --api-key, and tell me how to hand it over if I'd rather not paste
+it into this chat. Never repeat the key back. If auth is off, add --api-key ''
+so an earlier saved key isn't reused.
+
+The script needs network access and writes to my home directory; if a sandbox
+blocks it, ask me to approve running it outside the sandbox.
+
+When it finishes, tell me which tools it installed into and the next steps for
+each, then ask whether I want it in any other tool.`,
+        zh: `帮我安装 OpenViking 记忆插件，运行：
+
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+
+<SERVER_URL> 是我的 OpenViking 服务地址，向我要，不要猜。服务开了鉴权的话，
+要一个 user key（root key 读写不了记忆）：先看看有没有已保存的，没有再向我要
+（用 --api-key 传入），并告诉我不想把 key 贴进对话时可以怎么给你。
+不要复述 key。没开鉴权就加 --api-key ''，免得沿用之前保存的 key。
+
+脚本需要联网并写入主目录，如果被沙箱拦住，请求我批准后在沙箱外运行。
+
+装完告诉我装进了哪些工具、各自的后续步骤，再问我要不要给其他工具也装。`,
+      })}</Pre>
 
       <P>{T({
-        en: 'The installer walks you through connecting to a local server (http://127.0.0.1:1933, no authentication by default) or a remote one with an API key. For a remote server, use a user key, not the root key. It checks the server, prints every change it will make, and writes nothing until you confirm. Then it writes ~/.openviking/ovcli.conf, installs openviking-memory into Claude Code (version 2.1.224 and later keep it updated on their own), and registers the plugin for Codex with plugin hooks enabled.',
-        zh: '安装脚本提供交互式引导：可以连接本地服务（http://127.0.0.1:1933，默认不需要认证），也可以连接需要 API Key 的远程服务。远程服务填的是 user key，不是 root key。脚本会先检查服务是否可用，列出将要修改的内容，确认之后才写入：配置好 ~/.openviking/ovcli.conf，为 Claude Code 安装 openviking-memory 插件（2.1.224 及以上版本之后会自动更新），为 Codex 注册插件并开启插件 hooks。',
+        en: 'Either way, restart your agent afterwards and keep using claude or codex as before. The installer ends with the next steps for each tool; in Claude Code, run /openviking-memory:ov to verify. Re-running it is safe.',
+        zh: '装完后重启 agent，照常使用 claude 或 codex。脚本结尾会列出每个工具的后续步骤；在 Claude Code 里可以运行 /openviking-memory:ov 验证。重复运行安装脚本是安全的。',
       })}</P>
 
       <Callout type="tip">
         <P>{T({
-          en: 'Re-running the installer is safe. Once done, reopen your terminal and launch claude or codex as usual. On its first start, Codex stops at "6 hooks need review": choose Trust all and continue. If you skip it, the MCP tools still work, but recall and capture never fire.',
-          zh: '重复执行安装脚本是安全的。装好后重新打开终端，照常启动 claude 或 codex。Codex 第一次启动会停在“6 hooks need review”，选 Trust all and continue；跳过的话 MCP 工具照样能用，但自动召回和捕获都不会触发。',
+          en: 'On its first start, Codex stops at "Hooks need review": choose Trust all and continue. If you skip it, the MCP tools still work, but recall and capture never fire.',
+          zh: 'Codex 首次启动会停在“Hooks need review”，选 Trust all and continue；跳过的话 MCP 工具照样能用，但自动召回和捕获都不会触发。',
         })}</P>
       </Callout>
 
       <P>{T({
-        en: 'If you prefer to control each step, install from the plugin marketplaces instead. Write ~/.openviking/ovcli.conf yourself first, or run the setup.mjs wizard bundled with the plugin; for Codex, also turn on hooks under [features] in ~/.codex/config.toml if your build has them off. Pick one path: enabling the plugin from both the installer and a marketplace runs every hook twice.',
-        zh: '想自己控制每一步，也可以走插件市场。这条路需要先自己写好 ~/.openviking/ovcli.conf，或者运行插件自带的 setup.mjs 向导；Codex 如果默认没开 hooks，还要在 ~/.codex/config.toml 的 [features] 里打开。安装器和插件市场二选一：两边都启用，每个 hook 都会执行两遍。',
+        en: <>Try it: ask it to remember one of your preferences, then ask about it in a new session a little later. Memories are processed in the background, so it's normal not to find one right after you say it. To install from the plugin marketplaces by hand, see the <A href={`${OPENVIKING_DOCS}/en/agent-integrations/02-claude-code`}>Claude Code</A> and <A href={`${OPENVIKING_DOCS}/en/agent-integrations/04-codex`}>Codex</A> docs.</>,
+        zh: <>试一下：让它记住你的一个偏好，过一会儿开个新会话再问。记忆在后台整理，刚说完查不到是正常的。想走插件市场手动安装，见 <A href={`${OPENVIKING_DOCS}/zh/agent-integrations/02-claude-code`}>Claude Code</A> 和 <A href={`${OPENVIKING_DOCS}/zh/agent-integrations/04-codex`}>Codex</A> 的接入文档。</>,
       })}</P>
-
-      <Pre lang="bash" filename="terminal">{`# Claude Code
-claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
-claude plugin install openviking-memory@openviking
-
-# Codex
-codex plugin marketplace add volcengine/OpenViking
-codex plugin add openviking-memory@openviking`}</Pre>
 
       <Hr ornament />
 

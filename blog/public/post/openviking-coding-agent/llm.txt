@@ -24,43 +24,43 @@ The OpenViking plugin moves that work from you to the system.
 
 ## Quick Start
 
-You need a running OpenViking server, either [deployed locally](https://docs.openviking.ai/zh/getting-started/02-quickstart) or the hosted service on [Volcengine](https://console.volcengine.com/vikingdb/openviking). The server must support the viking://~ home alias, which the plugin uses to address your own memory space. Claude Code and Codex share one installer, which asks which client to set up:
+You need a running OpenViking server, either [deployed locally](https://docs.openviking.ai/zh/getting-started/02-quickstart) or the hosted service on [Volcengine](https://console.volcengine.com/vikingdb/openviking). Then run the installer and answer its prompts: tick the tools to set up (it detects which ones you have), then pick a server. Choose Self-hosted / local for a server on this machine, Volcengine OpenViking Cloud for the hosted service, or Custom URL for any other address. If auth is on, enter a user key, not the root key.
 
 terminal:
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
-
-# or pick the client up front
-curl -fsSL https://openviking.ai/install | bash -s -- --harness claude
-curl -fsSL https://openviking.ai/install | bash -s -- --harness codex
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-The installer downloads plugins from the OpenViking documentation site and never contacts github.com. If openviking.ai is slow to reach, openviking.net serves the same script, and so does the Volcengine TOS mirror:
+Or let your agent install it. Paste this into Claude Code or Codex, and have your server address ready, plus its API key if auth is on:
 
-terminal:
+prompt:
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+```text
+Install the OpenViking memory plugin for me by running:
+
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+
+<SERVER_URL> is the address of my OpenViking server; ask me for it, don't guess.
+If the server has auth turned on, it needs a user key (a root key can't read or
+write memories): check whether one is already saved; if not, ask me for it and
+pass it with --api-key, and tell me how to hand it over if I'd rather not paste
+it into this chat. Never repeat the key back. If auth is off, add --api-key ''
+so an earlier saved key isn't reused.
+
+The script needs network access and writes to my home directory; if a sandbox
+blocks it, ask me to approve running it outside the sandbox.
+
+When it finishes, tell me which tools it installed into and the next steps for
+each, then ask whether I want it in any other tool.
 ```
 
-The installer walks you through connecting to a local server (http://127.0.0.1:1933, no authentication by default) or a remote one with an API key. For a remote server, use a user key, not the root key. It checks the server, prints every change it will make, and writes nothing until you confirm. Then it writes ~/.openviking/ovcli.conf, installs openviking-memory into Claude Code (version 2.1.224 and later keep it updated on their own), and registers the plugin for Codex with plugin hooks enabled.
+Either way, restart your agent afterwards and keep using claude or codex as before. The installer ends with the next steps for each tool; in Claude Code, run /openviking-memory:ov to verify. Re-running it is safe.
 
-> **Tip:** Re-running the installer is safe. Once done, reopen your terminal and launch claude or codex as usual. On its first start, Codex stops at "6 hooks need review": choose Trust all and continue. If you skip it, the MCP tools still work, but recall and capture never fire.
+> **Tip:** On its first start, Codex stops at "Hooks need review": choose Trust all and continue. If you skip it, the MCP tools still work, but recall and capture never fire.
 
-If you prefer to control each step, install from the plugin marketplaces instead. Write ~/.openviking/ovcli.conf yourself first, or run the setup.mjs wizard bundled with the plugin; for Codex, also turn on hooks under [features] in ~/.codex/config.toml if your build has them off. Pick one path: enabling the plugin from both the installer and a marketplace runs every hook twice.
-
-terminal:
-
-```bash
-# Claude Code
-claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
-claude plugin install openviking-memory@openviking
-
-# Codex
-codex plugin marketplace add volcengine/OpenViking
-codex plugin add openviking-memory@openviking
-```
+Try it: ask it to remember one of your preferences, then ask about it in a new session a little later. Memories are processed in the background, so it's normal not to find one right after you say it. To install from the plugin marketplaces by hand, see the [Claude Code](https://docs.openviking.ai/en/agent-integrations/02-claude-code) and [Codex](https://docs.openviking.ai/en/agent-integrations/04-codex) docs.
 
 ## What the Plugin Gives Your Agent
 
