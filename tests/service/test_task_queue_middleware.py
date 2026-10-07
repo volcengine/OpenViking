@@ -513,3 +513,111 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
     await queue.ack("m", message)
     assert not index.has_work("task-1")
     transport.write.assert_awaited_once_with("/queue/Test/ack", b"m")
+
+
+@pytest.mark.parametrize("phase", ["queued", "cancel_before_start", "cancel_during_work"])
+async def test_session_commit_deletion_fence_settles_delivery(tracked_queue, phase):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.session.session import Session
+    from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+    from openviking.storage.viking_fs import VikingFS
+    from openviking_cli.session.user_id import UserIdentifier
+
+    queue, index, transport, finalize, cancelled = tracked_queue
+    deleting = phase != "cancel_during_work"
+    started = asyncio.Event()
+    reads = []
+    write_attempts = []
+    ctx = RequestContext(user=UserIdentifier("account", "user"), role=Role.USER)
+
+    class FencedFS:
+        _deletion_guard = staticmethod(lambda account, user: deleting)
+
+        async def stat(self, uri, **kwargs):
+            # Like VikingFS.stat, reads remain allowed during deletion.
+            reads.append(uri)
+            return {}
+
+        async def write_file(self, **kwargs):
+            write_attempts.append(kwargs["uri"])
+            VikingFS._ensure_identity_not_deleting(self, kwargs["ctx"])
+            pytest.fail("deleting identity must reject the marker write")
+
+    class CommitSession(Session):
+        async def load(self):
+            pass
+
+        async def resume_queued_commit(self, msg):
+            started.set()
+            if phase == "queued":
+                await self._write_failed_marker(
+                    msg.archive_uri, stage="memory_extraction", error="commit write failed"
+                )
+                pytest.fail("deleting identity must reject the commit write")
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await self.finalize_cancelled_commit(msg.archive_uri)
+                raise
+
+    class Service:
+        def session(self, ctx, session_id, session_uri=None):
+            return CommitSession(
+                viking_fs=FencedFS(), ctx=ctx, session_id=session_id, session_uri=session_uri
+            )
+
+    msg = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri="viking://user/user/sessions/session-1",
+        archive_uri="viking://user/user/sessions/session-1/history/archive_001",
+        user=ctx.user.to_dict(),
+    )
+    await queue.enqueue(msg.to_dict())
+    message = {"id": "message-1", "data": transport.write.await_args.args[1].decode()}
+    transport.read.return_value = json.dumps(message).encode()
+    transport.write.reset_mock()
+    queue.set_dequeue_handler(SessionCommitProcessor(Service()))
+    if phase == "cancel_before_start":
+        cancelled.add("task-1")
+    worker = asyncio.create_task(queue.dequeue())
+    try:
+        if phase == "cancel_during_work":
+            await asyncio.wait_for(started.wait(), 1)
+            deleting = True
+            cancelled.add("task-1")
+            index.cancel_active("task-1")
+        await asyncio.wait_for(worker, 1)
+        assert not index.has_work("task-1")
+        assert reads == [msg.session_uri]
+        assert write_attempts == [f"{msg.archive_uri}/.failed.json"]
+        finalize.assert_awaited_once()
+        if phase != "cancel_before_start":
+            assert index.failure("task-1") == "Identity deletion is in progress"
+        transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
+    finally:
+        if not worker.done():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+
+@pytest.mark.parametrize("cancel_before_start", [False, True])
+async def test_session_commit_unrelated_precondition_keeps_recovery_message(
+    tracked_queue, cancel_before_start
+):
+    from openviking_cli.exceptions import FailedPreconditionError
+
+    queue, index, transport, _, cancelled = tracked_queue
+    message = await enqueue_task(queue, transport)
+    transport.read.return_value = json.dumps(message).encode()
+    transport.write.reset_mock()
+    processor = SessionCommitProcessor(None)
+    processor._parse_message = lambda data: (None, None)
+    processor._process = AsyncMock(side_effect=FailedPreconditionError("different precondition"))
+    processor._finalize_cancelled = processor._process
+    queue.set_dequeue_handler(processor)
+    if cancel_before_start:
+        cancelled.add("task-1")
+    await queue.dequeue()
+    assert index.has_work("task-1")
+    transport.write.assert_not_awaited()
