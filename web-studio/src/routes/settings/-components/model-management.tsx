@@ -78,6 +78,7 @@ import {
 } from '../-lib/model-management-api'
 import type {
   ModelChanges,
+  ModelConfiguration,
   ModelConfig,
   ModelKind,
 } from '../-lib/model-management-api'
@@ -393,6 +394,9 @@ export function ModelManagement() {
     retry: false,
   })
   const [drafts, setDrafts] = React.useState<ModelChanges>({})
+  const [baseline, setBaseline] = React.useState<ModelConfiguration | null>(
+    null,
+  )
   const [editor, setEditor] = React.useState<Editor | null>(null)
   const [confirm, setConfirm] = React.useState<{
     kind: ModelKind
@@ -402,19 +406,21 @@ export function ModelManagement() {
   const [saved, setSaved] = React.useState(false)
   const mutation = useMutation({
     mutationFn: (changes: ModelChanges) =>
-      api.save(changes, query.data?.revision),
+      api.save(changes, baseline?.revision),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey })
       setDrafts({})
+      setBaseline(null)
       setSaved(true)
       toast.success(t('models.saved'))
     },
   })
   function current(kind: ModelKind): ModelConfig {
     if (kind === 'query_planner' && drafts[kind] === null) return current('vlm')
-    return drafts[kind] ?? query.data?.models[kind].config ?? {}
+    return drafts[kind] ?? (baseline ?? query.data)?.models[kind].config ?? {}
   }
   function change(kind: ModelKind, value: ModelConfig) {
+    setBaseline((previous) => previous ?? query.data ?? null)
     mutation.reset()
     setSaved(false)
     setDrafts((previous) => ({ ...previous, [kind]: value }))
@@ -448,6 +454,7 @@ export function ModelManagement() {
     readonly = false,
     settings = false,
   ) {
+    setBaseline((previous) => previous ?? query.data ?? null)
     const config = current(kind)
     const value = settings
       ? config
@@ -473,6 +480,10 @@ export function ModelManagement() {
       settings,
       value: structuredClone(value),
     })
+  }
+  function dismissEditor() {
+    setEditor(null)
+    if (!Object.keys(drafts).length) setBaseline(null)
   }
   function applyEditor() {
     if (!editor) return
@@ -680,7 +691,12 @@ export function ModelManagement() {
                     <Action
                       label={t('models.resetDefault')}
                       disabled={pending}
-                      onClick={() => setConfirm({ kind })}
+                      onClick={() => {
+                        setBaseline(
+                          (previous) => previous ?? query.data ?? null,
+                        )
+                        setConfirm({ kind })
+                      }}
                     >
                       <RotateCcwIcon />
                     </Action>
@@ -815,9 +831,12 @@ export function ModelManagement() {
                       onOpen={(index, readonly) =>
                         open(kind, group.mode, index, readonly)
                       }
-                      onDelete={(index) =>
+                      onDelete={(index) => {
+                        setBaseline(
+                          (previous) => previous ?? query.data ?? null,
+                        )
                         setConfirm({ kind, mode: group.mode, index })
-                      }
+                      }}
                     />
                   </div>
                 ))
@@ -840,6 +859,7 @@ export function ModelManagement() {
                 disabled={pending}
                 onClick={() => {
                   setDrafts({})
+                  setBaseline(null)
                   mutation.reset()
                   setSaved(false)
                 }}
@@ -863,7 +883,7 @@ export function ModelManagement() {
       <Dialog
         open={Boolean(editor)}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setEditor(null)
+          if (!isOpen) dismissEditor()
         }}
       >
         <DialogContent className="gap-0 overflow-hidden rounded-lg p-0 sm:max-w-lg">
@@ -906,18 +926,7 @@ export function ModelManagement() {
                         'extra_headers',
                         'extra_request_body',
                       ]) {
-                        if (
-                          editor.kind === 'rerank' &&
-                          [
-                            'api_key',
-                            'ak',
-                            'sk',
-                            'api_base',
-                            'extra_headers',
-                          ].includes(key)
-                        )
-                          value[key] = null
-                        else delete value[key]
+                        value[key] = null
                       }
                       if (editor.kind === 'rerank') {
                         value.model = null
@@ -1028,11 +1037,7 @@ export function ModelManagement() {
                 )}
               </div>
               <DialogFooter className="flex-row justify-end border-t bg-muted/20 px-6 py-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setEditor(null)}
-                >
+                <Button type="button" variant="outline" onClick={dismissEditor}>
                   {t(editor.readonly ? 'models.close' : 'models.dismiss')}
                 </Button>
                 {editor.readonly ? (
@@ -1057,7 +1062,10 @@ export function ModelManagement() {
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setConfirm(null)
+          if (!isOpen) {
+            setConfirm(null)
+            if (!Object.keys(drafts).length) setBaseline(null)
+          }
         }}
       >
         <DialogContent>
@@ -1071,7 +1079,13 @@ export function ModelManagement() {
             </DialogTitle>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirm(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirm(null)
+                if (!Object.keys(drafts).length) setBaseline(null)
+              }}
+            >
               {t('models.dismiss')}
             </Button>
             <Button

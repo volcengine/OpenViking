@@ -86,7 +86,9 @@ export function bindingFields(kind: ModelKind, provider: string): FieldSpec[] {
     fields.push({
       key: 'api_key',
       type: 'secret',
-      required: !['litellm'].includes(provider),
+      required:
+        provider !== 'litellm' &&
+        !(kind === 'embedding' && provider === 'openai'),
     })
   if (provider !== 'vikingdb' && provider !== 'local')
     fields.push({
@@ -182,6 +184,11 @@ export function ModelFields({
   const [customProvider, setCustomProvider] = React.useState(
     value.provider === 'openai' && Boolean(value.api_base),
   )
+  const needsEmbeddingBase =
+    fields.some((field) => field.key === 'provider') &&
+    fields.some((field) => field.key === 'api_key' && !field.required) &&
+    value.provider === 'openai' &&
+    !value.api_key
   return (
     <>
       {fields.map((field) => {
@@ -255,7 +262,8 @@ export function ModelFields({
                   {...PLAIN_INPUT_PROPS}
                   id={id}
                   required={
-                    field.key === 'api_base' && customProvider
+                    field.key === 'api_base' &&
+                    (customProvider || needsEmbeddingBase)
                       ? true
                       : field.required
                   }

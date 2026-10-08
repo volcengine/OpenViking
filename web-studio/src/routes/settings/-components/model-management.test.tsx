@@ -126,6 +126,7 @@ function mount(
       <ModelManagement />
     </QueryClientProvider>,
   )
+  return client
 }
 async function menuAction(
   region: ReturnType<typeof within>,
@@ -141,6 +142,49 @@ function section(name: string) {
 it('includes localized contract labels in model settings', () => {
   expect(zh.settings.models.fields.dimension).toBe('向量维度')
   expect(en.settings.models.fields.dimension).toBe('Dimensions')
+})
+it.each([false, true])(
+  'keeps the original revision across background refresh (applied: %s)',
+  async (applied) => {
+    const client = mount()
+    await screen.findByText('model-a')
+    fireEvent.click(
+      section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+    )
+    fireEvent.change(screen.getByLabelText('models.fields.model'), {
+      target: { value: 'draft-model' },
+    })
+    if (applied) fireEvent.click(screen.getByText('models.apply'))
+    const refreshed = structuredClone(data)
+    refreshed.revision = 'external-revision'
+    refreshed.models.vlm.config.timeout = 99
+    state.get.mockResolvedValue(refreshed)
+    await client.refetchQueries({ queryKey: ['model-management', 'default'] })
+    if (!applied) fireEvent.click(screen.getByText('models.apply'))
+    fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+    expect(state.save.mock.calls[0][1]).toBe('revision')
+    expect(state.save.mock.calls[0][0].vlm.timeout).toBe(60)
+  },
+)
+it('allows keyless OpenAI-compatible embedding endpoints but requires an address', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('embeddingType').getByRole('button', { name: 'models.edit' }),
+  )
+  const key = screen.getByLabelText('models.fields.api_key')
+  expect(key.hasAttribute('required')).toBe(false)
+  fireEvent.change(key, { target: { value: '' } })
+  const base = screen.getByLabelText('models.fields.api_base')
+  expect(base.hasAttribute('required')).toBe(true)
+  fireEvent.change(base, { target: { value: 'http://localhost:8000/v1' } })
+  fireEvent.click(screen.getByText('models.apply'))
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+  expect(
+    state.save.mock.calls[0][0].embedding.dense.credentials[0],
+  ).toMatchObject({ api_key: null, api_base: 'http://localhost:8000/v1' })
 })
 it('shows file scope, restart and override warnings and blocks saves to read-only files', async () => {
   mount({

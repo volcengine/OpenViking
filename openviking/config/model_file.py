@@ -13,6 +13,7 @@ from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
 )
+from openviking_cli.utils.config.vlm_config import VLMCredential
 
 MODEL_KINDS = ("vlm", "embedding", "query_planner", "rerank")
 
@@ -153,6 +154,54 @@ def _merge(old: dict, changes: dict) -> dict:
     return result
 
 
+def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
+    result = _merge(old, changes)
+    if "credentials" not in changes:
+        return result
+    if not isinstance(changes["credentials"], list) or not all(
+        isinstance(binding, dict) for binding in changes["credentials"]
+    ):
+        return result
+    fields = set((EmbeddingCredential if embedding else VLMCredential).model_fields) - {
+        "id",
+        "model",
+    }
+    defaults = {}
+    if not embedding:
+        providers = result.get("providers") or {}
+        provider = result.get("provider") or result.get("backend") or result.get("default_provider")
+        if not provider and len(providers) == 1:
+            provider = next(iter(providers))
+        defaults.update(providers.get(provider) or {})
+        if provider:
+            defaults["provider"] = provider
+    defaults.update({key: value for key, value in result.items() if key in fields})
+    # Materialize inherited bindings before removing legacy fallbacks. Explicit
+    # null/empty values must mean clearing, not re-inheriting obsolete secrets.
+    result["credentials"] = [
+        {**{key: value for key, value in defaults.items() if key in fields}, **binding}
+        for binding in changes["credentials"]
+    ]
+    for key in fields:
+        result.pop(key, None)
+    result.pop("backend", None)
+    if not embedding:
+        for key in ("providers", "default_provider", "backup"):
+            result.pop(key, None)
+    return result
+
+
+def _merge_model(old: dict, changes: dict, kind: str) -> dict:
+    if kind in ("vlm", "query_planner"):
+        return _merge_credentials(old, changes, False)
+    result = _merge(old, changes)
+    if kind == "embedding":
+        for mode in ("dense", "sparse", "hybrid"):
+            if isinstance(changes.get(mode), dict):
+                result[mode] = _merge_credentials(old.get(mode) or {}, changes[mode], True)
+    return result
+
+
 def _atomic_write(path: Path, data: bytes, mode: int) -> None:
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -191,7 +240,7 @@ def save_model_file(settings: dict, revision: str) -> dict:
                     raise ValueError("Only query_planner can be reset to inherit VLM")
                 raw.pop(kind, None)
             elif isinstance(value, dict):
-                raw[kind] = _merge(raw.get(kind) or {}, value)
+                raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
             else:
                 raise ValueError("Model configuration must be an object")
         _validate(raw)

@@ -133,3 +133,79 @@ def test_embedding_credentials_display_parent_fallbacks(model_file):
     binding = read_model_file()["models"]["embedding"]["config"]["dense"]["credentials"][0]
     assert binding["model"] == "text-embedding-3-small"
     assert binding["api_key"] == "${STUDIO_TEST_KEY}"
+
+
+@pytest.mark.parametrize("kind", ["vlm", "embedding"])
+def test_cleared_legacy_binding_fields_do_not_return(model_file, kind):
+    path, raw = model_file
+    section = raw["vlm"] if kind == "vlm" else raw["embedding"]["dense"]
+    section.update(api_base="https://old.example/v1", extra_headers={"X-Old": "obsolete"})
+    path.write_text(json.dumps(raw))
+    result = read_model_file()
+    config = result["models"][kind]["config"]
+    binding_section = config if kind == "vlm" else config["dense"]
+    binding_section["credentials"][0].update(api_base=None, extra_headers={})
+    save_model_file({kind: config}, result["revision"])
+    stored = json.loads(path.read_text())
+    stored_section = stored[kind] if kind == "vlm" else stored[kind]["dense"]
+    assert "api_base" not in stored_section and "api_key" not in stored_section
+    current = read_model_file()["models"][kind]["config"]
+    current_section = current if kind == "vlm" else current["dense"]
+    assert not current_section["credentials"][0].get("api_base")
+    assert not current_section["credentials"][0].get("extra_headers")
+    assert current_section["credentials"][0]["api_key"] == "${STUDIO_TEST_KEY}"
+
+
+def test_partial_credentials_preserve_inherited_fields_and_environment_references(model_file):
+    path, raw = model_file
+    raw["vlm"].update(api_base="${STUDIO_TEST_URL}", extra_headers={"X-Keep": "yes"})
+    path.write_text(json.dumps(raw))
+    result = read_model_file()
+    save_model_file({"vlm": {"credentials": [{"model": "gpt-4o-mini"}]}}, result["revision"])
+    current = read_model_file()["models"]["vlm"]["config"]["credentials"][0]
+    assert current["api_base"] == "${STUDIO_TEST_URL}"
+    assert current["api_key"] == "${STUDIO_TEST_KEY}"
+    assert current["extra_headers"] == {"X-Keep": "yes"}
+
+
+def test_provider_switch_does_not_reuse_legacy_headers_or_endpoint(model_file):
+    path, raw = model_file
+    raw["vlm"].update(
+        provider="volcengine",
+        api_base="https://old.example/api/v3",
+        extra_headers={"Authorization": "old"},
+    )
+    path.write_text(json.dumps(raw))
+    result = read_model_file()
+    config = result["models"]["vlm"]["config"]
+    config["credentials"][0].update(
+        provider="openai", api_key="new-key", api_base=None, extra_headers=None
+    )
+    save_model_file({"vlm": config}, result["revision"])
+    binding = read_model_file()["models"]["vlm"]["config"]["credentials"][0]
+    assert binding["provider"] == "openai" and binding["api_key"] == "new-key"
+    assert not binding.get("api_base") and not binding.get("extra_headers")
+
+
+def test_keyless_embedding_does_not_inherit_legacy_key(model_file):
+    path, _ = model_file
+    result = read_model_file()
+    save_model_file(
+        {
+            "embedding": {
+                "dense": {
+                    "credentials": [
+                        {
+                            "provider": "openai",
+                            "api_key": None,
+                            "api_base": "http://localhost:8000/v1",
+                        }
+                    ]
+                }
+            }
+        },
+        result["revision"],
+    )
+    current = read_model_file()["models"]["embedding"]["config"]["dense"]["credentials"][0]
+    assert not current.get("api_key")
+    assert current["api_base"] == "http://localhost:8000/v1"
