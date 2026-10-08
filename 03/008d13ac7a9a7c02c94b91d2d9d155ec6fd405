@@ -1,0 +1,22 @@
+benchmark/locomo/vikingbot/run_eval.py
+  h_b34c679d17e2ac 261,291-292
+bot/vikingbot/channels/chat.py
+  h_b34c679d17e2ac 50,57,161
+bot/vikingbot/channels/single_turn.py
+  h_b34c679d17e2ac 49,56,67
+bot/vikingbot/cli/commands.py
+  h_b34c679d17e2ac 13,885,907,924,958,1018
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "03008d13ac7a9a7c02c94b91d2d9d155ec6fd405",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
