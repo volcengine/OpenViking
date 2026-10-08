@@ -1,0 +1,16 @@
+benchmark/locomo/vikingbot/run_eval.py
+  h_b34c679d17e2ac 258-265,269,299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3806acf2e12690437ce0158f02f630ed56a7658a",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
