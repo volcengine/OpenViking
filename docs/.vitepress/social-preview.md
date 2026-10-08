@@ -2,9 +2,17 @@
 
 Approved direction: midnight navy sea viewed from above, with branching silver foam and ivory text. Generated with the built-in imagegen tool. The approved homepage card is the edit reference; keep its ocean, sail and wordmark while changing the section label and copy.
 
-Asset: `docs/images/og-openviking-docs-392c2586.png`. Exported to 1200 × 630 PNG; the filename suffix is the first eight SHA-256 characters. Change the filename and all metadata references together when replacing the card. Keep previously published PNG URLs available for cached links.
+Asset: `docs/images/og-openviking-docs-8efb541b.png`. Exported to 1200 × 630 PNG; the filename suffix is the first eight SHA-256 characters. Change the filename and all metadata references together when replacing the card. Keep previously published PNG URLs available for cached links.
 
 The generated PNG is the source artwork. It replaces the earlier turquoise SVG composition. Review logo, spelling and legibility before accepting any regeneration.
+
+The optimized E refresh removed only the old mark from a 115 × 120 crop, repaired the midnight-ocean texture with imagegen, then overlaid the exact Master vector path in Paper #F2F4F6. The wordmark and every other part of the 1200 × 630 card remain from the approved source. The deterministic vector path is recorded in `brand-e.md`.
+
+## Optimized E background-repair prompt
+
+```text
+Use case: precise-object-edit. Asset type: tiny crop from an OpenViking social preview background. Remove only the white geometric OpenViking sail logo from the center of this crop and reconstruct the midnight-navy top-down ocean water and subtle silver foam texture behind it. Preserve the crop dimensions, camera angle, texture scale, colors, grain, and every pixel outside the removed logo area as closely as possible. Add no text, no logo, no symbols, no objects, no watermark.
+```
 
 ## Final imagegen prompt
 
