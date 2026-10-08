@@ -7,7 +7,7 @@ import math
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -28,7 +28,7 @@ from openviking.storage.abstract_overview import (
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
-from openviking.storage.expr import And, PathScope, RawDSL
+from openviking.storage.expr import And, In, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
@@ -1072,6 +1072,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        count_levels: Optional[Sequence[int]] = None,
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1092,7 +1093,8 @@ class _OpsMixin:
                 multiple records across L0/L1/L2 levels).
             count (int): For directories, the number of nodes in the vector index
                 under this directory (including subdirectories). For files, this
-                field is not included.
+                field is not included. When ``count_levels`` is supplied, only
+                records whose level is in that collection are counted.
 
         Args:
             uri: Viking URI, or a 32-char hex vector record id (resolves to URI via vector store)
@@ -1103,6 +1105,11 @@ class _OpsMixin:
             include_lock_status: If True, include ``isLocked`` in the result.
                 Leave disabled for internal metadata checks to avoid the extra
                 PathLock filesystem lookup.
+            count_levels: If provided, restrict the directory count to these vector
+                record levels. Level 0 is a directory's ``.abstract.md``, level 1 its
+                ``.overview.md``, and level 2 a content file. Pass ``(2,)`` to count
+                only stored content, excluding the per-directory summary scaffolding
+                that OpenViking generates for every directory it touches.
         """
         real_ctx = self._ctx_or_default(ctx)
         uri = await self.resolve_uri(uri, real_ctx)
@@ -1152,10 +1159,18 @@ class _OpsMixin:
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
                             filter_expr = PathScope("uri", uri, depth=-1)
-                            result["count"] = await vector_store.count(
-                                filter=filter_expr,
-                                ctx=real_ctx,
-                            )
+                            levels = None if count_levels is None else list(count_levels)
+                            if levels is not None and not levels:
+                                result["count"] = 0
+                            else:
+                                if levels is not None:
+                                    filter_expr = And(
+                                        [filter_expr, In("level", levels)]
+                                    )
+                                result["count"] = await vector_store.count(
+                                    filter=filter_expr,
+                                    ctx=real_ctx,
+                                )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result

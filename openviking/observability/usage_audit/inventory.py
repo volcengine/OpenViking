@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 class ContextInventoryProvider:
     """Best-effort current-state context counter with a short TTL cache."""
 
+    # Dashboard counts are user-facing content volumes. OpenViking generates a
+    # level 0 (.abstract.md) and level 1 (.overview.md) record for every directory
+    # it touches, so an untouched scope root already carries two vector records.
+    # Counting all levels makes a brand-new deployment report phantom content, so
+    # restrict the count to level 2 records, which map to stored content.
+    _CONTENT_LEVELS = (2,)
+
     def __init__(self, service: Any, *, ttl_seconds: float = 10.0) -> None:
         self._service = service
         self._ttl_seconds = max(float(ttl_seconds), 0.0)
@@ -62,7 +69,11 @@ class ContextInventoryProvider:
         if fs_service is None:
             return 0
         try:
-            stat = await fs_service.stat(uri, ctx=ctx)
+            stat = await fs_service.stat(
+                uri,
+                ctx=ctx,
+                count_levels=self._CONTENT_LEVELS,
+            )
             return max(int(stat.get("count") or 0), 0)
         except (FileNotFoundError, AGFSNotFoundError, NotFoundError):
             logger.debug("Usage/Audit inventory root does not exist: %s", uri)

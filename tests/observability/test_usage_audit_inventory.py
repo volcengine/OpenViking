@@ -25,8 +25,8 @@ class FakeFSService:
     def __init__(self) -> None:
         self.calls = []
 
-    async def stat(self, uri, *, ctx):
-        self.calls.append((uri, ctx))
+    async def stat(self, uri, *, ctx, count_levels=None):
+        self.calls.append((uri, ctx, count_levels))
         return {
             "viking://resources": {"count": 2},
             "viking://user/user-1/skills": {"count": 3},
@@ -35,12 +35,12 @@ class FakeFSService:
 
 
 class FailingFSService:
-    async def stat(self, uri, *, ctx):
+    async def stat(self, uri, *, ctx, count_levels=None):
         raise RuntimeError(f"stat unavailable for {uri}")
 
 
 class MissingFSService:
-    async def stat(self, uri, *, ctx):
+    async def stat(self, uri, *, ctx, count_levels=None):
         raise AGFSNotFoundError(uri)
 
 
@@ -57,11 +57,25 @@ async def test_context_inventory_counts_from_stat():
 
     assert counts == {"files": 2, "skills": 3, "memories": 5, "total": 10}
     assert len(fs.calls) == 3
-    assert {uri for uri, call_ctx in fs.calls if call_ctx is ctx} == {
+    assert {uri for uri, call_ctx, _levels in fs.calls if call_ctx is ctx} == {
         "viking://resources",
         "viking://user/user-1/skills",
         "viking://user/user-1/memories",
     }
+
+
+@pytest.mark.asyncio
+async def test_context_inventory_counts_content_levels_only():
+    """Level 0/1 directory scaffolding must not inflate the dashboard counts."""
+    fs = FakeFSService()
+    provider = ContextInventoryProvider(
+        SimpleNamespace(fs=fs),
+        ttl_seconds=0,
+    )
+
+    await provider.get_counts(_ctx())
+
+    assert [levels for _uri, _ctx, levels in fs.calls] == [(2,), (2,), (2,)]
 
 
 @pytest.mark.asyncio
