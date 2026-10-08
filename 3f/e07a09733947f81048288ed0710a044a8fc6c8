@@ -1,0 +1,18 @@
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 23,449,451-480,494,496-501
+openviking/server/routers/search.py
+  h_b34c679d17e2ac 108-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3fe07a09733947f81048288ed0710a044a8fc6c8",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
