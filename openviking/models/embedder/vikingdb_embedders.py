@@ -82,9 +82,13 @@ class VikingDBClientMixin:
         texts: List[str],
         dense_model: Dict[str, Any] = None,
         sparse_model: Optional[Dict[str, Any]] = None,
+        input_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         path = "/api/vikingdb/embedding"
         data_items = [{"text": text} for text in texts]
+        if input_type is not None:
+            for item in data_items:
+                item["input_type"] = input_type
 
         req_body = {"data": data_items}
         if dense_model:
@@ -213,8 +217,12 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         return result
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        input_type = self._resolve_input_type(is_query)
+
         async def _call() -> EmbedResult:
-            results = await self._call_api_async([text], dense_model=self.dense_model)
+            results = await self._call_api_async(
+                [text], dense_model=self.dense_model, input_type=input_type
+            )
             if not results:
                 return EmbedResult(dense_vector=[])
 
@@ -399,9 +407,14 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         return result
 
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+        input_type = self._resolve_input_type(is_query)
+
         async def _call() -> EmbedResult:
             results = await self._call_api_async(
-                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+                [text],
+                dense_model=self.dense_model,
+                sparse_model=self.sparse_model,
+                input_type=input_type,
             )
             if not results:
                 return EmbedResult(dense_vector=[], sparse_vector={})
