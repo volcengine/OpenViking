@@ -9,7 +9,7 @@ name: Host Compatibility
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Daily at 02:00 UTC
+    - cron: '0 16 * * *'  # Daily at 00:00 SGT (16:00 UTC)
   workflow_dispatch:
     inputs:
       host:
