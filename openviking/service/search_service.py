@@ -235,7 +235,7 @@ class SearchService:
         retriever = SkillPackageRetriever(
             storage=storage,
             embedder=embedder,
-            rerank_config=fs.rerank_config,
+            rerank_config=await fs.get_rerank_config(ctx),
         )
         result = await retriever.retrieve_skills(
             TypedQuery(query, ContextType.SKILL, "", target_directories=targets),

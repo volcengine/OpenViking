@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import Response as HTTPResponse
 from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
@@ -138,9 +139,10 @@ class ConfigPatchRequest(BaseModel):
     """
 
     settings: dict[str, Any] = Field(default_factory=dict)
+    revision: str | None = None
 
 
-_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb", "rerank"})
 
 
 def _authorize_account_config_patch(
@@ -647,21 +649,69 @@ async def patch_account_settings(
 @require_auth_root_or_admin
 async def get_account_configuration(
     request: Request,
+    response: HTTPResponse,
     account_id: str = Path(..., description="Account ID"),
+    include_effective_vlm: bool = Query(False),
+    include_effective_embedding: bool = Query(False),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return this account layer's explicit runtime configuration."""
     _check_account_access(ctx, account_id)
+    if (include_effective_vlm or include_effective_embedding) and ctx.role != Role.ROOT:
+        raise PermissionDeniedError("Only ROOT can read effective model configuration")
     await _check_account_exists(request, account_id)
-    settings = await _get_runtime_config_manager().get_settings(
+    runtime_config = _get_runtime_config_manager()
+    settings = await runtime_config.get_settings(
         ConfigScope.account(account_id)
     )
+    result = {
+        "account_id": account_id,
+        "settings": _visible_account_config(ctx, settings),
+    }
+    if include_effective_vlm:
+        def select_vlm(view):
+            vlm = (
+                view.account.vlm.to_vlm_config(view.cluster.vlm)
+                if view.account.vlm is not None
+                else view.cluster.vlm
+            )
+            return {
+                "model": vlm.model,
+                "credentials": [
+                    credential.model_dump(exclude_none=True)
+                    for credential in vlm.credentials
+                ],
+                "timeout": vlm.timeout,
+            }
+
+        result["effective_vlm"] = await runtime_config.resolve_account(account_id, select_vlm)
+        response.headers["Cache-Control"] = "no-store"
+    if include_effective_embedding:
+        from openviking.config.vector import resolve_effective_embedding
+
+        def select_embedding(view):
+            embedding = resolve_effective_embedding(view.cluster.embedding, view.account.embedding)
+            models = []
+            for mode in ("dense", "sparse", "hybrid"):
+                section = getattr(embedding, mode)
+                if section is None:
+                    continue
+                bindings = section.credentials or [section]
+                for binding in bindings:
+                    models.append({
+                        "mode": mode,
+                        "model": binding.model or section.model,
+                        "provider": binding.provider or section.provider,
+                        "api_base": binding.api_base or section.api_base,
+                        "dimension": section.get_effective_dimension(),
+                    })
+            return {"source": "account" if view.account.embedding is not None else "server", "models": models}
+
+        result["effective_embedding"] = await runtime_config.resolve_account(account_id, select_embedding)
+        response.headers["Cache-Control"] = "no-store"
     return Response(
         status="ok",
-        result={
-            "account_id": account_id,
-            "settings": _visible_account_config(ctx, settings),
-        },
+        result=result,
     )
 
 
@@ -804,10 +854,28 @@ async def patch_account_configuration(
 @require_auth_root
 async def get_cluster_configuration(
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
+    account_id: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return the cluster layer's explicit runtime configuration."""
     runtime_config = _get_runtime_config_manager()
+    if source == "file":
+        from openviking.config.model_file import MODEL_KINDS, read_model_file
+
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = await asyncio.to_thread(read_model_file)
+        except (ValueError, OSError) as exc:
+            raise FailedPreconditionError("Cannot read the server startup configuration file") from exc
+        cluster = await runtime_config.get_settings(ConfigScope.cluster())
+        account = await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
+        result["overrides"] = {
+            "cluster": [key for key in MODEL_KINDS if (cluster or {}).get(key) is not None],
+            "account": [key for key in MODEL_KINDS if (account or {}).get(key) is not None],
+        }
+        return Response(status="ok", result=result)
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
 
@@ -817,9 +885,22 @@ async def get_cluster_configuration(
 async def patch_cluster_configuration(
     body: ConfigPatchRequest,
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
+    if source == "file":
+        from openviking.config.model_file import save_model_file
+
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = await asyncio.to_thread(save_model_file, body.settings, body.revision or "")
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        except OSError as exc:
+            raise FailedPreconditionError("Cannot write ov.conf; check file and directory permissions") from exc
+        return Response(status="ok", result=result)
     runtime_config = _get_runtime_config_manager()
     try:
         await runtime_config.patch_cluster(body.settings)

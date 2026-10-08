@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, model_validator
 
@@ -40,6 +40,8 @@ class AccountEmbeddingModelConfig(BaseModel):
     query_param: Optional[str] = RuntimeField(default=None, dynamic=False)
     document_param: Optional[str] = RuntimeField(default=None, dynamic=False)
     version: Optional[str] = RuntimeField(default=None, dynamic=False)
+    model_path: Optional[str] = RuntimeField(default=None, dynamic=False)
+    extra_body: Optional[Dict[str, Any]] = RuntimeField(default=None, dynamic=False)
 
     # Provider bindings may rotate without changing the declared vector space.
     credentials: List[AccountEmbeddingCredential] = RuntimeField(min_length=1)
@@ -64,7 +66,7 @@ class AccountEmbeddingModelConfig(BaseModel):
                 "region": credential.region,
                 "host": credential.host,
             }
-            for field_name in ("input", "query_param", "document_param", "version"):
+            for field_name in ("input", "query_param", "document_param", "version", "model_path", "extra_body"):
                 value = getattr(self, field_name)
                 if value is not None:
                     values[field_name] = value

@@ -35,10 +35,17 @@ def _make_viking_fs() -> VikingFS:
 
 
 @pytest.mark.asyncio
-async def test_find_works_without_rerank_config(monkeypatch) -> None:
+@pytest.mark.parametrize("runtime_rerank", [False, True])
+async def test_find_works_without_rerank_config(monkeypatch, runtime_rerank) -> None:
     fs = _make_viking_fs()
     request_ctx = _ctx()
     captured = {}
+    active = None
+    if runtime_rerank:
+        from openviking_cli.utils.config.rerank_config import RerankConfig
+
+        active = RerankConfig(provider="jev", model="jev-latest", api_key="test-key")
+        fs._rerank_resolver = AsyncMock(return_value=active)
 
     class FakeRetriever:
         def __init__(self, storage, embedder, rerank_config):
@@ -97,7 +104,9 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert [ctx.uri for ctx in result.resources] == ["viking://resources/docs/guide.md"]
     assert captured["storage"] is fs.vector_store
     assert captured["embedder"] is fs.query_embedder
-    assert captured["rerank_config"] is None
+    assert captured["rerank_config"] is active
+    if runtime_rerank:
+        fs._rerank_resolver.assert_awaited_once_with("acc1")
     assert captured["typed_query"].query == "guide"
     assert captured["typed_query"].context_type is None
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]

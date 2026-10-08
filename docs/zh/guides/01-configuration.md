@@ -86,6 +86,7 @@ OpenViking 的配置分为两个层级：
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
+| Account | `rerank` | 动态配置 | 仅 ROOT 可读写；支持 VikingDB、Cohere、OpenAI 兼容、LiteLLM 和 Jev。未配置时使用 Cluster 启动配置，设为 `null` 恢复默认。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
 Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。
@@ -108,7 +109,29 @@ Account 凭证和显式 VectorDB 连接必须独立提供连接与鉴权字段�
 等依赖组装入口使用。CI 架构测试会拒绝其他生产模块新增对 Cluster VLM
 或 Query Planner 配置的直接读取。
 
-修改运行时配置使用以下接口：
+Web Studio 的「设置 → 模型设置」编辑服务端实际加载的 `ov.conf`，不再创建账号级模型覆盖。仅 ROOT 可以读写凭证，响应禁止缓存。
+文件配置接口支持四类模型，包括 JEV 参数；Web Studio 页面暂时只展示 VLM 和 Embedding，隐藏 Query Planner 和 Rerank，不修改其已有配置。VLM、Query Planner 和 Embedding 的 `credentials` 是有序故障切换数组；Rerank 是单配置。
+确认修改、添加、排序和恢复继承先进入草稿，页面统一「保存配置」以一次版本校验提交所有修改；「撤销修改」丢弃全部未保存草稿。
+列表显示文件配置，不代表运行中的模型；保存后需重启服务。界面保护 Embedding 的模型身份、维度和输入参数，凭证必须兼容已有向量，保存不会重建索引。
+未编辑字段和环境变量引用保持不变。每次保存前备份到同目录 `<配置文件名>.studio.bak`（权限 0600）。只读文件不可保存。
+已有账号/集群运行时覆盖不会被静默删除。界面提示当前账号及集群的覆盖；其他账号也可能存在覆盖，需单独确认。
+
+复用集群配置接口，以 `source=file` 区分文件管理和原有运行时管理：
+
+```http
+GET   /api/v1/admin/configuration?source=file&account_id=default
+PATCH /api/v1/admin/configuration?source=file
+```
+
+GET 返回 `models`、`file_path`、`revision`、`writable`、`restart_required` 和覆盖提示。PATCH 示例：
+
+```json
+{"revision": "<GET 返回的 revision>", "settings": {"rerank": {"provider": "jev", "model": "jev-latest", "api_key": "<your-jev-api-key>", "mode": "choice", "threshold": 0}}}
+```
+
+旧版本请求被拒绝，需重新加载文件。仅允许编辑四类模型节；`query_planner: null` 删除该节并恢复继承 VLM。没有启动文件的程序化初始化不支持文件编辑。不要同时使用界面与外部配置管理工具作为写入入口。
+
+原有运行时配置接口保持不变：
 
 ```http
 GET   /api/v1/admin/configuration

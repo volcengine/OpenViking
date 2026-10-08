@@ -318,6 +318,140 @@ async def template_account(lightweight_admin_client):
     return account_id, {"X-API-Key": response.json()["result"]["user_key"]}
 
 
+@pytest.mark.parametrize("account_override", [False, True])
+async def test_account_configuration_effective_vlm_is_root_only(
+    lightweight_admin_client, lightweight_admin_app, template_account, monkeypatch,
+    account_override,
+):
+    from types import SimpleNamespace
+
+    from openviking.config.account_config import AccountVLMConfig
+    from openviking_cli.utils.config.vlm_config import VLMConfig
+
+    account_id, admin_headers = template_account
+    path = f"/api/v1/admin/accounts/{account_id}/configuration"
+    cluster_vlm = VLMConfig(
+        model="cluster-model", provider="openai", api_key="cluster-secret",
+        api_base="https://example.com/v1",
+    )
+    account_vlm = AccountVLMConfig(
+        model="account-model",
+        credentials=[{"provider": "openai", "api_key": "account-secret", "api_base": "https://account.example.com/v1"}],
+    ) if account_override else None
+    manager = lightweight_admin_app.state.fake_service.runtime_config_manager
+
+    async def resolve_account(_account_id, selector):
+        assert _account_id == account_id
+        return selector(SimpleNamespace(
+            account=SimpleNamespace(vlm=account_vlm),
+            cluster=SimpleNamespace(vlm=cluster_vlm),
+        ))
+
+    monkeypatch.setattr(manager, "resolve_account", resolve_account)
+    root_response = await lightweight_admin_client.get(
+        path, params={"include_effective_vlm": "true"}, headers=root_headers(),
+    )
+    assert root_response.status_code == 200
+    assert root_response.headers["cache-control"] == "no-store"
+    effective = root_response.json()["result"]["effective_vlm"]
+    assert effective["model"] == ("account-model" if account_override else "cluster-model")
+    assert effective["credentials"][0]["provider"] == "openai"
+    assert effective["credentials"][0]["api_key"] == ("account-secret" if account_override else "cluster-secret")
+    assert effective["credentials"][0]["api_base"] == (
+        "https://account.example.com/v1" if account_override else "https://example.com/v1"
+    )
+    denied = await lightweight_admin_client.get(
+        path, params={"include_effective_vlm": "true"}, headers=admin_headers,
+    )
+    assert denied.status_code == 403
+    ordinary = await lightweight_admin_client.get(path, headers=admin_headers)
+    assert ordinary.status_code == 200
+    assert "effective_vlm" not in ordinary.json()["result"]
+
+
+@pytest.mark.parametrize("account_override", [False, True])
+async def test_effective_embedding_summary_is_root_only_and_excludes_secrets(
+    lightweight_admin_client, lightweight_admin_app, template_account, monkeypatch,
+    account_override,
+):
+    from types import SimpleNamespace
+
+    from openviking.config.account_vector import AccountEmbeddingConfig
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    account_id, admin_headers = template_account
+    path = f"/api/v1/admin/accounts/{account_id}/configuration"
+    embedding = EmbeddingConfig(dense={
+        "model": "embedding-model", "provider": "openai", "api_key": "embedding-secret",
+        "dimension": 1024, "api_base": "https://embed.example.com/v1",
+        "credentials": [{"provider": "openai", "api_key": "other-secret", "model": "credential-model"}],
+    })
+    manager = lightweight_admin_app.state.fake_service.runtime_config_manager
+    account_embedding = AccountEmbeddingConfig(dense={
+        "model": "account-embedding", "dimension": 1024,
+        "credentials": [{"provider": "openai", "api_key": "account-secret", "api_base": "https://account.example.com/v1"}],
+    }) if account_override else None
+
+    async def resolve_account(_account_id, selector):
+        return selector(SimpleNamespace(
+            account=SimpleNamespace(embedding=account_embedding),
+            cluster=SimpleNamespace(embedding=embedding),
+        ))
+
+    monkeypatch.setattr(manager, "resolve_account", resolve_account)
+    response = await lightweight_admin_client.get(
+        path, params={"include_effective_embedding": "true"}, headers=root_headers(),
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["result"]["effective_embedding"] == {
+        "source": "account" if account_override else "server", "models": [{
+            "mode": "dense", "model": "account-embedding" if account_override else "credential-model", "provider": "openai",
+            "api_base": "https://account.example.com/v1" if account_override else "https://embed.example.com/v1", "dimension": 1024,
+        }],
+    }
+    assert "secret" not in response.text
+    denied = await lightweight_admin_client.get(
+        path, params={"include_effective_embedding": "true"}, headers=admin_headers,
+    )
+    assert denied.status_code == 403
+    ordinary = await lightweight_admin_client.get(path, headers=admin_headers)
+    assert "effective_embedding" not in ordinary.json()["result"]
+
+
+async def test_studio_file_configuration_permissions_revision_and_overrides(
+    lightweight_admin_client, lightweight_admin_app, template_account, tmp_path, monkeypatch,
+):
+    from openviking.config.scope import ConfigScope
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    account_id, admin_headers = template_account
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "file-secret"}}))
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", config_path)
+    manager = lightweight_admin_app.state.fake_service.runtime_config_manager
+    await manager.patch_account(account_id, {"vlm": {"model": "override-model", "credentials": [{"provider": "openai", "api_key": "account-secret"}]}})
+    url = "/api/v1/admin/configuration"
+    params = {"source": "file", "account_id": account_id}
+    denied = await lightweight_admin_client.get(url, params=params, headers=admin_headers)
+    assert denied.status_code == 403 and "file-secret" not in denied.text
+    response = await lightweight_admin_client.get(url, params=params, headers=root_headers())
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    result = response.json()["result"]
+    assert result["models"]["vlm"]["config"]["model"] == "gpt-4o"
+    assert result["overrides"]["account"] == ["vlm"]
+    body = {"revision": result["revision"], "settings": {"rerank": {"provider": "jev", "api_key": "jev-secret", "mode": "choice", "threshold": 0}}}
+    assert (await lightweight_admin_client.patch(url, params={"source": "file"}, headers=admin_headers, json=body)).status_code == 403
+    saved = await lightweight_admin_client.patch(url, params={"source": "file"}, headers=root_headers(), json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["result"]["restart_required"]
+    assert json.loads(config_path.read_text())["rerank"]["provider"] == "jev"
+    assert (await lightweight_admin_client.patch(url, params={"source": "file"}, headers=root_headers(), json=body)).status_code == 400
+    settings = await manager.get_settings(ConfigScope.account(account_id))
+    assert settings["vlm"]["model"] == "override-model"
+
+
 @pytest.mark.parametrize(
     "memory_type",
     ["profile", "preferences", "entities", "events", "soul", "identity"],

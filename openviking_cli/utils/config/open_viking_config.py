@@ -626,6 +626,7 @@ class OpenVikingConfigSingleton:
     _instance: Optional[OpenVikingConfig] = None
     _lock: Lock = Lock()
     _initializing: bool = False
+    _config_file: Optional[Path] = None
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
@@ -682,6 +683,7 @@ class OpenVikingConfigSingleton:
             try:
                 if config_dict is not None:
                     cls._instance = OpenVikingConfig.from_dict(config_dict)
+                    cls._config_file = None
                 else:
                     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
                     if path is not None:
@@ -718,7 +720,9 @@ class OpenVikingConfigSingleton:
             raw = os.path.expandvars(raw)
             config_data = json.loads(raw)
 
-            return OpenVikingConfig.from_dict(config_data)
+            config = OpenVikingConfig.from_dict(config_data)
+            cls._config_file = config_path.resolve()
+            return config
         except json.JSONDecodeError as e:
             raise ValueError(f"Config file JSON format error: {e}")
         except ValueError:
@@ -737,6 +741,12 @@ class OpenVikingConfigSingleton:
         """Reset the singleton instance (mainly for testing)."""
         with cls._lock:
             cls._instance = None
+            cls._config_file = None
+
+    @classmethod
+    def get_config_file(cls) -> Optional[Path]:
+        """Return the actual startup file, not a newly resolved default path."""
+        return cls._config_file
 
 
 # Global convenience function

@@ -27,6 +27,7 @@ from openviking.config.account_vector import AccountEmbeddingConfig, AccountVect
 from openviking.models.vlm.registry import is_valid_provider
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.github_config import GitHubConfig
+from openviking_cli.utils.config.rerank_config import RerankConfig
 from openviking_cli.utils.config.runtime_field import RuntimeField
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
@@ -140,6 +141,7 @@ class AccountConfig(BaseModel):
     feishu: Optional[AccountFeishuConfig] = RuntimeField(default=None)
     vlm: Optional[AccountVLMConfig] = RuntimeField(default=None)
     query_planner: Optional[AccountVLMConfig] = RuntimeField(default=None)
+    rerank: Optional[RerankConfig] = RuntimeField(default=None)
     github: Optional[GitHubConfig] = RuntimeField(default=None)
     agent_evolution: Optional[AgentEvolutionConfig] = RuntimeField(
         default=None,

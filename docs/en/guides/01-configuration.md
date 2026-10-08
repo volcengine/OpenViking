@@ -87,6 +87,7 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `rerank` | Dynamic | ROOT-only. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM and Jev. An absent section uses Cluster startup defaults; set it to `null` to restore them. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
@@ -114,7 +115,29 @@ Account-owned business code must resolve model configuration through
 evaluation composition roots. A CI architecture test rejects new direct reads
 of Cluster VLM or Query Planner configuration from other production modules.
 
-For runtime changes, use the following endpoints:
+Web Studio's **Settings → Models** edits the server's actual startup `ov.conf`, rather than creating Account model overrides. Only ROOT may read/write credentials; responses disable caching.
+The file configuration API supports all four categories, including JEV parameters. Web Studio currently shows only VLM and Embedding; Query Planner and Rerank are hidden without changing their existing settings. VLM, Query Planner and Embedding use ordered `credentials` arrays; Rerank has a single binding.
+Confirmed edits, additions, ordering and inheritance resets remain drafts. The page-level Save configuration action submits all changes with one revision check; Discard changes clears all unsaved drafts.
+Lists show file settings, not necessarily running models. Saving requires a server restart. Embedding identity, dimensions and input remain protected in the UI; credentials must remain compatible with existing vectors. Saving does not rebuild indexes.
+Unchanged fields and environment references are preserved. The previous file is backed up as `<filename>.studio.bak` with mode 0600. Read-only files cannot be saved.
+Existing runtime overrides are not silently removed. The UI reports Cluster and current Account overrides; other Accounts may also have overrides and need separate review.
+
+The existing Cluster configuration API accepts `source=file`; default runtime behavior is unchanged:
+
+```http
+GET   /api/v1/admin/configuration?source=file&account_id=default
+PATCH /api/v1/admin/configuration?source=file
+```
+
+GET returns `models`, `file_path`, `revision`, `writable`, `restart_required` and override warnings. PATCH example:
+
+```json
+{"revision": "<revision from GET>", "settings": {"rerank": {"provider": "jev", "model": "jev-latest", "api_key": "<your-jev-api-key>", "mode": "choice", "threshold": 0}}}
+```
+
+Stale revisions are rejected; reload before retrying. Only model sections are writable. Setting `query_planner` to null removes that section to inherit VLM. Servers initialized without a startup file cannot use file editing. Avoid concurrent UI edits and external configuration-management writers.
+
+The original runtime configuration APIs remain unchanged:
 
 ```http
 GET   /api/v1/admin/configuration

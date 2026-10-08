@@ -2,44 +2,46 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
+
+from openviking_cli.utils.config.runtime_field import RuntimeField
 
 
 class RerankConfig(BaseModel):
     """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM, and Jev (TypeSafe) providers."""
 
-    provider: Optional[str] = Field(
+    provider: Optional[str] = RuntimeField(
         default=None,
         description="Rerank provider: 'vikingdb', 'cohere', 'openai', 'litellm', or 'jev'. Auto-detected from config if omitted.",
     )
 
     # VikingDB fields
-    ak: Optional[str] = Field(default=None, description="VikingDB Access Key")
-    sk: Optional[str] = Field(default=None, description="VikingDB Secret Key")
-    host: str = Field(
+    ak: Optional[str] = RuntimeField(default=None, description="VikingDB Access Key")
+    sk: Optional[str] = RuntimeField(default=None, description="VikingDB Secret Key")
+    host: str = RuntimeField(
         default="api-vikingdb.vikingdb.cn-beijing.volces.com", description="VikingDB API host"
     )
-    model_name: str = Field(default="doubao-seed-rerank", description="Rerank model name")
-    model_version: str = Field(default="251028", description="Rerank model version")
+    model_name: str = RuntimeField(default="doubao-seed-rerank", description="Rerank model name")
+    model_version: str = RuntimeField(default="251028", description="Rerank model version")
 
     # Shared provider fields
-    api_key: Optional[str] = Field(
+    api_key: Optional[str] = RuntimeField(
         default=None, description="API key for Cohere, OpenAI-compatible, or Jev providers"
     )
-    api_base: Optional[str] = Field(default=None, description="Custom endpoint URL")
-    model: Optional[str] = Field(
+    api_base: Optional[str] = RuntimeField(default=None, description="Custom endpoint URL")
+    model: Optional[str] = RuntimeField(
         default=None, description="Model name for OpenAI-compatible, LiteLLM, or Jev providers"
     )
-    mode: Optional[str] = Field(
+    mode: Optional[str] = RuntimeField(
         default="noul",
         description="Jev rerank mode: 'noul' or 'choice'",
     )
 
-    extra_headers: Optional[Dict[str, str]] = Field(
+    extra_headers: Optional[Dict[str, str]] = RuntimeField(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
-    timeout: float = Field(
+    timeout: float = RuntimeField(
         default=30.0,
         description=(
             "HTTP request timeout in seconds for rerank calls. Increase for local "
@@ -47,11 +49,11 @@ class RerankConfig(BaseModel):
         ),
     )
 
-    threshold: float = Field(
+    threshold: float = RuntimeField(
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
-    max_input_tokens: int = Field(
+    max_input_tokens: int = RuntimeField(
         default=0,
         ge=0,
         description=(
@@ -60,7 +62,7 @@ class RerankConfig(BaseModel):
         ),
     )
 
-    log_payloads: bool = Field(
+    log_payloads: bool = RuntimeField(
         default=False,
         description=(
             "Log complete rerank request and response payloads. Disabled by default "
