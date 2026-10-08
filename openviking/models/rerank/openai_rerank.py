@@ -7,7 +7,7 @@ Supports third-party rerank services like Alibaba Cloud DashScope (qwen3-rerank)
 via api_key + api_base configuration.
 """
 
-# For logging, use Python's built-in logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -140,12 +140,24 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            response = requests.post(
-                url=self.api_base,
-                headers=headers,
-                json=req_body,
-                timeout=self.timeout,
-            )
+            try:
+                response = requests.post(
+                    url=self.api_base,
+                    headers=headers,
+                    json=req_body,
+                    timeout=self.timeout,
+                )
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(
+                    f"[OpenAIRerankClient] Connection error on rerank attempt 1, retrying after 0.5s: {e}"
+                )
+                time.sleep(0.5)
+                response = requests.post(
+                    url=self.api_base,
+                    headers=headers,
+                    json=req_body,
+                    timeout=self.timeout,
+                )
             response.raise_for_status()
             result = response.json()
 
