@@ -1,0 +1,401 @@
+# Deploy a Fully Local OpenViking on NVIDIA DGX Spark with cuVS
+
+Published: 2026-10-08
+Updated: 2026-10-08
+Author: zayn (https://github.com/ZaynJarvis)
+Canonical human page: https://blog.openviking.ai/post/deploy-openviking-on-dgx-spark/
+Agent-readable page: https://blog.openviking.ai/post/deploy-openviking-on-dgx-spark/llm.txt
+
+Start from a clean DGX Spark: install Ollama local models, OpenViking, and NVIDIA cuVS, configure GPU vector search, run it as a service, and verify the path from import to read-back.
+
+DGX Spark puts the CPU and GPU on one 128 GB pool of unified memory, which is enough to keep the models, the database, and GPU vector search on a single desktop machine. This guide starts from a clean box. You install Ollama and two local models, install OpenViking and NVIDIA cuVS, switch the vector backend to the GPU, run it as a service, and verify the whole path from import to read-back.
+
+> **Info:** Tested on DGX Spark (GB10, aarch64) with NVIDIA driver 580, CUDA 13.0, Python 3.12, OpenViking 0.4.17.1, cuVS 26.06, and CuPy 14.1. New to OpenViking? Read the [architecture overview](https://blog.openviking.ai/post/openviking-context-database-architecture) first.
+
+The seven steps: 0 check the machine, 1 Ollama and models, 2 install OpenViking and cuVS (ends with a smoke test of the GPU path), 3 configure, 4 start and check, 5 connect the CLI, 6 verify end to end.
+
+## What You Will Build
+
+Everything runs on the Spark and listens on the loopback address. A laptop or agent (ov CLI, SDK, MCP) talks to the OpenViking server (127.0.0.1:1933), which uses Ollama (127.0.0.1:11434) for the embedding model and the VLM, and NVIDIA cuVS, inside the server process, for dense vector search on the GPU.
+
+The embedding model turns text into vectors, and the VLM writes the L0 abstract and L1 overview for every file and directory. cuVS accelerates only the dense vector search step. OpenViking keeps directory scoping, scalar filters, and permissions, and hands cuVS a candidate set to search.
+
+## Pick a Deployment Path
+
+OpenViking runs as an HTTP service, and there are several ways to run it. The GPU backend narrows the choice for this guide.
+
+| Path | Use it when | With cuVS on the Spark |
+| --- | --- | --- |
+| Managed service (Volcengine) | You want no servers and no local models | Not applicable |
+| Python install (uv or venv) | One machine, full control of the environment | This guide |
+| systemd service | A Linux host that should keep the server up across reboots | Added on top of the Python install, see below |
+| Docker image | You prefer containers and a mounted volume | The published image does not install the cuVS packages, so use the Python install for the GPU backend |
+| Helm / private delivery | Kubernetes clusters and enterprise rollouts | Out of scope here |
+
+The [deployment guide](https://docs.openviking.ai/en/guides/03-deployment) covers Docker, Compose, and Helm in full. Before you deploy, decide where the workspace lives, how you will back it up, and who gets which key. The guide's deployment checklist lists these items.
+
+> **Tip:** You can also hand the first part of this guide to your coding agent. OpenViking publishes setup instructions written for agents ([setup guide for agents](https://docs.openviking.ai/en/getting-started/04-setup-for-agent)), and the prompt below asks it to follow them and then come back here for the GPU backend.
+
+```text
+Follow this guide to install and start an OpenViking Server on this machine,
+using local Ollama models:
+
+https://docs.openviking.ai/en/getting-started/04-setup-for-agent
+
+Then add the NVIDIA cuVS GPU backend as described in:
+
+https://blog.openviking.ai/post/deploy-openviking-on-dgx-spark/
+
+Ask me before choosing models or opening the server to other machines.
+Never print API keys back to me.
+```
+
+## Step 0: Check the Machine
+
+```bash
+nvidia-smi                 # driver 580+, CUDA 13.x
+python3 --version          # 3.11 or newer (cuVS 26.06 wheels need it)
+uname -m                   # aarch64
+```
+
+OpenViking itself runs on Python 3.10 or newer, and the cuVS 26.06 packages need 3.11. The CUDA major version decides which cuVS package you install: `cuvs-cu13` for CUDA 13, `cuvs-cu12` for CUDA 12. On the Spark, `nvidia-smi` reports the total memory usage as not supported because the memory is unified. Read per-process usage with `nvidia-smi --query-compute-apps=pid,used_gpu_memory --format=csv` instead.
+
+## Step 1: Install Ollama and Pull the Models
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3-embedding:0.6b     # embedding, 1024 dimensions, ~639 MB
+ollama pull qwen3.6:27b              # VLM, ~17 GB
+curl -fsS http://127.0.0.1:11434/api/tags
+```
+
+These are two of the presets the OpenViking setup wizard offers for local models. The table lists more of them, with the RAM the wizard recommends. On a 128 GB Spark every row fits, but the VLM, the vector index, and your other workloads share that one pool, so choose the smallest VLM that gives good summaries.
+
+| Model | Role | Download | Recommended RAM |
+| --- | --- | --- | --- |
+| qwen3-embedding:0.6b | Embedding, 1024 dim | ~639 MB | 4 GB |
+| qwen3-embedding:4b | Embedding, 1024 dim | ~2.5 GB | 8 GB |
+| qwen3.5:9b | VLM | ~6.6 GB | 16 GB |
+| qwen3.6:27b | VLM | ~17 GB | 32 GB |
+| qwen3.6:35b | VLM | ~24 GB | 48 GB |
+
+If you change the embedding model, set its real output size as the dimension in the configuration step, because the index is created with that size.
+
+## Step 2: Install OpenViking and cuVS
+
+Use one virtual environment for both, so the server process can import cuVS and CuPy.
+
+```bash
+python3 -m venv ~/openviking-env
+source ~/openviking-env/bin/activate
+pip install openviking
+
+# CUDA 13 (use cuvs-cu12 and cupy-cuda12x for CUDA 12)
+pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.com
+```
+
+The `[ctk]` extra installs the CUDA toolkit headers that cuVS needs when the host has a driver but no toolkit. See the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) for the release you pick.
+
+### Check the GPU Path Before Adding Models
+
+The repository ships a smoke test that writes vectors and runs a filtered search through cuVS. It needs neither the embedding model nor the VLM, so a failure here points at the GPU stack and nothing else.
+
+```bash
+git clone --depth 1 https://github.com/volcengine/OpenViking.git
+python OpenViking/examples/cuvs_smoke.py
+```
+
+## Step 3: Configure OpenViking
+
+Run the setup wizard and choose the local Ollama option for both models. It checks that Ollama is reachable, offers to pull the models, and writes `~/.openviking/ov.conf`.
+
+```bash
+openviking-server init
+```
+
+The wizard does not configure the GPU backend, so open `ov.conf` and add the `storage.vectordb` block. The complete file looks like this:
+
+```json
+{
+  "server": { "host": "127.0.0.1", "port": 1933 },
+  "storage": {
+    "workspace": "/home/<you>/.openviking/data",
+    "vectordb": {
+      "backend": "cuvs",
+      "distance_metric": "cosine",
+      "cuvs": {
+        "algorithm": "brute_force",
+        "dtype": "float32",
+        "max_concurrent_gpu_searches": 1,
+        "micro_batching_enabled": false,
+        "fallback_to_native": true,
+        "filter_cache_size": 16
+      }
+    }
+  },
+  "embedding": {
+    "dense": {
+      "provider": "ollama",
+      "model": "qwen3-embedding:0.6b",
+      "api_base": "http://localhost:11434/v1",
+      "dimension": 1024,
+      "input": "text"
+    }
+  },
+  "vlm": {
+    "provider": "litellm",
+    "model": "ollama/qwen3.6:27b",
+    "api_key": "no-key",
+    "api_base": "http://localhost:11434",
+    "temperature": 0.0,
+    "max_retries": 2,
+    "extra_request_body": { "num_ctx": 16384, "think": false }
+  }
+}
+```
+
+- **num_ctx and think**: Ollama defaults to a 4096-token context, and the memory-extraction prompt alone is about 5k tokens, so the default silently truncates the conversation. The wizard sets 16384 and turns thinking off, because a thinking model can otherwise emit only reasoning and stall.
+- **fallback_to_native**: dense search runs on the GPU, while sparse and hybrid queries fall back to the native index.
+- **server.host**: `127.0.0.1` is the default. In the default development mode, local requests need no key. The section on remote access below covers opening it up safely.
+
+### Choose the Backend Mode
+
+- `backend: "cuvs"`: fails fast if the GPU is unavailable, dense search always runs on the GPU. Best for verification and a dedicated box.
+- `backend: "local"` with `auto_enable`: falls back to the CPU index on its own and checks free memory before each build. Best when the GPU is shared with the LLM.
+
+Start with the explicit backend to verify the GPU path, and switch to auto mode if the LLM and the index share memory. On a Spark the VLM and the vector index draw on the same unified memory. If you want OpenViking to use cuVS only when memory allows, keep the backend on local and enable auto mode instead:
+
+```json
+"vectordb": {
+  "backend": "local",
+  "cuvs": {
+    "auto_enable": true,
+    "algorithm": "brute_force",
+    "auto_memory_reserve_mb": 8192,
+    "auto_memory_safety_factor": 2.0,
+    "auto_background_rebuild": true
+  }
+}
+```
+
+Auto mode decides per query. OpenViking filters and routes first (URI scope plus scalar filters produce a candidate set). The query goes to cuVS GPU when the scope is wide, the index is ready, and memory fits. It goes to the native CPU index when there are few candidates, a rebuild is pending, memory is short, or no GPU is available. An explicit cuvs backend always takes the GPU branch. Results are then reranked and the original text is read on demand.
+
+Before each build, auto mode reads the free device memory, estimates the index size, multiplies it by the safety factor, and keeps the reserve free. If the index does not fit, that query uses the native CPU index and a later query retries. Small filtered scopes also route to the CPU by design, because a few thousand candidates are faster there. The reserve above is an example; size it against the model you run.
+
+## Step 4: Check and Start the Server
+
+```bash
+openviking-server doctor     # validates embedding, VLM, storage, and the vector backend
+openviking-server            # keep this terminal open
+
+# in another terminal
+curl http://127.0.0.1:1933/health
+```
+
+A healthy server answers `{"status":"ok","healthy":true,...}`. Only one server can own a workspace: with an embedded vector backend, OpenViking takes an exclusive file lock on `storage.workspace`. Web Studio, the built-in management UI, is served from the same address at `/studio`.
+
+## Step 5: Connect the CLI
+
+```bash
+npm install -g @openviking/cli
+ov config      # choose Custom, URL http://127.0.0.1:1933, leave the key empty
+ov health
+```
+
+## Step 6: Verify the Full Path
+
+A passing health check does not prove that models, indexing, and retrieval work together. Run one document through the whole path. Save this as ov-release-rotation.md:
+
+```markdown
+# OpenViking release rotation
+
+OpenViking ships a new release every Friday.
+Release owners rotate in this order: qin-ctx, zhoujh01, ZaynJarvis, t0saki.
+```
+
+```bash
+ov add-resource ./ov-release-rotation.md \
+  --to viking://resources/ov-release-rotation --wait --timeout 120
+
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "Who owns the weekly OpenViking release?" \
+  --uri viking://resources/ov-release-rotation
+```
+
+Then read the file back by the URI that find returns, and compare it with the source. The comparison is the acceptance test, because a successful HTTP status alone does not show that the stored text is intact:
+
+```bash
+ov read "<returned-file-uri>" > /tmp/readback.md
+diff /tmp/readback.md ov-release-rotation.md && echo READBACK_OK
+```
+
+### Confirm the Search Used the GPU
+
+Ask for operation telemetry on a search. In the response, `summary.vector.cuvs.routes` counts the searches by route, and a `cuvs` entry means the dense search ran on the GPU. `builds` is 1 on the first search, when the GPU index is built lazily, and 0 afterward.
+
+```bash
+curl -s -X POST http://127.0.0.1:1933/api/v1/search/find \
+  -H "Content-Type: application/json" \
+  -d '{"query": "weekly release owner", "target_uri": "viking://resources", "telemetry": true}'
+```
+
+To watch the process from the GPU side, run the per-process query from Step 0 before and after the first search.
+
+## Run It as a Service
+
+For a machine that stays on, let systemd keep the server up and start it on boot. This is the recommended way to run OpenViking on Linux, and it works with the virtual environment from Step 2. Replace every `<you>` with the user that owns the environment and the configuration. Ollama's installer registers its own systemd unit, so the server can start after it.
+
+```ini
+[Unit]
+Description=OpenViking HTTP Server
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=<you>
+Group=<you>
+WorkingDirectory=/home/<you>
+ExecStart=/home/<you>/openviking-env/bin/openviking-server
+Environment="OPENVIKING_CONFIG_FILE=/home/<you>/.openviking/ov.conf"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now openviking.service
+sudo systemctl status openviking.service
+sudo journalctl -u openviking.service -f
+```
+
+Stop the foreground server from Step 4 first, because only one server can hold the workspace lock. The unit points at the configuration file through `OPENVIKING_CONFIG_FILE`, so a file under your home directory is used even though systemd starts the service.
+
+## Reach It from Your Laptop
+
+The server listens on loopback, so a laptop cannot reach it directly. There are two ways to fix that, and the first is usually enough.
+
+### Option 1: An SSH tunnel
+
+```bash
+ssh -N -L 1933:127.0.0.1:1933 <you>@<spark-host>
+
+# in another laptop terminal
+ov config      # Custom, URL http://127.0.0.1:1933
+ov health
+# Web Studio: http://127.0.0.1:1933/studio
+```
+
+Traffic stays inside the SSH connection, the server never listens on a public address, and no key is needed in the default development mode.
+
+### Option 2: Listen on the network with authentication
+
+Use this when several people or machines share the Spark. A non-loopback listener requires a root key, and the server refuses to start in development mode on such an address. Add the listener and the key to `ov.conf`, then create an account and a user key with the Admin API:
+
+```json
+"server": {
+  "host": "0.0.0.0",
+  "port": 1933,
+  "root_api_key": "<a long random secret>"
+}
+```
+
+```bash
+curl -X POST http://127.0.0.1:1933/api/v1/admin/accounts \
+  -H "X-API-Key: <root key>" -H "Content-Type: application/json" \
+  -d '{"account_id": "team", "admin_user_id": "alice"}'
+# returns a user_key; give that key to the client, never the root key
+```
+
+Clients then put the Spark's address and their user key in `~/.openviking/ovcli.conf`. A root key is for administration only. Put TLS in front of the server before you expose it beyond a trusted network; the [public access guide](https://docs.openviking.ai/en/guides/12-public-access) and [authentication](https://docs.openviking.ai/en/guides/04-authentication) cover the options.
+
+## Connect Your Agents
+
+A running server is useful once an agent talks to it. Three routes cover most setups:
+
+- **Plugins for Claude Code and Codex**: run `curl -fsSL https://openviking.ai/install | bash`, tick the tools to set up, and choose Custom URL with your server address (the tunnel address works). Afterward you use claude or codex as before. The [coding agent guide](https://blog.openviking.ai/post/openviking-coding-agent) walks through it.
+- **MCP clients**: point any MCP-compatible client at the built-in /mcp endpoint of the server.
+- **Context Gateway**: for clients that cannot install a plugin, such as chat apps and SDK scripts, change only the base URL and the API key. The [gateway guide](https://docs.openviking.ai/en/guides/15-context-gateway) is in beta and explains what it recalls, saves, and compacts.
+
+The [integration overview](https://docs.openviking.ai/en/agent-integrations/01-overview) lists every supported agent with a one-line recommendation.
+
+## Plan the Memory
+
+The vectors live in two places: a host-side copy that OpenViking keeps for recovery and fallback, and the cuVS dataset on the device. Both are logical allocations from the same unified memory pool. With the default `float32`, the device payload is `N × dimension × 4` bytes. We measured these CuPy allocations for 1024-dimensional vectors on the Spark:
+
+| Vectors | Device allocation |
+| --- | --- |
+| 10,000 | 39 MiB |
+| 100,000 | 391 MiB |
+| 200,000 | 781 MiB |
+
+The server process also carries a CUDA runtime baseline of roughly 170 MiB, and the models loaded by Ollama take their own share of the same pool. Setting `"dtype": "float16"` halves the device payload; measure Recall@K against float32 before you rely on it. The [cuVS guide](https://docs.openviking.ai/en/guides/16-cuvs) lists the CAGRA graph overhead and the filter-cache cost.
+
+### Behavior to Expect
+
+- The GPU index is not persisted. After a restart, OpenViking rebuilds it from the locally stored vectors, and the first dense search pays that cost.
+- Inserts, updates, and deletes mark the GPU index dirty. By default the next search rebuilds it synchronously; with auto mode and background rebuild, queries use the CPU index until the new snapshot is ready.
+- A built snapshot stays in memory until the next rebuild or shutdown. There is no idle eviction yet, so budget for the full index.
+- The CPU path searches an int8-quantized index and the GPU path searches float32 or float16 vectors, so scores and near-tie ordering can differ slightly between the two.
+
+## What Speed-up to Expect
+
+We measured exact brute-force search on a 1.94 million vector, 1024-dimensional collection on the Spark, with top-100 results and 8 concurrent clients:
+
+| Scope | CPU native | cuVS GPU with Auto | Speed-up |
+| --- | --- | --- | --- |
+| No directory filter | 19.0 QPS | 76.8 QPS | 4.04× |
+| Directory filter | 71.1 QPS | 115.0 QPS | 1.62× |
+
+Read these numbers with their limits in mind. They cover the vector recall step only, not the end-to-end latency of an agent. The CPU path searched an int8 index and the GPU path float16, so this is not an equal-dtype kernel comparison. A directory filter leaves fewer candidates, which is why the gain is smaller there and why auto mode keeps a CPU path. The benchmark harness lets you repeat the measurement on your own data.
+
+### Tune for Your Workload
+
+| Goal | Setting |
+| --- | --- |
+| More throughput under concurrent requests | micro_batching_enabled: true |
+| Smaller device footprint | dtype: float16 |
+| Approximate graph search on large collections | algorithm: cagra |
+| Measure your own configuration | [benchmark/cuvs](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/README.md) |
+
+Micro-batching supports exact brute-force only and needs max_concurrent_gpu_searches set to 1. Change one setting at a time and re-run the benchmark harness on your data, because crossover points depend on the hardware and the workload.
+
+## Troubleshooting
+
+| Symptom | Where to look |
+| --- | --- |
+| Import error for cuvs or cupy, or a CUDA version error | The package does not match the CUDA major version. Reinstall cu13 or cu12 packages, keep the [ctk] extra, and re-run the smoke test. |
+| doctor reports an embedding or VLM failure | curl http://127.0.0.1:11434/api/tags and confirm the model names match ov.conf exactly. |
+| Overviews are empty or show a placeholder | The VLM is not available, so semantic processing did not run. Fix the model configuration before judging retrieval quality. |
+| Memory extraction stalls or looks truncated | Keep num_ctx at 16384 and think set to false in extra_request_body. |
+| A second server will not start | The workspace holds an exclusive lock. Stop the first server (including the systemd unit) or use a separate workspace. |
+| The server refuses to start on 0.0.0.0 | Development mode does not allow a non-loopback address. Set server.root_api_key. |
+| Search is not faster than the CPU | Check summary.vector.cuvs.routes. In auto mode, small filtered scopes route to the CPU on purpose. |
+| First search after a restart or write is slow | The GPU index is being rebuilt. Use auto mode with background rebuild if that latency matters. |
+
+## Upgrade and Roll Back
+
+1. Copy the virtual environment, and install the new OpenViking version into the copy. Run pip check there.
+2. Stop the server (sudo systemctl stop openviking.service) and back up the whole workspace directory together with ov.conf.
+3. Point ExecStart at the new environment, start the service, and run the Step 6 checks again.
+
+To roll back, stop the new server, restore the backed-up workspace, and start the old environment. Do not point the old version at data the new version has written.
+
+## What to Try Next
+
+With the server running and an agent connected, import your own documents and see what the agent recalls. Everything in this guide stays on the machine, so the same setup also works for private repositories and documents.
+
+## Links
+
+- [OpenViking GitHub](https://github.com/volcengine/OpenViking)
+- [Quickstart](https://docs.openviking.ai/en/getting-started/02-quickstart)
+- [Server deployment](https://docs.openviking.ai/en/guides/03-deployment)
+- [NVIDIA cuVS backend guide](https://docs.openviking.ai/en/guides/16-cuvs)
+- [Model configuration](https://docs.openviking.ai/en/guides/01-configuration)
+- [Agent integrations](https://docs.openviking.ai/en/agent-integrations/01-overview)
+- [cuVS benchmark harness](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/README.md)
+- [OpenViking Docs](https://docs.openviking.ai)
