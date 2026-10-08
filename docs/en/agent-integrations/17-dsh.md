@@ -104,7 +104,8 @@ Credentials given in the patch win over the environment. Behavior knobs resolve 
 |-------|---------------|
 | Nothing injected, no OpenViking tools | `dsh --profile web --dump-config` should list `openviking-memory-runtime`; re-run the installer or `dsh plugin --profile web add …` |
 | Installed into the wrong profile | The installer defaults to `web`; re-run it with `--dsh-profile <name>` |
-| `ERESOLVE` during install | Use a supported `@deepseek-ai/dsh` version: `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.7-rc.2`, or a stable `0.1.x` (peer range `>=0.1.0-rc.6 <0.2.0 \|\| ^0.1.5-rc.1 \|\| ^0.1.7-rc.2`), and keep all `@deepseek-ai/dsh-*` host packages on the same version. |
+| DSH reports the bundle is incompatible with this dsh version | The bundle accepts every `@deepseek-ai/dsh` 0.x release from `0.1.0-rc.6` on (peer range `>=0.1.0-rc.6 <1.0.0-0`), so this means DSH 1.0 or later; update the bundle, or accept the risk with `dsh plugin allow-version`. Keep all `@deepseek-ai/dsh-*` host packages on the same version. |
+| Bundle fails to start on a new DSH release | Releases verified so far: `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.7-rc.2`, `0.2.0-rc.2`, `0.2.1-alpha.1`. Newer 0.x releases are admitted without prior verification; pin DSH to a verified release and open an issue. |
 | Install says the package is "not in the npm registry" | The profile may have a pnpm minimum release age of 24 hours; check its configuration (`minimumReleaseAge`). Wait it out, or add the exact version to `minimumReleaseAgeExclude` in the profile's `pnpm-workspace.yaml` |
 | Recall is empty | `curl "<your OpenViking URL>/health"`; check the endpoint and that the prompt is longer than the minimum query length (3 characters) |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |

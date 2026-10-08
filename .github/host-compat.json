@@ -1,0 +1,16 @@
+{
+  "hosts": [
+    {
+      "id": "dsh",
+      "name": "DeepSeek Harness",
+      "plugin": "examples/dsh-memory-plugin",
+      "probe": "@deepseek-ai/dsh",
+      "tags": ["latest", "next", "alpha"],
+      "packages": "^@deepseek-ai/dsh(-.+)?$",
+      "includePrerelease": true,
+      "tests": "*.test.mjs",
+      "skipTests": ["bundle.test.mjs"],
+      "notes": "DSH checks @deepseek-ai/dsh-* peers at plugin load with prereleases included. bundle.test.mjs asserts the dev pins stay at the tested minimum, which this check replaces on purpose."
+    }
+  ]
+}
