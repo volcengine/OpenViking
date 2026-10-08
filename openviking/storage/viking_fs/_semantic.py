@@ -17,6 +17,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
     _ensure_non_empty_search_query,
@@ -632,6 +633,11 @@ class _SemanticMixin:
                     lease_ref=lease_ref,
                 )
 
+        except LockAcquisitionError:
+            # Surface lock conflicts with their type intact so the semantic
+            # queue's lock-retry guards (#4615) can re-enqueue without tripping
+            # the API circuit breaker.
+            raise
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")
-            raise IOError(f"Failed to write {uri}: {e}")
+            raise IOError(f"Failed to write {uri}: {e}") from e
