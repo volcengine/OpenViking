@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * The one hook entry cursor, TRAE and ZCode all run.
+ * The one hook entry Cursor, Qoder CLI, TRAE, ZCode and Kimi Code all run.
  *
  * Each host names it from its own hooks.json, passing the event and the client
  * id as arguments; the adapter under `hosts/` supplies everything that differs

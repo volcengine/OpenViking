@@ -1,9 +1,10 @@
 # OpenViking Memory for thin hook hosts
 
-Cursor, TRAE, TRAE CN and ZCode use host configuration files. Kimi Code uses its native managed-plugin directory. They share the same dispatcher and memory runtime; the installer assembles the runtime at install time rather than committing a copy per host.
+Cursor, Qoder CLI, TRAE, TRAE CN and ZCode use host configuration files. Kimi Code uses its native managed-plugin directory. They share the same dispatcher and memory runtime; the installer assembles the runtime at install time rather than committing a copy per host.
 
 ```bash
 bash examples/memory-plugin-shared/install.sh --harness cursor
+bash examples/memory-plugin-shared/install.sh --harness qoder
 bash examples/memory-plugin-shared/install.sh --harness trae,trae-cn
 bash examples/memory-plugin-shared/install.sh --harness zcode
 bash examples/memory-plugin-shared/install.sh --harness kimicode
@@ -20,7 +21,7 @@ bash examples/memory-plugin-shared/install.sh --harness kimicode
 
 ## Layout
 
-`scripts/hook.mjs` is the single entry every hook command runs. It owns the state machine all five clients share — the debounce, the prompt dedup, the recall cache, the cross-process lock — and asks the adapter under `hosts/` for the four things that differ: the event vocabulary, the response envelope, how a prompt is read out of the payload, and how a finished turn is captured. `scripts/uri-guard.mjs` and `servers/mcp-proxy.mjs` are likewise one file each, with the host chosen from the client id the installer passes.
+`scripts/hook.mjs` is the single entry every hook command runs. It owns the state machine all six clients share — the debounce, the prompt dedup, the recall cache, the cross-process lock — and asks the adapter under `hosts/` for the four things that differ: the event vocabulary, the response envelope, how a prompt is read out of the payload, and how a finished turn is captured. `scripts/uri-guard.mjs` and `servers/mcp-proxy.mjs` are likewise one file each, with the host chosen from the client id the installer passes.
 
 The root `plugin.json` is host-neutral package metadata used for version checks and diagnostics. Kimi's native manifest lives under `hosts/kimicode/` and is copied to the root of its assembled installation.
 
@@ -31,6 +32,7 @@ The memory logic itself is not here: recall, batching, the pending queue, creden
 ## Host notes
 
 - **Cursor** — six events, including the `preCompact` and `sessionEnd` no other host in this plugin has. Commits on Stop once `capturedSinceCommit` reaches the threshold, and unconditionally before a compaction. Sessions are `cu-`. See the [Cursor guide](../../docs/en/agent-integrations/12-cursor.md).
+- **Qoder CLI** — `SessionStart` and `UserPromptSubmit` inject context through `hookSpecificOutput.additionalContext`; `Stop` captures Claude-schema JSONL transcript turns and commits when it found new messages. Hooks, MCP, and three skills share `${QODER_CONFIG_DIR:-~/.qoder}`. Sessions are `qd-`. See the [Qoder CLI guide](../../docs/en/agent-integrations/20-qoder.md).
 - **TRAE / TRAE CN** — capture reads `prompt`, `text_content` and `last_assistant_message` off the Stop event rather than parsing a transcript. Every Stop that carries content commits. Sessions are `tr-` and `trcn-`. See the [TRAE guide](../../docs/en/agent-integrations/13-trae.md).
 - **ZCode** — the rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and let a later Stop recover missed turns, and hook stdin is only the fallback. ZCode supports neither `PreCompact` nor `SessionEnd`, so committing on every Stop stands in for both. Its output schema is strict, so a pass-through writes nothing at all. Sessions are `zc-`. [DESIGN.md](./DESIGN.md) records the verified extension surface.
 - **Kimi Code** — `wire.jsonl` is the authoritative transcript. UserPromptSubmit emits raw context text, while Stop, PreCompact and SessionEnd may detach; Interrupt remains synchronous under a two-second OpenViking request budget. The installer creates a self-contained native plugin without editing legacy `config.toml` or `mcp.json`. Sessions are `kc-`. [Host contract](./hosts/kimicode/DESIGN.md).
@@ -47,7 +49,7 @@ For Kimi's managed plugin, use its installed path instead:
 node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs" kimicode --offline
 ```
 
-For config-driven copies, the client defaults to the one that copy was installed for; pass `cursor`, `trae`, `trae-cn` or `zcode` as an argument to override it. Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report.
+For config-driven copies, the client defaults to the one that copy was installed for; pass `cursor`, `qoder`, `trae`, `trae-cn` or `zcode` as an argument to override it. Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report.
 
 ## Tests
 

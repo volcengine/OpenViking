@@ -31,6 +31,7 @@
 | [Claude Code](#claude-code) | 插件：hook + MCP 代理 | 服务端 MCP 工具 |
 | [Codex、TraeCode CLI 2.0](#codex-与-traecode-cli-2-0) | Codex 插件：hook + MCP 代理 | 服务端 MCP 工具 |
 | [Cursor](#cursor) | hook 与 MCP 配置，外加一条 rule | 服务端 MCP 工具 |
+| [Qoder CLI](#qoder-cli) | hook 与 MCP 配置 | 服务端 MCP 工具 |
 | [TRAE、TRAE CN](#trae-与-trae-cn) | hook 与 MCP 配置 | 服务端 MCP 工具 |
 | [ZCode](#zcode) | hook 与 MCP 配置 | 服务端 MCP 工具 |
 | [Kimi Code](#kimi-code) | Kimi Code 插件：hook + MCP 代理 | 服务端 MCP 工具 |
@@ -50,6 +51,7 @@
 | Codex | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | Codex 0.145+；否则下次启动时 | 先提交，再由宿主摘要 |
 | TraeCode CLI 2.0 | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 仅当版本带 `SessionEnd`；否则下次启动时 | 同 Codex |
 | Cursor | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 否 | 先提交，再由宿主摘要 |
+| Qoder CLI | 是，带会话 | profile、记忆索引、skill | 每轮有新增 transcript 消息时 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息 | 提交新捕获的消息 |
@@ -180,6 +182,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 | Claude Code | 每次 `UserPromptSubmit` | 去掉首尾空白的提问 | `additionalContext` 中的 `<openviking-context>` |
 | Codex、TraeCode CLI 2.0 | 每次 `UserPromptSubmit`；整个 hook 有 120 秒截止时间 | 提问 | `<openviking-context source="auto-recall">` |
 | Cursor | `beforeSubmitPrompt` | 提问；500 ms 内的重复事件复用上次结果 | `additional_context` |
+| Qoder CLI | `UserPromptSubmit` | 提问；500 ms 内的重复事件复用上次结果 | `hookSpecificOutput.additionalContext` |
 | TRAE、TRAE CN | `UserPromptSubmit` | 去掉之前注入块的提问 | `additionalContext` |
 | ZCode | `UserPromptSubmit` | 去掉三类注入块（含 `<system-reminder>`）的提问 | `additionalContext`，严格 JSON |
 | Kimi Code | `UserPromptSubmit` | 提问 | 纯文本上下文，不是 JSON |
@@ -215,7 +218,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 |---|---|
 | Claude Code | `SessionStart`，所有 source |
 | Codex | `SessionStart` 的 startup、clear 和 resume |
-| Cursor、TRAE、TRAE CN、ZCode | `SessionStart` |
+| Cursor、Qoder CLI、TRAE、TRAE CN、ZCode | `SessionStart` |
 | Kimi Code | 首次提问时；失败后在后续提问中重试，直到成功 |
 | OpenCode | 每个会话的第一条消息；失败后不重试，子代理会话跳过。已索引仓库的列表同时进入 system prompt |
 | DSH | 每个会话一次；压缩后不再发送 |
@@ -242,7 +245,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 |---|---|
 | Claude Code | 15 秒，hook 上限 60 秒 |
 | Codex | 整个 hook 120 秒截止，包括最长 110 秒的本地压缩器 |
-| Cursor、TRAE、TRAE CN、ZCode | 15 秒，宿主上限 20 秒 |
+| Cursor、Qoder CLI、TRAE、TRAE CN、ZCode | 15 秒，宿主上限 20 秒 |
 | OpenCode | 30 秒 |
 | DSH | 10 秒，开启查询扩写时至少 15 秒。召回会阻塞 pre-step |
 | pi | 15 秒 |
@@ -311,6 +314,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Codex | `Stop` 时待提交 token 达到 20,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
 | TraeCode CLI 2.0 | 同 Codex | 同 Codex；没有 `SessionEnd` 时只有启动时的扫描 | 同 Codex |
 | Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
+| Qoder CLI | 每个捕获到新 JSONL transcript 消息的 `Stop` | 无 | 没有压缩前事件 |
 | TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
 | ZCode | 每个 `Stop`；漏掉的 `Stop` 对应的轮次，在下一个 `Stop` 从 rollout 文件补齐 | 无 | 没有压缩前事件 |
 | Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 捕获到新消息时提交 | `PreCompact` 捕获到新消息时提交 |
@@ -334,6 +338,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Codex | 提交 | 视情况 | 否 | 否 | 否 | 连按两次 Ctrl+C 属于正常退出，会触发 `SessionEnd`；只按一次不会。漏掉的内容在下一次 startup 或 clear 的 `SessionStart` 提交：结束标记还在就立即提交，否则等空闲 30 分钟后提交 |
 | TraeCode CLI 2.0 | 否，除非版本带 `SessionEnd` | 否 | 否 | 否 | 否 | 下一次 `SessionStart` 的 30 分钟空闲扫描 |
 | Cursor | 否 | 否 | 否 | 否 | 否 | 关闭或切换对话不触发任何事件。`sessionEnd` 只在关闭窗口时触发，而此时宿主已停止执行 hook 命令。不足 8 条消息阈值的部分要等同一会话的后续消息 |
+| Qoder CLI | 否 | 否 | 否 | 否 | 否 | 每个带新增 transcript 消息的已完成 `Stop` 都已提交，最多丢失正在进行的那一轮 |
 | TRAE、TRAE CN | 否 | 否 | 否 | 否 | 否 | 每个 `Stop` 已经提交，最多丢失正在进行的那一轮 |
 | ZCode | 否 | 视情况 | 否 | 否 | 否 | 按 Ctrl+C 时如果该轮的 `Stop` 已触发，分离的 worker 会写完。每个 `Stop` 都提交，漏掉的轮次在下一个 `Stop` 补齐 |
 | Kimi Code | 视情况 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 只在捕获到新消息时提交；已被 `Stop` 捕获的尾部等待下一次提交 |
@@ -349,7 +354,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 - **正常退出时会提交**：Claude Code、Codex 0.145+、OpenCode、DSH、takeover 关闭的 pi，以及 Hermes。其他集成依赖最后一列的回收方式。
 - **`kill -9` 之后没有任何集成会提交**。已写入的消息保持未提交，直到该会话的下一次提交。带空闲超时的服务端自动提交策略是唯一的服务端兜底，而插件不会配置它。
-- **TRAE、TRAE CN 和 ZCode** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
+- **Qoder CLI、TRAE、TRAE CN 和 ZCode** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
 
 <a id="_3-3-4-pending-queue-离线补偿对照"></a>
 
@@ -357,7 +362,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 写入失败时 |
 |---|---|
-| Claude Code、Cursor、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条，每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
+| Claude Code、Cursor、Qoder CLI、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条，每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
 | Codex、TraeCode CLI 2.0 | 新捕获的内容不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分。`SessionStart` 仍会重放已排队的条目 |
 | OpenClaw | 没有队列，失败的轮次不会重发 |
 | Hermes（内置） | 上传在进程内线程中运行，不从磁盘重放。`$HERMES_HOME/openviking/pending_sessions/` 下的待提交标记让之后的启动能提交已退出进程留下的会话（仅 POSIX） |
@@ -466,6 +471,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Codex | 统一安装器（`--harness codex`）或 `codex plugin marketplace add` | `cx-<id>`，由 Codex 会话推导 | 共享配置，`plugin.codex` |
 | TraeCode CLI 2.0 | 统一安装器（`--harness trae-cli`），对 `traecli` 执行 Codex 的安装流程 | 同 Codex | 同 Codex |
 | Cursor | 统一安装器；写入 `~/.cursor/hooks.json` 和 `mcp.json` | `cu-<conversation id>` | 共享配置，`plugin.cursor` |
+| Qoder CLI | 统一安装器；把 hook 和 MCP 合并进 `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` | `qd-<session id>` | 共享配置，`plugin.qoder` |
 | TRAE、TRAE CN | 统一安装器；写入 `~/.trae/` 或 `~/.trae-cn/` 下的 hook 与 MCP 文件 | `tr-` 或 `trcn-` | 共享配置，`plugin.trae` 或 `plugin.trae_cn` |
 | ZCode | 统一安装器；合并进 `~/.zcode/cli/config.json` 并开启 hook | `zc-<id>` | 共享配置，`plugin.zcode` |
 | Kimi Code | 统一安装器；Kimi Code 托管插件 | `kc-<id>` | 共享配置，`plugin.kimicode` |
@@ -482,13 +488,13 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 ### 统一安装器
 
-`examples/memory-plugin-shared/install.sh` 安装 Claude Code、Codex、TraeCode CLI 2.0、Cursor、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、pi 和 DSH。OpenClaw 和 Hermes 有各自的安装渠道。需要知道的几点：
+`examples/memory-plugin-shared/install.sh` 安装 Claude Code、Codex、TraeCode CLI 2.0、Cursor、Qoder CLI、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、pi 和 DSH。OpenClaw 和 Hermes 有各自的安装渠道。需要知道的几点：
 
 - 不带 `--harness` 时显示多选菜单。各插件自带的 setup 脚本会替你传入 `--harness`。通过 `curl` 管道执行时，从 `/dev/tty` 读取输入。
 - 从文档站下载；在仓库 checkout 中运行时，使用本地 checkout。
 - hook 和 MCP 条目带有 `OPENVIKING_INTEGRATION_ID` 标记，重新运行只替换自己的条目，不动其他工具的条目。每个被修改的文件先备份为 `.bak`，再以 `0600` 权限原子替换。
 - 凭据步骤为本地服务端、OpenViking Service 或自定义 URL 写入 `~/.openviking/ovcli.conf`。已有配置会先显示当前值（API key 打码），再让你选择保留或修改。
-- `--uninstall` 支持 Cursor、TRAE、TRAE CN、ZCode 和 Kimi Code。其他集成通过宿主自己的插件管理卸载。
+- `--uninstall` 支持 Cursor、Qoder CLI、TRAE、TRAE CN、ZCode 和 Kimi Code。其他集成通过宿主自己的插件管理卸载。
 - 需要 Node.js 18 或更高版本。
 
 <a id="_3-1-3-凭据体系"></a>
@@ -499,7 +505,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 使用方 | 服务端 URL | API key | 身份 | 认证头 |
 |---|---|---|---|---|
-| 共享插件代码：Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、OpenCode、DSH、pi、Agent Plugins | `OPENVIKING_URL`，其次 `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`，其次 `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID` | 只有 `Authorization: Bearer` |
+| 共享插件代码：Claude Code、Codex、Cursor、Qoder CLI、TRAE、ZCode、Kimi Code、OpenCode、DSH、pi、Agent Plugins | `OPENVIKING_URL`，其次 `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`，其次 `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID` | 只有 `Authorization: Bearer` |
 | OpenClaw | `OPENVIKING_BASE_URL`，其次 `OPENVIKING_URL` | `OPENVIKING_API_KEY` 或 SecretRef | `OPENVIKING_ACCOUNT_ID`、`OPENVIKING_USER_ID` | `X-API-Key` |
 | Hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT` | 同时发送 `X-API-Key` 和 `Bearer`。有 key 时不发租户头，服务端要求时补发并重试一次 |
 | ov CLI | `ovcli.conf` | `ovcli.conf` | `--account`、`--user`、`--actor-peer-id` | `X-API-Key`；按 `auth_mode` 使用 Basic 或 Bearer。含两个及以上点号的 key 也会以 Bearer 发送 |
@@ -536,6 +542,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor` | 有 |
 | Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的四个 | 有 |
 | Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory` | 安装器菜单 |
+| Qoder CLI | 无 | 无 | `openviking-memory`、`openviking-skills`、`ov-experience-memory` | 安装器菜单 |
 | TRAE、TRAE CN、ZCode | 无 | 无 | 无 | 安装器菜单 |
 | OpenCode | 无 | 无 | 与 Cursor 相同的三个，仅在插件注册自己的 MCP 服务时提供 | 有 |
 | DSH | 无 | 无 | 与 Cursor 相同的三个 | 无 |
@@ -582,6 +589,15 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 - 只捕获文本，所以 `ov-experience-memory` 能检索和应用 Experience，但无法把读取关联回所用的 Experience。
 - `sessionEnd` 只在关闭窗口时触发，此时 Cursor 已停止执行 hook 命令，因此实际不会提交。
 - 服务端不可达时，每轮都要等满 15 秒召回超时。
+
+### Qoder CLI
+
+[Qoder CLI 记忆集成](./20-qoder.md)。hook 与 MCP 配置，包含 3 个 hook（`SessionStart`、`UserPromptSubmit`、`Stop`）和 3 个 skill。
+
+- Qoder 把 hook 和 MCP server 放在同一个 `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` 中；安装和卸载只合并一次该文件，并保留无关条目。
+- `UserPromptSubmit` 通过 `hookSpecificOutput.additionalContext` 返回上下文。
+- `Stop` 读取 Claude schema 的 JSONL transcript，在捕获到新增的用户或助手消息时提交。
+- 此集成没有 Qoder 的 `PreCompact` 或退出 hook，也不安装 URI guard。
 
 <a id="trae-trae-cn-ide-版"></a>
 

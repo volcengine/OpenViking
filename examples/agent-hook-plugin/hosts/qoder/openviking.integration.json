@@ -3,11 +3,11 @@
   "id": "openviking-memory",
   "version": "0.5.14",
   "clients": [
-    "trae",
-    "trae-cn"
+    "qoder"
   ],
   "capabilities": [
     "hooks",
-    "mcp"
+    "mcp",
+    "skills"
   ]
 }

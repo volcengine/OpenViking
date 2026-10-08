@@ -15,10 +15,11 @@ export function parseCursorTranscript(raw) {
     if (!line.trim()) continue;
     let item;
     try { item = JSON.parse(line); } catch { continue; }
-    if (item?.role !== "user" && item?.role !== "assistant") continue;
+    const role = item?.role ?? item?.message?.role;
+    if (role !== "user" && role !== "assistant") continue;
     const content = extractCursorText(item.message?.content ?? item.content);
     if (!content) continue;
-    turns.push({ role: item.role, content });
+    turns.push({ role, content });
   }
   return turns;
 }

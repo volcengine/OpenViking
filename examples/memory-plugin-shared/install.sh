@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
+# Qoder CLI, TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
 # DeepSeek Harness (dsh).
 #
 # In short:
@@ -61,6 +61,7 @@
 #   trae-cli   the same through the TraeCode CLI, then removes the hooks an older
 #              installer added to ~/.trae/cli/hooks.json and ~/.trae/traecli.toml
 #   cursor     ~/.cursor/hooks.json, ~/.cursor/mcp.json, ~/.cursor/rules, ~/.cursor/skills
+#   qoder      ${QODER_CONFIG_DIR:-~/.qoder}/settings.json and skills
 #   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
@@ -69,7 +70,7 @@
 #   dsh        dsh plugin add into the chosen profile
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
-# Cursor, TRAE, TRAE CN and ZCode run their hooks from
+# Cursor, Qoder CLI, TRAE, TRAE CN and ZCode run their hooks from
 # ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper.
 # The plugin bundle is unpacked to ~/.openviking/memory-plugin-marketplace when
 # a harness installs from it.
@@ -86,7 +87,7 @@
 # neither a published build nor part of a checkout downloads and runs the
 # published copy of this script.
 #
-# Uninstall: Cursor, TRAE, TRAE CN, ZCode and Kimi Code with
+# Uninstall: Cursor, Qoder CLI, TRAE, TRAE CN, ZCode and Kimi Code with
 #   curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness <list>
 # The other harnesses with the commands the install prints at the end, such as
 #   claude plugin uninstall openviking-memory@openviking && claude plugin marketplace remove openviking
@@ -224,7 +225,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, qoder, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
@@ -498,10 +499,11 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_QODER=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
+  { command -v qoder >/dev/null 2>&1 || [ -d "${QODER_CONFIG_DIR:-$HOME/.qoder}" ]; } && HAVE_QODER=1
   { [ -d "/Applications/Trae.app" ] || [ -d "/Applications/TRAE.app" ] || [ -d "$HOME/.trae" ]; } && HAVE_TRAE=1
   { [ -d "/Applications/Trae CN.app" ] || [ -d "/Applications/TRAE SOLO CN.app" ] || [ -d "$HOME/.trae-cn" ]; } && HAVE_TRAE_CN=1
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
@@ -634,7 +636,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_QODER=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -647,6 +649,7 @@ SEL_OPENCODE=0
 SEL_PI=0
 SEL_DSH=0
 SEL_CURSOR_APP=0
+SEL_QODER=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
 SEL_ZCODE=0
@@ -664,7 +667,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 9 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
 }
 
 tui_total_count() {
@@ -694,6 +697,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'dsh|dsh'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cursor|cursor'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'qoder|qoder'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'trae|trae'; return 0; fi
   i=$((i + 1))
@@ -733,6 +738,7 @@ tui_bin_label() {
     pi:*) printf 'pi' ;;
     dsh:*) printf 'DeepSeek Harness' ;;
     cursor:*) printf 'Cursor' ;;
+    qoder:*) printf 'Qoder CLI' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
     zcode:*) printf 'ZCode' ;;
@@ -757,6 +763,8 @@ tui_bin_selected() {
     [ "$SEL_DSH" -eq 1 ]
   elif [ "$kind" = "cursor" ]; then
     [ "$SEL_CURSOR_APP" -eq 1 ]
+  elif [ "$kind" = "qoder" ]; then
+    [ "$SEL_QODER" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
     [ "$SEL_TRAE" -eq 1 ]
   elif [ "$kind" = "trae-cn" ]; then
@@ -773,6 +781,7 @@ tui_bin_selected() {
 tui_bin_detected() { # tui_bin_detected <kind> <bin>
   case "$1" in
     cursor) [ "$HAVE_CURSOR" -eq 1 ] ;;
+    qoder) [ "$HAVE_QODER" -eq 1 ] ;;
     trae) [ "$HAVE_TRAE" -eq 1 ] ;;
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
@@ -788,6 +797,7 @@ tui_set_all_bins() {
   SEL_PI=1
   SEL_DSH=1
   SEL_CURSOR_APP=1
+  SEL_QODER=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
   SEL_ZCODE=1
@@ -812,6 +822,8 @@ tui_toggle_bin() {
     return 0
   elif [ "$kind" = "cursor" ]; then
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
+  elif [ "$kind" = "qoder" ]; then
+    SEL_QODER=$((1 - SEL_QODER)); return 0
   elif [ "$kind" = "trae" ]; then
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
   elif [ "$kind" = "trae-cn" ]; then
@@ -898,6 +910,7 @@ tui_reset_bin_selection() {
   SEL_PI=0
   SEL_DSH=0
   SEL_CURSOR_APP=0
+  SEL_QODER=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
   SEL_ZCODE=0
@@ -925,6 +938,7 @@ EOF
   if command -v pi >/dev/null 2>&1; then SEL_PI=1; any=1; fi
   if command -v dsh >/dev/null 2>&1; then SEL_DSH=1; any=1; fi
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
+  if [ "$HAVE_QODER" -eq 1 ]; then SEL_QODER=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
@@ -1016,6 +1030,7 @@ tui_add_compatible_cli() {
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
+    || [ "$SEL_QODER" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
     || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
@@ -1030,6 +1045,7 @@ tui_finish_selection() {
   [ "$SEL_PI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}pi"
   [ "$SEL_DSH" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh"
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
+  [ "$SEL_QODER" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}qoder"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
@@ -1101,6 +1117,7 @@ select_harnesses() {
   [ "$HAVE_CLAUDE" -eq 1 ] && detected="claude"
   [ "$HAVE_CODEX" -eq 1 ] && detected="${detected:+$detected,}codex"
   [ "$HAVE_CURSOR" -eq 1 ] && detected="${detected:+$detected,}cursor"
+  [ "$HAVE_QODER" -eq 1 ] && detected="${detected:+$detected,}qoder"
   [ "$HAVE_TRAE" -eq 1 ] && detected="${detected:+$detected,}trae"
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
@@ -1257,7 +1274,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
+      claude|codex|cursor|qoder|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1297,9 +1314,9 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
   if contains_harness cli; then ok=1; fi
-  # Cursor and TRAE are config-driven integrations. They may be installed
+  # Cursor, Qoder and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
+  if contains_harness cursor || contains_harness qoder || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -2309,7 +2326,7 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode"
+AGENT_HOOK_HOSTS="cursor qoder trae zcode kimicode"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
@@ -2430,6 +2447,19 @@ uninstall_agent_integrations() {
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
+  if contains_harness qoder; then
+    local qoder_root qoder_runtime
+    qoder_root="$(qoder_config_root)"
+    qoder_runtime="$OV_HOME/agent-integrations/qoder/hosts/qoder/settings-config.mjs"
+    if [ -f "$qoder_runtime" ]; then
+      "$NODE_BIN" "$qoder_runtime" remove "$qoder_root/settings.json"
+    else
+      warn "$(t 'Qoder uninstall runtime not found; remove OpenViking entries by hand from:' '未找到 Qoder 卸载运行时，请手动移除 OpenViking 条目：') $qoder_root/settings.json"
+    fi
+    rm -rf "$qoder_root/skills/openviking-memory" "$qoder_root/skills/openviking-skills" "$qoder_root/skills/ov-experience-memory"
+    rm -rf "$OV_HOME/agent-integrations/qoder"
+    info "$(t 'Removed the Qoder CLI OpenViking integration.' '已移除 Qoder CLI OpenViking 集成。')"
+  fi
   if contains_harness trae; then
     agent_remove_json_configs "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)"
     rm -rf "$OV_HOME/agent-integrations/trae"
@@ -2523,6 +2553,7 @@ NODE
     info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/qoder" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
@@ -2537,6 +2568,10 @@ NODE
 
 cursor_mcp_path() {
   printf '%s' "$HOME/.cursor/mcp.json"
+}
+
+qoder_config_root() {
+  printf '%s' "${QODER_CONFIG_DIR:-$HOME/.qoder}"
 }
 
 cursor_legacy_claude_plugins() {
@@ -2591,6 +2626,31 @@ install_cursor() {
     warn "$(t 'Cursor may also import these older Claude OpenViking plugins and run duplicate Hooks:' 'Cursor 还可能导入以下旧版 Claude OpenViking 插件并重复执行 Hook：') $legacy_plugins"
     warn "$(t 'Upgrade or remove those legacy plugin ids, then restart Cursor.' '请升级或移除这些旧插件 id，然后重启 Cursor。')"
   fi
+}
+
+install_qoder() {
+  step_heading "$(t 'Qoder CLI integration' 'Qoder CLI 集成')"
+  local source root config_root settings_path skill skill_tmp
+  ensure_bundle
+  source="$(plugin_dir_on_disk agent-hook-plugin)" || {
+    err "$(t 'Agent integration sources not found:' '未找到 Agent 接入源码：') agent-hook-plugin"
+    return 1
+  }
+  root="$(assemble_agent_integration qoder qoder)" || return 1
+  config_root="$(qoder_config_root)"
+  settings_path="$config_root/settings.json"
+  "$NODE_BIN" "$root/hosts/qoder/settings-config.mjs" write \
+    "$settings_path" "$root" "$NODE_BIN" "$SOURCE_MODE"
+  mkdir -p "$config_root/skills"
+  for skill in openviking-memory openviking-skills ov-experience-memory; do
+    skill_tmp="$config_root/skills/$skill.tmp"
+    rm -rf "$skill_tmp"
+    cp -R "$source/hosts/cursor/skills/$skill" "$skill_tmp"
+    rm -rf "$config_root/skills/$skill"
+    mv "$skill_tmp" "$config_root/skills/$skill"
+  done
+  info "$(t 'Qoder CLI hooks and MCP installed:' 'Qoder CLI hooks 与 MCP 已安装：') $settings_path"
+  info "$(t 'Qoder CLI Skills installed under its configuration directory.' 'Qoder CLI Skills 已安装到其配置目录。')"
 }
 
 zcode_mcp_path() {
@@ -2818,34 +2878,43 @@ install_pi() {
 # Validation
 # ---------------------------------------------------------------------------
 
-# Cursor, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
+# Cursor, Qoder CLI, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
 # in where their hooks and MCP entries live and in the session-start event name.
 validate_hook_host() { # validate_hook_host <client>
   local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
-  local hooks mcp event file complete=1
-  set -- "$root/scripts/hook.mjs" "$root/scripts/uri-guard.mjs" "$root/integration.json" "$shared/agent-hook-runtime.mjs"
+  local hooks mcp event file config_root complete=1 guard=1
+  set -- "$root/scripts/hook.mjs" "$root/integration.json" "$shared/agent-hook-runtime.mjs"
   case "$client" in
     cursor)
       hooks="$HOME/.cursor/hooks.json"; mcp="$(cursor_mcp_path)"; event=sessionStart
-      set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
+      set -- "$@" "$root/scripts/uri-guard.mjs" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
         "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
         "$HOME/.cursor/skills/ov-experience-memory/SKILL.md"
       ;;
+    qoder)
+      config_root="$(qoder_config_root)"; hooks="$config_root/settings.json"; mcp="$hooks"; event=session-start; guard=0
+      set -- "$@" "$root/hosts/qoder/settings-config.mjs" "$config_root/skills/openviking-memory/SKILL.md" \
+        "$config_root/skills/openviking-skills/SKILL.md" "$config_root/skills/ov-experience-memory/SKILL.md"
+      ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
-    *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
+    *)
+      hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start
+      set -- "$@" "$root/scripts/uri-guard.mjs" "$shared/uri-guard.mjs"
+      ;;
   esac
   for file in "$@"; do
     [ -f "$file" ] || complete=0
   done
   grep -q 'scripts/hook.mjs' "$hooks" 2>/dev/null \
-    && grep -q 'scripts/uri-guard.mjs' "$hooks" 2>/dev/null \
     && grep -q 'OPENVIKING_INTEGRATION_ID' "$hooks" 2>/dev/null \
     && grep -q 'mcp-proxy.mjs' "$mcp" 2>/dev/null || complete=0
+  if [ "$guard" -eq 1 ] && ! grep -q 'scripts/uri-guard.mjs' "$hooks" 2>/dev/null; then complete=0; fi
   if [ "$complete" -eq 0 ]; then
     warn "$client: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
     return 1
   fi
-  "$NODE_BIN" --check "$root/scripts/hook.mjs" && "$NODE_BIN" --check "$root/scripts/uri-guard.mjs" || return 1
+  "$NODE_BIN" --check "$root/scripts/hook.mjs" || return 1
+  if [ "$guard" -eq 1 ]; then "$NODE_BIN" --check "$root/scripts/uri-guard.mjs" || return 1; fi
   if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 "$NODE_BIN" "$root/scripts/hook.mjs" "$event" "$client" >/dev/null; then
     warn "$client: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
     return 1
@@ -2896,7 +2965,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor qoder trae trae-cn zcode; do
     contains_harness "$client" || continue
     validate_hook_host "$client" || { ok=0; agent_fatal=1; }
   done
@@ -3078,7 +3147,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode opencode pi dsh cli; do
+  for h in cursor qoder trae trae-cn zcode kimicode opencode pi dsh cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3186,7 +3255,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
+  if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness qoder || contains_harness trae || contains_harness trae-cn \
     || contains_harness zcode || contains_harness kimicode || contains_harness opencode || contains_harness pi; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
@@ -3194,6 +3263,11 @@ EOF
     plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
       "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
       "$HOME/.cursor/skills/ov-experience-memory" "$OV_HOME/agent-integrations/cursor"
+  fi
+  if contains_harness qoder; then
+    plan_paths "Qoder CLI" "$(qoder_config_root)/settings.json" "$(qoder_config_root)/skills/openviking-memory" \
+      "$(qoder_config_root)/skills/openviking-skills" "$(qoder_config_root)/skills/ov-experience-memory" \
+      "$OV_HOME/agent-integrations/qoder"
   fi
   if contains_harness trae; then
     plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"
@@ -3204,7 +3278,7 @@ EOF
   if contains_harness zcode; then
     plan_paths ZCode "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
   fi
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
+  if contains_harness cursor || contains_harness qoder || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
     plan_paths "$(t 'Shared hook runtime' '共享 hook 运行时')" "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness kimicode; then
@@ -3314,7 +3388,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor qoder trae trae-cn zcode; do
     contains_harness "$client" || continue
     label="$(tui_bin_label "$client" "$client")"
     doctor="node $(short_path "$OV_HOME/agent-integrations/$client/scripts/ov-memory-doctor.mjs")"
@@ -3403,6 +3477,7 @@ $CODEX_BINS
 EOF
 fi
 if contains_harness cursor; then install_cursor; fi
+if contains_harness qoder; then install_qoder; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi

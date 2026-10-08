@@ -31,6 +31,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [Claude Code](#claude-code) | Plugin with hooks and an MCP proxy | Server MCP tools |
 | [Codex, TraeCode CLI 2.0](#codex-and-traecode-cli-2-0) | Codex plugin with hooks and an MCP proxy | Server MCP tools |
 | [Cursor](#cursor) | Hook and MCP configuration, plus a rule | Server MCP tools |
+| [Qoder CLI](#qoder-cli) | Hook and MCP configuration | Server MCP tools |
 | [TRAE, TRAE CN](#trae-and-trae-cn) | Hook and MCP configuration | Server MCP tools |
 | [ZCode](#zcode) | Hook and MCP configuration | Server MCP tools |
 | [Kimi Code](#kimi-code) | Kimi Code plugin with hooks and an MCP proxy | Server MCP tools |
@@ -50,6 +51,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Codex | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Codex 0.145+; otherwise at the next start | Commits, then the host summarizes |
 | TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Only if the build has `SessionEnd`; otherwise at the next start | Same as Codex |
 | Cursor | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | No | Commits, then the host summarizes |
+| Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every turn with new transcript messages | No exit event; turns are already committed | No pre-compaction event |
 | TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Only when `SessionEnd` captures new messages | Commits newly captured messages |
@@ -180,6 +182,7 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 | Claude Code | Every `UserPromptSubmit` | The prompt, trimmed | `<openviking-context>` in `additionalContext` |
 | Codex, TraeCode CLI 2.0 | Every `UserPromptSubmit`; the whole hook has a 120-second deadline | The prompt | `<openviking-context source="auto-recall">` |
 | Cursor | `beforeSubmitPrompt` | The prompt; repeated events within 500 ms reuse the previous result | `additional_context` |
+| Qoder CLI | `UserPromptSubmit` | The prompt; repeated events within 500 ms reuse the previous result | `hookSpecificOutput.additionalContext` |
 | TRAE, TRAE CN | `UserPromptSubmit` | The prompt, with earlier injected blocks removed | `additionalContext` |
 | ZCode | `UserPromptSubmit` | The prompt, with three kinds of injected block removed, including `<system-reminder>` | `additionalContext`, strict JSON |
 | Kimi Code | `UserPromptSubmit` | The prompt | Plain context text, not JSON |
@@ -215,7 +218,7 @@ When each integration injects it:
 |---|---|
 | Claude Code | `SessionStart`, every source |
 | Codex | `SessionStart` on startup, clear, and resume |
-| Cursor, TRAE, TRAE CN, ZCode | `SessionStart` |
+| Cursor, Qoder CLI, TRAE, TRAE CN, ZCode | `SessionStart` |
 | Kimi Code | The first prompt; retried on later prompts until it succeeds |
 | OpenCode | The first message of each session; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
 | DSH | Once per session; not sent again after compaction |
@@ -242,7 +245,7 @@ The server stops query expansion after 5 seconds (`retrieval.recall_intent_timeo
 |---|---|
 | Claude Code | 15 seconds, inside a 60-second hook limit |
 | Codex | A 120-second deadline for the whole hook, including a local compressor of up to 110 seconds |
-| Cursor, TRAE, TRAE CN, ZCode | 15 seconds, inside a 20-second host limit |
+| Cursor, Qoder CLI, TRAE, TRAE CN, ZCode | 15 seconds, inside a 20-second host limit |
 | OpenCode | 30 seconds |
 | DSH | 10 seconds, raised to at least 15 with query expansion. Recall blocks the pre-step |
 | pi | 15 seconds |
@@ -311,6 +314,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Codex | `Stop` at 20,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
 | TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
 | Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
+| Qoder CLI | Every `Stop` that captured new JSONL transcript messages | None | No pre-compaction event |
 | TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
 | Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit when they capture new messages | `PreCompact` commits when it captures new messages |
@@ -334,6 +338,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Codex | Commits | Conditional | No | No | No | A double Ctrl+C quits cleanly and fires `SessionEnd`; a single one does not. Anything missed is committed at the next `SessionStart` on startup or clear: at once if the end marker survived, otherwise after 30 minutes idle |
 | TraeCode CLI 2.0 | No, unless the build has `SessionEnd` | No | No | No | No | The 30-minute idle sweep at the next `SessionStart` |
 | Cursor | No | No | No | No | No | Closing or switching a chat fires no event. `sessionEnd` fires only on window close, after the host has already stopped running hook commands. Messages below the 8-message threshold wait for later messages in the same session |
+| Qoder CLI | No | No | No | No | No | Every completed `Stop` with new transcript messages already committed, so at most the turn in progress is lost |
 | TRAE, TRAE CN | No | No | No | No | No | Every `Stop` already committed, so at most the turn in progress is lost |
 | ZCode | No | Conditional | No | No | No | Ctrl+C after that turn's `Stop` fired lets the detached worker finish. Every `Stop` commits, and missed turns are caught up at the next `Stop` |
 | Kimi Code | Conditional | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit only when they capture new messages; a tail already captured by `Stop` waits for the next commit |
@@ -349,7 +354,7 @@ What this means in practice:
 
 - **Commits at a normal exit:** Claude Code, Codex 0.145+, OpenCode, DSH, pi with takeover off, and Hermes. The others rely on the recovery in the last column.
 - **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins do not configure one.
-- **TRAE, TRAE CN, and ZCode** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
+- **Qoder CLI, TRAE, TRAE CN, and ZCode** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
 
 <a id="_3-3-4-pending-queue-offline-compensation-comparison"></a>
 
@@ -357,7 +362,7 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Claude Code, Cursor, Qoder CLI, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
 | Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
@@ -466,6 +471,7 @@ The session ID prefix tells you which integration wrote a session on the server.
 | Codex | Unified installer (`--harness codex`) or `codex plugin marketplace add` | `cx-<id>`, derived from the Codex session | Shared settings, `plugin.codex` |
 | TraeCode CLI 2.0 | Unified installer (`--harness trae-cli`), which runs the Codex flow against `traecli` | Same as Codex | Same as Codex |
 | Cursor | Unified installer; writes `~/.cursor/hooks.json` and `mcp.json` | `cu-<conversation id>` | Shared settings, `plugin.cursor` |
+| Qoder CLI | Unified installer; merges Hooks and MCP into `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` | `qd-<session id>` | Shared settings, `plugin.qoder` |
 | TRAE, TRAE CN | Unified installer; writes `~/.trae/` or `~/.trae-cn/` hooks and MCP files | `tr-` or `trcn-` | Shared settings, `plugin.trae` or `plugin.trae_cn` |
 | ZCode | Unified installer; merges into `~/.zcode/cli/config.json` and turns hooks on | `zc-<id>` | Shared settings, `plugin.zcode` |
 | Kimi Code | Unified installer; managed Kimi Code plugin | `kc-<id>` | Shared settings, `plugin.kimicode` |
@@ -482,13 +488,13 @@ The session ID prefix tells you which integration wrote a session on the server.
 
 ### Unified installer
 
-`examples/memory-plugin-shared/install.sh` installs Claude Code, Codex, TraeCode CLI 2.0, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, pi, and DSH. OpenClaw and Hermes have their own channels. Things worth knowing:
+`examples/memory-plugin-shared/install.sh` installs Claude Code, Codex, TraeCode CLI 2.0, Cursor, Qoder CLI, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, pi, and DSH. OpenClaw and Hermes have their own channels. Things worth knowing:
 
 - Without `--harness`, it shows a multi-select menu. The setup helpers bundled with each plugin pass `--harness` for you. When piped from `curl`, it reads answers from `/dev/tty`.
 - It downloads from the documentation site, or uses the local checkout when run from one.
 - Hook and MCP entries carry an `OPENVIKING_INTEGRATION_ID` marker, so a rerun replaces its own entries and leaves other tools' entries alone. Each changed file is backed up to `.bak` and replaced atomically with mode `0600`.
 - The credential step writes `~/.openviking/ovcli.conf` for a local server, OpenViking Service, or a custom URL. Existing values are shown, with the API key masked, before you choose to keep or change them.
-- `--uninstall` covers Cursor, TRAE, TRAE CN, ZCode, and Kimi Code. Remove the others through the host's own plugin manager.
+- `--uninstall` covers Cursor, Qoder CLI, TRAE, TRAE CN, ZCode, and Kimi Code. Remove the others through the host's own plugin manager.
 - Node.js 18 or later is required.
 
 <a id="_3-1-3-credential-systems"></a>
@@ -499,7 +505,7 @@ Four credential systems exist, each with its own variable names and headers. Whe
 
 | Used by | Server URL | API key | Identity | Auth header |
 |---|---|---|---|---|
-| Shared plugin code: Claude Code, Codex, Cursor, TRAE, ZCode, Kimi Code, OpenCode, DSH, pi, Agent Plugins | `OPENVIKING_URL`, then `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`, then `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID` | `Authorization: Bearer` only |
+| Shared plugin code: Claude Code, Codex, Cursor, Qoder CLI, TRAE, ZCode, Kimi Code, OpenCode, DSH, pi, Agent Plugins | `OPENVIKING_URL`, then `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`, then `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID` | `Authorization: Bearer` only |
 | OpenClaw | `OPENVIKING_BASE_URL`, then `OPENVIKING_URL` | `OPENVIKING_API_KEY`, or a SecretRef | `OPENVIKING_ACCOUNT_ID`, `OPENVIKING_USER_ID` | `X-API-Key` |
 | Hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT` | Both `X-API-Key` and `Bearer`. With a key, tenant headers are omitted unless the server asks for them, then retried once |
 | ov CLI | `ovcli.conf` | `ovcli.conf` | `--account`, `--user`, `--actor-peer-id` | `X-API-Key`; Basic or Bearer depending on `auth_mode`. A key with two or more dots is also sent as Bearer |
@@ -536,6 +542,7 @@ Settings that apply only to some integrations:
 | Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `ov-memory-doctor` | Yes |
 | Codex, TraeCode CLI 2.0 | No | None | Same four as Claude Code | Yes |
 | Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
+| Qoder CLI | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
 | TRAE, TRAE CN, ZCode | No | None | None | Installer menu |
 | OpenCode | No | None | The same three as Cursor, only when the plugin registers its MCP server | Yes |
 | DSH | No | None | The same three as Cursor | No |
@@ -582,6 +589,15 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - Capture is text-only, so `ov-experience-memory` can find and apply Experience but cannot link its reads back to the Experience used.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
+
+### Qoder CLI
+
+[Qoder CLI Memory Integration](./20-qoder.md). Hook and MCP configuration with 3 hooks (`SessionStart`, `UserPromptSubmit`, and `Stop`) plus 3 skills.
+
+- Qoder keeps Hooks and MCP servers in the same `${QODER_CONFIG_DIR:-~/.qoder}/settings.json`; install and uninstall merge that file once and preserve unrelated entries.
+- `UserPromptSubmit` returns context through `hookSpecificOutput.additionalContext`.
+- `Stop` reads the Claude-schema JSONL transcript and commits when it captures new user or assistant messages.
+- Qoder exposes no `PreCompact` or exit hook in this integration, and no URI guard is installed.
 
 <a id="trae-trae-cn-ide-editions"></a>
 

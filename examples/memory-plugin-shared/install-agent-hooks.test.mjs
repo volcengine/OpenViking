@@ -509,10 +509,129 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
   }
 });
 
+test("Qoder install merges one settings file idempotently and uninstall preserves foreign entries", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-qoder-hooks-"));
+  const qoderRoot = join(home, "custom-qoder");
+  const settingsPath = join(qoderRoot, "settings.json");
+  const env = { QODER_CONFIG_DIR: qoderRoot };
+  try {
+    const foreignStop = { hooks: [{ type: "command", command: "third-party stop" }] };
+    writeJson(settingsPath, {
+      language: "en",
+      hooks: {
+        PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "foreign-check" }] }],
+        Stop: [foreignStop],
+      },
+      mcpServers: {
+        foreign: { command: "foreign-server" },
+      },
+    });
+
+    const install = () => runInstaller(home, [
+      "--harness", "qoder",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ], env);
+    const first = install();
+    assert.equal(first.status, 0, `${first.stdout}\n${first.stderr}`);
+    assert.match(first.stdout, /Qoder CLI hooks and MCP installed/u);
+    const firstManifest = JSON.parse(readFileSync(
+      join(home, ".openviking", "agent-integrations", "qoder", "integration.json"),
+      "utf8",
+    ));
+    const second = install();
+    assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(settings.version, undefined, "Qoder settings must not receive a hook-schema version");
+    assert.equal(settings.language, "en");
+    assert.deepEqual(settings.hooks.PreToolUse, [
+      { matcher: "Bash", hooks: [{ type: "command", command: "foreign-check" }] },
+    ]);
+    assert.ok(settings.hooks.Stop.some((group) => JSON.stringify(group) === JSON.stringify(foreignStop)));
+    for (const event of ["SessionStart", "UserPromptSubmit", "Stop"]) {
+      assert.equal(
+        settings.hooks[event].filter((group) => JSON.stringify(group).includes("# openviking-memory")).length,
+        1,
+        event,
+      );
+    }
+    assert.equal(settings.mcpServers.foreign.command, "foreign-server");
+    assert.equal(settings.mcpServers.openviking.command, installedNode);
+    assert.equal(settings.mcpServers.openviking.env.OPENVIKING_HOOK_SOURCE, "qoder");
+    assert.match(settings.mcpServers.openviking.args[0], /agent-integrations\/qoder\/servers\/mcp-proxy\.mjs$/u);
+    for (const skill of ["openviking-memory", "openviking-skills", "ov-experience-memory"]) {
+      assert.ok(existsSync(join(qoderRoot, "skills", skill, "SKILL.md")), skill);
+    }
+    const manifest = JSON.parse(readFileSync(
+      join(home, ".openviking", "agent-integrations", "qoder", "integration.json"),
+      "utf8",
+    ));
+    assert.equal(manifest.client, "qoder");
+    assert.deepEqual(manifest.capabilities, ["hooks", "mcp", "skills"]);
+    assert.deepEqual(
+      { installedAt: manifest.installedAt, updatedAt: manifest.updatedAt },
+      { installedAt: firstManifest.installedAt, updatedAt: firstManifest.updatedAt },
+    );
+
+    const removed = runInstaller(home, ["--harness", "qoder", "--uninstall", "--lang", "en", "--yes"], env);
+    assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
+    const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(after.language, "en");
+    assert.deepEqual(after.hooks.PreToolUse, [
+      { matcher: "Bash", hooks: [{ type: "command", command: "foreign-check" }] },
+    ]);
+    assert.deepEqual(after.hooks.Stop, [foreignStop]);
+    assert.equal(Boolean(after.hooks.SessionStart), false);
+    assert.equal(Boolean(after.hooks.UserPromptSubmit), false);
+    assert.deepEqual(after.mcpServers, { foreign: { command: "foreign-server" } });
+    assert.equal(existsSync(`${settingsPath}.bak`), false);
+    assert.equal(existsSync(join(qoderRoot, "skills", "openviking-memory")), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "qoder")), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Qoder install refuses to overwrite a foreign openviking MCP entry", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-qoder-mcp-conflict-"));
+  const qoderRoot = join(home, ".qoder");
+  const settingsPath = join(qoderRoot, "settings.json");
+  try {
+    writeJson(settingsPath, { mcpServers: { openviking: { command: "foreign-openviking" } } });
+    const result = runInstaller(home, [
+      "--harness", "qoder",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /already exists and is not managed by OpenViking/u);
+    assert.deepEqual(
+      JSON.parse(readFileSync(settingsPath, "utf8")).mcpServers.openviking,
+      { command: "foreign-openviking" },
+    );
+    const removed = runInstaller(home, ["--harness", "qoder", "--uninstall", "--lang", "en", "--yes"]);
+    assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
+    assert.deepEqual(
+      JSON.parse(readFileSync(settingsPath, "utf8")).mcpServers.openviking,
+      { command: "foreign-openviking" },
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // Installing the thin harnesses together lets one client's verification pass
 // against a directory another client happened to create, so each is installed
 // into a HOME of its own.
-for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
+for (const client of ["cursor", "qoder", "trae", "trae-cn", "zcode"]) {
   test(`${client} installs and verifies on its own`, () => {
     const home = mkdtempSync(join(tmpdir(), `openviking-solo-${client}-`));
     try {
