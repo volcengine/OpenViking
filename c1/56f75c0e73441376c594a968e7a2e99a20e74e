@@ -1,0 +1,18 @@
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 557
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 552
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c156f75c0e73441376c594a968e7a2e99a20e74e",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
