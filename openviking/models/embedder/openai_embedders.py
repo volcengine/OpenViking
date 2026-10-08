@@ -22,6 +22,7 @@ from openviking.models.network import (
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.embedding_input import truncate_embedding_input
 
 logger = get_logger(__name__)
 
@@ -321,7 +322,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
     def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
-            return text
+            if self.max_input_tokens is None:
+                return text
+            # mypy cannot narrow via ``all(isinstance(...))``; rebind as strings.
+            text_items: List[str] = [item for item in text if isinstance(item, str)]
+            return [truncate_embedding_input(item, self.max_input_tokens) for item in text_items]
         return self.prepare_embedding_input(text)
 
     def _build_kwargs(

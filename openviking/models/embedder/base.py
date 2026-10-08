@@ -10,7 +10,18 @@ from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
@@ -309,11 +320,26 @@ class EmbedderBase(ABC):
     def prepare_embedding_input(self, content: "EmbeddingInput") -> "EmbeddingInput":
         """Apply this embedder's input guard before provider calls.
 
-        Plain text is truncated to ``max_input_tokens``. For embedders that
-        support images, multimodal inputs (a list of content parts) are kept as a
-        list. Embedders that do not support multimodal input get the
-        text parts extracted, so image parts are safely dropped.
+        Plain text is truncated to ``max_input_tokens``. A plain text batch (a
+        list of strings) keeps its list shape and every item is truncated
+        individually, matching the provider's per-item input limits. For
+        embedders that support images, multimodal inputs (a list of content
+        parts) are kept as a list. Embedders that do not support multimodal
+        input get the text parts extracted, so image parts are safely dropped.
         """
+        if isinstance(content, list) and all(isinstance(item, str) for item in content):
+            if self.max_input_tokens is None:
+                return content
+            # mypy cannot narrow ``EmbeddingInput`` items via ``all(isinstance(...))``,
+            # so rebind them as plain strings before the per-item truncation.
+            text_items: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    text_items.append(item)
+            return cast(
+                "EmbeddingInput",
+                [truncate_embedding_input(item, self.max_input_tokens) for item in text_items],
+            )
         if isinstance(content, list) and self.supports_multimodal:
             if self.max_input_tokens is None:
                 return content

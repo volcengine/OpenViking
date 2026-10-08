@@ -5,6 +5,10 @@
 from unittest.mock import MagicMock, patch
 
 from openviking.models.embedder import OpenAIDenseEmbedder
+from openviking.utils.embedding_input import (
+    EMBEDDING_TRUNCATION_SUFFIX,
+    estimate_embedding_input_tokens,
+)
 
 
 class TestOpenAIDenseEmbedder:
@@ -277,3 +281,107 @@ class TestOpenAIDenseEmbedder:
 
         assert result.dense_vector is not None
         mock_telemetry.add_token_usage_by_source.assert_called_once_with("embedding", 8, 0)
+
+
+class TestEmbeddingInputTruncationGuard:
+    """Plain list[str] inputs must respect max_input_tokens at both guard layers.
+
+    Regression tests for the truncation guard being skipped for plain text
+    batches: the OpenAI-compatible lower guard passed them through untouched,
+    while the base guard collapsed them to an empty string for text-only
+    embedders and left them unbounded for multimodal embedders.
+    """
+
+    OVERSIZED_TEXT = "x" * 5000
+    TOKEN_BUDGET = 64
+
+    def _make_embedder(self, input_type=None, max_input_tokens=TOKEN_BUDGET):
+        config = {}
+        if max_input_tokens is not None:
+            config["max_input_tokens"] = max_input_tokens
+        kwargs = {
+            "model_name": "embedding-3",
+            "api_key": "test-api-key",
+            "dimension": 1536,
+            "config": config,
+        }
+        if input_type is not None:
+            kwargs["input_type"] = input_type
+        return OpenAIDenseEmbedder(**kwargs)
+
+    def _assert_within_budget(self, item):
+        """Each truncated item keeps its content within the budget (suffix overhead allowed)."""
+        assert item.endswith(EMBEDDING_TRUNCATION_SUFFIX.lstrip())
+        suffix_budget = estimate_embedding_input_tokens(EMBEDDING_TRUNCATION_SUFFIX)
+        assert estimate_embedding_input_tokens(item) <= self.TOKEN_BUDGET + suffix_budget
+
+    def test_lower_guard_truncates_plain_list_items(self):
+        """_prepare_embedding_input should bound every item of a plain text batch."""
+        embedder = self._make_embedder()
+        result = embedder._prepare_embedding_input([self.OVERSIZED_TEXT, "short text"])
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        self._assert_within_budget(result[0])
+        assert result[1] == "short text"
+
+    def test_lower_guard_keeps_list_when_no_budget(self):
+        """Without max_input_tokens the plain text batch is returned as-is."""
+        embedder = self._make_embedder(max_input_tokens=None)
+        batch = ["first text", "second text"]
+
+        assert embedder._prepare_embedding_input(batch) == batch
+
+    def test_upper_guard_does_not_collapse_plain_list_for_text_only(self):
+        """Text-only embedders must not fold a plain text batch into an empty string."""
+        embedder = self._make_embedder()
+        assert embedder.supports_multimodal is False
+
+        result = embedder.prepare_embedding_input([self.OVERSIZED_TEXT])
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        self._assert_within_budget(result[0])
+
+    def test_upper_guard_truncates_plain_list_for_multimodal(self):
+        """Multimodal embedders must not pass plain text batch items through unbounded."""
+        embedder = self._make_embedder(input_type="multimodal")
+        assert embedder.supports_multimodal is True
+
+        result = embedder.prepare_embedding_input([self.OVERSIZED_TEXT])
+
+        assert isinstance(result, list)
+        assert len(result) == 1
+        self._assert_within_budget(result[0])
+
+    def test_embed_request_carries_truncated_list(self):
+        """embed() must send the truncated batch, not the raw oversized one."""
+        mock_client = MagicMock()
+        with patch(
+            "openviking.models.embedder.openai_embedders.openai.OpenAI"
+        ) as mock_openai_class:
+            mock_openai_class.return_value = mock_client
+            mock_embedding = MagicMock()
+            mock_embedding.embedding = [0.1] * 1536
+            mock_response = MagicMock()
+            mock_response.data = [mock_embedding]
+            mock_client.embeddings.create.return_value = mock_response
+
+            embedder = self._make_embedder()
+            embedder.embed([self.OVERSIZED_TEXT, "short text"])
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        sent_input = call_kwargs["input"]
+        assert isinstance(sent_input, list)
+        assert len(sent_input) == 2
+        self._assert_within_budget(sent_input[0])
+        assert sent_input[1] == "short text"
+
+    def test_single_string_truncation_unchanged(self):
+        """The single-string path keeps its existing truncation behavior."""
+        embedder = self._make_embedder()
+
+        result = embedder.prepare_embedding_input(self.OVERSIZED_TEXT)
+
+        assert isinstance(result, str)
+        self._assert_within_budget(result)
