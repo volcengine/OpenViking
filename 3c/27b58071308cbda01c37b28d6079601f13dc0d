@@ -1,0 +1,18 @@
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 541
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 3-6,9,11-12,18,73-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3c27b58071308cbda01c37b28d6079601f13dc0d",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
