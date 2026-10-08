@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -5,11 +6,12 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { normalizeRewriteMode } from "./shared/plugin-config.mjs";
 import { getStateDir } from "./session-state.mjs";
 
-const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", source: "default_primary" };
+const DEFAULT_PRIMARY = { model: "gpt-6-luna", thinking: "low", source: "default_primary" };
 const DEFAULT_FALLBACK = { model: "gpt-5.6-luna", thinking: "low", source: "default_fallback" };
-const PROFILE_SCHEMA_VERSION = 3;
+const PROFILE_SCHEMA_VERSION = 4;
 const DEFAULT_CODEX_HOME = join(homedir(), ".codex");
 const COMPRESSOR_PROVIDER = "openviking_compressor";
+const BUILTIN_PROVIDERS = new Set(["openai", "oss", "ollama", "lmstudio"]);
 
 function isOff(value) {
   return /^(?:0|false|no|off|none|disabled)$/i.test(String(value || "").trim());
@@ -31,7 +33,51 @@ export function recallCompressionExplicitlyOff(cfg) {
     || isOff(cfg.recallCompressModel) || isOff(cfg.recallCompressThinking);
 }
 
-export function buildCodexExecArgs(profile, outputPath, cfg = {}) {
+/**
+ * `--ignore-user-config` also drops the user's custom provider (endpoint and
+ * auth), so forward the active one as `-c` overrides. Only single-line
+ * `key = value` entries are copied; anything else (sub-tables, multi-line
+ * values, trailing comments) forwards nothing.
+ */
+export function userProviderOverrides(env = process.env) {
+  let text;
+  try {
+    text = readFileSync(join(codexHomeDir(env), "config.toml"), "utf-8");
+  } catch {
+    return [];
+  }
+  const topLevel = text.split(/^\s*\[/m)[0];
+  const id = topLevel.match(/^\s*model_provider\s*=\s*"([\w-]+)"\s*$/m)?.[1];
+  if (!id || BUILTIN_PROVIDERS.has(id)) return [];
+
+  const header = new RegExp(`^\\[model_providers\\.(?:${id}|"${id}")(\\.|\\])`);
+  const args = ["-c", `model_provider=${JSON.stringify(id)}`];
+  let inSection = false;
+  let found = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      const match = line.match(header);
+      if (match?.[1] === ".") return [];
+      inSection = Boolean(match);
+      found ||= inSection;
+      continue;
+    }
+    if (!inSection || !line || line.startsWith("#")) continue;
+    const entry = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!entry || !isSingleLineValue(entry[2])) return [];
+    args.push("-c", `model_providers.${id}.${entry[1]}=${entry[2]}`);
+  }
+  return found ? args : [];
+}
+
+function isSingleLineValue(value) {
+  if (/^"(?:[^"\\]|\\.)*"$|^'[^']*'$/.test(value)) return true;
+  if (/^\{.*\}$/.test(value)) return !value.includes("#");
+  return /^[\w.+-]+$/.test(value);
+}
+
+export function buildCodexExecArgs(profile, outputPath, cfg = {}, env = process.env) {
   const args = [];
   if (profile.model) args.push("-m", profile.model);
   if (profile.thinking && profile.thinking !== "default") {
@@ -43,6 +89,8 @@ export function buildCodexExecArgs(profile, outputPath, cfg = {}) {
       "-c", `model_providers.${COMPRESSOR_PROVIDER}.name=${JSON.stringify(COMPRESSOR_PROVIDER)}`,
       "-c", `model_providers.${COMPRESSOR_PROVIDER}.base_url=${JSON.stringify(cfg.recallCompressBaseUrl)}`,
     );
+  } else {
+    args.push(...userProviderOverrides(env));
   }
   args.push(
     "--sandbox",

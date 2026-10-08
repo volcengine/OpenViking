@@ -315,7 +315,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 ### digest 压缩
 
-`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Sonnet + 低推理档——Haiku 不支持 effort 旋钮，时延不可控），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
+`recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Haiku + 低推理档），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
 
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 

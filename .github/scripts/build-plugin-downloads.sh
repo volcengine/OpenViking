@@ -44,8 +44,9 @@ SRC="${WORK}/memory-plugins-src"
 cp -R "${STAGE}" "${SRC}"
 git -C "${SRC}" init -q -b main
 git -C "${SRC}" add -A
+# Background auto-maintenance would repack while the clone below reads.
 GIT_AUTHOR_DATE="2000-01-01T00:00:00Z" GIT_COMMITTER_DATE="2000-01-01T00:00:00Z" \
-  git -C "${SRC}" -c user.email=release@openviking.org -c user.name="OpenViking Release" \
+  git -C "${SRC}" -c maintenance.auto=false -c user.email=release@openviking.org -c user.name="OpenViking Release" \
   commit -qm "OpenViking memory plugins"
 git clone -q --bare "${SRC}" "${OUT}/plugins/memory-plugins.git"
 git -C "${OUT}/plugins/memory-plugins.git" -c pack.threads=1 repack -adq

@@ -12,6 +12,7 @@ import {
   loadCodexModelsCache,
   markRecallCompressorRuntimeFailed,
   resolveRecallCompressorProfile,
+  userProviderOverrides,
 } from "./recall-compressor-profile.mjs";
 
 function baseCfg(overrides = {}) {
@@ -53,13 +54,13 @@ async function writeModelsCache(codexHome, slugs) {
 
 test("buildCodexExecArgs injects a configured compressor base URL", () => {
   const args = buildCodexExecArgs(
-    { model: "gpt-5.3-codex-spark", thinking: "default" },
+    { model: "gpt-6-luna", thinking: "default" },
     "/tmp/last-message.txt",
     { recallCompressBaseUrl: "https://compressor.example/v1" },
   );
 
   assert.deepEqual(args.slice(0, 8), [
-    "-m", "gpt-5.3-codex-spark",
+    "-m", "gpt-6-luna",
     "-c", 'model_provider="openviking_compressor"',
     "-c", 'model_providers.openviking_compressor.name="openviking_compressor"',
     "-c", 'model_providers.openviking_compressor.base_url="https://compressor.example/v1"',
@@ -69,11 +70,83 @@ test("buildCodexExecArgs injects a configured compressor base URL", () => {
 
 test("buildCodexExecArgs preserves the existing command without a compressor base URL", () => {
   const args = buildCodexExecArgs(
-    { model: "gpt-5.3-codex-spark", thinking: "default" },
+    { model: "gpt-6-luna", thinking: "default" },
     "/tmp/last-message.txt",
+    {},
+    { CODEX_HOME: "/nonexistent-codex-home" },
   );
 
   assert.equal(args.some((arg) => arg.includes("openviking_compressor")), false);
+  assert.equal(args.some((arg) => arg.startsWith("model_provider")), false);
+});
+
+async function withCodexConfig(toml, action) {
+  const codexHome = await mkdtemp(join(tmpdir(), "ov-codex-home-"));
+  try {
+    await writeFile(join(codexHome, "config.toml"), toml);
+    await action({ CODEX_HOME: codexHome });
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
+}
+
+test("buildCodexExecArgs forwards the user's active custom provider", async () => {
+  await withCodexConfig([
+    'model_provider = "custom"',
+    'model = "gpt-6.1-sol"',
+    "",
+    '[projects."/tmp"]',
+    'trust_level = "trusted"',
+    "[model_providers.custom]",
+    'base_url = "http://127.0.0.1:1936/v1"',
+    'wire_api = "responses"',
+    "# comment",
+    'experimental_bearer_token = "secret"',
+    'http_headers = { "X-Team" = "ov" }',
+    "requires_openai_auth = false",
+    "[model_providers.other]",
+    'base_url = "http://other"',
+  ].join("\n"), async (env) => {
+    const args = buildCodexExecArgs({ model: "gpt-6-luna", thinking: "low" }, "/tmp/out.txt", {}, env);
+    const overrides = args.filter((_, i) => args[i - 1] === "-c");
+    assert.deepEqual(overrides.filter((v) => v.startsWith("model_provider")), [
+      'model_provider="custom"',
+      'model_providers.custom.base_url="http://127.0.0.1:1936/v1"',
+      'model_providers.custom.wire_api="responses"',
+      'model_providers.custom.experimental_bearer_token="secret"',
+      'model_providers.custom.http_headers={ "X-Team" = "ov" }',
+      "model_providers.custom.requires_openai_auth=false",
+    ]);
+    assert.ok(args.indexOf("exec") > args.indexOf("model_providers.custom.requires_openai_auth=false"));
+  });
+});
+
+test("userProviderOverrides skips built-in providers and unsupported layouts", async () => {
+  await withCodexConfig('model_provider = "openai"\n', (env) => {
+    assert.deepEqual(userProviderOverrides(env), []);
+  });
+  await withCodexConfig('model_provider = "custom"\n[model_providers.custom]\nbase_url = "x"\n[model_providers.custom.http_headers]\nA = "b"\n', (env) => {
+    assert.deepEqual(userProviderOverrides(env), []);
+  });
+  await withCodexConfig('model_provider = "custom"\n[model_providers.custom]\nbase_url = "x" # trailing\n', (env) => {
+    assert.deepEqual(userProviderOverrides(env), []);
+  });
+  await withCodexConfig('model_provider = "custom"\n', (env) => {
+    assert.deepEqual(userProviderOverrides(env), []);
+  });
+});
+
+test("a configured compressor base URL takes precedence over the user's provider", async () => {
+  await withCodexConfig('model_provider = "custom"\n[model_providers.custom]\nbase_url = "x"\n', (env) => {
+    const args = buildCodexExecArgs(
+      { model: "gpt-6-luna", thinking: "low" },
+      "/tmp/out.txt",
+      { recallCompressBaseUrl: "https://compressor.example/v1" },
+      env,
+    );
+    assert.equal(args.includes('model_provider="custom"'), false);
+    assert.ok(args.includes('model_provider="openviking_compressor"'));
+  });
 });
 
 test("loadCodexModelsCache returns empty set when cache missing", async () => {
@@ -86,11 +159,11 @@ test("loadCodexModelsCache returns empty set when cache missing", async () => {
 
 test("loadCodexModelsCache parses available slugs", async () => {
   await withTempState(async ({ codexHome }) => {
-    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark", "gpt-5.6-luna", "codex-auto-review"]);
+    await writeModelsCache(codexHome, ["gpt-6-luna", "gpt-5.6-luna", "codex-auto-review"]);
     const result = await loadCodexModelsCache({ CODEX_HOME: codexHome });
     assert.equal(result.present, true);
     assert.equal(result.slugs.size, 3);
-    assert.equal(result.slugs.has("gpt-5.3-codex-spark"), true);
+    assert.equal(result.slugs.has("gpt-6-luna"), true);
     assert.equal(result.slugs.has("gpt-5.6-luna"), true);
   });
 });
@@ -116,7 +189,7 @@ test("resolveRecallCompressorProfile picks first candidate present in cache", as
 
 test("resolveRecallCompressorProfile honors configured candidate first when present", async () => {
   await withTempState(async ({ codexHome }) => {
-    await writeModelsCache(codexHome, ["gpt-5.5", "gpt-5.3-codex-spark"]);
+    await writeModelsCache(codexHome, ["gpt-5.5", "gpt-6-luna"]);
     const profile = await resolveRecallCompressorProfile(
       baseCfg({
         recallCompressModel: "gpt-5.5",
@@ -142,7 +215,7 @@ test("resolveRecallCompressorProfile falls back optimistically when cache missin
       { CODEX_HOME: codexHome },
     );
     assert.equal(profile.enabled, true);
-    assert.equal(profile.model, "gpt-5.3-codex-spark");
+    assert.equal(profile.model, "gpt-6-luna");
     assert.equal(profile.detected, false);
   });
 });
@@ -162,7 +235,7 @@ test("resolveRecallCompressorProfile disables when compress is configured off", 
 
 test("invalidateRecallCompressorProfileCache removes the persisted profile", async () => {
   await withTempState(async ({ stateDir, codexHome }) => {
-    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark"]);
+    await writeModelsCache(codexHome, ["gpt-6-luna"]);
     await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
     const path = join(stateDir, "recall-compressor-profile.json");
     await readFile(path, "utf-8"); // exists
@@ -174,7 +247,7 @@ test("invalidateRecallCompressorProfileCache removes the persisted profile", asy
 test("detectRecallCompressorProfile prefers cached profile (no probe even when cache exists)", async () => {
   await withTempState(async ({ stateDir, codexHome }) => {
     // Seed cache with a different model than what the resolver would pick now.
-    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark"]);
+    await writeModelsCache(codexHome, ["gpt-6-luna"]);
     await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
 
     // Change the catalogue so the resolver would pick something else if it
@@ -186,12 +259,12 @@ test("detectRecallCompressorProfile prefers cached profile (no probe even when c
       {},
       { CODEX_HOME: codexHome },
     );
-    assert.equal(profile.model, "gpt-5.3-codex-spark");
+    assert.equal(profile.model, "gpt-6-luna");
     // Persisted profile is unchanged.
     const persisted = JSON.parse(
       await readFile(join(stateDir, "recall-compressor-profile.json"), "utf-8"),
     );
-    assert.equal(persisted.profile.model, "gpt-5.3-codex-spark");
+    assert.equal(persisted.profile.model, "gpt-6-luna");
   });
 });
 
@@ -211,13 +284,13 @@ test("detectRecallCompressorProfile resolves on cache miss", async () => {
 
 test("detectRecallCompressorProfile after invalidate re-resolves against current catalogue", async () => {
   await withTempState(async ({ codexHome }) => {
-    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark", "gpt-5.6-luna"]);
+    await writeModelsCache(codexHome, ["gpt-6-luna", "gpt-5.6-luna"]);
     const initial = await detectRecallCompressorProfile(
       baseCfg(),
       {},
       { CODEX_HOME: codexHome },
     );
-    assert.equal(initial.model, "gpt-5.3-codex-spark");
+    assert.equal(initial.model, "gpt-6-luna");
 
     // Simulate runtime compress failure → invalidate cache, then drop the
     // failing slug from the catalogue. Next detect should pick the next one.
@@ -252,25 +325,25 @@ test("markRecallCompressorRuntimeFailed writes a disabled profile cached for UPS
     await writeModelsCache(codexHome, ["gpt-5.6-luna"]);
     await resolveRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
 
-    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.3-codex-spark" });
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-6-luna" });
     const cached = await loadCachedRecallCompressorProfile(baseCfg());
     assert.ok(cached, "expected cached profile to exist");
     assert.equal(cached.enabled, false);
     assert.equal(cached.source, "runtime_failed");
-    assert.equal(cached.failedModel, "gpt-5.3-codex-spark");
+    assert.equal(cached.failedModel, "gpt-6-luna");
   });
 });
 
 test("detectRecallCompressorProfile recovers across SessionStart after runtime_failed marker", async () => {
   await withTempState(async ({ codexHome }) => {
     // Initial healthy resolve.
-    await writeModelsCache(codexHome, ["gpt-5.3-codex-spark", "gpt-5.6-luna"]);
+    await writeModelsCache(codexHome, ["gpt-6-luna", "gpt-5.6-luna"]);
     const initial = await detectRecallCompressorProfile(baseCfg(), {}, { CODEX_HOME: codexHome });
-    assert.equal(initial.model, "gpt-5.3-codex-spark");
+    assert.equal(initial.model, "gpt-6-luna");
 
     // Runtime compress failure marks the cache disabled. UPS within the
     // same session would now read this disabled profile and skip compress.
-    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-5.3-codex-spark" });
+    await markRecallCompressorRuntimeFailed(baseCfg(), { failedModel: "gpt-6-luna" });
     const within = await loadCachedRecallCompressorProfile(baseCfg());
     assert.equal(within.enabled, false);
 
