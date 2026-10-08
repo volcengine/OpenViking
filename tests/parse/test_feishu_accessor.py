@@ -1608,11 +1608,7 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
     )
 
     assert title == "Budget"
-    assert (
-        "| name               |     | amount |\n"
-        "| ------------------ | --- | ------ |\n"
-        "| Rent \\| Fees<br>Q1 |     | 1      |"
-    ) in markdown
+    assert ("| name |  | amount |\n| --- | --- | --- |\n| Rent \\| Fees<br>Q1 |  | 1 |") in markdown
     assert "1 more rows truncated" in markdown
     assert "2 columns after Z omitted" in markdown
     assert "### Content Calendar" in markdown
