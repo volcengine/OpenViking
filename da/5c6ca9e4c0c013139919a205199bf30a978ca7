@@ -1,0 +1,18 @@
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 140-147
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 140-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "da5c6ca9e4c0c013139919a205199bf30a978ca7",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
