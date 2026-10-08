@@ -68,8 +68,9 @@ releases tested so far.
 Verified releases: `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.7-rc.2`,
 `0.2.0-rc.2`, and `0.2.1-alpha.1`. A daily job
 (`.github/workflows/host-compat.yml`) runs the bundle's tests against the
-releases DSH's `latest`, `next`, and `alpha` dist-tags point at and opens an
-issue when one fails, so a breaking release is usually caught before users
+releases DSH's `latest`, `next`, and `alpha` dist-tags point at, installs each
+of those releases, adds the packed bundle to a profile and checks
+`--dump-config` lists it, and opens an issue when any of that fails, so a breaking release is usually caught before users
 reach it; if the bundle still fails to start on a new release, pin DSH to a
 verified one and open an issue. DSH 1.0 and later, pre-releases included, fall outside the
 range and DSH refuses to load the bundle; `dsh plugin allow-version` grants an exact-version
