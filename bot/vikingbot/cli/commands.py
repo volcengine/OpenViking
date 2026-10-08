@@ -10,7 +10,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 
 # --- stdout-safety guard (must run before any openviking/vikingbot imports) ---
@@ -882,6 +882,7 @@ def prepare_agent_channel(
     sender: str | None = None,
     memory_peer: list[str] | None = None,
     memory_user: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -903,6 +904,7 @@ def prepare_agent_channel(
             markdown=markdown,
             eval=eval,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
     else:
@@ -919,6 +921,7 @@ def prepare_agent_channel(
             markdown=markdown,
             logs=logs,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
 
@@ -952,6 +955,7 @@ def chat(
         "--memory-user",
         help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
+    disabled_tools: Annotated[list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")] = None,
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
@@ -1011,6 +1015,7 @@ def chat(
         sender,
         memory_peer,
         memory_user,
+        disabled_tools=disabled_tools,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval

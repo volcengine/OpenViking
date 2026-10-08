@@ -258,7 +258,7 @@ def run_vikingbot_chat(
 
     # 先执行 /new 命令清除会话
     if sender_peer_id:
-        new_cmd = ["vikingbot", "chat"]
+        new_cmd = ["vikingbot", "chat", "--disable-tool", "web_search", "--disable-tool", "web_fetch"]
         if config:
             new_cmd.extend(["--config", config])
         new_cmd.extend(
@@ -288,7 +288,8 @@ def run_vikingbot_chat(
     else:
         input = f"Answer the question directly: {question}"
 
-    cmd = ["vikingbot", "chat"]
+    # LoCoMo answers use stored memories without web search or page fetching.
+    cmd = ["vikingbot", "chat", "--disable-tool", "web_search", "--disable-tool", "web_fetch"]
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
