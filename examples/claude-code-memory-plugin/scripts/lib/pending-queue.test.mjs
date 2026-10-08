@@ -109,7 +109,14 @@ test("commitSession preserves retention payload across retry and replay", async 
       };
     }, (stage, data) => logs.push({ stage, data }));
 
-    assert.deepEqual(result, { replayed: 1, failed: 0, skipped: 0, deferred: 0 });
+    assert.deepEqual(result, {
+      replayed: 1,
+      failed: 0,
+      skipped: 0,
+      deferred: 0,
+      commitsSent: 0,
+      commitsQueued: 0,
+    });
     assert.equal(calls[0].path, "/api/v1/sessions/cc-retryable-commit/commit");
     assert.deepEqual(JSON.parse(calls[0].init.body), payload);
     assert.deepEqual(logs[1], {
