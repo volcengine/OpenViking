@@ -40,6 +40,13 @@ class IndexFileMarkers(str, Enum):
     WRITE_DONE = ".write_done"  # Index write complete marker file suffix
 
 
+# Metadata file the native engine requires inside every snapshot directory
+# (see kMetaFile in src/index/detail/index_manager_impl.cpp); the loader
+# fail-fasts when it is missing, so it is the minimum payload evidence of a
+# completed snapshot.
+MANAGER_META_FILE = "manager_meta.json"
+
+
 # ==================== Scheduler related constants ====================
 DEFAULT_TTL_CLEANUP_SECONDS = 0  # TTL expired data cleanup interval (seconds)
 DEFAULT_INDEX_MAINTENANCE_SECONDS = 30  # Index maintenance task interval (seconds)
