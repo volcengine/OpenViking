@@ -7,7 +7,7 @@ import { SHELL_STRINGS, THEME_LIGHT, buildPath, makeFormatDate } from './shell-c
 
 export const SITE_URL = 'https://blog.openviking.ai';
 // Version the filename so social crawlers do not reuse the previous artwork.
-export const SITE_SOCIAL_IMAGE = '/assets/covers/og-openviking-blog-59159ae8.png';
+export const SITE_SOCIAL_IMAGE = '/assets/covers/og-openviking-blog-0a798714.png';
 export const SITE_SOCIAL_IMAGE_WIDTH = 1200;
 export const SITE_SOCIAL_IMAGE_HEIGHT = 630;
 
