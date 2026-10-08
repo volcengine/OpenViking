@@ -269,7 +269,7 @@ export async function replayAgentPending(fetchJSON, log = () => {}) {
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
-  if (!isRecallEnabled(cfg) || !String(prompt || "").trim()) return null;
+  if (!isRecallEnabled(cfg) || String(prompt || "").trim().length < (cfg.recallMinPromptChars ?? 1)) return null;
   const peer = resolveEffectivePeerId({ cfg, cwd });
   return buildRecallBlock(fetchJSON, cfg, prompt, {
     actorPeerId: peer.peerId,

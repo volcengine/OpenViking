@@ -79,6 +79,7 @@ export const KNOBS = [
   { name: "recallLimit", type: "int", default: 10, min: 1, max: 50, env: "OPENVIKING_RECALL_LIMIT", workspace: "recall.max_items", sendOnlyWhenConfigured: true, capability: "recall" },
   { name: "scoreThreshold", type: "number", default: 0.35, min: 0, max: 1, env: "OPENVIKING_SCORE_THRESHOLD", aliases: ["recallScoreThreshold"], workspace: "recall.score_threshold", capability: "recall" },
   { name: "minQueryLength", type: "int", default: 3, min: 1, max: 64, env: "OPENVIKING_MIN_QUERY_LENGTH", aliases: ["recallMinQueryLength"], capability: "recall" },
+  { name: "recallMinPromptChars", type: "int", default: 1, min: 0, max: 10000, env: "OPENVIKING_RECALL_MIN_PROMPT_CHARS", aliases: ["minPromptChars"], capability: "recall" },
   { name: "recallTokenBudget", type: "int", default: 2000, min: 200, max: 50000, env: "OPENVIKING_RECALL_TOKEN_BUDGET", aliases: ["recallBudget"], capability: "recall" },
   { name: "recallMaxContentChars", type: "int", default: 500, min: 100, max: 5000, env: "OPENVIKING_RECALL_MAX_CONTENT_CHARS", capability: "recall" },
   { name: "recallPreferAbstract", type: "bool", default: true, env: "OPENVIKING_RECALL_PREFER_ABSTRACT", capability: "recall" },

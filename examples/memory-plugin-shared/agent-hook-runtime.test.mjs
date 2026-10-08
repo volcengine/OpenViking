@@ -13,6 +13,7 @@ import {
   commitAgentSession,
   loadAgentHookConfig,
   makeAgentFetchJSON,
+  recallForPrompt,
   resolveNativeSessionId,
   runHookStage,
 } from "./lib/agent-hook-runtime.mjs";
@@ -473,4 +474,11 @@ test("captured messages carry the effective peer in the body, and none when peer
     ],
     [{ role: "user", content: "c" }],
   ]);
+});
+
+test("recallForPrompt respects recallMinPromptChars threshold", async () => {
+  const fetchJSON = async () => ({ ok: true, status: 200, result: [] });
+  const cfg = { enabled: true, autoRecall: true, recallMinPromptChars: 5 };
+  const resShort = await recallForPrompt(fetchJSON, cfg, "abc", "/tmp");
+  assert.equal(resShort, null);
 });
