@@ -231,6 +231,10 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     _say("Validating OpenViking local dev access...")
                     valid, message, _role = ov._validate_openviking_setup_values(values)
                     if valid:
+                        from .mcp_tools import validate_connection
+
+                        valid, message = validate_connection(ov, values)
+                    if valid:
                         _say("OpenViking local dev access validated.")
                         return values
                     retry("  OpenViking credential failed", message)
@@ -278,6 +282,12 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                 continue
             if api_key_type == "root" and role != "root":
                 retry("  OpenViking root API key failed", "The supplied key was not accepted as a root API key.")
+                continue
+            from .mcp_tools import validate_connection
+
+            valid, message = validate_connection(ov, values)
+            if not valid:
+                retry("  OpenViking MCP unavailable", message)
                 continue
             _say("OpenViking API access validated.")
             return values
@@ -367,6 +377,10 @@ def _run_existing_profile_setup(*, profiles: list, select, cancelled, config: di
             _say("Validating OpenViking profile...")
             require_api_key = not ov._is_local_openviking_url(profile.values.get("endpoint", ""))
             ok, message, _role = ov._validate_openviking_setup_values(profile.values, require_api_key=require_api_key)
+            if ok:
+                from .mcp_tools import validate_connection
+
+                ok, message = validate_connection(ov, profile.values)
             if ok:
                 _link_ovcli_profile(config=config, provider_config=provider_config, env_path=env_path, ovcli_path=profile.path)
                 _print_openviking_ready(f"Linked profile: {_profile_display_name(profile)}", profile.path)
@@ -534,11 +548,23 @@ def run_setup(hermes_home: str, config: dict) -> None:
     if result is _SETUP_CANCELLED:
         _print_cancelled_setup()
     elif result:
+        from .mcp_tools import configure
+
+        configure(config, hermes_home)
         _apply_usage_profile(config, provider_config, usage_profile)
         # A saved environment override must not silently defeat the chosen preset.
         _ov()._write_env_vars(env_path, {}, remove_keys=("OPENVIKING_RECALL_SCOPE",))
         os.environ.pop("OPENVIKING_RECALL_SCOPE", None)
         save_config(config)
+        _say("OpenViking MCP tools configured. Restart Hermes to load them.")
+        trust = config["mcp_servers"]["openviking"].get("trust")
+        if trust is None or str(trust).strip().lower() == "full":
+            _say(
+                "OpenViking tools run without per-call approval. They can modify data, "
+                "and forget can permanently delete entire directories."
+            )
+        else:
+            _say("Hermes will use its approval prompts for MCP tool calls.")
         if usage_profile == _SHARED_PROFILE:
             _say("Restart the Hermes gateway to apply the shared session settings.")
         else:

@@ -98,6 +98,7 @@ def check(host, repository, root, timeout):
             "local_server.py",
             "local_packages.py",
             "cli.py",
+            "mcp_tools.py",
             "native_memory_mirror.py",
             "plugin.yaml",
             "pyproject.toml",
@@ -139,6 +140,7 @@ from pathlib import Path
 import psutil
 from ruamel.yaml import YAML
 from hermes_constants import get_hermes_home
+from hermes_cli.config import save_config
 from plugins.memory import find_provider_dir, load_memory_provider
 from pm.environments import project_python
 home = get_hermes_home()
@@ -149,6 +151,10 @@ assert find_provider_dir("openviking") == home / "plugins/openviking"
 provider = load_memory_provider("openviking", register_skills=False)
 assert type(provider).__module__.startswith("_hermes_user_memory."), type(provider)
 provider.shutdown()
+# Provider CLI commands are exposed only for the selected memory provider,
+# as after `hermes memory setup openviking`.
+config.setdefault("memory", {})["provider"] = "openviking"
+save_config(config)
 print(json.dumps({"installed": True, "enabled": True, "external_module": type(provider).__module__,
                   "psutil": psutil.__version__, "home": str(home),
                   "python": str(project_python(Path.cwd()))}))
@@ -156,6 +162,16 @@ print(json.dumps({"installed": True, "enabled": True, "external_module": type(pr
         result = subprocess.check_output(
             [python, "-c", probe], cwd=host, env=env, text=True, timeout=timeout
         )
+        with (root / "validate.log").open("a") as log:
+            subprocess.run(
+                command + ["openviking", "mcp", "--help"],
+                cwd=host,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=True,
+            )
         evidence = json.loads(result.strip().splitlines()[-1])
         evidence["source_ref"] = ref
         (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")

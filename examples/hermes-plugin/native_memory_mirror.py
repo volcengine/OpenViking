@@ -8,7 +8,7 @@ FIFO worker.
 
 The registry is intentionally narrow: it tracks only memories created through
 the built-in-memory mirror. Session-extracted memories and explicit
-``viking_remember`` writes are outside its ownership and are never guessed at or
+Explicit OpenViking tool writes are outside its ownership and are never guessed at or
 deleted by similarity.
 """
 
