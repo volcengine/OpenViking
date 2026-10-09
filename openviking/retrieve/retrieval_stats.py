@@ -9,7 +9,7 @@ via the observer API.
 
 import threading
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 
 @dataclass
@@ -29,6 +29,7 @@ class RetrievalStats:
     queries_by_type: Dict[str, int] = field(default_factory=dict)
     rerank_used: int = 0
     rerank_fallback: int = 0
+    rerank_by_lane: Dict[str, int] = field(default_factory=dict)
     total_latency_ms: float = 0.0
     max_latency_ms: float = 0.0
 
@@ -70,6 +71,7 @@ class RetrievalStats:
             "queries_by_type": dict(self.queries_by_type),
             "rerank_used": self.rerank_used,
             "rerank_fallback": self.rerank_fallback,
+            "rerank_by_lane": dict(self.rerank_by_lane),
             "avg_latency_ms": round(self.avg_latency_ms, 1),
             "max_latency_ms": round(self.max_latency_ms, 1),
         }
@@ -89,6 +91,7 @@ class RetrievalStatsCollector:
             scores=[0.82, 0.71, 0.55],
             latency_ms=42.5,
             rerank_used=True,
+            lane="light",
         )
 
     Usage in the observer::
@@ -108,6 +111,7 @@ class RetrievalStatsCollector:
         latency_ms: float = 0.0,
         rerank_used: bool = False,
         rerank_fallback: bool = False,
+        lane: Optional[str] = None,
     ) -> None:
         """Record metrics from a single retrieval query."""
         with self._lock:
@@ -130,6 +134,10 @@ class RetrievalStatsCollector:
 
             if rerank_used:
                 self._stats.rerank_used += 1
+                if lane:
+                    self._stats.rerank_by_lane[lane] = (
+                        self._stats.rerank_by_lane.get(lane, 0) + 1
+                    )
             if rerank_fallback:
                 self._stats.rerank_fallback += 1
 

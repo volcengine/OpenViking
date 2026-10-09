@@ -281,6 +281,8 @@ class _SemanticMixin:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            rerank_profiles=getattr(self, "rerank_profiles", None),
+            rerank_routing=getattr(self, "rerank_routing", None),
         )
 
         typed_query = TypedQuery(
@@ -521,6 +523,8 @@ class _SemanticMixin:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            rerank_profiles=getattr(self, "rerank_profiles", None),
+            rerank_routing=getattr(self, "rerank_routing", None),
         )
 
         async def _execute(tq: TypedQuery):

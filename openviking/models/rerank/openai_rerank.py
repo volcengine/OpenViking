@@ -7,8 +7,9 @@ Supports third-party rerank services like Alibaba Cloud DashScope (qwen3-rerank)
 via api_key + api_base configuration.
 """
 
-# For logging, use Python's built-in logging
+import time
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -51,6 +52,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        max_retries: int = 2,
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -62,6 +64,7 @@ class OpenAIRerankClient(RerankBase):
             extra_headers: Optional extra headers for API requests
             timeout: HTTP request timeout in seconds. Defaults to 30. Increase for
                 local LLM servers that incur model cold-start latency on the first call.
+            max_retries: Maximum number of retries on ConnectionError.
         """
         super().__init__()
         self.api_key = api_key
@@ -69,6 +72,7 @@ class OpenAIRerankClient(RerankBase):
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.max_retries = max_retries
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
 
@@ -140,12 +144,37 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            response = requests.post(
-                url=self.api_base,
-                headers=headers,
-                json=req_body,
-                timeout=self.timeout,
-            )
+            proxies = None
+            try:
+                parsed = urlparse(self.api_base)
+                if parsed.hostname in ("127.0.0.1", "localhost", "::1"):
+                    proxies = {"http": None, "https": None}
+            except Exception:
+                proxies = None
+
+            response = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = requests.post(
+                        url=self.api_base,
+                        headers=headers,
+                        json=req_body,
+                        timeout=self.timeout,
+                        proxies=proxies,
+                    )
+                    break
+                except requests.exceptions.ConnectionError as e:
+                    if attempt < self.max_retries:
+                        delay = 0.5 * (2 ** attempt)
+                        logger.warning(
+                            f"[OpenAIRerankClient] Connection error on attempt {attempt + 1}"
+                            f"/{self.max_retries + 1}, retrying in {delay:.1f}s: {e}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise
+            if response is None:
+                return None
             response.raise_for_status()
             result = response.json()
 
@@ -204,4 +233,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            max_retries=getattr(config, "max_retries", 2),
         )
