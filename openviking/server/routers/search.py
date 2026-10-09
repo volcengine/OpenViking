@@ -373,11 +373,14 @@ async def find(
     http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Semantic search without session context."""
     service = get_service()
+    profiles = getattr(getattr(service, "_config", None), "rerank_profiles", {})
     routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
-    lane = request.rerank_lane or _ctx.rerank_lane or routing.get("find", "heavy")
-    _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
+    lane = request.rerank_lane or _ctx.rerank_lane
+    if not lane and profiles:
+        lane = routing.get("find", "heavy")
+    if lane:
+        _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -440,9 +443,13 @@ async def _search_context(
     actual_limit: int,
 ):
     """Assemble an injection-ready context block for one request."""
+    profiles = getattr(getattr(service, "_config", None), "rerank_profiles", {})
     routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
-    lane = request.rerank_lane or ctx.rerank_lane or routing.get("context", "light")
-    ctx = dataclasses.replace(ctx, rerank_lane=lane)
+    lane = request.rerank_lane or ctx.rerank_lane
+    if not lane and profiles:
+        lane = routing.get("context", "light")
+    if lane:
+        ctx = dataclasses.replace(ctx, rerank_lane=lane)
     params = AssembleParams(
         query=request.query,
         search_type=request.search_type,
@@ -509,9 +516,13 @@ async def search(
         )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri, _ctx)
     resolved_image_url = _resolve_image_url(request.image_url, _ctx)
+    profiles = getattr(getattr(service, "_config", None), "rerank_profiles", {})
     routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
-    lane = request.rerank_lane or _ctx.rerank_lane or routing.get("search", routing.get("default", "light"))
-    _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
+    lane = request.rerank_lane or _ctx.rerank_lane
+    if not lane and profiles:
+        lane = routing.get("search", routing.get("default", "light"))
+    if lane:
+        _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
 
     async def _search():
         session = None

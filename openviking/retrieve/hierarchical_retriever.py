@@ -177,7 +177,9 @@ class HierarchicalRetriever:
         if mode is None:
             mode = RetrieverMode.THINKING if client else RetrieverMode.QUICK
         use_rerank = (
-            mode == RetrieverMode.THINKING and client is not None and not image_query
+            (mode == RetrieverMode.THINKING or bool(effective_lane))
+            and client is not None
+            and not image_query
         )
         decay_kwargs = {}
         if events_time_decay_protection is not None:
