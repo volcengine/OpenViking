@@ -204,9 +204,12 @@ class NamedQueue:
         ctx.committed = True
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
-        """Read and remove one message from the AGFS queue; return parsed dict or None.
+        """Move the head message from pending to processing; return parsed dict or None.
 
-        Normalises the various return types AGFSClient.read() may produce.
+        Reading ``/dequeue`` marks the message in progress on the backend; it is
+        not deleted until ``ack()`` confirms it, so an unacknowledged message is
+        recovered on the next startup. Normalises the various return types
+        AGFSClient.read() may produce.
         """
         content = await self._async_agfs.read(f"{self.path}/dequeue")
         if not content or content == b"{}":
@@ -252,7 +255,12 @@ class NamedQueue:
             return None
 
     async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
-        """Get and remove message from queue without invoking the handler."""
+        """Move the head message to processing without invoking the handler or ACK.
+
+        The delivery is left unacknowledged, so the backend recovers it on the
+        next startup unless the caller ACKs it explicitly. Use ``dequeue()`` for
+        the normal handler-and-ACK path.
+        """
         await self._ensure_initialized()
         try:
             return await self._read_queue_message()
@@ -340,7 +348,12 @@ class NamedQueue:
             return None
 
     async def size(self) -> int:
-        """Get queue size."""
+        """Return the number of pending messages, excluding in-progress deliveries.
+
+        This is the QueueFS ``/size`` gauge (messages available for dequeue), not
+        the total unacknowledged count; use ``get_status()`` for pending plus
+        processing.
+        """
         await self._ensure_initialized()
         size_file = f"{self.path}/size"
 
