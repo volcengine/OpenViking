@@ -116,6 +116,18 @@ def warn_unknown_config_fields(
         if child_model is None:
             continue
         child_prefix = f"{path_prefix}.{key}" if path_prefix else key
+        origin = get_origin(field.annotation)
+        if origin in (dict, Mapping) and isinstance(value, Mapping):
+            for sub_key, sub_item in value.items():
+                if isinstance(sub_item, Mapping):
+                    warn_unknown_config_fields(
+                        data=sub_item,
+                        model=child_model,
+                        logger=logger,
+                        path_prefix=f"{child_prefix}.{sub_key}",
+                    )
+            continue
+
         is_sequence = isinstance(value, (list, tuple))
         for index, item in enumerate(value if is_sequence else (value,)):
             if not isinstance(item, Mapping):

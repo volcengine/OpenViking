@@ -3,6 +3,7 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import asyncio
+import dataclasses
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
@@ -143,6 +144,10 @@ class FindRequest(BaseModel):
     read_content: bool = False
     telemetry: TelemetryRequest = False
     events_time_decay_protection: Optional[str] = None
+    rerank_lane: Optional[str] = Field(
+        default=None,
+        description="Optional rerank lane/profile name override (e.g. 'light', 'heavy').",
+    )
 
     @model_validator(mode="after")
     def _validate_time_decay(self) -> "FindRequest":
@@ -252,6 +257,10 @@ class SearchRequest(BaseModel):
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
     rewrite: Union[bool, Literal["auto"]] = False
     rewrite_max_bullets: int = Field(default=6, ge=1, le=20)
+    rerank_lane: Optional[str] = Field(
+        default=None,
+        description="Optional rerank lane/profile name override (e.g. 'light', 'heavy').",
+    )
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
@@ -366,6 +375,28 @@ class GlobRequest(BaseModel):
     include_tags: bool = False
 
 
+def _resolve_request_rerank_lane(
+    operation: str,
+    request_lane: Optional[str],
+    ctx_lane: Optional[str],
+    service: Any,
+) -> Optional[str]:
+    """Resolve rerank lane from request override, context, or routing rules."""
+    lane = request_lane or ctx_lane
+    if lane:
+        return lane
+    config = getattr(service, "_config", None)
+    profiles = getattr(config, "rerank_profiles", {})
+    if not profiles:
+        return None
+    routing = getattr(config, "rerank_routing", {})
+    if operation in routing:
+        return routing[operation]
+    if "default" in routing:
+        return routing["default"]
+    return "heavy" if operation == "find" else "light"
+
+
 @router.post("/find")
 async def find(
     request: FindRequest,
@@ -374,6 +405,9 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
+    lane = _resolve_request_rerank_lane("find", request.rerank_lane, _ctx.rerank_lane, service)
+    if lane:
+        _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -436,6 +470,9 @@ async def _search_context(
     actual_limit: int,
 ):
     """Assemble an injection-ready context block for one request."""
+    lane = _resolve_request_rerank_lane("context", request.rerank_lane, ctx.rerank_lane, service)
+    if lane:
+        ctx = dataclasses.replace(ctx, rerank_lane=lane)
     params = AssembleParams(
         query=request.query,
         search_type=request.search_type,
@@ -502,6 +539,9 @@ async def search(
         )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri, _ctx)
     resolved_image_url = _resolve_image_url(request.image_url, _ctx)
+    lane = _resolve_request_rerank_lane("search", request.rerank_lane, _ctx.rerank_lane, service)
+    if lane:
+        _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
 
     async def _search():
         session = None

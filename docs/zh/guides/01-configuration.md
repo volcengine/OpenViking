@@ -1123,6 +1123,7 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
 | `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
 | `threshold` | float | 分数阈值，范围为 `0.0` 到 `1.0`。低于此值的结果会被过滤。默认：`0.1` |
+| `max_retries` | int | HTTP 连接错误时的最大重试次数（指数退避）。默认：`2` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 
 **支持的提供方:**
@@ -1133,6 +1134,46 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 - `jev`: Jev (TypeSafe System One) 结构化判定接口，支持 Choice 横向比较和 Noul 独立评分
 
 如果未配置 Rerank，搜索仅使用向量相似度。
+
+#### 分级 Rerank 配置与路由 (Tiered Rerank Profiles)
+
+可在 `rerank_profiles` 下配置多个命名的重排模型 profile，并通过 `rerank_routing` 按接口/操作进行分流路由：
+
+```json
+{
+  "rerank_profiles": {
+    "light": {
+      "provider": "openai",
+      "model": "novelaide/Qwen3-Reranker-4B-MLX",
+      "api_base": "http://127.0.0.1:8082/v1/rerank",
+      "timeout": 45.0,
+      "threshold": 0.1,
+      "max_retries": 2,
+      "max_input_tokens": 512
+    },
+    "heavy": {
+      "provider": "openai",
+      "model": "Qwen3-Reranker-8B",
+      "api_key": "your-key",
+      "api_base": "https://ai.gitee.com/v1/rerank",
+      "timeout": 75.0,
+      "threshold": 0.1,
+      "max_retries": 2,
+      "max_input_tokens": 1024
+    }
+  },
+  "rerank_routing": {
+    "context": "light",
+    "find": "heavy",
+    "search": "light",
+    "default": "light"
+  }
+}
+```
+
+- 未配置 `rerank_profiles` 时，完全向后兼容单个 `rerank` 配置。
+- `rerank_routing` 将操作类型（`"context"`、`"find"`、`"search"`、`"default"`）映射到指定的 profile。
+- 客户端在 `/find` 或 `/search` 请求体中也可以传入 `rerank_lane` 显式指定使用的 profile。
 
 ### retrieval
 

@@ -482,6 +482,8 @@ class OpenVikingService:
             agfs=self._agfs_client,
             query_embedder=None,
             rerank_config=config.rerank,
+            rerank_profiles=getattr(config, "rerank_profiles", None),
+            rerank_routing=getattr(config, "rerank_routing", None),
             vector_store=self._vikingdb_manager,
             acl_manager=self._vikingdb_manager.acl_manager,
             retrieval_config=config.retrieval,
