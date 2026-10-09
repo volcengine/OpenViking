@@ -21,9 +21,42 @@ from vikingbot.utils.tracing import get_current_response_id
 class ToolExecutionResult:
     """Tool result plus request-scoped Skill resolution metadata."""
 
-    result: Any
+    result: str | MultimodalToolResult
     effective_params: dict[str, Any]
     skill_uris: tuple[str, ...] = ()
+
+
+def _normalize_tool_result(name: str, result: Any) -> str | MultimodalToolResult:
+    """Keep post-Hook results inside the Tool result contract."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, MultimodalToolResult):
+        try:
+            if not isinstance(result.text, str) or not isinstance(result.content, list):
+                raise TypeError
+            if not all(isinstance(part, dict) for part in result.content):
+                raise TypeError
+            json.dumps(result.content, ensure_ascii=False, allow_nan=False)
+        except Exception:
+            logger.warning(
+                "Tool '{}' produced invalid multimodal content after post-call Hooks", name
+            )
+            return (
+                f"Error: Tool '{name}' produced invalid multimodal content "
+                "after post-call processing"
+            )
+        return result
+
+    result_type = type(result).__name__[:80] or "unknown"
+    logger.warning(
+        "Tool '{}' produced unsupported result type '{}' after post-call Hooks",
+        name,
+        result_type,
+    )
+    return (
+        f"Error: Tool '{name}' produced unsupported result type '{result_type}' "
+        "after post-call processing"
+    )
 
 
 class ToolRegistry:
@@ -304,8 +337,9 @@ class ToolRegistry:
         result = hook_result.get("result")
         if isinstance(result, Exception):
             result = f"Error executing {name}: {str(result)}"
+        normalized_result = _normalize_tool_result(name, result)
         return ToolExecutionResult(
-            result=result,
+            result=normalized_result,
             effective_params=effective_params,
             skill_uris=skill_uris,
         )

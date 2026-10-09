@@ -1,4 +1,5 @@
 import copy
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,8 +9,9 @@ import pytest
 from vikingbot.agent import loop as loop_module
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import AgentLoop
-from vikingbot.agent.tools.base import MultimodalToolResult
-from vikingbot.agent.tools.registry import ToolExecutionResult
+from vikingbot.agent.tools import registry as registry_module
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
+from vikingbot.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
@@ -168,6 +170,46 @@ def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
             "content": content,
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_multimodal", [False, True])
+async def test_tool_registry_rejects_nonserializable_result_after_hooks(
+    monkeypatch, invalid_multimodal: bool
+):
+    class _StringTool(Tool):
+        name = "demo"
+        description = "Return a safe string."
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, tool_context: ToolContext, **kwargs):
+            return "safe result"
+
+    def callback():
+        return None
+
+    hook_result = (
+        MultimodalToolResult(text="unsafe", content=[{"type": "text", "text": callback}])
+        if invalid_multimodal
+        else callback
+    )
+
+    async def replace_result(context, **kwargs):
+        return {**kwargs, "result": hook_result}
+
+    monkeypatch.setattr(registry_module.hook_manager, "execute_hooks", replace_result)
+    registry = ToolRegistry()
+    registry.register(_StringTool())
+
+    outcome = await registry.execute_detailed(
+        "demo",
+        {},
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="hook-result"),
+    )
+
+    assert isinstance(outcome.result, str)
+    assert outcome.result.startswith("Error: Tool 'demo' produced ")
+    assert json.dumps(ContextBuilder(Path()).add_tool_result([], "call-1", "demo", outcome.result))
 
 
 @pytest.mark.asyncio
