@@ -408,7 +408,7 @@ class AgentLoop:
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
-        self._mcp_connecting = False
+        self._mcp_connect_lock = asyncio.Lock()
         self._ov_clients: dict[str, Any] = {}
         self._register_default_tools()
 
@@ -417,26 +417,26 @@ class AgentLoop:
 
         Ported from HKUDS/nanobot v0.1.5.
         """
-        if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
+        if self._mcp_connected or not self._mcp_servers:
             return
-        self._mcp_connecting = True
-        try:
-            from vikingbot.agent.tools.mcp import connect_mcp_servers
+        async with self._mcp_connect_lock:
+            if self._mcp_connected:
+                return
+            try:
+                from vikingbot.agent.tools.mcp import connect_mcp_servers
 
-            self._mcp_stack = AsyncExitStack()
-            await self._mcp_stack.__aenter__()
-            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-            self._mcp_connected = True
-        except Exception as e:
-            logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
-            if self._mcp_stack:
-                try:
-                    await self._mcp_stack.aclose()
-                except Exception:
-                    pass
-                self._mcp_stack = None
-        finally:
-            self._mcp_connecting = False
+                self._mcp_stack = AsyncExitStack()
+                await self._mcp_stack.__aenter__()
+                await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+                self._mcp_connected = True
+            except Exception as e:
+                logger.error(f"Failed to connect MCP servers (will retry next message): {e}")
+                if self._mcp_stack:
+                    try:
+                        await self._mcp_stack.aclose()
+                    except Exception:
+                        pass
+                    self._mcp_stack = None
 
     async def close_mcp(self) -> None:
         """Close MCP server connections. Ported from HKUDS/nanobot v0.1.5."""
