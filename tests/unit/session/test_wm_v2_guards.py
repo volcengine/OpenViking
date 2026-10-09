@@ -723,6 +723,37 @@ class TestFormatMessageForWm:
         assert result.count("base64_chars=50000") == 2
         assert image_data not in result
 
+    def test_tool_json_image_block_redacted(self):
+        png = "iVBORw0KGgo" + "A" * 50_000
+        jpeg = "/9j/" + "B" * 30_000
+        output = (
+            '[{"type":"text","text":"Read image file [image/png]"},'
+            '{"type":"image","data":"' + png + '","mimeType":"image/png"},'
+            '{"type":"image","source":{"type":"base64","media_type":"image/jpeg",'
+            '"data": "' + jpeg + '"}}]'
+        )
+        m = _msg(
+            "assistant",
+            [ToolPart(tool_name="read", tool_status="completed", tool_output=output)],
+        )
+
+        result = wm.format_message_for_wm(m)
+
+        assert "Read image file" in result
+        assert "mime=image/png, base64_chars=50011" in result
+        assert "mime=image/jpeg, base64_chars=30004" in result
+        assert png not in result
+        assert jpeg not in result
+
+    def test_non_image_json_data_field_is_not_redacted(self):
+        output = '{"data":"aGVsbG8gd29ybGQ=","rows":[{"data":"plain"}]}'
+        m = _msg(
+            "assistant",
+            [ToolPart(tool_name="query", tool_status="completed", tool_output=output)],
+        )
+
+        assert output in wm.format_message_for_wm(m)
+
     def test_malformed_inline_image_data_url_is_not_redacted(self):
         malformed = "data:image/png" + ";param" * 1_024 + ";notbase64,"
         m = _msg(

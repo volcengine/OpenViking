@@ -43,6 +43,18 @@ _B64_JSON_RE = re.compile(
     r"(([\"'])b64_json\2\s*:\s*)([\"'])([a-z0-9+/_=-]+)\3",
     re.IGNORECASE,
 )
+# JSON image blocks such as Pi's / Anthropic's {"type":"image","data":"iVBOR..."}.
+# Only base64 starting with a PNG/JPEG/GIF/WebP signature is treated as an image,
+# so ordinary "data" fields are left alone.
+_IMAGE_SIGNATURE_MIME = {
+    "iVBORw0KGgo": "image/png",
+    "/9j/": "image/jpeg",
+    "R0lGOD": "image/gif",
+    "UklGR": "image/webp",
+}
+_B64_IMAGE_DATA_JSON_RE = re.compile(
+    r"(([\"'])data\2\s*:\s*)([\"'])((?:iVBORw0KGgo|/9j/|R0lGOD|UklGR)[A-Za-z0-9+/_=-]*)\3"
+)
 
 
 def _inline_image_placeholder(mime: str, base64_chars: int) -> str:
@@ -58,7 +70,15 @@ def redact_inline_images(text: str) -> str:
         placeholder = _inline_image_placeholder("image/*", len(match.group(4)))
         return f"{match.group(1)}{quote}{placeholder}{quote}"
 
-    return _B64_JSON_RE.sub(replace_b64_json, _INLINE_IMAGE_DATA_URL_RE.sub(replace_data_url, text))
+    def replace_image_data_json(match: re.Match[str]) -> str:
+        data = match.group(4)
+        mime = next(m for sig, m in _IMAGE_SIGNATURE_MIME.items() if data.startswith(sig))
+        quote = match.group(3)
+        return f"{match.group(1)}{quote}{_inline_image_placeholder(mime, len(data))}{quote}"
+
+    text = _INLINE_IMAGE_DATA_URL_RE.sub(replace_data_url, text)
+    text = _B64_JSON_RE.sub(replace_b64_json, text)
+    return _B64_IMAGE_DATA_JSON_RE.sub(replace_image_data_json, text)
 
 
 def redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Message]:
