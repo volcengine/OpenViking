@@ -1,10 +1,10 @@
 ---
-description: 把任何使用 API Key 的模型客户端指向上下文网关，让它用上 OpenViking 记忆。
+description: 把任何使用 API Key 的模型客户端指向 OpenViking 网关，让它用上 OpenViking 记忆。
 ---
 
-# 上下文网关
+# OpenViking 网关
 
-**任何**能修改 Base URL 的模型客户端，接上上下文网关就能用上 OpenViking 记忆，还能让模型主动使用记忆。客户端只改两处：Base URL 改成网关地址，模型服务商的 API Key 换成网关密钥。不用安装插件，也不用改代码或提示词。
+**任何**能修改 Base URL 的模型客户端，接上 OpenViking 网关就能用上 OpenViking 记忆，还能让模型主动使用记忆。客户端只改两处：Base URL 改成网关地址，模型服务商的 API Key 换成网关密钥。不用安装插件，也不用改代码或提示词。
 
 开启 OpenViking 工具后，模型能在一条回复里自己检索记忆、读取原文、记下新内容、导入资料。这些工具由网关代为执行，客户端不需要声明或实现任何工具，所以聊天应用、SDK 脚本、低代码平台这类**任意**客户端，也能像 Agent 一样操作记忆。
 
@@ -18,9 +18,9 @@ description: 把任何使用 API Key 的模型客户端指向上下文网关，�
 
 网关支持三种常用的模型 API：Anthropic Messages、OpenAI Chat Completions 和 OpenAI Responses（要求每个请求都带完整历史）。它把每个请求转发给你配置的模型服务商，这里称为**上游**；请求用哪种 API 发来，就用同一种 API 转发，网关不做转换。
 
-> **注意**：上下文网关是一个单独运行的进程 `openviking-context-gateway`，不在 OpenViking Server 进程里。名字相近的 `vikingbot gateway` 是 VikingBot 的长期运行入口，负责远程访问和接入聊天平台；两者是 OpenViking 里用途不同的组件。
+> **注意**：OpenViking 网关是一个单独运行的进程 `openviking-gateway`，不在 OpenViking Server 进程里。它和 VikingBot Gateway（`vikingbot gateway` 命令）是两个不同的组件：后者是 VikingBot 的长期运行入口，负责远程访问和接入聊天平台。
 
-上下文网关目前处于 Beta 阶段。本页介绍网关的工作方式和客户端接入方法。为团队部署网关和日常运维，见[上下文网关部署与运维](22-context-gateway-operations.md)。
+网关目前处于 Beta 阶段。本页介绍网关的工作方式和客户端接入方法。为团队部署网关和日常运维，见[OpenViking 网关部署与运维](22-gateway-operations.md)。
 
 ## 自定义上游
 
@@ -29,15 +29,15 @@ description: 把任何使用 API Key 的模型客户端指向上下文网关，�
 - **计费、配额和负载均衡。** 网关不负责这些。需要时在网关后面接一层 LiteLLM、new-api 这类网关，把它添加为上游。
 - **使用订阅额度。** 客户端不能直接用订阅账号登录网关，但可以把 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 这类反向代理添加为上游。它把 ChatGPT（Codex）、Claude 等订阅账号包装成 API，例如 Codex 就可以经网关用上 ChatGPT 订阅额度。OpenAI Codex 负责人 Tibo 曾[公开介绍](https://x.com/thsottiaux/status/2076119366647894371)过用 CLIProxyAPI 接入 Codex 订阅的做法。**是否符合服务商的使用条款，请自行确认。**
 
-添加方法见[上游](22-context-gateway-operations.md#上游)，服务商选*通用*。
+添加方法见[上游](22-gateway-operations.md#上游)，服务商选*通用*。
 
 ## 一张图看懂架构
 
-![上下文网关架构：客户端只改 Base URL 和 API Key，经反向代理把模型请求发给网关；网关用用户自己的 OpenViking 密钥搜索 OpenViking、保存对话，再用同一种 API 把请求转发给上游模型服务商；会话和记忆的正本在 OpenViking，网关本机只有两个加密的 SQLite 文件](../../images/context-gateway/architecture.zh.svg)
+![OpenViking 网关架构：客户端只改 Base URL 和 API Key，经反向代理把模型请求发给网关；网关用用户自己的 OpenViking 密钥搜索 OpenViking、保存对话，再用同一种 API 把请求转发给上游模型服务商；会话和记忆的正本在 OpenViking，网关本机只有两个加密的 SQLite 文件](../../images/gateway/architecture.zh.svg)
 
-- **运行在哪**：网关是独立的服务，可以和 OpenViking 装在同一台机器、放在同一个 Pod，也可以分开部署（见[部署方式](22-context-gateway-operations.md#部署方式)）。共享部署时网关端口不对外开放，由反向代理把模型 API 和工具上传路径转发给网关，其余路径转发给 OpenViking；只在本机试用时可以省掉反向代理。
+- **运行在哪**：网关是独立的服务，可以和 OpenViking 装在同一台机器、放在同一个 Pod，也可以分开部署（见[部署方式](22-gateway-operations.md#部署方式)）。共享部署时网关端口不对外开放，由反向代理把模型 API 和工具上传路径转发给网关，其余路径转发给 OpenViking；只在本机试用时可以省掉反向代理。
 - **和 OpenViking 的关系**：网关只调用 OpenViking 的公开接口，向量化和记忆提取都在 OpenViking 里完成。
-- **数据在哪**：会话和记忆的正本在 OpenViking。网关本机只有两个加密的 SQLite 文件，一个存上游、密钥和配置，一个存对话状态；对话闲置 30 天后，网关删除它的状态。删除和隔离方式见[安全与数据](22-context-gateway-operations.md#安全与数据)。
+- **数据在哪**：会话和记忆的正本在 OpenViking。网关本机只有两个加密的 SQLite 文件，一个存上游、密钥和配置，一个存对话状态；对话闲置 30 天后，网关删除它的状态。删除和隔离方式见[安全与数据](22-gateway-operations.md#安全与数据)。
 - **出故障时**：OpenViking 不可用时对话照常进行，只是不带记忆，保存对话会自动重试。网关停止服务时，经过它的模型调用全部失败。
 - **谁来管**：账号管理员在 Studio 里给每位用户签发网关密钥。每个密钥绑定一位 OpenViking 用户、一份**上下文配置**（召回预算、是否保存对话、是否开放 OpenViking 工具等记忆设置）和一组**上游**（请求转发到的模型服务地址和 API Key）。
 
@@ -49,7 +49,7 @@ description: 把任何使用 API Key 的模型客户端指向上下文网关，�
 | --- | --- | --- | --- |
 | 把 Base URL 改成网关地址，API Key 换成网关密钥。Claude Code 还要设置 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`，给子 Agent 和后台请求加上标记，避免为它们召回和保存。 | 每条新消息都补充相关记忆，对话开头还提供用户画像；对话保存回 OpenViking 并提取成新记忆；长对话自动压缩；可选：模型主动检索、读取和写入 OpenViking（见[下一节](#让任意客户端拥有-agentic-记忆)）。 | 每条新消息的第一次模型调用最多多等 2 秒；补充的记忆按输入 token 计费，之后的请求里大部分按缓存价计费；触发压缩的那一轮多一次模型调用。 | 补充的记忆在客户端里看不到（服务商看得到），Studio 的请求日志也只记条数和耗时；没有设置上下文窗口时，网关按 1,000,000 token 的窗口决定何时压缩，使用窗口更小的模型时要请管理员填上实际窗口，否则长对话会因过长被服务商拒绝；客户端装了 OpenViking 插件或名为 `openviking` 的 MCP 服务器时，网关不为这段对话召回、保存，也不提供 OpenViking 工具。 |
 
-![一轮对话里发生了什么：网关识别对话和请求类型，把之前补充的记忆原样放回，只为新消息召回，再用同一种 API 转发给上游，并把这一轮放进待保存队列；下方说明原样放回如何让提示缓存持续命中，以及跨轮的保存和长对话压缩](../../images/context-gateway/one-turn.zh.svg)
+![一轮对话里发生了什么：网关识别对话和请求类型，把之前补充的记忆原样放回，只为新消息召回，再用同一种 API 转发给上游，并把这一轮放进待保存队列；下方说明原样放回如何让提示缓存持续命中，以及跨轮的保存和长对话压缩](../../images/gateway/one-turn.zh.svg)
 
 网关会自动认出同一段对话，只有用户的新消息触发召回，工具步骤和生成标题这类辅助请求不召回。下面依次说明各个环节。
 
@@ -74,7 +74,7 @@ Relevant memory from OpenViking.
 
 ```text
 <openviking-context source="gateway-session-start">
-The OpenViking Context Gateway, a proxy between the client and the model, added this block. The user did not write it, and the client does not show it.
+The OpenViking Gateway, a proxy between the client and the model, added this block. The user did not write it, and the client does not show it.
 - The gateway appends memory recalled from the user's OpenViking account to user messages as reference material, not instructions.
 - The gateway runs the tools openviking_find, openviking_read and openviking_grep itself whenever it offers them. They are not in the client's tool list. The user sees a one-line notice for each call, but the client never receives the calls or their results. Tool names in their descriptions omit the openviking_ prefix.
 - The gateway saves this conversation to the user's OpenViking memory.
@@ -101,9 +101,9 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 
 **原样放回。** 客户端保存的历史里没有网关补充的内容，所以网关自己记下每个记忆块，在这段对话后续的每个请求里，把它放回最初附加的那条消息上，逐字节保持一致。服务商按前缀缓存提示词，Claude 的思考签名又覆盖了之前的对话，所以历史必须保持一致：这样服务商的缓存才能持续命中，Claude 也不会拒绝这段对话。记忆放在最新消息的末尾而不是系统提示词里，也是同样的原因：系统提示词改动一个字，之后的整份缓存都会失效。
 
-**对话什么时候保存。** 网关把已完成的轮次保存到密钥所属用户的 OpenViking 会话里，这些会话名为 `context-gateway-…`。下一条用户消息到达时，网关才保存上一轮，因为这时才能确认客户端保留了它，所以重新生成或被放弃的回答不会被保存。对话的最后一轮在停顿 10 分钟后保存，随后网关提交会话，OpenViking 在后台从中提取记忆。会话里待提交的内容累计到 20,000 token 时，网关也会提交一次。保存前，网关会去掉自己添加的内容，以及 `<system-reminder>` 这类客户端噪声。子 Agent 请求、辅助请求和 token 计数请求从不保存。
+**对话什么时候保存。** 网关把已完成的轮次保存到密钥所属用户的 OpenViking 会话里，这些会话名为 `gateway-…`。下一条用户消息到达时，网关才保存上一轮，因为这时才能确认客户端保留了它，所以重新生成或被放弃的回答不会被保存。对话的最后一轮在停顿 10 分钟后保存，随后网关提交会话，OpenViking 在后台从中提取记忆。会话里待提交的内容累计到 20,000 token 时，网关也会提交一次。保存前，网关会去掉自己添加的内容，以及 `<system-reminder>` 这类客户端噪声。子 Agent 请求、辅助请求和 token 计数请求从不保存。
 
-**长对话。** 对话用到模型上下文窗口的 90%（默认值）时，网关会压缩它：由同一个模型为到目前为止的对话写一份有长度上限的摘要，此后这份摘要取代压缩位置之前的全部内容，不保留任何原文；客户端界面里的历史保持不变。如果开启了保存对话，并且模型能用 OpenViking 的 grep 和 read 工具，摘要后面会说明如何在已保存的对话里查找细节。摘要由模型自己生成，不再使用 OpenViking 的 Working Memory 摘要，网关新建的 OpenViking 会话也都关闭了 Working Memory。上游和上下文配置都没有设置模型的上下文窗口时，网关按 1,000,000 token 计算，所以窗口更小的模型需要设置窗口。每次压缩会多一次模型请求，服务商缓存也会失效一次。详见[长对话](22-context-gateway-operations.md#长对话)。
+**长对话。** 对话用到模型上下文窗口的 90%（默认值）时，网关会压缩它：由同一个模型为到目前为止的对话写一份有长度上限的摘要，此后这份摘要取代压缩位置之前的全部内容，不保留任何原文；客户端界面里的历史保持不变。如果开启了保存对话，并且模型能用 OpenViking 的 grep 和 read 工具，摘要后面会说明如何在已保存的对话里查找细节。摘要由模型自己生成，不再使用 OpenViking 的 Working Memory 摘要，网关新建的 OpenViking 会话也都关闭了 Working Memory。上游和上下文配置都没有设置模型的上下文窗口时，网关按 1,000,000 token 计算，所以窗口更小的模型需要设置窗口。每次压缩会多一次模型请求，服务商缓存也会失效一次。详见[长对话](22-gateway-operations.md#长对话)。
 
 以上数字都来自密钥使用的**上下文配置**。你可以在其中调整预算和时间，也可以分别关闭每项功能。
 
@@ -111,7 +111,7 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 
 自动召回是网关替模型猜它需要什么；开启 OpenViking 工具后，由模型自己决定查什么、读什么、记什么。工具由网关执行，客户端不用声明或实现任何工具，请求里一个工具都没有也能用。
 
-![开启 OpenViking 工具后的一条回复：网关在客户端的请求上附加召回的记忆和 OpenViking 工具定义，模型调用 OpenViking 工具时由网关用该用户的 OpenViking 密钥执行，再把结果接回请求继续询问模型，直到模型给出最终回答；客户端收到的是一条带提示行的连贯回复，工具往返在下一轮被原样放回](../../images/context-gateway/tool-loop.zh.svg)
+![开启 OpenViking 工具后的一条回复：网关在客户端的请求上附加召回的记忆和 OpenViking 工具定义，模型调用 OpenViking 工具时由网关用该用户的 OpenViking 密钥执行，再把结果接回请求继续询问模型，直到模型给出最终回答；客户端收到的是一条带提示行的连贯回复，工具往返在下一轮被原样放回](../../images/gateway/tool-loop.zh.svg)
 
 - **一条回复里完成多步操作**：网关拦下模型发出的 OpenViking 工具调用，用该用户的 OpenViking 密钥执行，把结果接回后再问模型，直到模型不再调用。客户端只收到一条连贯的回复，流式和非流式都支持。
 - **客户端自己的工具照常可用**：同一条回复里，模型可以同时调用 OpenViking 工具和客户端工具（例如 Bash）。客户端工具的调用原样交给客户端执行，照常经过客户端的权限确认。
@@ -141,9 +141,9 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 
 - **默认只提供只读工具。** 新建的上下文配置默认打开 **OpenViking 工具**，“使用推荐设置创建”也一样。默认勾选的是只读工具：`find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`list_watches`、`get_acl`、`list_users`、`list_groups` 和 `health`。会修改数据的工具默认不勾选：`remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl` 和 `cancel_watch`。想让模型保存记忆，就勾选 `remember`；想让它导入网页或附件，就勾选 `add_resource`。OpenViking 以后新增的工具会自动勾选。已有的上下文配置保留原来的设置。全部工具定义约占 3,500 个输入 token，会随对话中的每个请求发送，所以取消用不到的工具也能节省 token。改动只影响新对话。
 - **上限。** 默认每个请求最多 5 轮工具调用、新增 100,000 token。用完后网关拒绝之后的 OpenViking 调用，模型用已有结果继续回答；模型被拒后仍坚持调用，这个请求就会报错。单次调用超过 30 秒，这次调用向模型返回错误；整个请求超过 120 秒，请求失败。
-- **客户端要求。** 客户端要每轮回传完整历史；使用 OpenAI Responses 时要设置 `store: false`。客户端强制指定某个工具或要求结构化输出、上游关闭了**允许 OpenViking 工具**，或者上游是 DeepSeek、关闭了**补全推理内容回传**而请求又没有关闭思考模式时，网关不提供 OpenViking 工具。DeepSeek 要求带工具的请求回传之前每条回复的推理内容，而很多客户端不会发回来；DeepSeek 上游默认开启**补全推理内容回传**，由网关补回这部分内容，所以保持思考模式也能使用工具，见[上游](22-context-gateway-operations.md#上游)。对话是否带工具，在它的第一个请求时就决定了。
+- **客户端要求。** 客户端要每轮回传完整历史；使用 OpenAI Responses 时要设置 `store: false`。客户端强制指定某个工具或要求结构化输出、上游关闭了**允许 OpenViking 工具**，或者上游是 DeepSeek、关闭了**补全推理内容回传**而请求又没有关闭思考模式时，网关不提供 OpenViking 工具。DeepSeek 要求带工具的请求回传之前每条回复的推理内容，而很多客户端不会发回来；DeepSeek 上游默认开启**补全推理内容回传**，由网关补回这部分内容，所以保持思考模式也能使用工具，见[上游](22-gateway-operations.md#上游)。对话是否带工具，在它的第一个请求时就决定了。
 
-完整的条件、上限设置、文件导入方式和失败处理，见[OpenViking 工具](22-context-gateway-operations.md#openviking-工具)。
+完整的条件、上限设置、文件导入方式和失败处理，见[OpenViking 工具](22-gateway-operations.md#openviking-工具)。
 
 ### 用户看到什么
 
@@ -164,13 +164,13 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 - **四个控制点**：上下文配置里的总开关、逐个工具勾选、每个上游的**允许 OpenViking 工具**开关，以及工具轮数和 token 上限。
 - **和插件或 MCP 怎么选。** 插件和 MCP 在客户端里显示每次调用和结果，并在调用前请求确认，所以 Claude Code、Codex 用它们更透明。网关工具主要服务接不了插件或 MCP 的客户端。
 
-**实验性：Agent 自管上下文窗口。** 模型能使用 OpenViking 工具时，上下文配置还可以让它自己管理上下文窗口：模型会多两个工具，一个查看当前窗口用了多少，一个写好交接笔记后开启新窗口；窗口快满时，网关还会提醒它。这项功能默认关闭。详见[实验性：Agent 自管上下文窗口](22-context-gateway-operations.md#实验性-agent-自管上下文窗口)。
+**实验性：Agent 自管上下文窗口。** 模型能使用 OpenViking 工具时，上下文配置还可以让它自己管理上下文窗口：模型会多两个工具，一个查看当前窗口用了多少，一个写好交接笔记后开启新窗口；窗口快满时，网关还会提醒它。这项功能默认关闭。详见[实验性：Agent 自管上下文窗口](22-gateway-operations.md#实验性-agent-自管上下文窗口)。
 
 ## 网关还是插件
 
 OpenViking 也可以通过运行在 Agent 内部的插件接入 Claude Code、Codex、OpenCode、pi、OpenClaw、Hermes 等 Agent（见 [Agent 集成概览](../agent-integrations/01-overview.md)）。两种方式互相补充，差别都来自它们运行的位置：
 
-| | 上下文网关 | Agent 插件 |
+| | OpenViking 网关 | Agent 插件 |
 | --- | --- | --- |
 | 运行位置 | 在客户端和模型服务商之间，只能看到发给模型的请求。 | 在 Agent 内部，能看到 Agent 的会话、事件和本地工作区。 |
 | 适用的客户端 | 凡是能设置 Base URL 和 API Key 的客户端：聊天应用、SDK 和 API 应用、低代码平台、编程 Agent。 | 有 OpenViking 插件的 Agent。 |
@@ -201,21 +201,21 @@ Claude Code、Codex 和 pi 如果需要按项目区分记忆，或者要求每�
 
 ### 1. 安装网关
 
-把 `context-gateway` 可选依赖安装到 OpenViking 所在的环境：
+把 `gateway` 可选依赖安装到 OpenViking 所在的环境：
 
 ::: code-group
 
 ```bash [pip]
-pip install "openviking[context-gateway]"
+pip install "openviking[gateway]"
 ```
 
 ```bash [uv]
-uv tool install "openviking[context-gateway]" --upgrade
+uv tool install "openviking[gateway]" --upgrade
 ```
 
 :::
 
-安装后，`openviking-context-gateway --help` 会打印命令用法。在 Linux 和 macOS 上，还可以加装 `context-gateway-fast`（`"openviking[context-gateway,context-gateway-fast]"`），换用更快的事件循环和 HTTP 解析器。
+安装后，`openviking-gateway --help` 会打印命令用法。在 Linux 和 macOS 上，还可以加装 `gateway-fast`（`"openviking[gateway,gateway-fast]"`），换用更快的事件循环和 HTTP 解析器。
 
 ### 2. 生成加密密钥和管理令牌
 
@@ -223,11 +223,11 @@ uv tool install "openviking[context-gateway]" --upgrade
 
 ```bash
 mkdir -p ~/.openviking
-cat > ~/.openviking/context-gateway.env <<EOF
-export OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY="$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
-export OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+cat > ~/.openviking/gateway.env <<EOF
+export OPENVIKING_GATEWAY_ENCRYPTION_KEY="$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+export OPENVIKING_GATEWAY_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 EOF
-chmod 600 ~/.openviking/context-gateway.env
+chmod 600 ~/.openviking/gateway.env
 ```
 
 OpenViking Server 和网关都要读取这两个环境变量，所以启动它们的每个终端都要先加载这个文件。加密密钥务必保留好：一旦更换，网关就读不出之前存储的数据。
@@ -242,19 +242,19 @@ OpenViking Server 和网关都要读取这两个环境变量，所以启动它�
     "auth_mode": "api_key",
     "root_api_key": "<root-key>"
   },
-  "context_gateway": {
+  "gateway": {
     "enabled": true,
     "public_url": "http://127.0.0.1:1935"
   }
 }
 ```
 
-其余设置保持默认：网关监听 `127.0.0.1:1935`，通过 `http://127.0.0.1:1933` 访问 OpenViking，数据存放在 `~/.openviking/context-gateway`。`public_url` 是客户端使用的地址，Studio 的接入说明会显示它。
+其余设置保持默认：网关监听 `127.0.0.1:1935`，通过 `http://127.0.0.1:1933` 访问 OpenViking，数据存放在 `~/.openviking/gateway`。`public_url` 是客户端使用的地址，Studio 的接入说明会显示它。
 
 ### 4. 启动 OpenViking Server
 
 ```bash
-source ~/.openviking/context-gateway.env
+source ~/.openviking/gateway.env
 openviking-server
 ```
 
@@ -277,35 +277,35 @@ curl -X POST http://127.0.0.1:1933/api/v1/admin/accounts \
 ### 6. 启动网关
 
 ```bash
-source ~/.openviking/context-gateway.env
-openviking-context-gateway --config ~/.openviking/ov.conf
+source ~/.openviking/gateway.env
+openviking-gateway --config ~/.openviking/ov.conf
 ```
 
 检查它能否连上 OpenViking：
 
 ```bash
 curl -s http://127.0.0.1:1935/health
-# {"status":"ok","service":"context-gateway","openviking":{"status":"ok","healthy":true,"version":"…","auth_mode":"api_key"}}
+# {"status":"ok","service":"openviking-gateway","openviking":{"status":"ok","healthy":true,"version":"…","auth_mode":"api_key"}}
 ```
 
-刚启动时，`openviking` 可能还显示 `{"status":"starting"}`。如果显示 `"status":"degraded"`，见[故障排查](22-context-gateway-operations.md#故障排查)。
+刚启动时，`openviking` 可能还显示 `{"status":"starting"}`。如果显示 `"status":"degraded"`，见[故障排查](22-gateway-operations.md#故障排查)。
 
 ### 7. 在 Studio 中完成设置
 
-打开 <http://127.0.0.1:1933/studio>，进入**连接设置**，把 alice 的密钥同时填入**用户 API 密钥**和**管理员 API 密钥**。然后在侧边栏的“设置”分组里选择**上下文网关**。第一个请求到达之前，“概览”标签页会显示**快速开始**清单，步骤与下面相同：
+打开 <http://127.0.0.1:1933/studio>，进入**连接设置**，把 alice 的密钥同时填入**用户 API 密钥**和**管理员 API 密钥**。然后在侧边栏的“设置”分组里选择**OpenViking 网关**。第一个请求到达之前，“概览”标签页会显示**快速开始**清单，步骤与下面相同：
 
 1. **添加上游。** 在“上游”标签页选择**添加上游**。填写名称，选择服务商，再选择客户端使用的协议（本流程用 Chat Completions）。Studio 会填入服务商的 Base URL，例如 OpenAI 为 `https://api.openai.com/v1`；选*通用*时需要自己填写。保持选中**由网关保管 API Key**，再粘贴服务商的 API Key。保存后在上游列表里点**测试**，确认网关能连上服务商。
 2. **创建上下文配置。** 在“上下文配置”标签页选择**使用推荐设置创建**，会创建一份名为“默认”的配置，其中 OpenViking 工具只勾选了只读工具。
-3. **签发网关密钥。** 在“密钥”标签页选择**签发密钥**。填写名称，在 **OpenViking 用户**中选择 alice（账号里只有她一个用户时已经自动选好），再选择“默认”配置和刚添加的上游，然后签发。**复制网关密钥**对话框只显示一次完整的 `ovcg_…` 密钥，关闭之前先复制好。
+3. **签发网关密钥。** 在“密钥”标签页选择**签发密钥**。填写名称，在 **OpenViking 用户**中选择 alice（账号里只有她一个用户时已经自动选好），再选择“默认”配置和刚添加的上游，然后签发。**复制网关密钥**对话框只显示一次完整的 `ovgw_…` 密钥，关闭之前先复制好。
 4. **接入客户端。** “接入”标签页列出了每种客户端的配置，并已填好你的网关地址。下文[接入客户端](#接入客户端)也列出了同样的配置。
 
 ### 8. 发送测试请求
 
 ```bash
-export GATEWAY_KEY='ovcg_...'
+export GATEWAY_KEY='ovgw_...'
 
 curl -s http://127.0.0.1:1935/v1/models -H "Authorization: Bearer $GATEWAY_KEY"
-# {"object":"list","data":[{"id":"…","object":"model","owned_by":"context-gateway"}]}
+# {"object":"list","data":[{"id":"…","object":"model","owned_by":"openviking-gateway"}]}
 
 curl -s http://127.0.0.1:1935/v1/chat/completions \
   -H "Authorization: Bearer $GATEWAY_KEY" \
@@ -319,14 +319,14 @@ curl -s http://127.0.0.1:1935/v1/chat/completions \
 ### 9. 确认记忆生效
 
 - **请求经过了网关。** 打开“请求日志”标签页，刚才的请求显示为**新消息**，状态为 200。OpenViking 中有相关内容时，**记忆**列会显示补充的条数（例如 `+3`）；全新账号下这一列为空。
-- **对话已保存。** 用同一个 `X-OpenViking-Session` 请求头再发一条消息。第二条消息一到，第一轮就会保存；最后一轮在停顿 10 分钟后保存。之后，以 alice 身份连接 Studio 时，这段对话会以 `context-gateway-…` 会话的形式出现在**会话**页面。
+- **对话已保存。** 用同一个 `X-OpenViking-Session` 请求头再发一条消息。第二条消息一到，第一轮就会保存；最后一轮在停顿 10 分钟后保存。之后，以 alice 身份连接 Studio 时，这段对话会以 `gateway-…` 会话的形式出现在**会话**页面。
 - **记忆已提取。** 会话提交之后，OpenViking 才会提取记忆：对话停顿 10 分钟时提交一次，待提交内容累计到 20,000 token 时也会提交。提取在后台进行，需要稍等片刻。然后换一个会话请求头的值开始新对话，问一个依赖这条记忆的问题，例如“你的回答应该多长？”。**记忆**列会显示召回的条数，回复也应该用上了这些记忆。
 
 试用阶段想更快看到效果，可以另建一份上下文配置，把**最新回复等待时长**调短，用它签发一个密钥，再用这个密钥开始新对话。上下文配置的修改只对之后开始的对话生效。
 
 ## 接入客户端
 
-每个客户端都需要两样东西：网关地址和网关密钥。示例使用 `https://ov.example.com`，请换成你自己的网关地址；Studio 在上下文网关页面顶部和“接入”标签页都会显示它。另外，客户端所用的密钥必须绑定一个已启用的上游，这个上游要支持客户端的协议，并提供客户端请求的模型。
+每个客户端都需要两样东西：网关地址和网关密钥。示例使用 `https://ov.example.com`，请换成你自己的网关地址；Studio 在 OpenViking 网关页面顶部和“接入”标签页都会显示它。另外，客户端所用的密钥必须绑定一个已启用的上游，这个上游要支持客户端的协议，并提供客户端请求的模型。
 
 | 客户端 | 上游协议 | Base URL | 对话识别方式 |
 | --- | --- | --- | --- |
@@ -366,7 +366,7 @@ model_provider = "openviking"
 model = "<model>"
 
 [model_providers.openviking]
-name = "OpenViking Context Gateway"
+name = "OpenViking Gateway"
 base_url = "https://ov.example.com/v1"
 wire_api = "responses"
 env_key = "OPENVIKING_GATEWAY_KEY"
@@ -497,7 +497,7 @@ from volcenginesdkarkruntime import Ark
 client = Ark(base_url="https://ov.example.com/api/v3", api_key="<gateway-key>")
 ```
 
-路径只决定客户端使用哪种 API。请求仍然发往密钥绑定的、使用这种 API 并提供该模型的上游，通常是服务商选为“火山方舟”或“BytePlus 方舟（海外站）”的上游（见[上游](22-context-gateway-operations.md#上游)）。
+路径只决定客户端使用哪种 API。请求仍然发往密钥绑定的、使用这种 API 并提供该模型的上游，通常是服务商选为“火山方舟”或“BytePlus 方舟（海外站）”的上游（见[上游](22-gateway-operations.md#上游)）。
 
 ## 网关如何识别对话
 
@@ -531,7 +531,7 @@ client = Ark(base_url="https://ov.example.com/api/v3", api_key="<gateway-key>")
 
 ## 下一步
 
-- [上下文网关部署与运维](22-context-gateway-operations.md)：用 Docker Compose 或 Helm 部署，管理上游、上下文配置和密钥，排查问题。
+- [OpenViking 网关部署与运维](22-gateway-operations.md)：用 Docker Compose 或 Helm 部署，管理上游、上下文配置和密钥，排查问题。
 - [认证](04-authentication.md)：创建账号、用户和他们的密钥。
 - [公网访问与反向代理](12-public-access.md)：为 OpenViking 配置 HTTPS。
 - [Agent 集成概览](../agent-integrations/01-overview.md)：为支持插件的 Agent 安装插件。

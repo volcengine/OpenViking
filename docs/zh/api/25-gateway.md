@@ -1,32 +1,32 @@
-# 上下文网关管理 API
+# OpenViking 网关管理 API
 
-OpenViking Server 在 `/api/v1/admin/context-gateway` 下转发上下文网关的管理请求。Studio 的上下文网关页面通过这些端点管理上游、上下文配置和网关密钥，并读取请求日志。模型请求不走这组 API，客户端直接发到网关自己的端口（见[上下文网关](../guides/15-context-gateway.md)）。
+OpenViking Server 在 `/api/v1/admin/gateway` 下转发 OpenViking 网关的管理请求。Studio 的网关页面通过这些端点管理上游、上下文配置和网关密钥，并读取请求日志。模型请求不走这组 API，客户端直接发到网关自己的端口（见[OpenViking 网关](../guides/15-gateway.md)）。
 
 **前提条件**：
 
-- `ov.conf` 中 `context_gateway.enabled` 为 `true`，并且网关进程可以通过 `context_gateway.url` 访问。
-- OpenViking Server 和网关使用同一个管理令牌（默认读取 `OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN`，至少 32 个字符）。
+- `ov.conf` 中 `gateway.enabled` 为 `true`，并且网关进程可以通过 `gateway.url` 访问。
+- OpenViking Server 和网关使用同一个管理令牌（默认读取 `OPENVIKING_GATEWAY_ADMIN_TOKEN`，至少 32 个字符）。
 - 调用方使用 ADMIN 密钥或 root 密钥。USER 密钥返回 `403`。
 
 **代码入口**：
 
-- `openviking/server/routers/context_gateway.py` - OpenViking Server 代理、角色检查和账号隔离
-- `context_gateway/app.py` - 网关管理路由
-- `context_gateway/models.py` - 上游、上下文配置和密钥模型
+- `openviking/server/routers/gateway.py` - OpenViking Server 代理、角色检查和账号隔离
+- `openviking_gateway/app.py` - 网关管理路由
+- `openviking_gateway/models.py` - 上游、上下文配置和密钥模型
 
 ## 代理方式
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET / POST / PUT / DELETE | `/api/v1/admin/context-gateway/{path}` | 以调用方账号转发到 `{context_gateway.url}/admin/{path}` |
+| GET / POST / PUT / DELETE | `/api/v1/admin/gateway/{path}` | 以调用方账号转发到 `{gateway.url}/admin/{path}` |
 
-发往 `/api/v1/admin/context-gateway/{path}` 的请求会以相同的方法、查询参数和请求体转发到 `{context_gateway.url}/admin/{path}`。OpenViking Server 用管理令牌替换调用方的凭据，并把 `X-OpenViking-Account` 设为调用方所在的账号，因此每次调用只能读取和修改本账号的网关对象。账号管理员访问不到其他账号的数据，调用方也无法指定转发目标。
+发往 `/api/v1/admin/gateway/{path}` 的请求会以相同的方法、查询参数和请求体转发到 `{gateway.url}/admin/{path}`。OpenViking Server 用管理令牌替换调用方的凭据，并把 `X-OpenViking-Account` 设为调用方所在的账号，因此每次调用只能读取和修改本账号的网关对象。账号管理员访问不到其他账号的数据，调用方也无法指定转发目标。
 
 只有第一段路径是 `overview`、`logs`、`guides`、`upstreams`、`policies`、`keys`、`users` 或 `tools` 的请求会被转发。其他路径以及包含 `..` 的路径返回 `404`。网关返回的状态码和响应体原样返回给调用方。
 
 ## API 参考
 
-表格中的路径都相对于 `/api/v1/admin/context-gateway/`。管理 API 把上下文配置称为 `policies`。
+表格中的路径都相对于 `/api/v1/admin/gateway/`。管理 API 把上下文配置称为 `policies`。
 
 ### 概览和日志
 
@@ -42,7 +42,7 @@ OpenViking Server 在 `/api/v1/admin/context-gateway` 下转发上下文网关�
 **HTTP API**
 
 ```bash
-curl http://localhost:1933/api/v1/admin/context-gateway/overview \
+curl http://localhost:1933/api/v1/admin/gateway/overview \
   -H "X-API-Key: your-admin-key"
 ```
 
@@ -80,7 +80,7 @@ curl http://localhost:1933/api/v1/admin/context-gateway/overview \
 | PUT | `policies/{policy_id}` | 创建或替换上下文配置 |
 | DELETE | `policies/{policy_id}` | 删除上下文配置 |
 
-`upstream_id` 和 `policy_id` 由调用方指定。`PUT` 的请求体是完整对象，未知字段会被拒绝。各字段的默认值和取值范围见[配置参考](../guides/22-context-gateway-operations.md#配置参考)中的上游设置和上下文配置设置。
+`upstream_id` 和 `policy_id` 由调用方指定。`PUT` 的请求体是完整对象，未知字段会被拒绝。各字段的默认值和取值范围见[配置参考](../guides/22-gateway-operations.md#配置参考)中的上游设置和上下文配置设置。
 
 上游的 `api_key` 和 `headers` 的值只写不读，响应中分别换成 `has_api_key` 和 `header_names`。`PUT` 时 `api_key` 留空会保留已存的密钥；省略 `headers` 会保留所有已存的请求头，某个请求头的值留空则保留这个名字已存的值。
 
@@ -89,7 +89,7 @@ curl http://localhost:1933/api/v1/admin/context-gateway/overview \
 **HTTP API**
 
 ```bash
-curl http://localhost:1933/api/v1/admin/context-gateway/upstreams \
+curl http://localhost:1933/api/v1/admin/gateway/upstreams \
   -H "X-API-Key: your-admin-key"
 ```
 
@@ -149,7 +149,7 @@ OpenViking 密钥必须属于调用方账号中的 USER 或 ADMIN。只有 OpenV
 **HTTP API**
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/admin/context-gateway/keys \
+curl -X POST http://localhost:1933/api/v1/admin/gateway/keys \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"name":"alice laptop","user_id":"alice","policy_id":"default","upstream_ids":["openai"]}'
@@ -166,9 +166,9 @@ curl -X POST http://localhost:1933/api/v1/admin/context-gateway/keys \
   "upstream_ids": ["openai"],
   "models": [],
   "user_id": "alice",
-  "prefix": "ovcg_Xk3p9Q",
+  "prefix": "ovgw_Xk3p9Q",
   "created_at": 1785000000.0,
-  "key": "ovcg_Xk3p9Q…"
+  "key": "ovgw_Xk3p9Q…"
 }
 ```
 
@@ -193,7 +193,7 @@ OpenViking Server 自身产生的错误使用标准错误响应格式：
 | 403 | `PERMISSION_DENIED` | 调用方不是 ROOT 或 ADMIN |
 | 404 | `NOT_FOUND` | 路径不在转发范围内 |
 | 409 | `CONFLICT` | 服务端读不出所选用户的密钥 |
-| 503 | `UNAVAILABLE` | 上下文网关未启用、管理令牌未配置，或连不上网关（原始状态码 502） |
+| 503 | `UNAVAILABLE` | OpenViking 网关未启用、管理令牌未配置，或连不上网关（原始状态码 502） |
 
 网关返回的错误保留网关的状态码，响应体形如 `{"detail": "Unknown context policy"}`：
 
@@ -206,10 +206,10 @@ OpenViking Server 自身产生的错误使用标准错误响应格式：
 | 409 | 删除仍被密钥使用的上游或上下文配置 |
 | 422 | 请求体无效。提交的值可能包含密钥，所以错误信息不会回显它们 |
 
-网关无法验证 OpenViking 密钥时，响应体是 `{"error": {"message": "<原因>"}}`，原因值见[签发密钥失败](../guides/22-context-gateway-operations.md#签发密钥失败)。
+网关无法验证 OpenViking 密钥时，响应体是 `{"error": {"message": "<原因>"}}`，原因值见[签发密钥失败](../guides/22-gateway-operations.md#签发密钥失败)。
 
 ## 相关文档
 
-- [上下文网关](../guides/15-context-gateway.md) - 网关的工作方式和客户端接入
-- [上下文网关部署与运维](../guides/22-context-gateway-operations.md) - 部署、在 Studio 中管理网关和配置参考
+- [OpenViking 网关](../guides/15-gateway.md) - 网关的工作方式和客户端接入
+- [OpenViking 网关部署与运维](../guides/22-gateway-operations.md) - 部署、在 Studio 中管理网关和配置参考
 - [管理员](08-admin.md) - 账号、用户和角色

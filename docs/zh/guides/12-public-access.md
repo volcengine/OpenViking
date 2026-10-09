@@ -73,7 +73,7 @@ OV_ACME_EMAIL=admin@your-domain.com   # 可选；推荐用于 Let's Encrypt
 }
 ```
 
-如果同时运行[上下文网关](15-context-gateway.md)，请改用网关运维指南 [Docker Compose](22-context-gateway-operations.md#docker-compose) 一节中的域名块。它把模型 API 路径转发给网关，其余请求转发给 OpenViking。
+如果同时运行[OpenViking 网关](15-gateway.md)，请改用网关运维指南 [Docker Compose](22-gateway-operations.md#docker-compose) 一节中的域名块。它把模型 API 路径转发给网关，其余请求转发给 OpenViking。
 
 ### 3. 取消 `docker-compose.yml` 中的 HTTPS 注释
 
@@ -199,11 +199,11 @@ Compose 部署应修改 `.env` 并运行 `docker compose up -d`，在其他 shel
 
 ## 兼容备注：`:1934` 反代
 
-`docker compose up` 默认在 1934 端口启一个 Caddy 反代。它把[上下文网关](15-context-gateway.md)的路径（`/v1/*`、`/api/v3/*`、`/api/compatible/v1/*` 和 `/context-gateway/uploads`）转发给 `context-gateway` 服务，其余请求转发给 `openviking:1933`。这个入口**主要为兼容已经书签到 1934 的旧部署保留**。网关自己的端口不对宿主机开放，所以不配 HTTPS 时，客户端要经这个端口访问网关，见网关运维指南的 [Docker Compose](22-context-gateway-operations.md#docker-compose) 一节。新部署直接连私网中的 1933，公网客户端使用上面的 HTTPS 入口；不需要这个入口可以从 `docker-compose.yml` 注释掉 caddy 服务和 1934 端口映射。
+`docker compose up` 默认在 1934 端口启一个 Caddy 反代。它把[OpenViking 网关](15-gateway.md)的路径（`/v1/*`、`/api/v3/*`、`/api/compatible/v1/*` 和 `/gateway/uploads`）转发给 `gateway` 服务，其余请求转发给 `openviking:1933`。这个入口**主要为兼容已经书签到 1934 的旧部署保留**。网关自己的端口不对宿主机开放，所以不配 HTTPS 时，客户端要经这个端口访问网关，见网关运维指南的 [Docker Compose](22-gateway-operations.md#docker-compose) 一节。新部署直接连私网中的 1933，公网客户端使用上面的 HTTPS 入口；不需要这个入口可以从 `docker-compose.yml` 注释掉 caddy 服务和 1934 端口映射。
 
 ## 相关文档
 
 - [部署指南](03-deployment.md) — Docker、systemd、Kubernetes
 - [OAuth 指南](11-oauth.md) — OAuth 2.1 配置与客户端接入
 - [认证](04-authentication.md) — API Key 管理
-- [上下文网关部署与运维](22-context-gateway-operations.md) — 网关的路由、代理设置和 HTTPS
+- [OpenViking 网关部署与运维](22-gateway-operations.md) — 网关的路由、代理设置和 HTTPS

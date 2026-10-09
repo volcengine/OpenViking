@@ -4,7 +4,7 @@
 <rect x="40" y="70" width="1420" height="110" rx="0" fill="#F5F9FF"/>
 <text x="105" y="131" font-size="17" font-weight="700" fill="#3370FF" text-anchor="middle">Client</text>
 <rect x="40" y="180" width="1420" height="120" rx="0" fill="#F7F3FF"/>
-<text x="105" y="235" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">Context</text>
+<text x="105" y="235" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">OpenViking</text>
 <text x="105" y="257" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">Gateway</text>
 <rect x="40" y="300" width="1420" height="110" rx="0" fill="#F1EBFF"/>
 <text x="105" y="361" font-size="17" font-weight="700" fill="#6425D0" text-anchor="middle">OpenViking</text>

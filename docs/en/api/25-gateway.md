@@ -1,32 +1,32 @@
-# Context Gateway Management API
+# OpenViking Gateway Management API
 
-OpenViking Server forwards Context Gateway management calls below `/api/v1/admin/context-gateway`. Studio's Context Gateway page uses these endpoints to manage upstreams, context profiles and gateway keys, and to read request logs. Model traffic does not go through this API; clients send it to the gateway's own port (see [Context Gateway](../guides/15-context-gateway.md)).
+OpenViking Server forwards OpenViking Gateway management calls below `/api/v1/admin/gateway`. Studio's OpenViking Gateway page uses these endpoints to manage upstreams, context profiles and gateway keys, and to read request logs. Model traffic does not go through this API; clients send it to the gateway's own port (see [OpenViking Gateway](../guides/15-gateway.md)).
 
 **Prerequisites**:
 
-- `context_gateway.enabled` is `true` in `ov.conf`, and the gateway process is reachable at `context_gateway.url`.
-- OpenViking Server and the gateway share the admin token (`OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN` by default, at least 32 characters).
+- `gateway.enabled` is `true` in `ov.conf`, and the gateway process is reachable at `gateway.url`.
+- OpenViking Server and the gateway share the admin token (`OPENVIKING_GATEWAY_ADMIN_TOKEN` by default, at least 32 characters).
 - The caller uses an ADMIN key or the root key. USER keys get `403`.
 
 **Code entry points**:
 
-- `openviking/server/routers/context_gateway.py` - OpenViking Server proxy, role check and account scoping
-- `context_gateway/app.py` - gateway management routes
-- `context_gateway/models.py` - upstream, context profile and key models
+- `openviking/server/routers/gateway.py` - OpenViking Server proxy, role check and account scoping
+- `openviking_gateway/app.py` - gateway management routes
+- `openviking_gateway/models.py` - upstream, context profile and key models
 
 ## How the proxy works
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET / POST / PUT / DELETE | `/api/v1/admin/context-gateway/{path}` | Forwarded to `{context_gateway.url}/admin/{path}` for the caller's account |
+| GET / POST / PUT / DELETE | `/api/v1/admin/gateway/{path}` | Forwarded to `{gateway.url}/admin/{path}` for the caller's account |
 
-Every request to `/api/v1/admin/context-gateway/{path}` is sent to `{context_gateway.url}/admin/{path}` with the same method, query string and body. OpenViking Server replaces the caller's credentials with the admin token and adds `X-OpenViking-Account` set to the caller's account, so every call reads and changes only that account's gateway objects. An account admin cannot reach another account's data, and the caller cannot choose the destination.
+Every request to `/api/v1/admin/gateway/{path}` is sent to `{gateway.url}/admin/{path}` with the same method, query string and body. OpenViking Server replaces the caller's credentials with the admin token and adds `X-OpenViking-Account` set to the caller's account, so every call reads and changes only that account's gateway objects. An account admin cannot reach another account's data, and the caller cannot choose the destination.
 
 Only these first path segments are forwarded: `overview`, `logs`, `guides`, `upstreams`, `policies`, `keys`, `users` and `tools`. Any other path, or a path containing `..`, returns `404`. The gateway's response status and body are returned unchanged.
 
 ## API Reference
 
-Paths in the tables are relative to `/api/v1/admin/context-gateway/`. The management API calls context profiles `policies`.
+Paths in the tables are relative to `/api/v1/admin/gateway/`. The management API calls context profiles `policies`.
 
 ### Overview and logs
 
@@ -42,7 +42,7 @@ Paths in the tables are relative to `/api/v1/admin/context-gateway/`. The manage
 **HTTP API**
 
 ```bash
-curl http://localhost:1933/api/v1/admin/context-gateway/overview \
+curl http://localhost:1933/api/v1/admin/gateway/overview \
   -H "X-API-Key: your-admin-key"
 ```
 
@@ -80,7 +80,7 @@ curl http://localhost:1933/api/v1/admin/context-gateway/overview \
 | PUT | `policies/{policy_id}` | Create or replace a context profile |
 | DELETE | `policies/{policy_id}` | Delete a context profile |
 
-The caller chooses `upstream_id` and `policy_id`. A `PUT` body is the complete object, and unknown fields are rejected. For every field, its default and limits, see the upstream and context profile settings in the [configuration reference](../guides/22-context-gateway-operations.md#configuration-reference).
+The caller chooses `upstream_id` and `policy_id`. A `PUT` body is the complete object, and unknown fields are rejected. For every field, its default and limits, see the upstream and context profile settings in the [configuration reference](../guides/22-gateway-operations.md#configuration-reference).
 
 Upstream `api_key` and `headers` values are write-only. Responses replace them with `has_api_key` and `header_names`. On `PUT`, a blank `api_key` keeps the stored key; omitting `headers` keeps every stored header, and a blank header value keeps the stored value for that name.
 
@@ -89,7 +89,7 @@ Deleting an upstream or context profile that a gateway key still uses returns `4
 **HTTP API**
 
 ```bash
-curl http://localhost:1933/api/v1/admin/context-gateway/upstreams \
+curl http://localhost:1933/api/v1/admin/gateway/upstreams \
   -H "X-API-Key: your-admin-key"
 ```
 
@@ -149,7 +149,7 @@ Existing keys cannot be edited; `PUT keys/{key_id}` returns `405`. Issue a repla
 **HTTP API**
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/admin/context-gateway/keys \
+curl -X POST http://localhost:1933/api/v1/admin/gateway/keys \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d '{"name":"alice laptop","user_id":"alice","policy_id":"default","upstream_ids":["openai"]}'
@@ -166,9 +166,9 @@ curl -X POST http://localhost:1933/api/v1/admin/context-gateway/keys \
   "upstream_ids": ["openai"],
   "models": [],
   "user_id": "alice",
-  "prefix": "ovcg_Xk3p9Q",
+  "prefix": "ovgw_Xk3p9Q",
   "created_at": 1785000000.0,
-  "key": "ovcg_Xk3p9Q…"
+  "key": "ovgw_Xk3p9Q…"
 }
 ```
 
@@ -193,7 +193,7 @@ Errors raised by OpenViking Server itself use the standard error envelope:
 | 403 | `PERMISSION_DENIED` | Caller is not ROOT or ADMIN |
 | 404 | `NOT_FOUND` | Path outside the forwarded resources |
 | 409 | `CONFLICT` | The chosen user's key cannot be read on the server |
-| 503 | `UNAVAILABLE` | Context Gateway is not enabled, the admin token is not configured, or the gateway cannot be reached (original status 502) |
+| 503 | `UNAVAILABLE` | OpenViking Gateway is not enabled, the admin token is not configured, or the gateway cannot be reached (original status 502) |
 
 Errors from the gateway pass through with its own status and a body such as `{"detail": "Unknown context policy"}`:
 
@@ -206,10 +206,10 @@ Errors from the gateway pass through with its own status and a body such as `{"d
 | 409 | Deleting an upstream or context profile that keys still use |
 | 422 | Invalid body. The message does not echo submitted values, because they can contain secrets |
 
-When the gateway cannot verify an OpenViking key, the body is `{"error": {"message": "<reason>"}}` with reasons listed in [Issuing a key fails](../guides/22-context-gateway-operations.md#issuing-a-key-fails).
+When the gateway cannot verify an OpenViking key, the body is `{"error": {"message": "<reason>"}}` with reasons listed in [Issuing a key fails](../guides/22-gateway-operations.md#issuing-a-key-fails).
 
 ## Related Documentation
 
-- [Context Gateway](../guides/15-context-gateway.md) - how the gateway works and how to connect clients
-- [Context Gateway deployment and operations](../guides/22-context-gateway-operations.md) - deployment, Studio management and configuration reference
+- [OpenViking Gateway](../guides/15-gateway.md) - how the gateway works and how to connect clients
+- [OpenViking Gateway deployment and operations](../guides/22-gateway-operations.md) - deployment, Studio management and configuration reference
 - [Admin](08-admin.md) - accounts, users and roles

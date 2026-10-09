@@ -1,12 +1,12 @@
 ---
-description: Deploy Context Gateway with Docker Compose, Helm or your own proxy, manage it in Studio, and troubleshoot it.
+description: Deploy OpenViking Gateway with Docker Compose, Helm or your own proxy, manage it in Studio, and troubleshoot it.
 ---
 
-# Context Gateway deployment and operations
+# OpenViking Gateway deployment and operations
 
-This page is for the people who run Context Gateway: deploying it, managing upstreams, context profiles and keys in Studio, keeping data safe, day-to-day operations, and fixing problems. For what the gateway does and how to connect clients, see [Context Gateway](15-context-gateway.md); for the overall architecture, see [Architecture at a glance](15-context-gateway.md#architecture-at-a-glance) on that page.
+This page is for the people who run OpenViking Gateway: deploying it, managing upstreams, context profiles and keys in Studio, keeping data safe, day-to-day operations, and fixing problems. For what the gateway does and how to connect clients, see [OpenViking Gateway](15-gateway.md); for the overall architecture, see [Architecture at a glance](15-gateway.md#architecture-at-a-glance) on that page.
 
-Context Gateway is currently in beta. Its settings and APIs may change between releases, so read the release notes before you upgrade.
+OpenViking Gateway is currently in beta. Its settings and APIs may change between releases, so read the release notes before you upgrade.
 
 The gateway is a separate process next to OpenViking Server, normally on port 1935. Clients send their model requests to it. You manage it in Studio, which OpenViking Server serves; Studio's management calls reach the gateway through OpenViking Server. The two processes talk only over HTTP: the gateway calls OpenViking's public APIs to search memory, save conversations and run tools, and OpenViking Server calls the gateway's management API. The diagram shows the request paths when a single HTTPS address is exposed:
 
@@ -15,15 +15,15 @@ The gateway is a separate process next to OpenViking Server, normally on port 19
                           |
                           v
           reverse proxy (https://ov.example.com)
-             |                                  |
-             | /v1/*                            | everything else:
-             | /api/v3/*                        | /studio, /api/v1,
-             | /api/compatible/v1/*             | /mcp, /health, ...
-             | /context-gateway/uploads         |
-             v                                  v
-    Context Gateway :1935  <--- management ---  OpenViking Server :1933
-       |          |                                     ^
-       |          +-------- search, save, tools --------+
+             |                                     |
+             | /v1/*                               | everything else:
+             | /api/v3/*                           | /studio, /api/v1,
+             | /api/compatible/v1/*                | /mcp, /health, ...
+             | /gateway/uploads                    |
+             v                                     v
+    OpenViking Gateway :1935  <--- management ---  OpenViking Server :1933
+       |          |                                        ^
+       |          +--------- search, save, tools ----------+
        v
     model providers (upstreams)
 ```
@@ -31,19 +31,19 @@ The gateway is a separate process next to OpenViking Server, normally on port 19
 ## Requirements
 
 - **OpenViking Server 0.4.16 or later, in API key mode** (`server.auth_mode: "api_key"` with a `root_api_key`). The gateway acts for each person with that person's OpenViking key. In dev mode every key acts as root, which the gateway refuses, so no gateway key can be issued.
-- **The gateway itself**: the `openviking[context-gateway]` extra on Python 3.10 or later, or the official OpenViking Docker image, which already contains the `openviking-context-gateway` command.
+- **The gateway itself**: the `openviking[gateway]` extra on Python 3.10 or later, or the official OpenViking Docker image, which already contains the `openviking-gateway` command.
 - **An account admin key** for Studio. Everything you configure belongs to the account of the key you sign in with. A root key also works but manages whichever account it resolves to, so prefer the account admin's key.
 - **An OpenViking user for each person** who gets a gateway key, in the same account. Users and admins both work; root does not. When you issue the key, OpenViking Server reads the user's OpenViking key itself; if it stores only key hashes, the user has to provide their key.
 - **API keys for your model providers.** Subscription logins are rejected, and Coding Plan keys are refused unless you explicitly allow them.
-- **A local disk on one host** for the gateway's storage (`~/.openviking/context-gateway` by default). Network file systems and storage shared between hosts are not supported. Run only one gateway instance at a time; for more capacity, add workers (see [Scaling](#scaling)).
+- **A local disk on one host** for the gateway's storage (`~/.openviking/gateway` by default). Network file systems and storage shared between hosts are not supported. Run only one gateway instance at a time; for more capacity, add workers (see [Scaling](#scaling)).
 - **Two secrets**, described next.
 
 ## Secrets
 
 | Secret | Environment variable | Needed by | What it does |
 | --- | --- | --- | --- |
-| Encryption key | `OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY` | Gateway | Encrypts everything the gateway stores: upstream API keys and headers, the OpenViking keys bound to gateway keys, conversation state and request logs. Must be a Fernet key: 32 random bytes in URL-safe base64. |
-| Admin token | `OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN` | Gateway and OpenViking Server | Authenticates OpenViking Server to the gateway's management API when you work in Studio. At least 32 characters. |
+| Encryption key | `OPENVIKING_GATEWAY_ENCRYPTION_KEY` | Gateway | Encrypts everything the gateway stores: upstream API keys and headers, the OpenViking keys bound to gateway keys, conversation state and request logs. Must be a Fernet key: 32 random bytes in URL-safe base64. |
+| Admin token | `OPENVIKING_GATEWAY_ADMIN_TOKEN` | Gateway and OpenViking Server | Authenticates OpenViking Server to the gateway's management API when you work in Studio. At least 32 characters. |
 
 Generate each once:
 
@@ -55,11 +55,11 @@ python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).de
 python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 ```
 
-Keep them in your secret store or deployment environment, not in `ov.conf` or source control. To read them from differently named variables, set `encryption_key_env` and `admin_token_env` in the `context_gateway` section.
+Keep them in your secret store or deployment environment, not in `ov.conf` or source control. To read them from differently named variables, set `encryption_key_env` and `admin_token_env` in the `gateway` section.
 
 - **The encryption key cannot be changed.** Nothing re-encrypts stored data, so with a different key the gateway cannot read what it stored. Back the key up together with the gateway's storage. If it is lost, point `storage_path` at an empty directory and set up upstreams, profiles and keys again.
 - **The admin token can be rotated.** Set the same new value for both processes and restart both. It only protects the management API and encrypts nothing.
-- Without valid secrets the gateway stops at startup. OpenViking Server starts without the admin token, but Studio's Context Gateway page then reports that the management token is not configured.
+- Without valid secrets the gateway stops at startup. OpenViking Server starts without the admin token, but Studio's OpenViking Gateway page then reports that the management token is not configured.
 
 ## Deploy
 
@@ -69,23 +69,23 @@ The gateway and OpenViking talk only over HTTP, so they can share a machine or a
 
 | Form | Suits | How to deploy | Watch for |
 | --- | --- | --- | --- |
-| Single machine | Trying it out yourself | Install `openviking[context-gateway]` and run `openviking-context-gateway` with the same `ov.conf` as OpenViking; see the [Quick start](15-context-gateway.md#quick-start). | You can skip the reverse proxy if only this machine uses it. |
+| Single machine | Trying it out yourself | Install `openviking[gateway]` and run `openviking-gateway` with the same `ov.conf` as OpenViking; see the [Quick start](15-gateway.md#quick-start). | You can skip the reverse proxy if only this machine uses it. |
 | [Docker Compose](#docker-compose) | Small teams on one server | The gateway runs in its own container, and the bundled Caddy routes by path on port 1934. | The gateway port is not mapped to the host; only the gateway container gets the encryption key. |
 | [Helm](#helm) | Kubernetes | The gateway runs as a second container in the OpenViking Pod, sharing its volume and `ov.conf`. | Keep one replica; the chart cannot split the gateway into its own Pod. |
-| [Separate deployment](#separate-deployment) | Gateway and OpenViking on different machines or Pods | Write your own Deployment or service definitions and put the same `context_gateway` section in both `ov.conf` files. | Each side must reach the other; the link carries users' OpenViking keys; network latency eats into the recall time limit. |
+| [Separate deployment](#separate-deployment) | Gateway and OpenViking on different machines or Pods | Write your own Deployment or service definitions and put the same `gateway` section in both `ov.conf` files. | Each side must reach the other; the link carries users' OpenViking keys; network latency eats into the recall time limit. |
 
-Both processes read the `context_gateway` section of the same `ov.conf`. OpenViking Server uses it to find the gateway for Studio and for data deletion; the gateway uses all of it. A few rules apply to this section:
+Both processes read the `gateway` section of the same `ov.conf`. OpenViking Server uses it to find the gateway for Studio and for data deletion; the gateway uses all of it. A few rules apply to this section:
 
 - The gateway reads the file given by `--config`, else `OPENVIKING_CONFIG_FILE`, else `~/.openviking/ov.conf`. Unlike OpenViking Server, it does not fall back to `/etc/openviking/ov.conf`.
-- The gateway does not expand `$VAR` or `${VAR}` placeholders. Write literal values in `context_gateway`, and keep the secrets in the environment variables above.
-- Unknown keys are errors. OpenViking Server reports `Unknown config field 'context_gateway.<name>'`, and the gateway refuses to start.
+- The gateway does not expand `$VAR` or `${VAR}` placeholders. Write literal values in `gateway`, and keep the secrets in the environment variables above.
+- Unknown keys are errors. OpenViking Server reports `Unknown config field 'gateway.<name>'`, and the gateway refuses to start.
 - Restart OpenViking Server after you change the section.
 
 Three addresses in this section are easy to mix up:
 
 | Setting | Who uses it | Typical value |
 | --- | --- | --- |
-| `url` | OpenViking Server, to reach the gateway's management API | `http://127.0.0.1:1935`; `http://context-gateway:1935` in Docker Compose |
+| `url` | OpenViking Server, to reach the gateway's management API | `http://127.0.0.1:1935`; `http://gateway:1935` in Docker Compose |
 | `openviking_url` | The gateway, to reach OpenViking Server | `http://127.0.0.1:1933`; `http://openviking:1933` in Docker Compose |
 | `public_url` | Clients. Studio shows it in its setup instructions, and OpenViking tools use it for upload links. | `https://ov.example.com` |
 
@@ -98,7 +98,7 @@ Serve OpenViking Server and the gateway from one public HTTPS origin and let the
 | `/v1/*` | Gateway | Anthropic Messages, Chat Completions, Responses and the model list |
 | `/api/v3/*` | Gateway | Ark paths (Volcano Engine Ark and BytePlus ModelArk) for Chat Completions, Responses and the model list |
 | `/api/compatible/v1/*` | Gateway | Ark's Anthropic-compatible path |
-| `/context-gateway/uploads` | Gateway | One-time file uploads from OpenViking tools |
+| `/gateway/uploads` | Gateway | One-time file uploads from OpenViking tools |
 | Everything else | OpenViking Server | Studio, REST API, MCP, OAuth, `/health` |
 
 With this layout, `public_url` is the public origin, for example `https://ov.example.com`. Anthropic clients use that address; OpenAI-style clients add `/v1`.
@@ -110,17 +110,17 @@ Whatever proxy you use, configure the gateway paths for long, streamed model cal
 - **No response buffering**, so streamed replies reach clients as they are generated.
 - **Request bodies of at least 32 MiB** (`max_body_bytes`). Long conversations with tool output get large, and nginx's default of 1 MB breaks them.
 - **A read timeout of at least 600 seconds** (`upstream_timeout_seconds`).
-- **No query strings in access logs for `/context-gateway/uploads`**, because they carry one-time upload tokens. The gateway itself writes no access log.
+- **No query strings in access logs for `/gateway/uploads`**, because they carry one-time upload tokens. The gateway itself writes no access log.
 
 ### Docker Compose
 
-The bundled `docker-compose.yml` defines a `context-gateway` service under the `context-gateway` profile. It runs the same image with the same `~/.openviking` mount and `ov.conf` as OpenViking Server. Its port 1935 is reachable only inside the Compose network; clients reach it through the bundled Caddy, which already routes the gateway paths on port 1934.
+The bundled `docker-compose.yml` defines a `gateway` service under the `gateway` profile. It runs the same image with the same `~/.openviking` mount and `ov.conf` as OpenViking Server. Its port 1935 is reachable only inside the Compose network; clients reach it through the bundled Caddy, which already routes the gateway paths on port 1934.
 
 1. **Put the secrets in `.env`** next to `docker-compose.yml`:
 
    ```dotenv
-   OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY=<encryption-key>
-   OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN=<admin-token>
+   OPENVIKING_GATEWAY_ENCRYPTION_KEY=<encryption-key>
+   OPENVIKING_GATEWAY_ADMIN_TOKEN=<admin-token>
    ```
 
    Compose passes the admin token to both containers and the encryption key only to the gateway. If either is empty, the gateway exits and Compose restarts it in a loop.
@@ -133,34 +133,34 @@ The bundled `docker-compose.yml` defines a `context-gateway` service under the `
        "auth_mode": "api_key",
        "root_api_key": "<root-key>"
      },
-     "context_gateway": {
+     "gateway": {
        "enabled": true,
        "host": "0.0.0.0",
-       "url": "http://context-gateway:1935",
+       "url": "http://gateway:1935",
        "openviking_url": "http://openviking:1933",
        "public_url": "http://<your-host>:1934"
      }
    }
    ```
 
-   Use `http://<your-host>:1934` while clients reach the bundled Caddy port, or your HTTPS origin once you add one. `storage_path` can keep its default: inside the container it resolves to `/app/.openviking/context-gateway`, which lies in the mounted volume.
+   Use `http://<your-host>:1934` while clients reach the bundled Caddy port, or your HTTPS origin once you add one. `storage_path` can keep its default: inside the container it resolves to `/app/.openviking/gateway`, which lies in the mounted volume.
 
 3. **Start the stack with the profile:**
 
    ```bash
-   docker compose --profile context-gateway up -d
+   docker compose --profile gateway up -d
    ```
 
-   Include `--profile context-gateway` in later `up` commands as well. After you edit `ov.conf`, restart both containers with `docker compose --profile context-gateway restart openviking context-gateway`.
+   Include `--profile gateway` in later `up` commands as well. After you edit `ov.conf`, restart both containers with `docker compose --profile gateway restart openviking gateway`.
 
 4. **Check the routing.** A request without a key should reach the gateway and be refused:
 
    ```bash
    curl -s http://127.0.0.1:1934/v1/models
-   # {"detail":"Invalid or revoked Context Gateway key"}
+   # {"detail":"Invalid or revoked OpenViking Gateway key"}
    ```
 
-   Then open Studio and check that the Overview tab shows OpenViking as connected. `docker compose logs context-gateway` shows startup errors.
+   Then open Studio and check that the Overview tab shows OpenViking as connected. `docker compose logs gateway` shows startup errors.
 
 If the gateway starts before OpenViking Server is ready, it runs without memory until its next check of OpenViking, at most 60 seconds later (`health_interval_seconds`). Messages sent in that window reach the model without memory.
 
@@ -168,9 +168,9 @@ If the gateway starts before OpenViking Server is ready, it runs without memory 
 
 ```caddyfile
 {$OPENVIKING_PUBLIC_BASE_URL} {
-    @context_gateway path /v1/* /api/v3/* /api/compatible/v1/* /context-gateway/uploads
-    handle @context_gateway {
-        reverse_proxy context-gateway:1935 {
+    @gateway path /v1/* /api/v3/* /api/compatible/v1/* /gateway/uploads
+    handle @gateway {
+        reverse_proxy gateway:1935 {
             flush_interval -1
         }
     }
@@ -180,7 +180,7 @@ If the gateway starts before OpenViking Server is ready, it runs without memory 
 }
 ```
 
-Then set `context_gateway.public_url` to the same origin, written out literally (for example `https://ov.example.com`), and restart.
+Then set `gateway.public_url` to the same origin, written out literally (for example `https://ov.example.com`), and restart.
 
 ### Helm
 
@@ -189,7 +189,7 @@ The chart runs the gateway as a second container in the OpenViking pod, sharing 
 1. **Create the Secret.** The key names `encryption-key` and `admin-token` are fixed:
 
    ```bash
-   kubectl create secret generic openviking-context-gateway \
+   kubectl create secret generic openviking-gateway \
      --from-literal=encryption-key="$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" \
      --from-literal=admin-token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
    ```
@@ -197,16 +197,16 @@ The chart runs the gateway as a second container in the OpenViking pod, sharing 
 2. **Enable the gateway in your values.** The NGINX ingress annotations below are recommendations for streaming and large requests; the chart does not set them:
 
    ```yaml
-   contextGateway:
+   gateway:
      enabled: true
-     existingSecret: openviking-context-gateway
+     existingSecret: openviking-gateway
      workers: 2
 
    config:
      server:
        auth_mode: api_key
        # Pass root_api_key from a Secret as described in the chart README.
-     context_gateway:
+     gateway:
        public_url: https://ov.example.com
 
    ingress:
@@ -229,18 +229,18 @@ The chart runs the gateway as a second container in the OpenViking pod, sharing 
            - ov.example.com
    ```
 
-What the chart does when `contextGateway.enabled` is true:
+What the chart does when `gateway.enabled` is true:
 
-- It generates the rest of the `context_gateway` section: `enabled`, `host: 0.0.0.0`, `port`, `workers`, `url: http://127.0.0.1:<port>`, `openviking_url: http://127.0.0.1:<config.server.port>` and `storage_path: <persistence.mountPath>/context-gateway`. Values you put under `config.context_gateway` take precedence. Set `public_url` there, as a literal value.
+- It generates the rest of the `gateway` section: `enabled`, `host: 0.0.0.0`, `port`, `workers`, `url: http://127.0.0.1:<port>`, `openviking_url: http://127.0.0.1:<config.server.port>` and `storage_path: <persistence.mountPath>/gateway`. Values you put under `config.gateway` take precedence. Set `public_url` there, as a literal value.
 - It passes the admin token to both containers and the encryption key to the gateway container. The gateway container does not receive `extraEnv`.
-- It adds a `context-gateway` port to the Service. When the ingress is enabled, it routes `/v1`, `/api/v3`, `/api/compatible/v1` and `/context-gateway/uploads` to that port, ahead of your own paths.
-- It adds a readiness probe on the gateway's `/health`. `contextGateway.resources` sets the gateway container's requests and limits.
+- It adds a `gateway` port to the Service. When the ingress is enabled, it routes `/v1`, `/api/v3`, `/api/compatible/v1` and `/gateway/uploads` to that port, ahead of your own paths.
+- It adds a readiness probe on the gateway's `/health`. `gateway.resources` sets the gateway container's requests and limits.
 
-Keep `replicaCount: 1`. The gateway's storage lives on the ReadWriteOnce volume and must be used from a single host; scale with `contextGateway.workers` instead. For passing the root key and model keys from Secrets, see the [chart README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md).
+Keep `replicaCount: 1`. The gateway's storage lives on the ReadWriteOnce volume and must be used from a single host; scale with `gateway.workers` instead. For passing the root key and model keys from Secrets, see the [chart README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md).
 
 ### Separate deployment
 
-When the gateway and OpenViking run on different machines or Pods, the chart and the Compose file no longer apply, and you write the deployment definitions yourself. Put the same `context_gateway` section in both `ov.conf` files, and keep these points in mind:
+When the gateway and OpenViking run on different machines or Pods, the chart and the Compose file no longer apply, and you write the deployment definitions yourself. Put the same `gateway` section in both `ov.conf` files, and keep these points in mind:
 
 - **Set the address in both directions.** The gateway reaches OpenViking at `openviking_url`; OpenViking Server reaches the gateway at `url`, which carries Studio's management calls and user data deletion. Both should be private addresses, and the gateway's `host` must listen on an interface the other side can reach.
 - **Protect the link between them.** The gateway calls OpenViking with each user's own OpenViking key, and management calls carry the admin token, so keep this link on a private network or behind TLS.
@@ -274,7 +274,7 @@ server {
     }
 
     # One-time file uploads. The query string carries the upload token.
-    location = /context-gateway/uploads {
+    location = /gateway/uploads {
         proxy_pass http://127.0.0.1:1935;
         proxy_http_version 1.1;
         proxy_request_buffering off;
@@ -308,7 +308,7 @@ If you raise `max_body_bytes` or `upstream_timeout_seconds`, raise `client_max_b
 
 ## Manage the gateway in Studio
 
-Open Studio at `/studio` on OpenViking Server, open **Connection Settings** and enter an account admin key as the **Admin API key**. **Context Gateway** then appears in the sidebar's **Settings** group; only account admins and root see it. Everything on these pages belongs to the account of that key. The page header shows the gateway address clients should use: `public_url`, or `url` while `public_url` is empty, in which case the **Connect** tab warns that clients may not reach it.
+Open Studio at `/studio` on OpenViking Server, open **Connection Settings** and enter an account admin key as the **Admin API key**. **OpenViking Gateway** then appears in the sidebar's **Settings** group; only account admins and root see it. Everything on these pages belongs to the account of that key. The page header shows the gateway address clients should use: `public_url`, or `url` while `public_url` is empty, in which case the **Connect** tab warns that clients may not reach it.
 
 If the gateway is not set up or cannot be reached, the page shows a setup card naming the setting to fix; see [Studio shows a setup card](#studio-shows-a-setup-card). Otherwise it has six tabs: **Overview**, **Upstreams**, **Profiles**, **Keys**, **Requests** and **Connect**. A new setup goes in that order: add an upstream, create a context profile, issue a gateway key, then connect a client using the Connect tab.
 
@@ -331,7 +331,7 @@ The upstream editor has four sections.
 
 **Endpoint.**
 
-- **Provider** decides which protocols you can pick and adjusts the gateway to the provider's quirks. The editor offers only the protocols the provider supports, as listed in the table above. Choose *Generic* for a provider not listed here, a compatible proxy such as LiteLLM or new-api, or a reverse proxy such as [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that exposes subscription accounts as an API (see [Custom upstreams](15-context-gateway.md#custom-upstreams); make sure using subscription quota this way complies with your provider's terms).
+- **Provider** decides which protocols you can pick and adjusts the gateway to the provider's quirks. The editor offers only the protocols the provider supports, as listed in the table above. Choose *Generic* for a provider not listed here, a compatible proxy such as LiteLLM or new-api, or a reverse proxy such as [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that exposes subscription accounts as an API (see [Custom upstreams](15-gateway.md#custom-upstreams); make sure using subscription quota this way complies with your provider's terms).
   - *Generic*, *Anthropic* and *OpenAI* forward requests the same way.
   - *DeepSeek*: with tools present, DeepSeek requires every earlier reply in the history to carry its reasoning, which many chat apps do not send back. DeepSeek upstreams have **Restore reasoning the client drops** on by default (see Routing below), so requests keep thinking on and still get OpenViking tools. With that setting off, OpenViking tools are offered only when a request turns thinking off (`"thinking": {"type": "disabled"}`); standard Responses requests have no `thinking` field, so they then get no tools. Memory is added as usual.
   - *Volcano Engine Ark* and *BytePlus ModelArk*, Ark's international edition, work the same way: requests go to Ark's own paths. Each conversation gets a stable `prompt_cache_key` for Chat Completions and Responses, so Ark's prefix cache follows the conversation. Requests whose model, thinking, sampling, system prompt or tools differ from the conversation's first request are flagged **Cache parameters changed** (`ark_cache_parameters_changed`), because Ark resets its cache when these change.
@@ -414,7 +414,7 @@ The [Configuration reference](#configuration-reference) lists every setting with
 
 ### Gateway keys
 
-A gateway key (`ovcg_…`) is what a client uses in place of a provider key. Each key belongs to one OpenViking user and uses one context profile and a set of upstreams.
+A gateway key (`ovgw_…`) is what a client uses in place of a provider key. Each key belongs to one OpenViking user and uses one context profile and a set of upstreams.
 
 To issue one, choose **Issue key** on the **Keys** tab and fill in:
 
@@ -476,7 +476,7 @@ The expanded row shows the reason, for example that OpenViking rejected the key 
 
 ## OpenViking tools
 
-With OpenViking tools on, the model can use the tools available on your OpenViking server while answering, within the user's access permissions. The gateway runs the tools, and the client continues receiving the answer until the reply ends. Reported token usage includes all model calls made during that reply. For what this means for different clients, which tools the model can use and what users see in the reply, see [Agentic memory for any client](15-context-gateway.md#agentic-memory-for-any-client) in the Context Gateway guide; this section covers client requirements, settings and limits.
+With OpenViking tools on, the model can use the tools available on your OpenViking server while answering, within the user's access permissions. The gateway runs the tools, and the client continues receiving the answer until the reply ends. Reported token usage includes all model calls made during that reply. For what this means for different clients, which tools the model can use and what users see in the reply, see [Agentic memory for any client](15-gateway.md#agentic-memory-for-any-client) in the OpenViking Gateway guide; this section covers client requirements, settings and limits.
 
 Tools support streaming and nonstreaming requests in all three protocols:
 
@@ -523,7 +523,7 @@ Housekeeping and sub-agent requests, and conversations where an OpenViking plugi
 
 **Importing files and skills.** The import tools are available when your OpenViking server provides them and they are selected in the profile. URL imports do not need a shell tool. Local files need one of these upload paths:
 
-- **A shell tool** (a client tool named like bash, shell, exec_command, terminal or run_command): the import tool returns a one-time upload link, and the model uploads the file with the client's own shell tool, which does go through the client's permission prompt. Skill directories are zipped first. The link points to `public_url` plus `/context-gateway/uploads`, so `public_url` must be an address the client can reach and your proxy must route that path to the gateway. Without `public_url`, imports fail with "Set context_gateway.public_url for client uploads".
+- **A shell tool** (a client tool named like bash, shell, exec_command, terminal or run_command): the import tool returns a one-time upload link, and the model uploads the file with the client's own shell tool, which does go through the client's permission prompt. Skill directories are zipped first. The link points to `public_url` plus `/gateway/uploads`, so `public_url` must be an address the client can reach and your proxy must route that path to the gateway. Without `public_url`, imports fail with "Set gateway.public_url for client uploads".
 - **An attached file**: without a shell tool, the model can import a file attached to a user message, sent either as base64 file data or as attachment text. This includes Responses `input_file` and Anthropic `document.source` with embedded `base64` or `text` data. Open WebUI usually sends only the extracted text, which is imported as a text file. Attachment URLs and provider file IDs are not fetched; use the import tool's URL parameter for a supported remote resource.
 
 Uploads are limited to `max_body_bytes` (32 MiB by default).
@@ -618,8 +618,8 @@ Stored values are encrypted with the encryption key. The files are readable only
 
 **Deleting data.**
 
-- Delete one user's gateway data from Studio (a key's **More actions** menu → **Delete this user's gateway data…**) or with `DELETE /api/v1/admin/context-gateway/users/{user_id}/data` on OpenViking Server, using an account admin key. This revokes the user's gateway keys and deletes their conversation state. Request-log metadata ages out with retention.
-- Removing a user in OpenViking does the same automatically. Removing an account also deletes the account's upstreams, profiles, keys and request logs from the gateway. If the gateway is unreachable at that moment, OpenViking keeps retrying. If you stop using the gateway, set `context_gateway.enabled` to `false` so deletions no longer wait for it.
+- Delete one user's gateway data from Studio (a key's **More actions** menu → **Delete this user's gateway data…**) or with `DELETE /api/v1/admin/gateway/users/{user_id}/data` on OpenViking Server, using an account admin key. This revokes the user's gateway keys and deletes their conversation state. Request-log metadata ages out with retention.
+- Removing a user in OpenViking does the same automatically. Removing an account also deletes the account's upstreams, profiles, keys and request logs from the gateway. If the gateway is unreachable at that moment, OpenViking keeps retrying. If you stop using the gateway, set `gateway.enabled` to `false` so deletions no longer wait for it.
 - Sessions and memories in OpenViking are deleted through OpenViking, not the gateway.
 - Deleting a memory in OpenViking does not remove a copy already added to a conversation: to replay it exactly, the gateway keeps the added memory text in the conversation state until the conversation expires. To clear it at once, delete the user's gateway data. That also revokes all of the user's gateway keys, so you have to issue new ones afterwards.
 
@@ -629,7 +629,7 @@ Stored values are encrypted with the encryption key. The files are readable only
 - The gateway uses each user's own OpenViking key for memory search, saving and tools, so it can do only what that user can do.
 - Only OpenViking Server should hold the admin token, and the gateway's `/admin/*` paths must stay private (see [Routes](#routes)). Studio users are checked by OpenViking Server: account admins and root only, each limited to their own account. The admin token has no such limit: whoever holds it can manage every account, so never expose the gateway port to the internet.
 - Account admins can issue gateway keys for any user in their account (when OpenViking stores only key hashes, the user has to provide their key). A gateway key lets its holder recall memory and call tools as that user, so the right to issue keys amounts to reading the memory of every user in the account. Give it only to admins you trust.
-- `/context-gateway/uploads` needs no gateway key. A one-time token signed by OpenViking authorizes each upload, and the gateway forwards it only to OpenViking's upload endpoint. Keep its query string out of proxy logs.
+- `/gateway/uploads` needs no gateway key. A one-time token signed by OpenViking authorizes each upload, and the gateway forwards it only to OpenViking's upload endpoint. Keep its query string out of proxy logs.
 - `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams.
 
 **Backups.** Back up `storage_path`, including both databases with their `-wal` and `-shm` files, together with the encryption key. For a consistent copy, stop the gateway or use SQLite's online backup (`sqlite3 kernel.sqlite3 ".backup kernel.backup.sqlite3"`, and the same for `management.sqlite3`). What a loss means:
@@ -640,7 +640,7 @@ Stored values are encrypted with the encryption key. The files are readable only
 
 ## Day-to-day operations
 
-The Context Gateway page is open only to account admins and root. Initial setup follows the order upstream → context profile → key → connect a client; after that, day-to-day work comes down to a few things.
+The OpenViking Gateway page is open only to account admins and root. Initial setup follows the order upstream → context profile → key → connect a client; after that, day-to-day work comes down to a few things.
 
 - **Watch the first-call cache hit rate.** The **First-call cache hit rate** on the Overview tab reflects prompt caching across turns and should stay close to what the provider reaches without the gateway. The **Within-turn cache hit rate** covers tool steps and is normally high. If the first-call rate drops noticeably, see [The first-call cache hit rate dropped](#the-first-call-cache-hit-rate-dropped).
 - **Use the request log to track down a single request.** Filter by new messages, tool steps or issues, then expand a row to see the recall result, saving status and why OpenViking tools were off; see [Requests and overview](#requests-and-overview).
@@ -654,7 +654,7 @@ The Context Gateway page is open only to account admins and root. Initial setup 
 
 ### Monitoring
 
-The gateway exports no metrics such as Prometheus and writes no HTTP access log. Check how it is doing on Studio's Overview and Requests tabs, or through the management API on OpenViking Server (`/api/v1/admin/context-gateway/overview` and `logs`); use the gateway's `/health` to check that the process is alive.
+The gateway exports no metrics such as Prometheus and writes no HTTP access log. Check how it is doing on Studio's Overview and Requests tabs, or through the management API on OpenViking Server (`/api/v1/admin/gateway/overview` and `logs`); use the gateway's `/health` to check that the process is alive.
 
 ## Design trade-offs
 
@@ -672,11 +672,11 @@ The table explains why the gateway's key design choices were made and what they 
 
 ## Configuration reference
 
-The `context_gateway` section of `ov.conf`, with every key at its default:
+The `gateway` section of `ov.conf`, with every key at its default:
 
 ```jsonc
 {
-  "context_gateway": {
+  "gateway": {
     "enabled": false,                                  // the gateway refuses to start until true
     "host": "127.0.0.1",                               // bind address
     "port": 1935,
@@ -684,9 +684,9 @@ The `context_gateway` section of `ov.conf`, with every key at its default:
     "url": "http://127.0.0.1:1935",                    // how OpenViking Server reaches the gateway
     "openviking_url": "http://127.0.0.1:1933",         // how the gateway reaches OpenViking Server
     "public_url": "",                                  // how clients reach the gateway
-    "storage_path": "~/.openviking/context-gateway",   // local disk only
-    "encryption_key_env": "OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY",
-    "admin_token_env": "OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN",
+    "storage_path": "~/.openviking/gateway",   // local disk only
+    "encryption_key_env": "OPENVIKING_GATEWAY_ENCRYPTION_KEY",
+    "admin_token_env": "OPENVIKING_GATEWAY_ADMIN_TOKEN",
     "min_server_version": "0.4.16",
     "session_ttl_days": 30,
     "response_ttl_seconds": 2592000,
@@ -700,16 +700,16 @@ The `context_gateway` section of `ov.conf`, with every key at its default:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `enabled` | `false` | Turns the gateway on. When false, the gateway refuses to start and Studio's Context Gateway page shows a setup card. |
+| `enabled` | `false` | Turns the gateway on. When false, the gateway refuses to start and Studio's OpenViking Gateway page shows a setup card. |
 | `host` | `127.0.0.1` | Bind address. Must be a loopback address while OpenViking runs in dev mode. |
 | `port` | `1935` | Gateway port. |
 | `workers` | `1` | Gateway processes on this host, 1–64. |
 | `url` | `http://127.0.0.1:1935` | Address OpenViking Server uses for management and data deletion. Also the address Studio shows when `public_url` is empty. |
 | `openviking_url` | `http://127.0.0.1:1933` | Address the gateway uses to reach OpenViking Server. |
 | `public_url` | empty | Address clients use. Studio shows it in setup instructions; upload links for OpenViking tools use it. Set it in every shared deployment. |
-| `storage_path` | `~/.openviking/context-gateway` | Directory for the two databases. Must be on a local disk. |
-| `encryption_key_env` | `OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY` | Environment variable holding the encryption key. |
-| `admin_token_env` | `OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN` | Environment variable holding the admin token. |
+| `storage_path` | `~/.openviking/gateway` | Directory for the two databases. Must be on a local disk. |
+| `encryption_key_env` | `OPENVIKING_GATEWAY_ENCRYPTION_KEY` | Environment variable holding the encryption key. |
+| `admin_token_env` | `OPENVIKING_GATEWAY_ADMIN_TOKEN` | Environment variable holding the admin token. |
 | `min_server_version` | `0.4.16` | Oldest OpenViking Server version the gateway works with. With an older or unparsable version, memory search and saving stop and no keys can be issued. |
 | `session_ttl_days` | `30` | Days of inactivity after which a conversation's state is removed. |
 | `response_ttl_seconds` | `2592000` | How long Responses IDs stay mapped to their upstream (at least 60). |
@@ -724,8 +724,8 @@ URL settings must be plain `http` or `https` addresses without credentials, quer
 
 | Variable | Read by | Purpose |
 | --- | --- | --- |
-| `OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY` | Gateway | Encryption key (see [Secrets](#secrets)). |
-| `OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN` | Gateway and OpenViking Server | Admin token, at least 32 characters. |
+| `OPENVIKING_GATEWAY_ENCRYPTION_KEY` | Gateway | Encryption key (see [Secrets](#secrets)). |
+| `OPENVIKING_GATEWAY_ADMIN_TOKEN` | Gateway and OpenViking Server | Admin token, at least 32 characters. |
 | `OPENVIKING_CONFIG_FILE` | Gateway and OpenViking Server | Path to `ov.conf` when `--config` is not given. |
 
 **Context profile settings.** Studio label first, then the name used in the management API (where profiles are called `policies`):
@@ -788,7 +788,7 @@ URL settings must be plain `http` or `https` addresses without credentials, quer
 
 **Gateway key fields:** Name (`name`), OpenViking key (`openviking_key`), Context profile (`policy_id`), Upstreams (`upstream_ids`, at least one) and Allowed models (`models`). When you issue through OpenViking Server, you can send the `user_id` of a user in this account instead of `openviking_key`, and OpenViking Server reads that user's key; send only one of the two.
 
-Studio calls the management API on OpenViking Server under `/api/v1/admin/context-gateway/`, with the resources `overview`, `logs`, `guides`, `upstreams`, `policies`, `keys` and `users/{user_id}/data`. Scripts can call the same paths with an account admin key.
+Studio calls the management API on OpenViking Server under `/api/v1/admin/gateway/`, with the resources `overview`, `logs`, `guides`, `upstreams`, `policies`, `keys` and `users/{user_id}/data`. Scripts can call the same paths with an account admin key.
 
 ## Troubleshooting
 
@@ -796,7 +796,7 @@ Studio calls the management API on OpenViking Server under `/api/v1/admin/contex
 
 | Symptom | Cause | What to do |
 | --- | --- | --- |
-| A conversation gets no recall and is not saved | An OpenViking plugin or an MCP server named `openviking` was detected, and the gateway stepped aside, leaving recall, saving and OpenViking tools to the plugin. | Expected: it keeps the same content from being added or saved twice. See [Gateway or plugin?](15-context-gateway.md#gateway-or-plugin). |
+| A conversation gets no recall and is not saved | An OpenViking plugin or an MCP server named `openviking` was detected, and the gateway stepped aside, leaving recall, saving and OpenViking tools to the plugin. | Expected: it keeps the same content from being added or saved twice. See [Gateway or plugin?](15-gateway.md#gateway-or-plugin). |
 | Saving shows **Retrying**, then **Paused** | OpenViking rejected the save or could not be reached, often because the user's OpenViking key was regenerated. | The gateway recovers on its own once the cause is fixed; if the key is no longer valid, issue a new gateway key. See [Conversations do not appear in OpenViking](#conversations-do-not-appear-in-openviking). |
 | The profile has tools on, but the conversation has none | The conversation's first request did not meet the tool conditions, or the client does not send the full history. | Check the reason in the request log (see [OpenViking tools](#openviking-tools)), fix it and start a new conversation. |
 | Requests go without memory | OpenViking unreachable or too slow, budget used up, nothing relevant, and so on. | See [No memory is added](#no-memory-is-added). |
@@ -807,25 +807,25 @@ Studio calls the management API on OpenViking Server under `/api/v1/admin/contex
 | Message | Cause and fix |
 | --- | --- |
 | `configure a Fernet encryption key and an admin token of at least 32 characters` | A secret is missing or too short in the gateway's environment. Load both [secrets](#secrets) into the shell, `.env` or Secret the gateway starts from. |
-| `Set context_gateway.enabled=true in ov.conf` | The section is missing or disabled, or the gateway read another file. It reads `--config`, then `OPENVIKING_CONFIG_FILE`, then `~/.openviking/ov.conf`, and nothing else. |
-| `Missing Context Gateway dependencies: …` | Install the extra: `pip install "openviking[context-gateway]"`. |
-| A validation error about a `context_gateway` field | An unknown key, a typo or an invalid value. `${VAR}` placeholders are not expanded, so a placeholder in a numeric or URL field fails too. |
-| `Context Gateway must bind to loopback when OpenViking uses dev authentication` | OpenViking runs in dev mode while `host` is not a loopback address. Switch OpenViking to API key mode. |
+| `Set gateway.enabled=true in ov.conf` | The section is missing or disabled, or the gateway read another file. It reads `--config`, then `OPENVIKING_CONFIG_FILE`, then `~/.openviking/ov.conf`, and nothing else. |
+| `Missing OpenViking Gateway dependencies: …` | Install the extra: `pip install "openviking[gateway]"`. |
+| A validation error about a `gateway` field | An unknown key, a typo or an invalid value. `${VAR}` placeholders are not expanded, so a placeholder in a numeric or URL field fails too. |
+| `OpenViking Gateway must bind to loopback when OpenViking uses dev authentication` | OpenViking runs in dev mode while `host` is not a loopback address. Switch OpenViking to API key mode. |
 | `Unsupported gateway schema; configure a fresh storage_path` | The storage was written by an incompatible gateway version. Point `storage_path` at an empty directory and set the gateway up again. |
 
-In Docker Compose, a gateway that keeps restarting usually has empty secrets in `.env`; `docker compose logs context-gateway` shows the message.
+In Docker Compose, a gateway that keeps restarting usually has empty secrets in `.env`; `docker compose logs gateway` shows the message.
 
 ### Studio shows a setup card
 
-The Context Gateway page shows a setup card instead of its tabs when OpenViking Server cannot use the gateway:
+The OpenViking Gateway page shows a setup card instead of its tabs when OpenViking Server cannot use the gateway:
 
-- **The Context Gateway is turned off**: OpenViking Server's `ov.conf` lacks `context_gateway.enabled: true`. Add it and restart OpenViking Server.
-- **The management token is missing**: OpenViking Server's environment lacks the admin token, or it is shorter than 32 characters. Set it (in Docker Compose through `.env`, in Helm through `contextGateway.existingSecret`) and restart OpenViking Server.
-- **OpenViking can't reach the gateway**: OpenViking Server cannot reach `context_gateway.url`. Check that the gateway is running and that `url` is the address OpenViking Server can use: `http://context-gateway:1935` in Docker Compose (the chart sets it for Helm).
+- **The OpenViking Gateway is turned off**: OpenViking Server's `ov.conf` lacks `gateway.enabled: true`. Add it and restart OpenViking Server.
+- **The management token is missing**: OpenViking Server's environment lacks the admin token, or it is shorter than 32 characters. Set it (in Docker Compose through `.env`, in Helm through `gateway.existingSecret`) and restart OpenViking Server.
+- **OpenViking can't reach the gateway**: OpenViking Server cannot reach `gateway.url`. Check that the gateway is running and that `url` is the address OpenViking Server can use: `http://gateway:1935` in Docker Compose (the chart sets it for Helm).
 
 If both processes are running but the page says "Your key was rejected. Check Connection settings." although the same admin key works on **Users & Permissions**, the two processes have different admin tokens, and the gateway answers 401 "Invalid gateway management credential". Set the same token for both and restart them.
 
-If **Context Gateway** is missing from the sidebar, Studio has no admin access: enter an account admin or root key as the **Admin API key** in **Connection Settings**. While OpenViking runs in dev mode, Studio hides its management pages.
+If **OpenViking Gateway** is missing from the sidebar, Studio has no admin access: enter an account admin or root key as the **Admin API key** in **Connection Settings**. While OpenViking runs in dev mode, Studio hides its management pages.
 
 ### Issuing a key fails
 
@@ -847,7 +847,7 @@ These rejections happen before a request reaches a provider, so they do not appe
 
 | Status and message | Cause and fix |
 | --- | --- |
-| 401 "Invalid or revoked Context Gateway key" | The client sent no gateway key, a revoked one, or its provider key. Check which key the client sends. |
+| 401 "Invalid or revoked OpenViking Gateway key" | The client sent no gateway key, a revoked one, or its provider key. Check which key the client sends. |
 | 403 "Claude subscription OAuth credentials are not supported" | The client sent a Claude subscription token, for example Claude Code signed in with a subscription and no `ANTHROPIC_AUTH_TOKEN` set; or the upstream holds one. Use API keys. |
 | 403 "Model is not allowed by this key" | The model is not in the key's allowed models. Issue a key that allows it. |
 | 404 "No allowed upstream matches this protocol and model" | No enabled upstream bound to the key speaks the API the client called and serves the requested model. Check the upstream's protocol, its models and aliases, whether it is enabled, and the key's upstreams. |
@@ -880,7 +880,7 @@ A message whose search failed never gets memory later; the next message searches
 - **The profile does not save.** The Saving column shows Off.
 - **Saving is retrying or paused.** The expanded row shows the reason. Fix the cause, for example an invalid OpenViking key; the gateway retries within 5 minutes. If the conversation stays paused, use **Resync conversation…**.
 - **An OpenViking plugin is in use** (`plugin_present`); the gateway saves nothing for that conversation.
-- **You are looking as another user.** Sessions belong to the OpenViking user behind the gateway key and are named `context-gateway-…`.
+- **You are looking as another user.** Sessions belong to the OpenViking user behind the gateway key and are named `gateway-…`.
 - **Memories come later than sessions.** OpenViking extracts memories only after a commit, in the background.
 
 ### The first-call cache hit rate dropped
@@ -902,8 +902,8 @@ If the provider rejects long conversations as too long for the model:
 
 ### File imports fail
 
-- "Set context_gateway.public_url for client uploads": set `public_url` to an address the client can reach.
-- The upload link cannot be reached, or returns 404: route `/context-gateway/uploads` to the gateway in your proxy.
+- "Set gateway.public_url for client uploads": set `public_url` to an address the client can reach.
+- The upload link cannot be reached, or returns 404: route `/gateway/uploads` to the gateway in your proxy.
 - 413: the file is larger than `max_body_bytes` or the proxy's limit.
 - 502 "OpenViking upload is unavailable": the gateway cannot reach OpenViking Server.
 - The import tools are not offered: the OpenViking server does not provide them, the profile has them unchecked, or gateway tools are disabled for this request. Check the Tools list and request details.

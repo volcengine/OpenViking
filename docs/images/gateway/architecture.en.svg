@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="990" viewBox="0 0 1600 990">
 <rect x="0" y="0" width="1600" height="990" rx="20" fill="#FFFFFF"/>
-<text x="40" y="52" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="24" font-weight="700" fill="#1F2329" text-anchor="start">Where Context Gateway runs and where its data lives</text>
+<text x="40" y="52" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="24" font-weight="700" fill="#1F2329" text-anchor="start">Where OpenViking Gateway runs and where its data lives</text>
 <rect x="320" y="90" width="890" height="822" rx="14" fill="#FCFBFF" stroke="#B7A3F0" stroke-width="1.5" stroke-dasharray="8 6"/>
 <text x="340" y="122" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="17" font-weight="700" fill="#6425D0" text-anchor="start">Your deployment · gateway and OpenViking on one host or apart</text>
 <text x="340" y="146" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">They talk only over HTTP: separate containers in Compose, one Pod in Helm, or separate machines</text>
@@ -35,9 +35,9 @@
 <text x="415" y="610" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">Optional for</text>
 <text x="415" y="631" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">a local trial</text>
 <rect x="560" y="170" width="340" height="220" rx="10" fill="#F3EEFF" stroke="#7F3BF5" stroke-width="2.5"/>
-<text x="580" y="208" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="700" fill="#1F2329" text-anchor="start">Context Gateway</text>
-<rect x="783.4" y="190" width="61" height="24" rx="12" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.2"/>
-<text x="813.9" y="207.4" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="600" fill="#7F3BF5" text-anchor="middle">:1935</text>
+<text x="580" y="208" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="700" fill="#1F2329" text-anchor="start">OpenViking Gateway</text>
+<rect x="826.4" y="190" width="61" height="24" rx="12" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.2"/>
+<text x="856.9" y="207.4" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="600" fill="#7F3BF5" text-anchor="middle">:1935</text>
 <rect x="578" y="226" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
 <text x="652" y="247.5" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif" font-size="14" font-weight="600" fill="#1F2329" text-anchor="middle">Recall memories</text>
 <rect x="738" y="226" width="148" height="32" rx="8" fill="#FFFFFF" stroke="#CDB7FA" stroke-width="1.2"/>
