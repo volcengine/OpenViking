@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from openviking.pyagfs import AGFSNotFoundError
+from openviking.storage.errors import LockAcquisitionError
 
 
 class MockLocalAGFS:
@@ -185,7 +186,7 @@ class MockLocalAGFS:
 
         acquired = lock.acquire(timeout=timeout_secs)
         if not acquired:
-            raise TimeoutError(f"timed out acquiring test path lock: {path}")
+            raise LockAcquisitionError(f"timed out acquiring test path lock: {path}")
 
         lease_ref = str(uuid.uuid4())
         lease = {

@@ -7,8 +7,10 @@ Tests the python binding mode of VikingFS which directly uses AGFS implementatio
 without HTTP server.
 """
 
+import asyncio
 import os
 import shutil
+import time
 import uuid
 
 import pytest
@@ -223,6 +225,26 @@ class TestVikingFSBindingLocal:
             for uri in (source_uri, target_uri):
                 if await vfs.exists(uri):
                     await vfs.rm(uri, recursive=True)
+
+    async def test_lock_waiters_do_not_starve_holder_release(self, viking_fs_binding_instance):
+        """Waiters with a timeout must leave executor threads for the holder's release."""
+        vfs = viking_fs_binding_instance
+        agfs = vfs._async_agfs
+        path = vfs._uri_to_path(f"viking://temp/waiters_{uuid.uuid4().hex}")
+        held = await agfs.pathlock_acquire_exact(path)
+
+        async def waiter():
+            lease = await agfs.pathlock_acquire_exact(path, timeout_secs=3)
+            await agfs.pathlock_release(lease)
+
+        waiters = [
+            asyncio.create_task(waiter()) for _ in range(min(32, (os.cpu_count() or 1) + 4) + 8)
+        ]
+        await asyncio.sleep(0.2)
+        started = time.monotonic()
+        await agfs.pathlock_release(held)
+        assert time.monotonic() - started < 1
+        await asyncio.gather(*waiters)
 
     async def test_borrowed_pathlock_cannot_release_via_raw_ref(self, viking_fs_binding_instance):
         """Reject borrowed lifecycle control through typed and raw lease refs."""

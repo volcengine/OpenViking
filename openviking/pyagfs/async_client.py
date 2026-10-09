@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.storage.errors import LockAcquisitionError
 
 from .protocols import AGFSSyncClientProtocol
 
@@ -363,6 +364,66 @@ class AsyncAGFSClient:
 
     # -- pathlock async wrappers ------------------------------------------------
 
+    async def _acquire_pathlock(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        """Wait for a lock without parking a worker thread per waiter.
+
+        A native wait holds a ``to_thread`` worker for its whole timeout. Enough
+        waiters exhaust the default executor, and the holder's own release, which
+        needs a worker too, then waits behind them. Poll nonblocking attempts
+        within the same overall deadline instead.
+        """
+        *head, timeout_secs, owner_lease_ref = args
+        if timeout_secs <= 0:
+            return await self._acquire_pathlock_once(method_name, *args)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_secs
+        while True:
+            try:
+                return await self._acquire_pathlock_once(method_name, *head, 0.0, owner_lease_ref)
+            except LockAcquisitionError as exc:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    # The native error describes only the last 0 ms attempt.
+                    raise LockAcquisitionError(
+                        f"lock acquire timed out after {timeout_secs * 1000:.0f}ms "
+                        f"(polled): {head[-1]}"
+                    ) from exc
+                await asyncio.sleep(min(0.05, remaining))
+
+    async def _acquire_pathlock_once(self, method_name: str, *args: Any) -> Dict[str, Any]:
+        """Keep a newly acquired lease owned until cancellation cleanup finishes.
+
+        The generic I/O runner intentionally propagates cancellation after its
+        worker finishes. Resource acquisition needs the successful result first,
+        otherwise that propagation discards the only owned lease reference.
+        """
+        cancellation: asyncio.CancelledError | None = None
+
+        async def settle(work: asyncio.Task[Any]) -> Any:
+            nonlocal cancellation
+            while not work.done():
+                try:
+                    await asyncio.shield(work)
+                except asyncio.CancelledError as exc:
+                    if work.cancelled():
+                        raise
+                    if cancellation is None:
+                        cancellation = exc
+                except BaseException:
+                    # Observe the actual failure with work.result() below.
+                    break
+            return work.result()
+
+        lease = await settle(asyncio.create_task(self.run(method_name, *args)))
+        if cancellation is not None:
+            # args[0] is the exact FsContext used for this acquisition. The
+            # native acquire methods return a new owned lease even when an
+            # owner_lease_ref supplies the parent owner identity. Release only
+            # that returned lease; never the caller's existing owner reference.
+            await settle(asyncio.create_task(self.pathlock_release(lease, fs_ctx=args[0])))
+            raise cancellation
+        return lease
+
     async def pathlock_acquire_exact(
         self,
         path: str,
@@ -372,7 +433,7 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire an exact lock on a single path."""
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_exact",
             _fs_ctx_or_default(path, fs_ctx),
             path,
@@ -389,7 +450,7 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire exact locks on multiple paths."""
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_exact_batch",
             _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
             paths,
@@ -406,7 +467,7 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire a tree lock on a single path."""
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_tree",
             _fs_ctx_or_default(path, fs_ctx),
             path,
@@ -423,7 +484,7 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire tree locks on multiple paths."""
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_tree_batch",
             _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
             paths,
@@ -442,7 +503,7 @@ class AsyncAGFSClient:
     ) -> Dict[str, Any]:
         """Acquire a mixed batch of exact and tree locks."""
         first = exact_paths[0] if exact_paths else (tree_paths[0] if tree_paths else "/")
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_exact_tree_batch",
             _fs_ctx_or_default(first, fs_ctx),
             exact_paths,
@@ -469,7 +530,7 @@ class AsyncAGFSClient:
             if request.get("kind") not in {"exact", "tree"}:
                 raise ValueError("pathlock request.kind must be 'exact' or 'tree'")
         first = requests[0]["path"]
-        return await self.run(
+        return await self._acquire_pathlock(
             "pathlock_acquire_batch",
             _fs_ctx_or_default(first, fs_ctx),
             requests,

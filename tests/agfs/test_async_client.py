@@ -3,6 +3,7 @@
 
 import asyncio
 import threading
+from typing import Any
 
 import pytest
 
@@ -41,3 +42,43 @@ async def test_async_agfs_client_hides_threadpool(backend):
         with pytest.raises(asyncio.CancelledError):
             await operation
     assert len(writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_agfs_client_releases_pathlock_on_cancellation():
+    """Cancellation during lock acquisition releases the newly acquired lease."""
+    acquired, release_block = threading.Event(), threading.Event()
+    released_leases = []
+
+    class LockClient:
+        def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
+            acquired.set()
+            if not release_block.wait(timeout=5):
+                raise TimeoutError("Test did not unblock acquire")
+            return {"lease_ref": "lease-123", "path": path}
+
+        def pathlock_release(self, ctx, lease):
+            released_leases.append((ctx, lease))
+            return "released"
+
+    client: Any = LockClient()
+    agfs = AsyncAGFSClient(client)
+
+    task = asyncio.create_task(
+        agfs.pathlock_acquire_exact("/local/account/file", fs_ctx={"account_id": "account"})
+    )
+
+    try:
+        assert await asyncio.to_thread(acquired.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release_block.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert len(released_leases) == 1
+    ctx, lease = released_leases[0]
+    assert lease["lease_ref"] == "lease-123"
+    assert ctx["account_id"] == "account"
