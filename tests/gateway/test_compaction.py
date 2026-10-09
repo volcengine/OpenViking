@@ -410,8 +410,8 @@ async def test_replies_without_usage_leave_the_estimate_to_the_whole_request(
     assert (await prepare(kernel, "chat", messages, credential, policy)).context_tokens > 2500
 
 
-async def test_a_cut_that_stays_over_the_threshold_backs_off(setup_kernel, credential, policy):
-    kernel, _, _, _ = setup_kernel
+async def test_irreducible_context_skips_summary_and_backs_off(setup_kernel, credential, policy):
+    kernel, store, _, _ = setup_kernel
     policy.update(context_window=2000, recall=False)
     # The system prompt alone fills the window, and no cut can remove it.
     messages = [
@@ -424,12 +424,23 @@ async def test_a_cut_that_stays_over_the_threshold_backs_off(setup_kernel, crede
     messages += [reply, {"role": "user", "content": "Next?"}]
     summarize = Summarizer("chat")
     second = await prepare(kernel, "chat", messages, credential, policy, summarize=summarize)
-    assert second.metrics["compaction_tokens"] and second.context_tokens >= 1800
-    assert second.metrics["compaction_failed"] == "still_over_threshold"
+    assert second.body["messages"] == messages
+    assert second.metrics["compaction_minimum_tokens"] >= 1800
+    assert second.metrics["compaction_failed"] == "minimum_context_over_threshold"
+    assert "compaction_tokens" not in second.metrics and summarize.requests == []
     await answered(kernel, second, credential, reply, tokens=2400)
     messages += [reply, {"role": "user", "content": "And then?"}]
     third = await prepare(kernel, "chat", messages, credential, policy, summarize=summarize)
-    assert len(summarize.requests) == 1 and "compaction_failed" not in third.metrics
+    assert summarize.requests == [] and "compaction_failed" not in third.metrics
+
+    # Expiry allows another cheap preflight, but never another futile model call.
+    old = await get_state(store.state, second.scope, second.session)
+    value = copy.deepcopy(old.value)
+    value["compaction"]["failed_at"] -= 61
+    assert await store.state.swap(second.scope, second.session, old, value)
+    retried = await prepare(kernel, "chat", messages, credential, policy, summarize=summarize)
+    assert retried.metrics["compaction_failed"] == "minimum_context_over_threshold"
+    assert retried.body["messages"] == messages and summarize.requests == []
 
 
 def test_estimate_counts_inline_media_like_an_image():

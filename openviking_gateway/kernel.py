@@ -19,6 +19,7 @@ from .compaction import (
     active_cut,
     apply_cut,
     cut_hint,
+    cut_messages,
     cut_point,
     estimate,
     opening_block,
@@ -742,6 +743,15 @@ class MemoryKernel:
             # Messages after the cut are new client input that hidden history never expands.
             if messages[len(span) :] != kept:
                 raise SummaryError("cut_not_found")
+            # An empty replacement is the smallest context any summary could produce.
+            # If even that cannot fit, a model call can only spend tokens before reaching
+            # the same result. Keep the original history and report the actual boundary.
+            minimum = dict(body)
+            minimum[adapter.field] = cut_messages(messages, len(span) - 1, "")
+            minimum_tokens = await asyncio.to_thread(estimate, minimum)
+            request.metrics["compaction_minimum_tokens"] = minimum_tokens
+            if minimum_tokens >= policy.compaction_threshold * request.context_window:
+                raise SummaryError("minimum_context_over_threshold")
             instruction = summary_instruction(policy.summary_max_tokens, in_progress)
             limit = policy.summary_max_tokens
             try:
