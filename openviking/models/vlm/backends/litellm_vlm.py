@@ -23,6 +23,7 @@ from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
+from ..request_headers import resolve_extra_headers
 
 logger = get_logger(__name__)
 
@@ -304,8 +305,9 @@ class LiteLLMVLMProvider(VLMBase):
             is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
             if not is_google_endpoint:
                 kwargs["api_base"] = self.api_base
-        if self._extra_headers:
-            kwargs["extra_headers"] = self._extra_headers
+        extra_headers = resolve_extra_headers(self._extra_headers)
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

@@ -20,6 +20,13 @@ from openviking.models.vlm.backends.litellm_vlm import (
 )
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+from openviking.models.vlm.request_headers import bind_vlm_request_id, resolve_extra_headers
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
+from openviking.service.task_work_index import bind_task_context
+from openviking.telemetry.span_models import RootSpanAttributes
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -111,6 +118,87 @@ class TestVLMExtraHeaders:
         call_kwargs = mock_openai_class.call_args[1]
         # Empty dict is falsy, so default_headers should not be set
         assert "default_headers" not in call_kwargs
+
+    def test_request_placeholder_uses_bound_task_and_http_identity(self):
+        headers = {"x-opencode-session": "openviking-host-{request_id}"}
+        token = bind_root_observability_context(
+            RootSpanAttributes(http_method="TEST", http_route="/test", request_id="request-a")
+        )
+        try:
+            assert resolve_extra_headers(headers)["x-opencode-session"] == (
+                "openviking-host-request-a"
+            )
+            with bind_task_context("task-b", "account", "user"):
+                assert resolve_extra_headers(headers)["x-opencode-session"] == (
+                    "openviking-host-task-b"
+                )
+                with bind_vlm_request_id("session-c"):
+                    assert resolve_extra_headers(headers)["x-opencode-session"] == (
+                        "openviking-host-session-c"
+                    )
+        finally:
+            reset_root_observability_context(token)
+
+        generated_a = resolve_extra_headers(headers)["x-opencode-session"]
+        generated_b = resolve_extra_headers(headers)["x-opencode-session"]
+        assert generated_a.startswith("openviking-host-vlm-")
+        assert generated_a != generated_b
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_request_placeholder_is_per_call_and_stable_across_retries(self, mock_openai_class):
+        response = MagicMock()
+        response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        response.usage = None
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [
+            RuntimeError("HTTP 503 Endpoint is unavailable"),
+            response,
+        ]
+        mock_openai_class.return_value = mock_client
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-4o-mini",
+                "max_retries": 1,
+                "extra_headers": {
+                    "X-Static": "literal",
+                    "x-opencode-session": "openviking-host-{request_id}",
+                },
+            }
+        )
+
+        with bind_vlm_request_id("request-retry"), patch("openviking.utils.model_retry.time.sleep"):
+            assert vlm.get_completion("hello") == "ok"
+
+        assert mock_openai_class.call_args.kwargs["default_headers"] == {"X-Static": "literal"}
+        assert [
+            call.kwargs["extra_headers"]
+            for call in mock_client.chat.completions.create.call_args_list
+        ] == [
+            {"x-opencode-session": "openviking-host-request-retry"},
+            {"x-opencode-session": "openviking-host-request-retry"},
+        ]
+
+    def test_litellm_expands_request_placeholder_per_call(self):
+        vlm = LiteLLMVLMProvider(
+            {
+                "provider": "litellm",
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "extra_headers": {
+                    "X-Static": "literal",
+                    "x-opencode-session": "openviking-host-{request_id}",
+                },
+            }
+        )
+
+        with bind_vlm_request_id("request-litellm"):
+            headers = vlm._build_text_kwargs(prompt="hello")["extra_headers"]
+
+        assert headers == {
+            "X-Static": "literal",
+            "x-opencode-session": "openviking-host-request-litellm",
+        }
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_dashscope_text_completion_passes_enable_thinking_in_extra_body(

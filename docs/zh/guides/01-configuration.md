@@ -800,10 +800,14 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 }
 ```
 
+Header 值可以包含 `{request_id}`。OpenViking 会将它解析为当前 VikingBot session、HTTP request
+或队列任务 ID。在这些托管作用域之外调用时，会生成一个 ID。同一作用域内的重试会复用解析后的值；
+不含该占位符的 Header 仍为静态值。
+
 常见使用场景：
 - **OpenRouter**：可选的 `HTTP-Referer` 和 `X-OpenRouter-Title` 用于[应用归属与展示](https://openrouter.ai/docs/app-attribution)，不作为 API 认证凭据；`X-Title` 仍可兼容
 - **Kimi Coding**: 需要自定义 user agent 或追加订阅请求头时可以在这里覆盖
-- **OpenCode Go**（`https://opencode.ai/zen/go/v1`）: 请求不带 `x-opencode-session` 会返回 HTTP 400 `MissingSessionID`。配置一个固定值即可，例如 `"extra_headers": {"x-opencode-session": "openviking-<your-host>"}`。OpenCode Go 只用这个 id 做路由和 prompt cache 优化，固定值不影响使用
+- **OpenCode Go**（`https://opencode.ai/zen/go/v1`）: 请求不带 `x-opencode-session` 会返回 HTTP 400 `MissingSessionID`。OpenCode 要求每个 conversation 使用一个稳定 ID，以优化路由和 prompt cache。请组合部署专属前缀和请求作用域值，例如 `"extra_headers": {"x-opencode-session": "openviking-<your-host>-{request_id}"}`。不要让无关任务复用一个固定 ID，否则它们会共用同一条 provider affinity 记录
 - **自定义代理**: 添加认证头或追踪头
 - **API 网关**: 添加版本或路由标识
 

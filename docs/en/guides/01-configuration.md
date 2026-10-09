@@ -805,10 +805,14 @@ For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP head
 }
 ```
 
+Header values can contain `{request_id}`. OpenViking resolves it to the current VikingBot session,
+HTTP request, or queue-task ID. Calls outside those managed scopes receive a generated ID. Retries
+within one scope reuse the resolved value; headers without the placeholder remain static.
+
 Common use cases:
 - **OpenRouter**: Optional `HTTP-Referer` and `X-OpenRouter-Title` headers provide [app attribution](https://openrouter.ai/docs/app-attribution), not API authentication; `X-Title` remains supported for compatibility
 - **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
-- **OpenCode Go** (`https://opencode.ai/zen/go/v1`): Requests without `x-opencode-session` fail with HTTP 400 `MissingSessionID`. Set a fixed id, e.g. `"extra_headers": {"x-opencode-session": "openviking-<your-host>"}`. A fixed id works; OpenCode Go only uses it for routing and prompt-cache hints
+- **OpenCode Go** (`https://opencode.ai/zen/go/v1`): Requests without `x-opencode-session` fail with HTTP 400 `MissingSessionID`. OpenCode requires one stable ID per conversation for routing and prompt caching. Use a deployment-specific prefix and request-scoped value, e.g. `"extra_headers": {"x-opencode-session": "openviking-<your-host>-{request_id}"}`. Do not reuse one fixed ID for unrelated work because it shares one provider-affinity record
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 

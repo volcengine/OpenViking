@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.models.vlm.request_headers import bind_vlm_request_id, resolve_vlm_request_id
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
@@ -287,14 +288,16 @@ class VLMProviderAdapter(LLMProvider):
             # An explicit empty list asks VLM backends for a structured response
             # without exposing tools, so per-response usage is preserved.
             response_tools = tools if tools is not None else []
+            request_id = resolve_vlm_request_id(session_id)
             while True:
                 try:
-                    result = await self._vlm.get_completion_async(
-                        messages=messages,
-                        thinking=getattr(self._vlm, "thinking", None),
-                        tools=response_tools,
-                        tool_choice="auto" if response_tools else None,
-                    )
+                    with bind_vlm_request_id(request_id):
+                        result = await self._vlm.get_completion_async(
+                            messages=messages,
+                            thinking=getattr(self._vlm, "thinking", None),
+                            tools=response_tools,
+                            tool_choice="auto" if response_tools else None,
+                        )
                     break
                 except Exception as e:
                     if not is_retryable_rate_limit_error(e):
@@ -347,6 +350,7 @@ class VLMProviderAdapter(LLMProvider):
                 yield event
             return
 
+        request_id = resolve_vlm_request_id(session_id)
         try:
             stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
             if callable(stream_with_failover):
@@ -357,6 +361,7 @@ class VLMProviderAdapter(LLMProvider):
                     model=model,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_id=request_id,
                 ):
                     yield event
                 return
@@ -368,6 +373,7 @@ class VLMProviderAdapter(LLMProvider):
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                request_id=request_id,
             ):
                 yield event
         except Exception as exc:
@@ -434,6 +440,7 @@ class VLMProviderAdapter(LLMProvider):
         model: str | None,
         max_tokens: int | None,
         temperature: float,
+        request_id: str,
     ) -> AsyncIterator[LLMStreamEvent]:
         attempt = 1
         while True:
@@ -447,6 +454,7 @@ class VLMProviderAdapter(LLMProvider):
                         model=model,
                         max_tokens=max_tokens,
                         temperature=temperature,
+                        request_id=request_id,
                     )
                 ):
                     emitted = True
@@ -474,6 +482,7 @@ class VLMProviderAdapter(LLMProvider):
         model: str | None,
         max_tokens: int | None,
         temperature: float,
+        request_id: str,
     ) -> AsyncIterator[LLMStreamEvent]:
         attempt = 1
         while True:
@@ -486,6 +495,7 @@ class VLMProviderAdapter(LLMProvider):
                     model=model,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    request_id=request_id,
                 ):
                     emitted = True
                     yield event
@@ -512,15 +522,17 @@ class VLMProviderAdapter(LLMProvider):
         model: str | None,
         max_tokens: int | None,
         temperature: float,
+        request_id: str,
     ) -> AsyncIterator[LLMStreamEvent]:
-        kwargs = self._build_stream_kwargs(
-            vlm,
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        with bind_vlm_request_id(request_id):
+            kwargs = self._build_stream_kwargs(
+                vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}

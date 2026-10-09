@@ -17,6 +17,7 @@ from openviking.models.vlm.backends.volcengine_vlm import (
     VolcEngineVLM,
     build_volcengine_request_headers,
 )
+from openviking.models.vlm.request_headers import resolve_vlm_request_id
 from openviking.utils.model_retry import is_retryable_rate_limit_error
 
 
@@ -30,9 +31,11 @@ class _FakeVLM:
         self.failures = list(failures)
         self.result = result
         self.calls = 0
+        self.request_ids: list[str] = []
 
     async def get_completion_async(self, **_kwargs):
         self.calls += 1
+        self.request_ids.append(resolve_vlm_request_id())
         if self.failures:
             raise self.failures.pop(0)
         return self.result
@@ -112,11 +115,15 @@ async def test_chat_retries_rate_limit_until_success(monkeypatch):
     )
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
 
-    response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
+    response = await adapter.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        session_id="conversation-123",
+    )
 
     assert response.content == "done"
     assert response.finish_reason == "stop"
     assert fake_vlm.calls == 3
+    assert fake_vlm.request_ids == ["conversation-123"] * 3
     assert sleep_delays == [1, 2]
 
 
@@ -233,16 +240,25 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
         [RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded")],
         [chunk],
     )
-    adapter = VLMProviderAdapter(
-        _FakeStreamingVLM(completions),
-        "test-model",
-        langfuse_client=_DisabledLangfuse(),
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "test-model",
+            "extra_headers": {"x-opencode-session": "openviking-host-{request_id}"},
+        }
     )
+    monkeypatch.setattr(
+        vlm,
+        "get_async_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+    )
+    adapter = VLMProviderAdapter(vlm, "test-model", langfuse_client=_DisabledLangfuse())
 
     events = [
         event
         async for event in adapter.chat_stream(
             messages=[{"role": "user", "content": "hello"}],
+            session_id="conversation-stream",
         )
     ]
 
@@ -252,6 +268,9 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     assert events[0].content == "streamed"
     assert events[1].response.content == "streamed"
     assert events[1].response.finish_reason == "stop"
+    assert [call["extra_headers"] for call in completions.kwargs] == [
+        {"x-opencode-session": "openviking-host-conversation-stream"}
+    ] * 2
 
 
 @pytest.mark.asyncio

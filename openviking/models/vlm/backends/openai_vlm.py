@@ -31,6 +31,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
+from ..request_headers import dynamic_extra_headers, static_extra_headers
 
 logger = get_logger(__name__)
 
@@ -69,8 +70,9 @@ def _build_openai_client_kwargs(
     kwargs["timeout"] = timeout
     # OpenViking owns provider retry/backoff via retry_sync/retry_async.
     kwargs["max_retries"] = 0
-    if extra_headers:
-        kwargs["default_headers"] = extra_headers
+    default_headers = static_extra_headers(extra_headers)
+    if default_headers:
+        kwargs["default_headers"] = default_headers
     return kwargs
 
 
@@ -290,6 +292,9 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        request_headers = dynamic_extra_headers(self.extra_headers)
+        if request_headers:
+            kwargs["extra_headers"] = request_headers
         return kwargs
 
     def _build_vision_kwargs(
@@ -321,6 +326,9 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        request_headers = dynamic_extra_headers(self.extra_headers)
+        if request_headers:
+            kwargs["extra_headers"] = request_headers
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
