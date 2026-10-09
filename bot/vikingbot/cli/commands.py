@@ -1117,21 +1117,12 @@ def channels_status():
 
 
 def _get_bridge_dir() -> Path:
-    """Get the bridge directory, setting it up if needed."""
+    """Get the current bridge build, rebuilding stale installed source."""
     import shutil
     import subprocess
 
     # User's bridge location
     user_bridge = get_bridge_path()
-
-    # Check if already built
-    if (user_bridge / "dist" / "index.js").exists():
-        return user_bridge
-
-    # Check for npm
-    if not shutil.which("npm"):
-        console.print("[red]npm not found. Please install Node.js >= 18.[/red]")
-        raise typer.Exit(1)
 
     # Find source bridge: first check package data, then source dir
     pkg_bridge = Path(__file__).parent.parent / "bridge"  # vikingbot/bridge (installed)
@@ -1146,6 +1137,26 @@ def _get_bridge_dir() -> Path:
     if not source:
         console.print("[red]Bridge source not found.[/red]")
         console.print("Try reinstalling: uv pip install --force-reinstall openviking[bot]")
+        raise typer.Exit(1)
+
+    source_files = [
+        path.relative_to(source)
+        for path in [
+            source / "package.json",
+            source / "tsconfig.json",
+            *(source / "src").rglob("*"),
+        ]
+        if path.is_file()
+    ]
+    if (user_bridge / "dist" / "index.js").exists() and all(
+        (user_bridge / path).is_file()
+        and (user_bridge / path).read_bytes() == (source / path).read_bytes()
+        for path in source_files
+    ):
+        return user_bridge
+
+    if not shutil.which("npm"):
+        console.print("[red]npm not found. Please install Node.js >= 18.[/red]")
         raise typer.Exit(1)
 
     console.print(f"{__logo__} Setting up bridge...")
@@ -1179,9 +1190,11 @@ def channels_login():
     """Link device via QR code."""
     import subprocess
 
-    from vikingbot.config.schema import ChannelType
+    from vikingbot.channels.whatsapp_auth import resolve_bridge_token
+    from vikingbot.config.schema import WhatsAppChannelConfig
 
     config = load_config()
+    _init_bot_data(config)
     bridge_dir = _get_bridge_dir()
 
     console.print(f"{__logo__} Starting bridge...")
@@ -1192,10 +1205,13 @@ def channels_login():
     # Find WhatsApp channel config
     channels_config = config.channels_config
     all_channels = channels_config.get_all_channels()
-    whatsapp_channel = next((c for c in all_channels if c.type == ChannelType.WHATSAPP), None)
+    whatsapp_channel = next(
+        (channel for channel in all_channels if isinstance(channel, WhatsAppChannelConfig)),
+        None,
+    )
 
-    if whatsapp_channel and whatsapp_channel.bridge_token:
-        env["BRIDGE_TOKEN"] = whatsapp_channel.bridge_token
+    configured_token = whatsapp_channel.bridge_token if whatsapp_channel else ""
+    env["BRIDGE_TOKEN"] = resolve_bridge_token(configured_token, get_data_dir())
 
     try:
         subprocess.run(["npm", "start"], cwd=bridge_dir, check=True, env=env)
