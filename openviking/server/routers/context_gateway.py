@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from openviking.server.account_user_keys import list_users_with_keys, pick_user_with_key
+from openviking.server.account_user_keys import list_account_users, pick_account_user
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
     get_request_context,
@@ -40,8 +40,8 @@ async def bind_selected_user(request: Request, ctx: RequestContext, body: bytes)
         raise HTTPException(
             400, "Root cannot choose a user; paste the user's OpenViking key instead"
         )
-    rows = await list_users_with_keys(get_api_key_manager_or_raise(request), ctx.account_id)
-    row = pick_user_with_key(
+    rows = await list_account_users(get_api_key_manager_or_raise(request), ctx.account_id)
+    row = pick_account_user(
         [row for row in rows if row["role"] in KEY_USER_ROLES],
         value.pop("user_id"),
         missing="Unknown OpenViking user in this account",

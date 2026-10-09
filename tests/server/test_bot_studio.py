@@ -1,7 +1,7 @@
 """The browser cannot elevate or cross accounts through Studio management."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -115,8 +115,9 @@ async def test_reused_admin_users_support_safe_credential_status(
         ]
 
 
+@pytest.mark.parametrize("auth_mode", ["api_key", "trusted"])
 @pytest.mark.parametrize("user_id,accepted", [("missing", False), ("root", False), ("bot", True)])
-async def test_selection_uses_current_account_registry(monkeypatch, user_id, accepted):
+async def test_selection_uses_current_account_registry(monkeypatch, user_id, accepted, auth_mode):
     from fastapi import HTTPException
 
     registry = SimpleNamespace(
@@ -127,11 +128,17 @@ async def test_selection_uses_current_account_registry(monkeypatch, user_id, acc
     monkeypatch.setattr(
         bot_studio, "get_server_url_from_server_data", lambda config: "http://localhost"
     )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None)))
+    config = SimpleNamespace(get_effective_auth_mode=lambda: auth_mode)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=config)))
     ctx = SimpleNamespace(account_id="a")
     if accepted:
         result = await bot_studio.selected_identity(request, ctx, user_id)
-        assert result["api_key"] == "internal-key"
+        if auth_mode == "trusted":
+            assert "api_key" not in result
+            assert result["api_key_type"] == "root"
+        else:
+            assert result["api_key"] == "internal-key"
+            assert result["api_key_type"] == "user"
         assert result["role"] == "user"
         assert result["account_id"] == "a"
     else:
@@ -150,8 +157,37 @@ async def test_hashed_key_is_not_treated_as_a_usable_credential(monkeypatch):
         AsyncMock(return_value=[{"user_id": "bot", "key_prefix": "prefix"}]),
     )
     with pytest.raises(HTTPException) as exc:
-        await bot_studio.selected_identity(None, SimpleNamespace(account_id="a"), "bot")
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=None)))
+        await bot_studio.selected_identity(request, SimpleNamespace(account_id="a"), "bot")
     assert exc.value.status_code == 409
+
+
+async def test_trusted_selection_uses_keyless_root_identity(monkeypatch):
+    registry = SimpleNamespace(
+        refresh_account_users_from_store=AsyncMock(),
+        get_users=Mock(return_value=[{"user_id": "bot", "key_prefix": "prefix"}]),
+    )
+    monkeypatch.setattr(bot_studio, "get_api_key_manager_or_raise", lambda request: registry)
+    monkeypatch.setattr(
+        bot_studio, "get_server_url_from_server_data", lambda config: "http://localhost"
+    )
+    config = SimpleNamespace(get_effective_auth_mode=lambda: "trusted")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=config)))
+    ctx = SimpleNamespace(account_id="a")
+
+    identity = await bot_studio.selected_identity(request, ctx, "bot")
+
+    registry.get_users.assert_called_once_with(
+        "a", limit=None, role_filter="user", expose_key=False
+    )
+    assert identity == {
+        "account_id": "a",
+        "user_id": "bot",
+        "role": "user",
+        "api_key_type": "root",
+        "agent_id": "vikingbot",
+        "server_url": "http://localhost",
+    }
 
 
 async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
