@@ -13,6 +13,7 @@ from fastapi import Request
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
+from openviking.utils.localhost import is_localhost as _is_localhost
 from openviking_cli.exceptions import PermissionDeniedError, UnauthenticatedError
 from openviking_cli.utils import get_logger
 
@@ -279,7 +280,3 @@ class ApiKeyAuthPlugin(AuthPlugin):
                 "Use a user/admin API key for data access, or trusted mode for upstream "
                 "identity assertion."
             )
-
-
-def _is_localhost(host: str) -> bool:
-    return host in {"127.0.0.1", "localhost", "::1"}

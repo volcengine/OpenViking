@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 from pydantic.json_schema import SkipJsonSchema
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from openviking.utils.localhost import is_localhost as is_localhost_host
 from openviking_cli.utils.config.vlm_config import VLMCredential
 
 
@@ -551,13 +552,6 @@ class HeartbeatConfig(BaseModel):
 
     enabled: bool = True
     interval_seconds: int = 10 * 60  # Default: 5 minutes
-
-
-LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def is_localhost_host(host: str) -> bool:
-    return host in LOCALHOST_HOSTS
 
 
 def requires_gateway_token(host: str, token: str) -> bool:

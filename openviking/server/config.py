@@ -12,6 +12,7 @@ from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
+from openviking.utils.localhost import is_localhost
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
@@ -505,12 +506,9 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     )
 
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
 def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
+    """Return whether a raw host value names a supported loopback address."""
+    return is_localhost(host)
 
 
 def load_bot_gateway_token(config_path: Optional[str] = None) -> str:

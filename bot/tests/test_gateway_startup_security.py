@@ -49,6 +49,24 @@ def test_gateway_allows_non_localhost_with_token(monkeypatch):
         commands.gateway(port=None, host=None, verbose=False, config_path=None)
 
 
+@pytest.mark.parametrize("host", ["LOCALHOST", "LoCaLhOsT"])
+def test_gateway_allows_localhost_case_insensitively_without_token(monkeypatch, host):
+    config = SimpleNamespace(
+        gateway=SimpleNamespace(host=host, port=18790, token=""),
+    )
+
+    monkeypatch.setattr(commands, "ensure_config", lambda _: config)
+    monkeypatch.setattr(commands, "validate_openviking_auth", lambda _config: None)
+
+    def _abort(*args, **kwargs):
+        raise _AbortCalled
+
+    monkeypatch.setattr(commands, "_abort_if_port_in_use", _abort)
+
+    with pytest.raises(_AbortCalled):
+        commands.gateway(port=None, host=None, verbose=False, config_path=None)
+
+
 def test_gateway_validates_openviking_auth_before_start(monkeypatch):
     config = SimpleNamespace(
         gateway=SimpleNamespace(host="127.0.0.1", port=18790, token=""),

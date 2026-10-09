@@ -16,10 +16,10 @@ from openviking.core.identifiers import validate_account_id, validate_user_id
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
+from openviking.utils.localhost import is_localhost as _is_localhost
 from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 from openviking_cli.utils import get_logger
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
 _TRUSTED_ASSERTABLE_ROLES = {
     Role.USER: Role.USER,
@@ -27,10 +27,6 @@ _TRUSTED_ASSERTABLE_ROLES = {
 }
 
 logger = get_logger(__name__)
-
-
-def _is_localhost(host: str) -> bool:
-    return host in _LOCALHOST_HOSTS
 
 
 def _configured_root_api_key(request: Request) -> Optional[str]:

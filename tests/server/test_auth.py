@@ -1611,12 +1611,12 @@ async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured(
 # ---- _is_localhost tests ----
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "LOCALHOST", "LoCaLhOsT", "::1"])
 def test_is_localhost_true(host: str):
     assert _is_localhost(host) is True
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.1", "10.0.0.1"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.1", "10.0.0.1", "example.com"])
 def test_is_localhost_false(host: str):
     assert _is_localhost(host) is False
 
@@ -1626,7 +1626,7 @@ def test_is_localhost_false(host: str):
 
 def test_validate_no_key_localhost_passes():
     """No root_api_key + localhost should pass validation."""
-    for host in ("127.0.0.1", "localhost", "::1"):
+    for host in ("127.0.0.1", "localhost", "LOCALHOST", "LoCaLhOsT", "::1"):
         config = ServerConfig(host=host, root_api_key=None)
         validate_server_config(config)  # should not raise
 
@@ -1647,7 +1647,7 @@ def test_validate_with_key_any_host_passes():
 
 def test_validate_trusted_mode_without_key_localhost_passes():
     """Trusted mode without root_api_key should still be allowed on localhost only."""
-    for host in ("127.0.0.1", "localhost", "::1"):
+    for host in ("127.0.0.1", "localhost", "LOCALHOST", "LoCaLhOsT", "::1"):
         config = ServerConfig(host=host, root_api_key=None, auth_mode="trusted")
         validate_server_config(config)
 

@@ -11,13 +11,7 @@ from fastapi import Request
 
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
-
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
+from openviking.utils.localhost import is_localhost as _is_localhost
 
 
 class DevAuthPlugin(AuthPlugin):
