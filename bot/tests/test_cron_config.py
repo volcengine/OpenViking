@@ -6,11 +6,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from vikingbot.agent.loop import AgentLoop
 from vikingbot.agent.tools.factory import register_default_tools, register_subagent_tools
 from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.bus.events import InboundMessage, OutboundMessage
+from vikingbot.bus.queue import MessageBus
 from vikingbot.cli import commands
-from vikingbot.config.schema import Config
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.cron.service import CronService
+from vikingbot.cron.types import CronSchedule
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -30,6 +34,70 @@ def test_cron_tool_registration(tmp_path, enabled):
     without_service = ToolRegistry(config=config)
     register_default_tools(without_service, config)
     assert not without_service.has("cron")
+
+
+def test_response_completed_payload_counts_model_tool_outcomes():
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="cron")
+    payload = AgentLoop._build_response_completed_payload(
+        msg=InboundMessage(sender_id="user", content="run", session_key=session_key),
+        response_id="response-id",
+        final_content="done",
+        final_reasoning_content=None,
+        token_usage={},
+        time_cost_seconds=0,
+        iteration=2,
+        tools_used=[
+            {"tool_name": "auto_memory_search", "execute_success": True, "auto": True},
+            {"tool_name": "calendar", "execute_success": False},
+            {"tool_name": "mail", "execute_success": False},
+        ],
+    )
+
+    assert payload["tool_success_count"] == 0
+    assert payload["tool_failure_count"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("success_count", "failure_count", "expected_status"),
+    [(0, 1, "error"), (0, 2, "error"), (0, 0, "ok"), (1, 2, "ok")],
+)
+async def test_cron_uses_tool_outcomes_for_run_status(
+    tmp_path, monkeypatch, success_count, failure_count, expected_status
+):
+    config = Config(storage_workspace=str(tmp_path), tools={"cron": {"enabled": True}})
+    monkeypatch.setattr(commands, "get_data_dir", lambda: tmp_path)
+    bus = MessageBus()
+    service = commands.prepare_cron(config, bus, quiet=True)
+    assert service is not None
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="cron")
+    result = OutboundMessage(
+        session_key=session_key,
+        content="scheduled response",
+        tool_success_count=success_count,
+        tool_failure_count=failure_count,
+    )
+    service._agent_holder["agent"] = SimpleNamespace(
+        process_direct_detailed=AsyncMock(return_value=result)
+    )
+    job = service.add_job(
+        "scheduled",
+        CronSchedule(kind="every", every_ms=60_000),
+        "collect data",
+        session_key,
+        deliver=True,
+    )
+
+    assert await service.run_job(job.id)
+    delivered = await bus.consume_outbound()
+    assert delivered.content == "scheduled response"
+    assert job.state.last_status == expected_status
+    if expected_status == "error":
+        noun = "call" if failure_count == 1 else "calls"
+        assert job.state.last_error == f"All {failure_count} attempted tool {noun} failed"
+    else:
+        assert job.state.last_error is None
 
 
 @pytest.mark.parametrize("enabled", [False, True])

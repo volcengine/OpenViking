@@ -759,11 +759,12 @@ Reminder message to deliver:
 \"\"\"{message}\"\"\"
 """
 
-        response = await agent_holder["agent"].process_direct(
+        result = await agent_holder["agent"].process_direct_detailed(
             cron_instruction,
             session_key=session_key,
             metadata=channel_metadata,
         )
+        response = result.content if result else ""
         if job.payload.deliver:
             from vikingbot.bus.events import OutboundMessage
 
@@ -774,6 +775,9 @@ Reminder message to deliver:
                     metadata=channel_metadata,
                 )
             )
+        if result and result.tool_failure_count > 0 and result.tool_success_count == 0:
+            noun = "call" if result.tool_failure_count == 1 else "calls"
+            raise RuntimeError(f"All {result.tool_failure_count} attempted tool {noun} failed")
         return response
 
     cron.on_job = on_cron_job

@@ -2508,6 +2508,8 @@ class AgentLoop:
                 time_cost=response_completed["time_cost_ms"] / 1000,
                 iteration=response_completed["iteration_count"],
                 tools_used_names=response_completed["tools_used_names"],
+                tool_success_count=response_completed["tool_success_count"],
+                tool_failure_count=response_completed["tool_failure_count"],
             )
         finally:
             if skill_runtime is not None:
@@ -2542,6 +2544,9 @@ class AgentLoop:
             for tool in (tools_used or [])
             if (tool_name := tool.get("tool_name")) is not None
         ]
+        attempted_tools = [tool for tool in (tools_used or []) if not tool.get("auto")]
+        tool_success_count = sum(tool.get("execute_success") is True for tool in attempted_tools)
+        tool_failure_count = sum(tool.get("execute_success") is False for tool in attempted_tools)
         return {
             "response_id": response_id,
             "session_id": msg.session_key.safe_name(),
@@ -2555,6 +2560,8 @@ class AgentLoop:
             "iteration_count": iteration,
             "tool_count": len(tools_used_names),
             "tools_used_names": tools_used_names,
+            "tool_success_count": tool_success_count,
+            "tool_failure_count": tool_failure_count,
             "response_length": len(final_content),
             "created_at": datetime.now().isoformat(),
             "has_reasoning": bool(final_reasoning_content),
@@ -2990,6 +2997,16 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
+        response = await self.process_direct_detailed(content, session_key, metadata)
+        return response.content if response else ""
+
+    async def process_direct_detailed(
+        self,
+        content: str,
+        session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
+        metadata: dict[str, object] | None = None,
+    ) -> OutboundMessage | None:
+        """Process a direct message and retain response execution metadata."""
         await self._connect_mcp()
         msg = InboundMessage(
             session_key=session_key,
@@ -2998,5 +3015,4 @@ Respond with ONLY valid JSON, no markdown fences."""
             metadata=metadata or {},
         )
 
-        response = await self._process_message(msg)
-        return response.content if response else ""
+        return await self._process_message(msg)
