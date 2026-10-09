@@ -139,7 +139,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                     "Resolve candidate path collisions following the Skill and instruction. "
                     "Combine compatible contributions, deduplicate equivalents, or rename independent "
                     "files. Preserve required detail and input independence. Submit complete files "
-                    "with supporting inputs, without patches or base_hash; runtime binds revisions. "
+                    "with supporting inputs, without patches or base_hash; outputs create new files. "
                     "Preserve binary candidates using their supplied content_ref; never generate Base64."
                 ),
             )
@@ -168,9 +168,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                 else:
                     reserved.update((draft.path, path) for draft in response.files)
                     break
-            resolved = await file_ops.save_replacements(
-                runtime, response, group, records, origin=path
-            )
+            resolved = await file_ops.save_files(runtime, response, group, records, {}, origin=path)
             await file_ops.accept_files(runtime, resolved)
             return resolved
         except (OSError, ValueError) as exc:
@@ -343,6 +341,4 @@ async def reduce_group(
             if saved.get("content_base64") is not None
         ]
         records = reduced
-    if stage == "map":
-        return await file_ops.save_replacements(runtime, response, group, records)
     return await file_ops.save_files(runtime, response, group, records, old)

@@ -205,19 +205,6 @@ async def save_files(runtime: Pipeline, response, group, records, old, *, origin
     return output
 
 
-async def save_replacements(runtime: Pipeline, response, group, records, *, origin=None):
-    """Bind complete generated files to current target revisions without mutating model results."""
-    response = response.model_copy(deep=True)
-    old = {}
-    for draft in response.files:
-        previous = await load_old(runtime, draft.path)
-        if previous is not None:
-            old[draft.path] = previous
-            draft.base_hash = content_hash(previous)
-    validate_files(runtime, response, group, records, old)
-    return await save_files(runtime, response, group, records, old, origin=origin)
-
-
 async def accept_files(runtime: Pipeline, references):
     """Accept artifacts and optional display metadata; Markdown schemas belong to the Skill."""
     for reference in references:
