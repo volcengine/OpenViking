@@ -531,14 +531,14 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### [Context Gateway Management](25-context-gateway.md)
+### [OpenViking Gateway Management](25-gateway.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/context-gateway/{path}` | Read gateway overview, logs, upstreams, context profiles, keys or tools for the caller's account |
-| POST | `/api/v1/admin/context-gateway/{path}` | Issue a gateway key, test an upstream or reset conversation saving |
-| PUT | `/api/v1/admin/context-gateway/{path}` | Create or replace an upstream or context profile |
-| DELETE | `/api/v1/admin/context-gateway/{path}` | Delete an upstream or context profile, revoke a key or delete a user's gateway data |
+| GET | `/api/v1/admin/gateway/{path}` | Read gateway overview, logs, upstreams, context profiles, keys or tools for the caller's account |
+| POST | `/api/v1/admin/gateway/{path}` | Issue a gateway key, test an upstream or reset conversation saving |
+| PUT | `/api/v1/admin/gateway/{path}` | Create or replace an upstream or context profile |
+| DELETE | `/api/v1/admin/gateway/{path}` | Delete an upstream or context profile, revoke a key or delete a user's gateway data |
 
 ### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 

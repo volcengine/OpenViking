@@ -155,7 +155,7 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
     const commitCall = calls.find((call) => call.path.endsWith("/commit"));
     const debugLog = await readFile(debugLogPath, "utf-8").catch(() => "");
     assert.ok(commitCall, `expected threshold commit call; calls=${JSON.stringify(calls)} debug=${debugLog}`);
-    assert.deepEqual(commitCall.body, { keep_recent_count: 7 });
+    assert.deepEqual(commitCall.body, { keep_recent_count: 0 });
     assert.match(debugLog, /"trace_id":"trace-codex-commit"/);
 
     const batchCall = calls.find((call) => call.path.endsWith("/messages/batch"));

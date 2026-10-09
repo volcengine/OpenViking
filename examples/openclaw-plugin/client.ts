@@ -379,7 +379,14 @@ export class OpenVikingClient {
         signal: controller.signal,
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
+      // Only a body that arrived whole but is not JSON falls back to `{}`. A
+      // body cut off by a timeout, reset or early close after the headers
+      // rejects, so a write is not reported as stored and a read is not
+      // reported as empty.
+      const payload = (await response.json().catch((error: unknown) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return {};
+      })) as {
         status?: string;
         result?: T;
         error?: { code?: string; message?: string; trace_id?: string };

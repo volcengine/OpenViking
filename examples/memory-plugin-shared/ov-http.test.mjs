@@ -6,8 +6,10 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { createServer } from "node:http";
 
 import { buildOvHeaders, createOvHttp } from "./lib/ov-http.mjs";
+import { isRetryableFailure } from "./lib/retryable.mjs";
 
 const CFG = {
   baseUrl: "http://127.0.0.1:1933",
@@ -176,6 +178,45 @@ test("a timed-out request says so in the envelope, not in its message", async ()
   assert.equal(res.status, 0);
   assert.equal(res.error.name, "AbortError");
   assert.equal(res.error.aborted, true);
+});
+
+test("response-body transport failures remain retryable", async (t) => {
+  let resetBody = false;
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.flushHeaders();
+    response.write('{"status":"ok","result":');
+    if (resetBody) setTimeout(() => response.destroy(), 30);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    for (resetBody of [false, true]) {
+      for (const requireJsonBody of [false, true]) {
+        await t.test(`${resetBody ? "reset" : "timeout"}, strict=${requireJsonBody}`, async () => {
+          const result = await createOvHttp({ baseUrl }, {
+            defaultTimeoutMs: 1000,
+            requireJsonBody,
+          })("/api/v1/sessions/body-read/commit");
+
+          assert.equal(result.ok, false);
+          assert.equal(result.status, 0);
+          assert.equal(result.result, null);
+          assert.equal(isRetryableFailure(result), true);
+          if (!resetBody) {
+            assert.equal(result.error.name, "AbortError");
+            assert.equal(result.error.aborted, true);
+          } else {
+            assert.ok(result.error.message);
+            assert.notEqual(result.error.aborted, true);
+          }
+        });
+      }
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("a trusted server is told who the operator is; an untrusted one only gets the key", async () => {

@@ -38,7 +38,7 @@ This outline shows common top-level groups, not a runnable configuration. For a 
 }
 ```
 
-Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility, except in the `context_gateway` section. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
+Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility, except in the `gateway` section. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
 
 ## Top-Level Settings
 
@@ -67,7 +67,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `log` | object | console | Log level, format, and file output |
 | `telemetry` | object | disabled | OpenTelemetry tracing |
 | `oauth` | object | disabled | MCP OAuth 2.1 |
-| `context_gateway` | object | disabled | Context Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../guides/22-context-gateway-operations.md#configuration-reference) |
+| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../guides/22-gateway-operations.md#configuration-reference) |
 | `prompts` | object | built-in templates | Custom prompt template directory |
 | `ingest` | object | built-in defaults | Conversation-log ingestion |
 | `output_language_override` | string | `""` | Force summary/memory language; empty means auto-detect |

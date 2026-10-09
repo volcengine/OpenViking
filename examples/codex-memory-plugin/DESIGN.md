@@ -226,10 +226,10 @@ available until that catch-up succeeds.
 After a complete append, Stop reads session meta and commits when
 `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
 The threshold commit passes
-`keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so
-the newest turns stay live after archive/extract. This keeps long-running
-sessions from waiting until PreCompact/SessionStart while still avoiding
-commit-on-every-turn fragmentation.
+`keep_recent_count=0`: Codex keeps its own transcript, so a live tail in
+OpenViking would only delay extraction. Committing at the threshold
+keeps long-running sessions from waiting until PreCompact/SessionStart
+while still avoiding commit-on-every-turn fragmentation.
 
 ## Injected context boundary
 

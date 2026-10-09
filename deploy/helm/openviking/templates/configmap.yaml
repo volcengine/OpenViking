@@ -1,7 +1,7 @@
 {{- $config := deepCopy .Values.config }}
-{{- if .Values.contextGateway.enabled }}
-{{- $gateway := dict "enabled" true "host" "0.0.0.0" "port" .Values.contextGateway.port "workers" .Values.contextGateway.workers "url" (printf "http://127.0.0.1:%v" .Values.contextGateway.port) "openviking_url" (printf "http://127.0.0.1:%v" (.Values.config.server.port | default 1933)) "storage_path" (printf "%s/context-gateway" .Values.persistence.mountPath) }}
-{{- $_ := set $config "context_gateway" (mergeOverwrite $gateway ($config.context_gateway | default dict)) }}
+{{- if .Values.gateway.enabled }}
+{{- $gateway := dict "enabled" true "host" "0.0.0.0" "port" .Values.gateway.port "workers" .Values.gateway.workers "url" (printf "http://127.0.0.1:%v" .Values.gateway.port) "openviking_url" (printf "http://127.0.0.1:%v" (.Values.config.server.port | default 1933)) "storage_path" (printf "%s/gateway" .Values.persistence.mountPath) }}
+{{- $_ := set $config "gateway" (mergeOverwrite $gateway ($config.gateway | default dict)) }}
 {{- end }}
 {{- if empty $config.storage.workspace }}
 {{- $_ := set $config.storage "workspace" (printf "%s/openviking_workspace" (trimSuffix "/" .Values.persistence.mountPath)) }}

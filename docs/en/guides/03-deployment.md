@@ -303,7 +303,7 @@ docker compose up -d
 After startup, you can access:
 - API service: `http://localhost:1933`
 - Web Studio: `http://localhost:1933/studio` (same origin as the API)
-- Caddy entry point: `http://localhost:1934`. It proxies to 1933 and is kept for existing deployments. When you also run Context Gateway, it sends the model API paths to the gateway; see [Context Gateway deployment and operations](22-context-gateway-operations.md#docker-compose).
+- Caddy entry point: `http://localhost:1934`. It proxies to 1933 and is kept for existing deployments. When you also run OpenViking Gateway, it sends the model API paths to the gateway; see [OpenViking Gateway deployment and operations](22-gateway-operations.md#docker-compose).
 
 ### Deploy on Railway
 

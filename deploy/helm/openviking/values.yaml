@@ -5,7 +5,7 @@ replicaCount: 1
 # Same pod, separate process and port. Multiple workers share local SQLite WAL.
 # Create a Secret with encryption-key (Fernet) and admin-token (32+ characters).
 # Requires authenticated OpenViking; dev mode only permits a loopback gateway.
-contextGateway:
+gateway:
   enabled: false
   workers: 2
   port: 1935

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "openviking-memory",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "clients": [
     "trae",
     "trae-cn"

@@ -65,7 +65,7 @@ RUN cmake \
 # of the native engine is also retained for injection into mounted worktrees.
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
-COPY context_gateway/ context_gateway/
+COPY openviking_gateway/ openviking_gateway/
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install \
       "json-repair>=0.25" \

@@ -1,6 +1,6 @@
 {
   "name": "openviking-pi-extension",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "description": "OpenViking memory and context extension for the pi coding agent",
   "private": true,
   "type": "module",

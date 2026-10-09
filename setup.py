@@ -578,7 +578,7 @@ setup(
     ),
     cmdclass=cmdclass,
     package_data={
-        "context_gateway": ["client-rules.json"],
+        "openviking_gateway": ["client-rules.json"],
         "openviking": [
             "lib/ragfs_python*.so",
             "lib/ragfs_python*.pyd",

@@ -16,16 +16,16 @@ version: "3.8"
 # See docs/en/guides/12-public-access.md for the full walkthrough.
 
 services:
-  context-gateway:
-    profiles: [context-gateway]
+  gateway:
+    profiles: [gateway]
     image: ghcr.io/volcengine/openviking:latest
-    entrypoint: [openviking-context-gateway]
+    entrypoint: [openviking-gateway]
     command: [--config, /app/.openviking/ov.conf]
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
-      OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY: ${OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY:-}
-      OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN:-}
+      OPENVIKING_GATEWAY_ENCRYPTION_KEY: ${OPENVIKING_GATEWAY_ENCRYPTION_KEY:-}
+      OPENVIKING_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_GATEWAY_ADMIN_TOKEN:-}
     expose:
       - "1935"
     restart: unless-stopped
@@ -44,7 +44,7 @@ services:
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
-      OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN:-}
+      OPENVIKING_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_GATEWAY_ADMIN_TOKEN:-}
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
       OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
     healthcheck:

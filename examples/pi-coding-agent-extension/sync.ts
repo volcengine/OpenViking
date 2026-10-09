@@ -313,7 +313,7 @@ export class SyncManager {
       });
       if (opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
-          keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
+          keep_recent_count: opts.keepRecentCount ?? 0,
         });
       }
       return null;
