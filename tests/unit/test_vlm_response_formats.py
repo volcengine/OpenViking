@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM response format handling (Issue #801)."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -187,3 +188,32 @@ async def test_openai_async_completion_with_empty_tools_preserves_usage(monkeypa
         "total_tokens": 15,
         "prompt_tokens_details": None,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vlm_cls", [OpenAIVLM, VolcEngineVLM, LiteLLMVLMProvider])
+@pytest.mark.parametrize("vision", [False, True])
+async def test_async_completion_timeout_bounds_whole_call(monkeypatch, vlm_cls, vision):
+    # SDK/httpx timeouts bound each socket read; a response that keeps trickling
+    # bytes never trips them. ``timeout`` must bound the whole call.
+    async def never_finishes(**_kwargs):
+        await asyncio.Event().wait()
+
+    vlm = vlm_cls(
+        {"provider": "openai", "model": "m", "api_key": "k", "timeout": 0.05, "max_retries": 0}
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=never_finishes))
+    )
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client, raising=False)
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", never_finishes)
+
+    call = (
+        vlm.get_vision_completion_async(prompt="hi", images=[])
+        if vision
+        else vlm.get_completion_async(prompt="hi")
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(call, timeout=5)
+    assert asyncio.get_running_loop().time() - started < 2

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI VLM backend implementation"""
 
+import asyncio
 import base64
 import json
 import re
@@ -380,7 +381,9 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
+            response = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs), timeout=self.timeout
+            )
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -501,7 +504,9 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
+            response = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs), timeout=self.timeout
+            )
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)

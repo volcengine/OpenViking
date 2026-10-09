@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """LiteLLM VLM Provider implementation with multi-provider support."""
 
+import asyncio
 import base64
 import json
 import os
@@ -503,7 +504,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await acompletion(**kwargs)
+            response = await asyncio.wait_for(acompletion(**kwargs), timeout=self.timeout)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
@@ -560,7 +561,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await acompletion(**kwargs)
+            response = await asyncio.wait_for(acompletion(**kwargs), timeout=self.timeout)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             if tools:

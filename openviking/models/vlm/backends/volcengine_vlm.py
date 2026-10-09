@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VolcEngine VLM backend implementation."""
 
+import asyncio
 import base64
 import json
 import time
@@ -273,7 +274,9 @@ class VolcEngineVLM(OpenAIVLM):
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             try:
-                response = await client.chat.completions.create(**kwargs)
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(**kwargs), timeout=self.timeout
+                )
             except Exception as error:
                 self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
                 raise
@@ -497,7 +500,9 @@ class VolcEngineVLM(OpenAIVLM):
         client = self.get_async_client()
         t0 = time.perf_counter()
         try:
-            response = await client.chat.completions.create(**kwargs)
+            response = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs), timeout=self.timeout
+            )
         except Exception as error:
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
