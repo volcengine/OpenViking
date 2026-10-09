@@ -24,6 +24,7 @@ from typing import Any, Optional
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.server.identity import RequestContext
+from openviking.storage.acl import AclUpdate
 from openviking.storage.context_update_plan import ContextUpdatePlan, execute_content_tree_actions
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.utils.ingest_options import IngestOptions
@@ -48,7 +49,12 @@ class PlanWork:
     semantic_action: Optional[str] = None
 
 
-async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> bool:
+async def enqueue_direct_index_actions(
+    actions: Any,
+    *,
+    ctx: RequestContext,
+    acl_update: AclUpdate | None = None,
+) -> bool:
     """Enqueue plan-level direct index actions (delete / upsert / field update).
 
     This is the inline-file counterpart of ``ResourceProcessor``'s richer
@@ -96,6 +102,7 @@ async def enqueue_direct_index_actions(actions: Any, *, ctx: RequestContext) -> 
             vector_enqueued = await vectorize_resource_file(
                 action.uri,
                 ctx=ctx,
+                acl_update=acl_update,
                 file_md5=action.md5,
                 scalar_override={
                     **dict(action.upsert_fields),
@@ -164,6 +171,7 @@ async def vectorize_resource_file(
     file_uri: str,
     *,
     ctx: RequestContext,
+    acl_update: AclUpdate | None = None,
     file_md5: str | None = None,
     scalar_override: Optional[dict[str, Any]] = None,
     field_patch: FieldPatch | None = None,
@@ -193,10 +201,11 @@ async def vectorize_resource_file(
         parent_uri=parent.uri,
         context_type=context_type_for_uri(file_uri),
         ctx=ctx,
-        # Direct actions carry resolved scalar fields in ``scalar_override``.
-        # Reapplying request options here could apply tag modes twice; ACL is
-        # committed separately by the caller after the plan execution.
-        ingest_options=IngestOptions(),
+        # Direct actions carry planner-resolved tag fields in
+        # ``scalar_override`` / ``field_patch``. Forward only ACL intent here so
+        # the first asynchronous upsert can materialize it without applying tag
+        # modes a second time.
+        ingest_options=IngestOptions(acl_update=acl_update),
         file_md5=file_md5,
         scalar_override=scalar_override,
         field_patch=field_patch,
@@ -242,7 +251,12 @@ async def commit_and_enqueue_plan(
 
     vector_requested = False
     if plan.direct_index_actions:
-        vector_requested = await enqueue_direct_index_actions(plan.direct_index_actions, ctx=ctx)
+        options = IngestOptions.from_value(ingest_options)
+        vector_requested = await enqueue_direct_index_actions(
+            plan.direct_index_actions,
+            ctx=ctx,
+            acl_update=options.acl_update,
+        )
 
     semantic_requested = False
     semantic_action: Optional[str] = None

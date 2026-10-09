@@ -14,6 +14,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.context_update_plan import ContextUpdatePlan
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
@@ -205,7 +206,7 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
 
     async def _plan(**kwargs):
         del kwargs
-        return None, SimpleNamespace()
+        return None, ContextUpdatePlan("viking://resources/demo.md", "resource")
 
     async def _commit(*args, **kwargs):
         del args, kwargs
@@ -240,6 +241,46 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
 
 
 @pytest.mark.asyncio
+async def test_direct_write_commits_final_bytes_when_rnfv_content_is_unchanged(monkeypatch, ctx):
+    """An explicit write owns F even when N already matches the indexed V md5."""
+    uri = "viking://resources/demo.md"
+    fake_fs = _FakeVikingFS()
+    fake_fs.stat = AsyncMock(return_value={"isDir": False})
+    fake_fs.write_file_bytes = AsyncMock()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    async def _snapshot(**kwargs):
+        del kwargs
+        return SimpleNamespace()
+
+    async def _plan(**kwargs):
+        del kwargs
+        # This is the plan RNFV produces when N.md5 == V.md5. The explicit
+        # write must still commit its bytes to F because V may lag F.
+        return None, ContextUpdatePlan(uri, "resource")
+
+    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
+    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
+
+    await coordinator._write_direct_with_refresh(
+        uri=uri,
+        root_uri="viking://resources",
+        content="indexed content",
+        mode="replace",
+        response_mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        telemetry_id="",
+        ingest_options=IngestOptions(),
+    )
+
+    fake_fs.write_file_bytes.assert_awaited_once()
+    assert fake_fs.write_file_bytes.await_args.args == (uri, b"indexed content")
+
+
+@pytest.mark.asyncio
 async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
     fake_fs = _FakeVikingFS()
     fake_fs.stat = AsyncMock(side_effect=NotFoundError("viking://resources/new.md", "file"))
@@ -252,7 +293,7 @@ async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
 
     async def _plan(**kwargs):
         del kwargs
-        return None, SimpleNamespace()
+        return None, ContextUpdatePlan("viking://resources/new.md", "resource")
 
     async def _commit(*args, **kwargs):
         del args, kwargs

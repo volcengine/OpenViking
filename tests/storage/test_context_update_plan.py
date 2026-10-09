@@ -2877,6 +2877,77 @@ async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
 
 
 @pytest.mark.asyncio
+async def test_vectorize_resource_file_carries_acl_without_reapplying_tags(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.acl import AclSpec, AclUpdate
+    from openviking_cli.session.user_id import UserIdentifier
+
+    captured = {}
+
+    async def _fake_vectorize_file(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file)
+    ctx = RequestContext(UserIdentifier("acc", "owner"), Role.USER)
+    acl_update = AclUpdate(
+        uri="viking://resources/private.md",
+        acl=AclSpec(
+            acl_mode="restricted",
+            entries=[{"principal": "user:reader", "level": "read"}],
+        ),
+    )
+
+    await context_update_execution.vectorize_resource_file(
+        "viking://resources/private.md",
+        ctx=ctx,
+        acl_update=acl_update,
+        scalar_override={"_record_id": "private-l2", "search_tags": ["team=search"]},
+        action="upsert",
+    )
+
+    options = captured["ingest_options"]
+    assert options.acl_update == acl_update
+    assert options.search_tags is None
+
+
+@pytest.mark.asyncio
+async def test_commit_and_enqueue_plan_forwards_acl_to_direct_actions(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.acl import AclSpec, AclUpdate
+    from openviking.storage.context_update_plan import ContextUpdatePlan, DirectIndexAction
+    from openviking.utils.ingest_options import IngestOptions
+    from openviking_cli.session.user_id import UserIdentifier
+
+    uri = "viking://resources/private.md"
+    acl_update = AclUpdate(
+        uri=uri,
+        acl=AclSpec(acl_mode="restricted", entries=[]),
+    )
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr(context_update_execution, "enqueue_direct_index_actions", enqueue)
+
+    await context_update_execution.commit_and_enqueue_plan(
+        ContextUpdatePlan(
+            uri,
+            "resource",
+            direct_index_actions=(DirectIndexAction("upsert", uri, 2, "private-l2", md5="new"),),
+        ),
+        ctx=RequestContext(UserIdentifier("acc", "owner"), Role.USER),
+        ingest_options=IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+            acl_update=acl_update,
+        ),
+    )
+
+    enqueue.assert_awaited_once()
+    assert enqueue.await_args.kwargs["acl_update"] == acl_update
+
+
+@pytest.mark.asyncio
 async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(monkeypatch):
     from openviking.server.identity import RequestContext, Role
     from openviking.storage import context_update_execution
