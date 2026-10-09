@@ -150,11 +150,14 @@ Envelope is **byte-compatible with Claude Code**:
 | Is the injected context persisted in the transcript? | **No.** `additionalContext` is delivered to the model for that request but is **not** written as a transcript record — the probe marker only appeared in the transcript because the *model echoed it* while reasoning. **Verify injection by asking the model to quote the block, not by grepping the transcript** (grepping yields 0 even when delivery works). |
 | Empty output (`{}`) safe? | **yes** — every probe hook returned `{}` and no session was blocked or delayed. |
 | `permissionDecision: "allow"` honoured? | **yes** — the probe allowed a `Bash` call that carried `viking://`; it ran. |
-| Is `permissionDecisionReason` visible to the model? | **NO** — the probe returned `permissionDecisionReason: "__CB_PROBE_NOTICE__ …"` on that same `PreToolUse`; the marker count in the transcript is **0**. No in-band model notice channel exists on `PreToolUse`. |
+| Is `permissionDecisionReason` visible to the model? | **On `allow`: no. On `deny`: yes.** The P0 probe's `allow` + `permissionDecisionReason: "__CB_PROBE_NOTICE__ …"` left the marker count at **0** — an `allow` carries no text through to the model. A `deny` behaves differently, verified at P5 with this plugin's own uri-guard in a real session: the reason surfaces as the **tool result** the model reads — `Error: viking:// URIs are OpenViking virtual paths… Use OpenViking MCP read instead. Example: read(uris="…")`, `is_error: true` — and the model then reasoned "The Read tool failed. I should use the OpenViking MCP read tool" and switched tools. |
 
-> **Design consequence**: a "this is a virtual URI" *notice* cannot be delivered to the model.
-> Either `deny` the call (with a reason the user sees) or drop the notice; `systemMessage` is
-> user-visible only.
+> **Design consequence**: there is no *advisory* channel on `PreToolUse` — you cannot say "careful,
+> that's a virtual URI" and let the call proceed. But a `deny` is not a dead end: its reason does
+> reach the model through the failed tool result, so a denial can steer it to the right tool. That
+> is why this plugin's `uri-guard` **denies** (file tools whose path is a `viking://` URI) rather
+> than emitting a notice, and why `Bash` is left out of its matcher — a `Bash` guard could only
+> ever have produced an inert notice. `systemMessage` remains user-visible only.
 
 ## 6. Exit codes
 

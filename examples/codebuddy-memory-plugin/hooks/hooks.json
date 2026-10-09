@@ -22,6 +22,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -51,6 +63,28 @@
             "type": "command",
             "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/session-end.mjs",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/subagent-start.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/subagent-stop.mjs",
+            "timeout": 45
           }
         ]
       }
