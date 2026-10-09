@@ -478,11 +478,6 @@ class OpenVikingService:
         await self._init_runtime_config_manager()
         if self._vlm_resolver is None:
             raise RuntimeError("VLM resolver not initialized")
-        from openviking.config.model_settings import select_rerank
-
-        async def resolve_rerank(account_id):
-            return await self._runtime_config_manager.resolve_account(account_id, select_rerank)
-
         self._viking_fs = init_viking_fs(
             agfs=self._agfs_client,
             query_embedder=None,
@@ -497,7 +492,6 @@ class OpenVikingService:
             vlm_resolver=self._vlm_resolver,
             embedding_provider=self._embedding_provider,
             vector_config_resolver=self._vector_config_resolver,
-            rerank_resolver=resolve_rerank,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")

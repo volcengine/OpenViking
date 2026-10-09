@@ -208,7 +208,6 @@ def init_viking_fs(
     vlm_resolver: Optional["VLMResolver"] = None,
     embedding_provider: Optional[Any] = None,
     vector_config_resolver: Optional[Any] = None,
-    rerank_resolver: Optional[Any] = None,
 ):
     """Initialize VikingFS singleton.
 
@@ -240,7 +239,6 @@ def init_viking_fs(
         vlm_resolver=vlm_resolver,
         embedding_provider=embedding_provider,
         vector_config_resolver=vector_config_resolver,
-        rerank_resolver=rerank_resolver,
     )
 
     if enable_recorder:

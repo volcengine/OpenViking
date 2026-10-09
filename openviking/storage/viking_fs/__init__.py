@@ -140,7 +140,6 @@ class VikingFS(
         vlm_resolver: Optional["VLMResolver"] = None,
         embedding_provider: Optional[Any] = None,
         vector_config_resolver: Optional[Any] = None,
-        rerank_resolver: Optional[Any] = None,
     ):
         self.agfs = agfs
         self._async_agfs = AsyncAGFSClient(agfs)
@@ -155,7 +154,6 @@ class VikingFS(
         self._vlm_resolver = vlm_resolver
         self._embedding_provider = embedding_provider
         self._vector_config_resolver = vector_config_resolver
-        self._rerank_resolver = rerank_resolver
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
         self._fulltext_available: Dict[tuple[str, str, str, str], tuple[bool, Optional[float]]] = {}
@@ -168,12 +166,6 @@ class VikingFS(
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Set the VLM resolver supplied by the owning service."""
         self._vlm_resolver = resolver
-
-    async def get_rerank_config(self, ctx: RequestContext):
-        resolver = getattr(self, "_rerank_resolver", None)
-        if resolver is not None:
-            return await resolver(ctx.account_id)
-        return self.rerank_config
 
 
 VikingFS.__module__ = __name__

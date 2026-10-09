@@ -279,7 +279,7 @@ class _SemanticMixin:
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,
-            rerank_config=await self.get_rerank_config(real_ctx),
+            rerank_config=self.rerank_config,
         )
 
         typed_query = TypedQuery(
@@ -512,7 +512,7 @@ class _SemanticMixin:
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,
-            rerank_config=await self.get_rerank_config(real_ctx),
+            rerank_config=self.rerank_config,
         )
 
         async def _execute(tq: TypedQuery):

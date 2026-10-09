@@ -142,7 +142,7 @@ class ConfigPatchRequest(BaseModel):
     revision: str | None = None
 
 
-_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb", "rerank"})
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
 
 
 def _authorize_account_config_patch(
@@ -649,69 +649,21 @@ async def patch_account_settings(
 @require_auth_root_or_admin
 async def get_account_configuration(
     request: Request,
-    response: HTTPResponse,
     account_id: str = Path(..., description="Account ID"),
-    include_effective_vlm: bool = Query(False),
-    include_effective_embedding: bool = Query(False),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return this account layer's explicit runtime configuration."""
     _check_account_access(ctx, account_id)
-    if (include_effective_vlm or include_effective_embedding) and ctx.role != Role.ROOT:
-        raise PermissionDeniedError("Only ROOT can read effective model configuration")
     await _check_account_exists(request, account_id)
-    runtime_config = _get_runtime_config_manager()
-    settings = await runtime_config.get_settings(
+    settings = await _get_runtime_config_manager().get_settings(
         ConfigScope.account(account_id)
     )
-    result = {
-        "account_id": account_id,
-        "settings": _visible_account_config(ctx, settings),
-    }
-    if include_effective_vlm:
-        def select_vlm(view):
-            vlm = (
-                view.account.vlm.to_vlm_config(view.cluster.vlm)
-                if view.account.vlm is not None
-                else view.cluster.vlm
-            )
-            return {
-                "model": vlm.model,
-                "credentials": [
-                    credential.model_dump(exclude_none=True)
-                    for credential in vlm.credentials
-                ],
-                "timeout": vlm.timeout,
-            }
-
-        result["effective_vlm"] = await runtime_config.resolve_account(account_id, select_vlm)
-        response.headers["Cache-Control"] = "no-store"
-    if include_effective_embedding:
-        from openviking.config.vector import resolve_effective_embedding
-
-        def select_embedding(view):
-            embedding = resolve_effective_embedding(view.cluster.embedding, view.account.embedding)
-            models = []
-            for mode in ("dense", "sparse", "hybrid"):
-                section = getattr(embedding, mode)
-                if section is None:
-                    continue
-                bindings = section.credentials or [section]
-                for binding in bindings:
-                    models.append({
-                        "mode": mode,
-                        "model": binding.model or section.model,
-                        "provider": binding.provider or section.provider,
-                        "api_base": binding.api_base or section.api_base,
-                        "dimension": section.get_effective_dimension(),
-                    })
-            return {"source": "account" if view.account.embedding is not None else "server", "models": models}
-
-        result["effective_embedding"] = await runtime_config.resolve_account(account_id, select_embedding)
-        response.headers["Cache-Control"] = "no-store"
     return Response(
         status="ok",
-        result=result,
+        result={
+            "account_id": account_id,
+            "settings": _visible_account_config(ctx, settings),
+        },
     )
 
 
