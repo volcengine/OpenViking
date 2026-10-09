@@ -220,7 +220,7 @@ Supply at least one of `data` or `temp_file_id`. The current server gives upload
   2. **Dict (MCP Tool format)**: Includes `name`, `description`, `inputSchema`, auto-detected and converted
   3. **String (SKILL.md content)**: Complete SKILL.md content
   4. **Path (automatically uploaded by SDK/CLI)**: SKILL.md file, Skill directory/collection, or ZIP; a single Markdown file does not include sibling resources
-  5. **Git URL**: Repository or Skill subdirectory. Collection `skills` selectors use directory names, not frontmatter names. A discovered `SKILL.md` owns its subtree; nested `SKILL.md` files remain attachments rather than separate discovered Skills
+  5. **Git URL**: Repository or Skill subdirectory. Collection `skills` selectors use directory names, not frontmatter names. A discovered `SKILL.md` owns its subtree; nested `SKILL.md` files remain attachments rather than separate discovered Skills. During recursive collection discovery, nested `.archive`, `.trash`, `_archive`, `_staging`, and `_staging-*` directories without their own `SKILL.md` are treated as inactive containers and skipped. An explicitly targeted source root or a directory with its own `SKILL.md` remains a normal Skill source
 
 Local `.json` files are not automatically decoded into structured Skills. Parse JSON and send the object in `data`, or use a frontmatter-based `SKILL.md` instead.
 

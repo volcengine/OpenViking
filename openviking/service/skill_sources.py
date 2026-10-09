@@ -18,6 +18,16 @@ from openviking.utils.skill_processor import SkillProcessor, validate_skill_name
 from openviking_cli.exceptions import InvalidArgumentError
 
 GIT_SKILL_SOURCE_PREFIXES = ("https://", "http://", "git@", "ssh://", "git://")
+_INACTIVE_SKILL_COLLECTION_DIRS = frozenset({".archive", ".trash", "_archive", "_staging"})
+
+
+def _is_inactive_skill_collection_dir(path: Path) -> bool:
+    """Return whether a non-Skill directory is reserved for inactive collection content."""
+    if path.name == ".git":
+        return True
+    if path.name not in _INACTIVE_SKILL_COLLECTION_DIRS and not path.name.startswith("_staging-"):
+        return False
+    return not (path / "SKILL.md").is_file()
 
 
 def parse_git_skill_source(source: str) -> dict:
@@ -49,7 +59,10 @@ def _skill_paths(root: Path, names: list[str], repo_root: Path | None) -> list[P
     paths = []
     # A SKILL.md owns its whole subtree, including nested SKILL.md attachments.
     for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(name for name in dirs if name != ".git")
+        directory_path = Path(directory)
+        dirs[:] = sorted(
+            name for name in dirs if not _is_inactive_skill_collection_dir(directory_path / name)
+        )
         if "SKILL.md" in files:
             paths.append(Path(directory))
             dirs.clear()
