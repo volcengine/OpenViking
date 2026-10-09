@@ -799,7 +799,14 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
         "description": "Perform mathematical calculations",
         "inputSchema": {
             "type": "object",
-            "properties": {"expression": {"type": "string", "description": "Expression"}},
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Expression",
+                    "minLength": 1,
+                    "maxLength": 100,
+                }
+            },
             "required": ["expression"],
         },
     }
@@ -808,6 +815,7 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
     root = added.json()["result"]["root_uri"]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     expected_body = mcp_to_skill(tool)["content"].strip()
+    assert "Constraints: minLength: 1; maxLength: 100." in expected_body
 
     async def assert_indexed_body():
         for level in (0, 1):
