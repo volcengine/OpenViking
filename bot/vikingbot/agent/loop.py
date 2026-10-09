@@ -2096,6 +2096,14 @@ class AgentLoop:
                         content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata,
                     )
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        session_key=msg.session_key,
+                        content="Compacting session memory...",
+                        event_type=OutboundEventType.PROGRESS,
+                        metadata=msg.metadata,
+                    )
+                )
                 if self._ov_session_context_enabled():
                     committed = await self._commit_openviking_session(
                         session,

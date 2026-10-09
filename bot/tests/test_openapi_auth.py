@@ -1785,6 +1785,26 @@ class TestOpenAPIAuth:
         assert pending.events[0]["type"] == "iteration"
         assert pending.events[0]["data"] == "Iteration 2/10"
 
+    @pytest.mark.parametrize("channel_type", ["bot_api", "cli"])
+    async def test_send_forwards_progress(self, message_bus, temp_workspace, channel_type):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, workspace_path=temp_workspace)
+        pending = PendingResponse()
+        if channel_type == "bot_api":
+            channel._bot_pending["default"] = {"session-1": pending}
+        else:
+            channel._pending["session-1"] = pending
+        await channel.send(
+            OutboundMessage(
+                session_key=SessionKey(
+                    type=channel_type, channel_id="default", chat_id="session-1"
+                ),
+                content="Compacting session memory...",
+                event_type=OutboundEventType.PROGRESS,
+            )
+        )
+        assert pending.events[0]["type"] == "progress"
+        assert pending.events[0]["data"] == "Compacting session memory..."
+
     def test_feedback_requires_existing_response(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
             OpenAPIChannelConfig(),

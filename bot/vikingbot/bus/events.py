@@ -15,6 +15,7 @@ class OutboundEventType(str, Enum):
     TOOL_CALL = "tool_call"  # Tool being called
     TOOL_RESULT = "tool_result"  # Result from tool execution
     REASONING = "reasoning"  # Reasoning content
+    PROGRESS = "progress"  # User-visible progress for a blocking operation
     CONTENT_DELTA = "content_delta"  # Streaming response text delta
     REASONING_DELTA = "reasoning_delta"  # Streaming reasoning text delta
     ITERATION = "iteration"  # Iteration marker
