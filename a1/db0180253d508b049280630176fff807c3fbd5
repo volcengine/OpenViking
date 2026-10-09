@@ -1,0 +1,32 @@
+bot/vikingbot/compile/file_ops.py
+  h_b34c679d17e2ac 9,29-84,89-91,95,101,104,107-109,127,137-140,171-172,186,245,258-259,275,286,297-298,301
+bot/vikingbot/compile/ops/common.py
+  h_b34c679d17e2ac 17,74-77,89-91,169-170,196-204,206,210-219,222-223,227-237,315-317,322,324-329
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 55-57,203-207,212,217
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 79,121,124,142-143,154,248,281-286,297-303,316,340-344
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 107
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 15,18,80-82,123-137,169-173,178-181,186-191,196,200-205
+bot/vikingbot/compile/results.py
+  h_b34c679d17e2ac 9,73-74,84,197-198,209-210,214
+bot/vikingbot/compile/review.py
+  h_b34c679d17e2ac 9,103-107,144-146
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 45,1352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a1db0180253d508b049280630176fff807c3fbd5",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
