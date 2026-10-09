@@ -9,6 +9,7 @@ via api_key + api_base configuration.
 
 import time
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -143,6 +144,14 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
+            proxies = None
+            try:
+                parsed = urlparse(self.api_base)
+                if parsed.hostname in ("127.0.0.1", "localhost", "::1"):
+                    proxies = {"http": None, "https": None}
+            except Exception:
+                proxies = None
+
             response = None
             for attempt in range(self.max_retries + 1):
                 try:
@@ -151,6 +160,7 @@ class OpenAIRerankClient(RerankBase):
                         headers=headers,
                         json=req_body,
                         timeout=self.timeout,
+                        proxies=proxies,
                     )
                     break
                 except requests.exceptions.ConnectionError as e:
