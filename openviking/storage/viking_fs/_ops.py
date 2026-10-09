@@ -2157,7 +2157,10 @@ class _OpsMixin:
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
-            raise IOError(f"Failed to append to file {uri}: {e}")
+            mapped = map_exception(e, resource=uri, resource_type="file")
+            if mapped is not None:
+                raise mapped from e
+            raise IOError(f"Failed to append to file {uri}: {e}") from e
         finally:
             if owned_lease is not None:
                 await self._async_agfs.pathlock_release(owned_lease)
