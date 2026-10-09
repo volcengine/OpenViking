@@ -104,7 +104,7 @@ class Pipeline:
         self.records: dict[str, Record] = {}
         self.evidence: dict[str, dict] = {}
         self.status: dict[str, str] = {}
-        self.old: dict[str, str | None] = {}
+        self.old: dict[str, str | bytes | None] = {}
         self.failures: list[str] = []
         self.warnings: list[str] = []
         self.artifacts: list[str] = []  # Only fully accepted final-file submissions.

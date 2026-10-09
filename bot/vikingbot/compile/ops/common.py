@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from openviking.core.namespace import relative_uri_path
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
 from vikingbot.compile import file_ops
-from vikingbot.compile.hashing import digest
+from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.pipeline_io import retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import (
@@ -71,7 +71,10 @@ async def payload(runtime: Pipeline, record: Record, *, combine=False) -> dict:
             if ready is None:
                 raise ValueError(f"Missing ready content: {record.ready_ref}")
             item["path"] = ready["path"]
-            content["text"] = ready["content"]
+            if ready.get("content_base64") is None:
+                content["text"] = ready["content"]
+            else:
+                content["file"] = file_ops.file_view(ready, record.ready_ref)
         return item
     if "text" in data and "uri" in data:
         # Number only the model-facing view; saved evidence and its hash remain unchanged.
@@ -83,7 +86,9 @@ async def payload(runtime: Pipeline, record: Record, *, combine=False) -> dict:
         }
     item = {"id": record.record_id, "payload": data}
     if record.ready_ref:
-        item["ready_file"] = await runtime.files.get(record.ready_ref)
+        item["ready_file"] = file_ops.file_view(
+            await runtime.files.get(record.ready_ref), record.ready_ref
+        )
     return item
 
 
@@ -161,6 +166,8 @@ async def transform(
             }
         )
 
+    snapshots = {r.ready_ref: await runtime.files.get(r.ready_ref) for r in records if r.ready_ref}
+
     def validate(response):
         validate_input_refs(records, [i for draft in response.records for i in draft.inputs])
         if isinstance(response, CombineResponse):
@@ -184,36 +191,50 @@ async def transform(
                 )
                 if not span.start_line <= span.end_line <= line_count:
                     raise ValueError("Evidence span lines are outside the original source range")
-            if draft.ready_content_ref is not None:
-                raise ValueError("Ready references require an agent with scratch access")
-            # Agent file references are resolved before checking record content.
-            if not draft.payload and not (draft.ready_content or "").strip():
-                raise ValueError("A record requires business payload or nonempty ready content")
             if draft.ready_path is not None:
                 validate_relative_file_path(draft.ready_path)
-            if draft.ready_content is not None and draft.ready_path is None:
+            has_ready = any(
+                value is not None
+                for value in (
+                    draft.ready_content,
+                    draft.ready_content_base64,
+                    draft.ready_content_ref,
+                )
+            )
+            if has_ready and draft.ready_path is None:
                 raise MissingReadyPathError(
-                    f"records[{index}]: ready_content is present but ready_path is missing. "
+                    f"records[{index}]: a ready file is present but ready_path is missing. "
                     "Add a top-level ready_path with an appropriate relative file path. "
                     "Preserve the existing ready_content; do not remove it to bypass validation."
                 )
-            if draft.ready_content is not None:
-                ready_group = Group("map", records)
+            if has_ready:
+                ready = FileDraft(
+                    path=draft.ready_path,
+                    content=draft.ready_content,
+                    content_base64=draft.ready_content_base64,
+                    content_ref=draft.ready_content_ref,
+                    inputs=draft.inputs,
+                )
+                ready_response = FileResponse(files=[ready])
+                file_ops.reuse_files(ready_response, snapshots)
                 file_ops.validate_files(
                     runtime,
-                    FileResponse(
-                        files=[
-                            FileDraft(
-                                path=draft.ready_path,
-                                content=draft.ready_content,
-                                inputs=draft.inputs,
-                            )
-                        ],
-                    ),
-                    ready_group,
+                    ready_response,
+                    Group("map", records),
                     [r for r in records if r.record_id in draft.inputs],
                     {},
                 )
+                draft.ready_content, draft.ready_content_base64 = (
+                    ready.content,
+                    ready.content_base64,
+                )
+                draft.ready_content_ref = None
+            if (
+                not draft.payload
+                and not (draft.ready_content or "").strip()
+                and draft.ready_content_base64 is None
+            ):
+                raise ValueError("A record requires business payload or nonempty ready content")
             if draft.target_uri and (
                 not relative_uri_path(runtime.target, draft.target_uri)
                 or draft.target_uri
@@ -291,13 +312,21 @@ async def transform(
             routing_text,
             draft.scope,
             draft.inputs,
-            f"ready/{record_id}" if draft.ready_content is not None else None,
+            f"ready/{record_id}"
+            if draft.ready_content is not None or draft.ready_content_base64 is not None
+            else None,
             digest(_COMBINE if label == "combine" else transform.model_dump()),
             draft.target_uri,
         )
         if record.ready_ref:
+            body = {"content": draft.ready_content, "content_base64": draft.ready_content_base64}
             await runtime.files.put(
-                record.ready_ref, {"path": draft.ready_path, "content": draft.ready_content}
+                record.ready_ref,
+                {
+                    "path": draft.ready_path,
+                    **body,
+                    "sha256": content_hash(file_ops.file_bytes(body)),
+                },
             )
         runtime.register(record)
         await runtime.files.put(f"records/{record_id}", asdict(record))

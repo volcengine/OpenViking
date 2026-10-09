@@ -42,6 +42,7 @@ from vikingbot.agent.tools.compile import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
+from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
@@ -1348,7 +1349,7 @@ class BotCompileService:
                         "WRITE_CONFLICT", f"Skill file changed: {operation['uri']}", stage="writing"
                     )
                 local.parent.mkdir(parents=True, exist_ok=True)
-                local.write_text(operation["content"], encoding="utf-8")
+                local.write_bytes(file_ops.file_bytes(operation))
             skill_md = skill_dir / "SKILL.md"
             validation = validate_skill_format(
                 skill_md.read_text(encoding="utf-8") if skill_md.is_file() else "",

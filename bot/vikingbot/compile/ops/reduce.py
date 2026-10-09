@@ -76,6 +76,7 @@ historical_files supplies paths, content and revision hashes. Update only releva
 using their supplied paths and base_hash values. Use patches for local edits or complete
 content for a full replacement. If only a section is supplied, patch within that section
 and preserve the rest of the file.
+Binary history supplies only metadata and hashes; generate a complete replacement with tools.
 """
 
 
@@ -117,8 +118,10 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
         inputs = {i for _, artifact in items for i in artifact["inputs"]}
         records = [runtime.records[i] for i in sorted(inputs)]
         group = Group("merge-" + digest([ref for ref, _ in items]), records)
+        snapshots = dict(items)
 
         def validate(response):
+            file_ops.reuse_files(response, snapshots)
             file_ops.validate_files(runtime, response, group, records, {})
             blocked = {d.path for d in response.files if reserved.get(d.path, path) != path}
             if blocked:
@@ -136,7 +139,8 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                     "Resolve candidate path collisions following the Skill and instruction. "
                     "Combine compatible contributions, deduplicate equivalents, or rename independent "
                     "files. Preserve required detail and input independence. Submit complete files "
-                    "with supporting inputs, without patches or base_hash; runtime binds revisions."
+                    "with supporting inputs, without patches or base_hash; runtime binds revisions. "
+                    "Preserve binary candidates using their supplied content_ref; never generate Base64."
                 ),
             )
             retries = Counter()
@@ -147,7 +151,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                         "reduce_merge",
                         runtime.system + "\n" + transform.instructions,
                         {
-                            "candidates": [a for _, a in items],
+                            "candidates": [file_ops.file_view(a, ref) for ref, a in items],
                             "reserved_paths": unavailable,
                             "inputs": [await common.payload(runtime, r) for r in records],
                         },
@@ -241,6 +245,7 @@ async def reduce_group(
                     FileDraft(
                         path=ready["path"],
                         content=ready["content"],
+                        content_base64=ready.get("content_base64"),
                         inputs=[records[0].record_id],
                     )
                 ],
@@ -273,7 +278,12 @@ async def reduce_group(
         ][:12]
     if old:
         extra["historical_files"] = [
-            {"path": path, "content": content, "base_hash": content_hash(content)}
+            {
+                "path": path,
+                "content": content if isinstance(content, str) else None,
+                "binary": isinstance(content, bytes),
+                "base_hash": content_hash(content),
+            }
             for path, content in old.items()
         ]
     if transform.output == "records":
@@ -284,6 +294,13 @@ async def reduce_group(
         )
     if old:
         system += _EXISTING_FILES
+    snapshots = {r.ready_ref: await runtime.files.get(r.ready_ref) for r in records if r.ready_ref}
+
+    def validate_files(response):
+        """Resolve assigned ready drafts before ordinary lineage and revision validation."""
+        file_ops.reuse_files(response, snapshots)
+        file_ops.validate_files(runtime, response, group, records, old)
+
     for depth in range(4):
         data = {**extra, "inputs": [await common.payload(runtime, r) for r in records]}
         try:
@@ -296,9 +313,7 @@ async def reduce_group(
                 system,
                 data,
                 FileResponse,
-                lambda value, records=records: file_ops.validate_files(
-                    runtime, value, group, records, old
-                ),
+                validate_files,
                 agent=transform.execution == "agent",
             )
             break
@@ -322,6 +337,11 @@ async def reduce_group(
             )
         if not reduced:
             raise ValueError("Overflow aggregation cannot discard all required contributions")
+        extra["candidates"] = [
+            file_ops.file_view(saved, ref)
+            for ref, saved in snapshots.items()
+            if saved.get("content_base64") is not None
+        ]
         records = reduced
     if stage == "map":
         return await file_ops.save_replacements(runtime, response, group, records)

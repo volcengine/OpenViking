@@ -6,6 +6,7 @@ They share the task runtime without owning pipeline scheduling or publication.
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 
@@ -25,27 +26,87 @@ if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
 
 
-def apply_file(draft: FileDraft, old: str | None) -> str:
+def encode_content(value: str | bytes) -> dict:
+    """Snapshot text or binary bytes for JSON storage; only UTF-8 bodies become text."""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return {"content": None, "content_base64": base64.b64encode(value).decode("ascii")}
+    return {"content": value, "content_base64": None}
+
+
+def file_bytes(file: dict) -> bytes:
+    """Restore exactly one text or Base64 body, rejecting missing or ambiguous content."""
+    if file is None:
+        raise ValueError("Missing stored file")
+    text, encoded = file.get("content"), file.get("content_base64")
+    if (text is None) == (encoded is None):
+        raise ValueError("A file requires exactly one text or binary body")
+    return text.encode("utf-8") if text is not None else base64.b64decode(encoded, validate=True)
+
+
+def file_view(file: dict, reference: str | None = None) -> dict:
+    """Expose text or binary metadata to models; byte snapshots remain runtime-only."""
+    if file is None:
+        raise ValueError("Missing stored file")
+    view = {k: v for k, v in file.items() if k != "content_base64"}
+    if file.get("content_base64") is not None:
+        raw = file_bytes(file)
+        view.update(binary=True, size_bytes=len(raw), sha256=content_hash(raw))
+    if reference is not None and file.get("content_base64") is not None:
+        view["content_ref"] = reference
+    return view
+
+
+def reuse_files(response: FileResponse, snapshots: dict[str, dict]) -> None:
+    """Resolve only supplied snapshot references, preserving bytes and checking their hashes."""
+    for draft in response.files:
+        if draft.content_ref is None:
+            continue
+        source = snapshots.get(draft.content_ref)
+        if (
+            source is None
+            or draft.content is not None
+            or draft.content_base64 is not None
+            or draft.patches
+        ):
+            raise ValueError("Reuse only supplied content_ref without content or patches")
+        raw = file_bytes(source)
+        actual = content_hash(raw)
+        if source.get("sha256", actual) != actual:
+            raise ValueError("Stored file hash mismatch")
+        draft.content, draft.content_base64 = source["content"], source.get("content_base64")
+        draft.content_sha256 = draft.content_sha256 or actual
+        draft.content_ref = None
+
+
+def apply_file(draft: FileDraft, old: str | bytes | None) -> str | bytes:
     """Assemble a revision-bound file, rejecting ambiguous, overlapping or stale patches.
 
     Bytes outside patch anchors are preserved exactly, including whitespace and frontmatter.
     """
+    content = draft.content
+    if draft.content_base64 is not None:
+        content = file_bytes(draft.model_dump())
     if old is None:
         if draft.base_hash is not None or draft.patches:
             raise ValueError("New files must not include base_hash or patches")
-        if draft.content is None:
+        if content is None:
             raise ValueError(
                 f'File "{draft.path}" is missing content. '
                 "Provide inline content, or set content_ref to the file you wrote with write_file, "
                 "relative to your scratch root."
             )
-        return draft.content
+        return content
     if draft.base_hash != content_hash(old):
         raise ValueError("Old target revision does not match the requested change")
-    if draft.content is not None:
+    if content is not None:
         if draft.patches:
             raise ValueError("Full replacement cannot be mixed with patches")
-        return draft.content
+        return content
+    if isinstance(old, bytes):
+        raise ValueError("Binary files require full replacement, not text patches")
     if not draft.patches:
         raise ValueError("Existing files require content or patches")
     edits = []
@@ -63,7 +124,7 @@ def apply_file(draft: FileDraft, old: str | None) -> str:
     return value
 
 
-async def load_old(runtime: Pipeline, path: str) -> str | None:
+async def load_old(runtime: Pipeline, path: str) -> str | bytes | None:
     """Read a selected target body once in this execution; only NOT_FOUND means absence."""
     path = validate_relative_file_path(path)
     if path not in runtime.old:
@@ -73,7 +134,10 @@ async def load_old(runtime: Pipeline, path: str) -> str | None:
             if entry.get("isDir"):
                 raise ValueError("Selected old target must be a file")
             payload = await runtime.client.download_bytes(uri)
-            runtime.old[path] = payload.decode("utf-8")
+            try:
+                runtime.old[path] = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                runtime.old[path] = payload
             runtime.metrics["history_body_reads"] += 1
         except OpenVikingError as exc:
             if exc.code != "NOT_FOUND":
@@ -104,6 +168,8 @@ def validate_files(runtime: Pipeline, response, group, records, old):
         value = apply_file(draft, current)
         if draft.content_sha256 and content_hash(value) != draft.content_sha256:
             raise ValueError("Artifact content hash mismatch")
+        if isinstance(value, bytes) and draft.path.lower().endswith((".md", ".json")):
+            value.decode("utf-8")
         if draft.path.endswith(".json"):
             json.loads(value)
 
@@ -117,7 +183,7 @@ async def save_files(runtime: Pipeline, response, group, records, old, *, origin
         inputs = draft.inputs
         artifact = {
             "path": draft.path,
-            "content": value,
+            **encode_content(value),
             "sha256": content_hash(value),
             "base_hash": content_hash(previous) if previous is not None else None,
             "owner": group.group_id,
@@ -176,7 +242,7 @@ async def accept_files(runtime: Pipeline, references):
         }
 
 
-def validate_skill_output(files: dict[str, str]) -> None:
+def validate_skill_output(files: dict[str, str | None]) -> None:
     """Check one Skill directory and its SKILL.md using the shared format validator.
 
     Paths are already checked by file validation. Raise ValueError for structural
@@ -189,6 +255,8 @@ def validate_skill_output(files: dict[str, str]) -> None:
     main = f"{name}/SKILL.md"
     if main not in files:
         raise ValueError(f"Missing {main}")
+    if files[main] is None:
+        raise ValueError("SKILL.md must contain UTF-8 text")
     result = validate_skill_format(files[main], strict=True, skill_dir_name=name, source_path=main)
     if not result["valid"]:
         raise ValueError("; ".join(issue["message"] for issue in result["errors"]))
@@ -204,6 +272,7 @@ async def repair_skill_output(runtime: Pipeline, artifacts: list[dict], error: s
     ids = {i for a in artifacts for i in a["inputs"]} or set(runtime.evidence)
     records = [runtime.records[i] for i in sorted(ids)]
     group = Group("skill-repair", records)
+    snapshots = {f"artifacts/{digest([a['owner'], a['path']])}": a for a in artifacts}
     old = {}
     for artifact in artifacts:
         if artifact["base_hash"] is not None:
@@ -214,6 +283,7 @@ async def repair_skill_output(runtime: Pipeline, artifacts: list[dict], error: s
 
     def validate(response):
         """Accept complete files only when provenance, revisions and package format agree."""
+        reuse_files(response, snapshots)
         validate_files(runtime, response, group, records, old)
         validate_skill_output(
             {draft.path: apply_file(draft, old.get(draft.path)) for draft in response.files}
@@ -224,12 +294,11 @@ async def repair_skill_output(runtime: Pipeline, artifacts: list[dict], error: s
         runtime.system
         + "\nFix the reported errors according to the original Skill and user instruction. "
         "Preserve valid content. Submit all files, including unchanged ones, with supporting "
-        "input IDs. Read assigned evidence if needed. Keep existing base_hash values.",
+        "input IDs. Read assigned evidence if needed. Keep existing base_hash values. "
+        "Preserve binary attachments using their supplied content_ref; never generate Base64.",
         {
             "error": error,
-            "files": [
-                {k: a[k] for k in ("path", "content", "inputs", "base_hash")} for a in artifacts
-            ],
+            "files": [file_view(a, ref) for ref, a in snapshots.items()],
             "inputs": [
                 {"id": r.record_id, "payload": {"source_ranges": r.source_refs}} for r in records
             ],

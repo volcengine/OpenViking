@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 
 from vikingbot.agent.tools.base import Tool
+from vikingbot.compile import file_ops
 from vikingbot.compile.plan import PLANNING_RULES, ReviewDecision, parse_plan
 from vikingbot.compile.results import Group, Record
 from vikingbot.compile.skill_resources import EvidenceReader
@@ -99,7 +100,11 @@ class StageOutputReader(Tool):
             ready = await self.runtime.files.get(record.ready_ref)
             if ready is None:
                 raise ValueError(f"Missing stage draft: {record.record_id}")
-            value = {"id": record.record_id, "ready_file": ready, "payload": value["payload"]}
+            value = {
+                "id": record.record_id,
+                "ready_file": file_ops.file_view(ready),
+                "payload": value["payload"],
+            }
         return {**value, "scope": record.scope, "source_ranges": record.source_refs}
 
     async def content(self, index: int, member: int | None = None) -> str:
@@ -136,8 +141,9 @@ class StageOutputReader(Tool):
                 raise ValueError(f"Missing stage file: {item}")
             self.evidence.allowed.update(artifact["source_refs"])
             value = {
-                "path": artifact["path"],
-                "content": artifact["content"],
+                **file_ops.file_view(
+                    {k: artifact[k] for k in ("path", "content", "content_base64") if k in artifact}
+                ),
                 "source_ranges": artifact["source_refs"],
             }
         return json.dumps(value, ensure_ascii=False, indent=2)

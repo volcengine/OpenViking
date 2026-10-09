@@ -52,7 +52,9 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
         if path in owners:
             raise ValueError(f"Multiple output writers claim {path}")
         owners[path] = artifact["owner"]
-        files[path] = artifact["content"].encode()
+        files[path] = file_ops.file_bytes(artifact)
+        if content_hash(files[path]) != artifact["sha256"]:
+            raise ValueError(f"Stored file hash mismatch: {path}")
         revisions[path] = artifact["base_hash"]
         origin = artifact.get("origin", path)
         origins[path] = origin
@@ -198,16 +200,21 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             raise ValueError(f"Stale prepared artifact: {uri}")
         # Resource writes recheck even identical cached bytes under server locks;
         # concurrent changes become per-file conflicts in the publication result.
-        if runtime.skill_target and old is not None and payload == old.encode():
+        if (
+            runtime.skill_target
+            and old is not None
+            and payload == (old.encode() if isinstance(old, str) else old)
+        ):
             rendered.unchanged.append(uri)
             continue
         operation = {
             "uri": uri,
-            "content": payload.decode(),
+            **file_ops.encode_content(payload),
             "mode": "replace" if revision else "create",
         }
         if revision:
             operation["expected_sha256"] = revision
+        operation.pop("content_base64" if operation["content"] is not None else "content")
         rendered.operations.append(operation)
         (rendered.updated if revision else rendered.created).append(uri)
         if (

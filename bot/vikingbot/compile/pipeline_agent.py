@@ -12,9 +12,10 @@ import json_repair
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
-from vikingbot.compile.pipeline_io import retry_allowed
+from vikingbot.compile.pipeline_io import TaskFiles, retry_allowed
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, RecordResponse
 from vikingbot.compile.schemas import result_schema
@@ -76,6 +77,9 @@ async def prepare_assignment(data, sandbox, root):
     if "candidates" in data:
         assignment["candidates"] = []
         for index, candidate in enumerate(data["candidates"]):
+            if candidate.get("binary"):
+                assignment["candidates"].append(candidate)
+                continue
             path = f"candidate-{index}.txt"
             await sandbox.write_file(f"{root}/{path}", candidate["content"])
             assignment["candidates"].append(
@@ -116,6 +120,21 @@ class EmitResult(Tool):
         self.data = data or {}
         self.metrics = metrics
 
+    async def read_content(self, relative: str) -> bytes:
+        """Read private scratch or an assigned ready snapshot; foreign snapshots are not accessible."""
+        supplied = {
+            item.get("ready_file", {}).get("content_ref") for item in self.data.get("inputs", [])
+        }
+        supplied.update(item.get("content_ref") for item in self.data.get("candidates", []))
+        if relative in supplied:
+            saved = await TaskFiles(self.sandbox).get(relative)
+            raw = file_ops.file_bytes(saved)
+            actual = content_hash(raw)
+            if saved.get("sha256", actual) != actual:
+                raise ValueError("Stored file hash mismatch")
+            return raw
+        return await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
+
     @property
     def parameters(self):
         parameters = result_schema(self.schema, self.data)
@@ -147,27 +166,43 @@ class EmitResult(Tool):
             if isinstance(result, RecordResponse):
                 for draft in result.records:
                     if draft.ready_content_ref is not None:
-                        if self.sandbox is None or draft.ready_content is not None:
+                        if (
+                            self.sandbox is None
+                            or draft.ready_content is not None
+                            or draft.ready_content_base64 is not None
+                        ):
                             raise ValueError(
                                 "Ready file reference requires scratch access without inline text"
                             )
                         relative = validate_relative_file_path(draft.ready_content_ref)
-                        raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
-                        draft.ready_content = raw.decode("utf-8")
+                        raw = await self.read_content(relative)
+                        body = file_ops.encode_content(raw)
+                        draft.ready_content = body["content"]
+                        draft.ready_content_base64 = body["content_base64"]
                         draft.ready_content_ref = None
             if isinstance(result, FileResponse):
                 for draft in result.files:
                     if draft.content_ref is not None:
-                        if self.sandbox is None or draft.content is not None or draft.patches:
+                        if (
+                            self.sandbox is None
+                            or draft.content is not None
+                            or draft.content_base64 is not None
+                            or draft.patches
+                        ):
                             raise ValueError(
                                 "File reference requires scratch access without content/patches"
                             )
                         relative = validate_relative_file_path(draft.content_ref)
-                        raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
+                        raw = await self.read_content(relative)
                         actual = content_hash(raw)
                         if draft.content_sha256 and draft.content_sha256 != actual:
                             raise ValueError("Scratch artifact hash mismatch")
-                        draft.content, draft.content_sha256 = raw.decode("utf-8"), actual
+                        body = file_ops.encode_content(raw)
+                        draft.content, draft.content_base64 = (
+                            body["content"],
+                            body["content_base64"],
+                        )
+                        draft.content_sha256 = actual
                         draft.content_ref = None
             if self.validate:
                 self.validate(result)
