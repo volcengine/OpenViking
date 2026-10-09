@@ -133,3 +133,176 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_returning()
     marker = json.loads(viking_fs.files[marker_uri])
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"
+
+
+class _CrashingLoadSession:
+    """Session whose load() raises, e.g. a torn read of live messages.jsonl."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def exists(self) -> bool:
+        return True
+
+    async def load(self) -> None:
+        raise self._error
+
+    async def resume_queued_commit(self, msg) -> bool:
+        raise AssertionError("resume_queued_commit must not run after a failed load")
+
+
+class _CrashingLoadSessionService:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def session(self, ctx, session_id, session_uri=None):
+        return _CrashingLoadSession(self._error)
+
+
+class _FakeTaskTracker:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+        self.failed: list[dict] = []
+
+    async def create(
+        self,
+        task_type,
+        resource_id=None,
+        *,
+        account_id=None,
+        user_id=None,
+        task_id=None,
+        meta=None,
+        auth=None,
+    ):
+        self.created.append(
+            {
+                "task_type": task_type,
+                "resource_id": resource_id,
+                "account_id": account_id,
+                "user_id": user_id,
+                "task_id": task_id,
+            }
+        )
+
+    async def fail(
+        self,
+        task_id,
+        error,
+        account_id=None,
+        user_id=None,
+        *,
+        result=None,
+    ):
+        self.failed.append(
+            {
+                "task_id": task_id,
+                "error": error,
+                "account_id": account_id,
+                "user_id": user_id,
+            }
+        )
+
+
+def _install_fake_tracker(monkeypatch) -> _FakeTaskTracker:
+    tracker = _FakeTaskTracker()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.get_task_tracker",
+        lambda: tracker,
+    )
+    return tracker
+
+
+async def test_on_dequeue_settles_worker_crash_as_failed_delivery(monkeypatch):
+    """A crash inside _process must settle the delivery instead of escaping.
+
+    Before the guard, a json.JSONDecodeError from Session.load() propagated out
+    of on_dequeue; the queue layer swallowed it and the task stayed pending
+    forever (reported as "Phase 2 timed out" by clients).
+    """
+    tracker = _install_fake_tracker(monkeypatch)
+    crash = json.JSONDecodeError(
+        "Unterminated string starting at: line 1 column 59183 (char 59182)",
+        "x" * 60000,
+        59182,
+    )
+    processor = SessionCommitProcessor(_CrashingLoadSessionService(crash))
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+    result = await processor.on_dequeue({"data": json.dumps(_make_msg().to_dict())})
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error is not None
+    assert "Unterminated string starting at: line 1 column 59183" in result.error
+    assert tracker.created == [
+        {
+            "task_type": "session_commit",
+            "resource_id": "sess-1",
+            "account_id": ctx.account_id,
+            "user_id": "alice",
+            "task_id": "task-1",
+        }
+    ]
+    assert len(tracker.failed) == 1
+    assert tracker.failed[0]["task_id"] == "task-1"
+    assert tracker.failed[0]["error"] == result.error
+    assert tracker.failed[0]["account_id"] == ctx.account_id
+    assert tracker.failed[0]["user_id"] == "alice"
+    assert get_root_observability_context() is None
+
+
+async def test_on_dequeue_worker_crash_reuses_phase1_task_id(monkeypatch):
+    """Repeated crashes create against the same explicit task_id.
+
+    tracker.create is idempotent for an explicit task_id owned by the same
+    user, so a Phase-1-created record is reused instead of duplicated.
+    """
+    tracker = _install_fake_tracker(monkeypatch)
+    crash = json.JSONDecodeError("bad", "doc", 0)
+    processor = SessionCommitProcessor(_CrashingLoadSessionService(crash))
+
+    await processor.on_dequeue({"data": json.dumps(_make_msg().to_dict())})
+    await processor.on_dequeue({"data": json.dumps(_make_msg().to_dict())})
+
+    assert [entry["task_id"] for entry in tracker.created] == ["task-1", "task-1"]
+    assert [entry["task_id"] for entry in tracker.failed] == ["task-1", "task-1"]
+
+
+async def test_on_dequeue_success_and_requeue_paths_do_not_touch_tracker(monkeypatch):
+    tracker = _install_fake_tracker(monkeypatch)
+
+    processor = SessionCommitProcessor(_FakeSessionService({}))
+    result = await processor.on_dequeue({"data": json.dumps(_make_msg().to_dict())})
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert tracker.created == []
+    assert tracker.failed == []
+
+    queued = []
+
+    class _QueueManager:
+        async def enqueue(self, queue_name, data):
+            queued.append((queue_name, data))
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: _QueueManager(),
+    )
+    requeue_processor = SessionCommitProcessor(_FakeSessionService({}, processed=False))
+    requeue_result = await requeue_processor.on_dequeue({"data": json.dumps(_make_msg().to_dict())})
+
+    assert requeue_result.outcome is ProcessOutcome.REQUEUED
+    assert tracker.created == []
+    assert tracker.failed == []
+
+
+async def test_on_dequeue_parse_failure_does_not_touch_tracker(monkeypatch):
+    tracker = _install_fake_tracker(monkeypatch)
+    processor = SessionCommitProcessor(_FakeSessionService({}))
+
+    result = await processor.on_dequeue({"data": "not json"})
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error is not None
+    assert tracker.created == []
+    assert tracker.failed == []
