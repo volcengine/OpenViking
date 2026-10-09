@@ -17,6 +17,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **pi** | [pi Coding Agent Extension](./11-pi.md) — native extension with auto-recall, turn capture, threshold commit, and the server's MCP tools registered as native pi tools |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
 | **Multiple local coding agents / a desktop UI** | [OpenViking Helper](./14-openviking-helper.md) — visual agent setup, session inspection, and memory management |
+| **HTTP clients / multiple local agents** | [HTTP Integration for Multiple Local Agents](./16-tkstack.md) — direct HTTP SDK access, shared identity boundaries, LiteLLM routing, and validation guidance |
 | **Any Agent Plugins 1.0 client** | [Agent Plugins 1.0 Package](./15-agent-plugins.md) — one portable package: `openviking-memory` skill plus the OpenViking MCP tools |
 | **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **Chat clients / SDK and API apps / other clients without a plugin** | [Context Gateway](../guides/15-context-gateway.md) — point any client that takes a base URL and an API key at the gateway; it recalls memory and saves conversations with nothing to install in the client |
