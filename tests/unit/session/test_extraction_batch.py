@@ -156,6 +156,7 @@ async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
         "Error code: 400 - InvalidParameter: Total tokens of multi-modal content "
         "and text exceed max message tokens.",
         "503 Service Unavailable",
+        "opaque provider failure",
     ],
 )
 async def test_working_memory_propagates_model_errors(monkeypatch, path, message):

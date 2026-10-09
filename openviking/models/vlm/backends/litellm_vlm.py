@@ -18,7 +18,7 @@ from litellm.types.utils import all_litellm_params
 
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_call import run_model_async, run_model_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -293,6 +293,7 @@ class LiteLLMVLMProvider(VLMBase):
             "messages": sanitize_openai_messages(messages),
             "temperature": self.temperature,
             "timeout": self.timeout,
+            "num_retries": 0,
         }
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
@@ -475,9 +476,11 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return retry_sync(
+        return run_model_sync(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="LiteLLM VLM completion",
         )
@@ -511,9 +514,11 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
+        return await run_model_async(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="LiteLLM VLM async completion",
         )
@@ -539,9 +544,11 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return retry_sync(
+        return run_model_sync(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="LiteLLM VLM vision completion",
         )
@@ -567,9 +574,11 @@ class LiteLLMVLMProvider(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._clean_response(self._extract_content_from_response(response))
 
-        return await retry_async(
+        return await run_model_async(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="LiteLLM VLM async vision completion",
         )

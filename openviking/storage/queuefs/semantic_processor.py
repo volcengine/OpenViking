@@ -71,7 +71,14 @@ from openviking.utils.circuit_breaker import (
     classify_api_error,
 )
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT
+from openviking.utils.model_call import ModelCallError, get_model_call_error, model_workload
+from openviking.utils.model_retry import (
+    ERROR_CLASS_AUTH,
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_PERMANENT,
+    ERROR_CLASS_QUOTA_EXCEEDED,
+    ERROR_CLASS_TRANSIENT,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -425,6 +432,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 user_id=msg.user_id,
                 peer_id=msg.peer_id,
             ),
+            # Parent freshness work is deliberately detached from the completed
+            # task lifecycle below; do not retain its root-task attribution.
+            root_task_id="",
         )
         with detach_task_context():
             await semantic_queue.enqueue(parent_msg)
@@ -448,6 +458,7 @@ class SemanticProcessor(DequeueHandlerBase):
         execute_started_at: float | None = None
         queue_wait_ms = 0.0
         execute_status = "ok"
+        processing_started = False
         breaker = None
         try:
             import json
@@ -502,20 +513,23 @@ class SemanticProcessor(DequeueHandlerBase):
                         get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                     await self._cleanup_local_artifact(msg)
                     return ProcessResult.success()
-            # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
-                breaker.check()
-            except CircuitBreakerOpen:
-                logger.warning(
-                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
-                )
-                await work.reenqueue()
-                self._merge_request_stats(msg.telemetry_id, requeue_count=1)
-                get_request_wait_tracker().record_semantic_requeue(msg.telemetry_id)
-                return ProcessResult.requeued()
+                with pause_task_processing():
+                    await breaker.wait_until_ready(deadline_at=msg.model_deadline_at)
+            except CircuitBreakerOpen as error:
+                await self._release_cancelled_semantic_lock(msg)
+                raise ModelCallError("circuit_open", "transient", 0, msg.id) from error
             collector = work.resolve_telemetry()
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
-            with telemetry_ctx:
+            with (
+                telemetry_ctx,
+                model_workload(
+                    msg.model_operation,
+                    stage="semantic_execute",
+                    deadline_at=msg.model_deadline_at,
+                    root_task_id=msg.root_task_id,
+                ),
+            ):
                 root_attrs = create_root_span_attributes(
                     http_method="QUEUE",
                     http_route=msg.context_type or "/queuefs/semantic",
@@ -551,6 +565,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         return ProcessResult.success()
                     semantic_lock = work.scope
                     assert semantic_lock is not None
+                    processing_started = True
                     dag_stats = None
                     processing_succeeded = False
                     try:
@@ -731,10 +746,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
         except asyncio.CancelledError:
             if work is not None:
-                await work.cancel()
+                # The work lifecycle owns handoff release; finish that cleanup
+                # even if shutdown cancels this consumer again.
+                await run_to_completion(work.cancel)
             raise
         except Exception as e:
-            if isinstance(e, LockAcquisitionError):
+            if isinstance(e, LockAcquisitionError) and not processing_started:
                 execute_status = "requeued"
                 logger.warning(
                     "Lock error processing semantic message, re-enqueueing without "
@@ -751,12 +768,32 @@ class SemanticProcessor(DequeueHandlerBase):
                 return ProcessResult.failed(str(e))
 
             error_class = classify_api_error(e)
-            if error_class == ERROR_CLASS_INPUT_TOO_LARGE:
+            terminal = get_model_call_error(e)
+            if (
+                terminal is not None
+                or error_class == ERROR_CLASS_INPUT_TOO_LARGE
+                or processing_started
+            ):
                 execute_status = "error"
                 logger.error(
-                    f"Input too large processing semantic message, dropping: {e}",
+                    f"Terminal error processing semantic message: {e}",
                     exc_info=True,
                 )
+                # After execution starts, replaying the message can repeat
+                # successful model calls and writes. Storage retries, when safe,
+                # belong around their individual idempotent I/O operation.
+                if (
+                    terminal is not None
+                    and terminal.attempts > 0
+                    and terminal.error_class
+                    in {
+                        ERROR_CLASS_AUTH,
+                        ERROR_CLASS_QUOTA_EXCEEDED,
+                        ERROR_CLASS_TRANSIENT,
+                    }
+                ):
+                    if breaker is not None:
+                        breaker.record_failure(terminal)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     get_request_wait_tracker().mark_semantic_failed(
@@ -801,6 +838,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     )
                 return ProcessResult.failed(str(e))
         finally:
+            if breaker is not None:
+                breaker.abandon()
             if msg is not None and execute_started_at is not None:
                 tracker = get_request_wait_tracker()
                 record_timing = getattr(tracker, "record_semantic_timing", None)
@@ -996,6 +1035,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     )
                     logger.debug(f"Generated summary for {file_name}")
                 except Exception as e:
+                    if get_model_call_error(e) is not None:
+                        raise
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
                     summary_dict = {"name": file_name, "summary": ""}
 
@@ -1022,7 +1063,14 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"{(len(pending_indices) + batch_size - 1) // batch_size} "
                     f"({len(batch)} files)"
                 )
-                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
+                tasks = [asyncio.create_task(_gen(i, fp)) for i, fp in batch]
+                try:
+                    await asyncio.gather(*tasks)
+                except BaseException:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
         completed_summaries = [s for s in file_summaries if s is not None]
         sample_limit = getattr(
@@ -1675,6 +1723,8 @@ class SemanticProcessor(DequeueHandlerBase):
             return overview.strip()
 
         except Exception as e:
+            if get_model_call_error(e) is not None:
+                raise
             logger.error(
                 f"Failed to generate overview for {dir_uri}: {e}",
                 exc_info=True,
@@ -1752,12 +1802,21 @@ class SemanticProcessor(DequeueHandlerBase):
                 partial = self._replace_link_references(partial, batch_link_map)
                 partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
+                if get_model_call_error(e) is not None:
+                    raise
                 logger.warning(
                     f"Failed to generate partial overview batch "
                     f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
                 )
 
-        await asyncio.gather(*[_run_batch(*bp) for bp in batch_prompts])
+        tasks = [asyncio.create_task(_run_batch(*bp)) for bp in batch_prompts]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
@@ -1788,6 +1847,8 @@ class SemanticProcessor(DequeueHandlerBase):
             overview = self._replace_link_references(overview, link_map)
             return overview.strip()
         except Exception as e:
+            if get_model_call_error(e) is not None:
+                raise
             logger.error(
                 f"Failed to merge partial overviews for {dir_uri}: {e}",
                 exc_info=True,

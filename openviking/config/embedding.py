@@ -25,6 +25,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 @dataclass(frozen=True)
 class EmbeddingResourceStatus:
     """Read-only Account embedding state."""
@@ -165,9 +166,7 @@ class AccountEmbeddingProvider:
                     raise RuntimeError("Account embedding provider is closed")
 
             settings = await self._resolver.resolve(account_id)
-            fingerprint = hashlib.sha256(
-                settings.embedding.model_dump_json().encode()
-            ).hexdigest()
+            fingerprint = hashlib.sha256(settings.embedding.model_dump_json().encode()).hexdigest()
             with self._lock:
                 if self._closed:
                     raise RuntimeError("Account embedding provider is closed")
@@ -211,6 +210,17 @@ class AccountEmbeddingProvider:
         if not account_id:
             raise ValueError("account_id is required")
         return AccountBoundEmbedder(self, account_id)
+
+    async def wait_until_ready(
+        self,
+        account_id: str,
+        *,
+        deadline_at: float | None = None,
+    ) -> CircuitBreaker:
+        """Wait for this account's current breaker and return its admission."""
+        resource = await self._resource_for(account_id)
+        await resource.breaker.wait_until_ready(deadline_at=deadline_at)
+        return resource.breaker
 
     async def query_cache_key(self, account_id: str, content) -> tuple[str, str, str]:
         """Describe a query input without borrowing the account resource."""

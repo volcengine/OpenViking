@@ -63,8 +63,9 @@ from openviking.session.working_memory import (
 )
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.telemetry.context import bind_telemetry_stage
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.model_call import model_workload
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
@@ -88,9 +89,6 @@ MemoryPolicyProvider = Callable[[], Awaitable[MemoryPolicyData]]
 logger = get_logger(__name__)
 
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
-_MEMORY_EXTRACTION_MAX_RETRIES = 3
-_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
-_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 
@@ -1997,7 +1995,10 @@ class Session:
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
-                with bind_telemetry(telemetry):
+                with (
+                    bind_telemetry(telemetry),
+                    model_workload("session_commit", root_task_id=task_id),
+                ):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
@@ -2116,24 +2117,22 @@ class Session:
                                 },
                             )
 
-                    async def _run_retryable_phase2_step(
+                    async def _run_phase2_step(
                         operation_name: str,
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        # Secondary safety net on top of the per-call retry that the
-                        # VLM/embedding layer already performs. Reuses the shared
-                        # transient-error classifier so permanent failures (auth,
-                        # quota, content-safety, 400, oversized input) fail fast
-                        # instead of being retried pointlessly.
-                        return await retry_async(
-                            fn,
-                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
-                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
-                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
-                            logger=logger,
-                            operation_name=operation_name,
-                        )
+                        # A step can have storage side effects and several model calls.
+                        # Retrying it would replay successful work and reset model budgets.
+                        if operation_name == "archive_summary":
+                            stage = "archive_summary"
+                        elif "skill" in operation_name:
+                            stage = "skill_extract"
+                        elif "working" in operation_name:
+                            stage = "working_memory"
+                        else:
+                            stage = "memory_extract"
+                        with bind_telemetry_stage(stage):
+                            return await fn()
 
                     async def _run_recorded_memory_step(
                         operation_name: str,
@@ -2141,7 +2140,7 @@ class Session:
                         step_messages: List[Message],
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        result = await _run_phase2_step(operation_name, fn)
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2199,7 +2198,9 @@ class Session:
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
                         if enable_working_memory:
-                            extraction_tasks.append(_run_archive_summary())
+                            extraction_tasks.append(
+                                _run_phase2_step("archive_summary", _run_archive_summary)
+                            )
                             extraction_labels.append("archive_summary")
 
                         if self._session_compressor and long_term_has_work:
@@ -2307,7 +2308,10 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_archive_summary()
+                        if enable_working_memory:
+                            await _run_phase2_step("archive_summary", _run_archive_summary)
+                        else:
+                            await _run_archive_summary()
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
@@ -2946,7 +2950,7 @@ class Session:
           ``update_working_memory`` tool forced on; parse per-section
           decisions and merge them against the previous WM. Invalid response
           content may fall back to the creation prompt. Model-call failures
-          propagate to the task owner; retries belong to the VLM provider.
+          propagate to the task owner; retries consume the offline task budget.
         """
         wm.wm_debug(
             f"_generate_archive_summary_async called "
@@ -3012,6 +3016,8 @@ class Session:
                     "output_language": output_language,
                 },
             )
+            # Only successful response parsing may fall back. Every model-call
+            # failure, including an opaque legacy error, must reach task failure.
             if checkpoint_requests:
                 response = await vlm.get_completion_async(
                     prompt=prompt,
