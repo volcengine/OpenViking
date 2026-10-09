@@ -61,6 +61,7 @@ PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/grok/openviking.integration.json"
 )
 
 failed=0

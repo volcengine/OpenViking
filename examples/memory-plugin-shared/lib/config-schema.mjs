@@ -260,6 +260,7 @@ export const HARNESS_KEYS = {
   claudeCode: "claude_code",
   codex: "codex",
   cursor: "cursor",
+  grok: "grok",
   kimicode: "kimicode",
   trae: "trae",
   traeCn: "trae_cn",

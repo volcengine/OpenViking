@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * The one hook entry cursor, TRAE and ZCode all run.
+ * The one hook entry the config-driven hosts all run.
  *
  * Each host names it from its own hooks.json, passing the event and the client
  * id as arguments; the adapter under `hosts/` supplies everything that differs
  * — the event vocabulary, the response envelope, how a prompt is read out of
  * the payload, and how a finished turn is captured. The state machine around
- * those four things is the same in all three, so it lives here.
+ * those four things is shared across these hosts, so it lives here.
  */
 
 import {
@@ -94,13 +94,15 @@ async function promptSubmit(ctx) {
     if (duplicateEvent) return "";
     const parts = [];
     let profileInjected = Boolean(state.profileInjected);
+    let deferredProfileIncluded = false;
     if (host.profileStage === "first-prompt" && !profileInjected) {
       const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
         logError("profile", error);
         return null;
       });
       if (profile) parts.push(contextBlock("session-start", profile));
-      profileInjected = Boolean(profile);
+      if (host.defersPromptContext) deferredProfileIncluded = Boolean(profile);
+      else profileInjected = Boolean(profile);
     }
     const recallBlock = state.promptHash === promptHash && state.recallBlock
       ? state.recallBlock
@@ -110,16 +112,38 @@ async function promptSubmit(ctx) {
           return null;
         });
     if (recallBlock) parts.push(recallBlock);
+    const promptContext = parts.join("\n\n");
     await writeHookState(clientId, ctx.nativeSessionId, {
       ...state,
       promptHash,
       promptEventId,
       promptAt: now,
       recallBlock,
+      ...(host.defersPromptContext ? { deferredPromptContext: promptContext } : {}),
+      ...(host.defersPromptContext ? { deferredProfileIncluded } : {}),
       ...(host.profileStage === "first-prompt" ? { profileInjected } : {}),
       ...(host.tracksPendingPrompt ? { pendingPrompt: { prompt, hash: promptHash, at: now } } : {}),
     });
-    return parts.join("\n\n");
+    return promptContext;
+  });
+}
+
+async function deliverDeferredPrompt(ctx) {
+  return withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
+    const state = await readHookState(clientId, ctx.nativeSessionId);
+    const block = typeof state.deferredPromptContext === "string"
+      ? state.deferredPromptContext
+      : "";
+    if (!block) return "";
+    await writeHookState(clientId, ctx.nativeSessionId, {
+      ...state,
+      deferredPromptContext: "",
+      deferredProfileIncluded: false,
+      ...(host.profileStage === "first-prompt"
+        ? { profileInjected: Boolean(state.profileInjected || state.deferredProfileIncluded) }
+        : {}),
+    });
+    return block;
   });
 }
 
@@ -170,6 +194,7 @@ async function main() {
     };
     if (stageName === "start") return sessionStart(ctx);
     if (stageName === "prompt") return promptSubmit(ctx);
+    if (stageName === "deliver") return deliverDeferredPrompt(ctx);
     return capture(ctx);
   });
 }

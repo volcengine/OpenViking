@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
+# Grok Build, TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, pi and
 # DeepSeek Harness (dsh).
 #
 # In short:
@@ -61,6 +61,7 @@
 #   trae-cli   the same through the TraeCode CLI, then removes the hooks an older
 #              installer added to ~/.trae/cli/hooks.json and ~/.trae/traecli.toml
 #   cursor     ~/.cursor/hooks.json, ~/.cursor/mcp.json, ~/.cursor/rules, ~/.cursor/skills
+#   grok       ~/.grok/hooks/openviking-memory.json, ~/.grok/config.toml, ~/.grok/skills
 #   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
@@ -69,7 +70,7 @@
 #   dsh        dsh plugin add into the chosen profile
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
-# Cursor, TRAE, TRAE CN and ZCode run their hooks from
+# Cursor, Grok Build, TRAE, TRAE CN and ZCode run their hooks from
 # ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper.
 # The plugin bundle is unpacked to ~/.openviking/memory-plugin-marketplace when
 # a harness installs from it.
@@ -86,7 +87,7 @@
 # neither a published build nor part of a checkout downloads and runs the
 # published copy of this script.
 #
-# Uninstall: Cursor, TRAE, TRAE CN, ZCode and Kimi Code with
+# Uninstall: Cursor, Grok Build, TRAE, TRAE CN, ZCode and Kimi Code with
 #   curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness <list>
 # The other harnesses with the commands the install prints at the end, such as
 #   claude plugin uninstall openviking-memory@openviking && claude plugin marketplace remove openviking
@@ -224,7 +225,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, grok, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
@@ -241,7 +242,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations,
+  --uninstall        Remove the Cursor, Grok Build, TRAE, TRAE CN, ZCode and Kimi Code integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
                      pi and dsh are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
@@ -498,10 +499,11 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_GROK=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
+  { command -v grok >/dev/null 2>&1 || [ -d "$HOME/.grok" ]; } && HAVE_GROK=1
   { [ -d "/Applications/Trae.app" ] || [ -d "/Applications/TRAE.app" ] || [ -d "$HOME/.trae" ]; } && HAVE_TRAE=1
   { [ -d "/Applications/Trae CN.app" ] || [ -d "/Applications/TRAE SOLO CN.app" ] || [ -d "$HOME/.trae-cn" ]; } && HAVE_TRAE_CN=1
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
@@ -634,7 +636,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_GROK=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
 refresh_available_harnesses
 
 TUI_CLAUDE_BINS="$CLAUDE_BINS"
@@ -647,6 +649,7 @@ SEL_OPENCODE=0
 SEL_PI=0
 SEL_DSH=0
 SEL_CURSOR_APP=0
+SEL_GROK=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
 SEL_ZCODE=0
@@ -664,7 +667,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 9 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
 }
 
 tui_total_count() {
@@ -694,6 +697,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'dsh|dsh'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cursor|cursor'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'grok|grok'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'trae|trae'; return 0; fi
   i=$((i + 1))
@@ -733,6 +738,7 @@ tui_bin_label() {
     pi:*) printf 'pi' ;;
     dsh:*) printf 'DeepSeek Harness' ;;
     cursor:*) printf 'Cursor' ;;
+    grok:*) printf 'Grok Build' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
     zcode:*) printf 'ZCode' ;;
@@ -757,6 +763,8 @@ tui_bin_selected() {
     [ "$SEL_DSH" -eq 1 ]
   elif [ "$kind" = "cursor" ]; then
     [ "$SEL_CURSOR_APP" -eq 1 ]
+  elif [ "$kind" = "grok" ]; then
+    [ "$SEL_GROK" -eq 1 ]
   elif [ "$kind" = "trae" ]; then
     [ "$SEL_TRAE" -eq 1 ]
   elif [ "$kind" = "trae-cn" ]; then
@@ -773,6 +781,7 @@ tui_bin_selected() {
 tui_bin_detected() { # tui_bin_detected <kind> <bin>
   case "$1" in
     cursor) [ "$HAVE_CURSOR" -eq 1 ] ;;
+    grok) [ "$HAVE_GROK" -eq 1 ] ;;
     trae) [ "$HAVE_TRAE" -eq 1 ] ;;
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
@@ -788,6 +797,7 @@ tui_set_all_bins() {
   SEL_PI=1
   SEL_DSH=1
   SEL_CURSOR_APP=1
+  SEL_GROK=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
   SEL_ZCODE=1
@@ -812,6 +822,8 @@ tui_toggle_bin() {
     return 0
   elif [ "$kind" = "cursor" ]; then
     SEL_CURSOR_APP=$((1 - SEL_CURSOR_APP)); return 0
+  elif [ "$kind" = "grok" ]; then
+    SEL_GROK=$((1 - SEL_GROK)); return 0
   elif [ "$kind" = "trae" ]; then
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
   elif [ "$kind" = "trae-cn" ]; then
@@ -898,6 +910,7 @@ tui_reset_bin_selection() {
   SEL_PI=0
   SEL_DSH=0
   SEL_CURSOR_APP=0
+  SEL_GROK=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
   SEL_ZCODE=0
@@ -925,6 +938,7 @@ EOF
   if command -v pi >/dev/null 2>&1; then SEL_PI=1; any=1; fi
   if command -v dsh >/dev/null 2>&1; then SEL_DSH=1; any=1; fi
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
+  if [ "$HAVE_GROK" -eq 1 ]; then SEL_GROK=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
@@ -1016,6 +1030,7 @@ tui_add_compatible_cli() {
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
+    || [ "$SEL_GROK" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
     || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
@@ -1030,6 +1045,7 @@ tui_finish_selection() {
   [ "$SEL_PI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}pi"
   [ "$SEL_DSH" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}dsh"
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
+  [ "$SEL_GROK" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}grok"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
@@ -1101,6 +1117,7 @@ select_harnesses() {
   [ "$HAVE_CLAUDE" -eq 1 ] && detected="claude"
   [ "$HAVE_CODEX" -eq 1 ] && detected="${detected:+$detected,}codex"
   [ "$HAVE_CURSOR" -eq 1 ] && detected="${detected:+$detected,}cursor"
+  [ "$HAVE_GROK" -eq 1 ] && detected="${detected:+$detected,}grok"
   [ "$HAVE_TRAE" -eq 1 ] && detected="${detected:+$detected,}trae"
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
@@ -1257,7 +1274,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
+      claude|codex|cursor|grok|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1297,9 +1314,9 @@ EOF
   if contains_harness pi && command -v pi >/dev/null 2>&1; then ok=1; fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
   if contains_harness cli; then ok=1; fi
-  # Cursor and TRAE are config-driven integrations. They may be installed
+  # Cursor, Grok Build and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
+  if contains_harness cursor || contains_harness grok || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -2144,6 +2161,7 @@ remove_legacy_trae_cli_integration() {
     info "$(t 'Removed the deprecated TRAE CLI Hooks integration after installing the TraeCode CLI 2.0 plugin.' 'TraeCode CLI 2.0 插件安装成功后，已移除弃用的 TRAE CLI Hooks 集成。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/grok" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
@@ -2306,10 +2324,10 @@ install_codex() {
 }
 
 # ---------------------------------------------------------------------------
-# Cursor / TRAE lifecycle hooks
+# Cursor / Grok Build / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode"
+AGENT_HOOK_HOSTS="cursor grok trae zcode kimicode"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
@@ -2430,6 +2448,21 @@ uninstall_agent_integrations() {
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
+  if contains_harness grok; then
+    local grok_hooks="$HOME/.grok/hooks/openviking-memory.json"
+    local grok_config="$HOME/.grok/config.toml"
+    local grok_lib
+    if grok_lib="$(install_lib_dir)"; then
+      "$NODE_BIN" "$grok_lib/host-json-config.mjs" remove-grok "$grok_hooks" "$grok_config"
+    else
+      rm -f "$grok_hooks"
+      warn "$(t 'Installer runtime not found; remove the OpenViking MCP block by hand from:' '未找到安装器运行时，请手动移除 OpenViking MCP 配置块：') $grok_config"
+    fi
+    rm -rf "$HOME/.grok/skills/openviking-memory" "$HOME/.grok/skills/openviking-skills" \
+      "$HOME/.grok/skills/ov-experience-memory"
+    rm -rf "$OV_HOME/agent-integrations/grok"
+    info "$(t 'Removed the Grok Build OpenViking integration.' '已移除 Grok Build OpenViking 集成。')"
+  fi
   if contains_harness trae; then
     agent_remove_json_configs "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)"
     rm -rf "$OV_HOME/agent-integrations/trae"
@@ -2523,6 +2556,7 @@ NODE
     info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/grok" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
@@ -2591,6 +2625,30 @@ install_cursor() {
     warn "$(t 'Cursor may also import these older Claude OpenViking plugins and run duplicate Hooks:' 'Cursor 还可能导入以下旧版 Claude OpenViking 插件并重复执行 Hook：') $legacy_plugins"
     warn "$(t 'Upgrade or remove those legacy plugin ids, then restart Cursor.' '请升级或移除这些旧插件 id，然后重启 Cursor。')"
   fi
+}
+
+install_grok() {
+  step_heading "$(t 'Grok Build integration' 'Grok Build 集成')"
+  local source root hooks_path config_path skill skill_tmp lib
+  ensure_bundle
+  source="$(plugin_dir_on_disk agent-hook-plugin)" || return 1
+  root="$(assemble_agent_integration grok grok)" || return 1
+  hooks_path="$HOME/.grok/hooks/openviking-memory.json"
+  config_path="$HOME/.grok/config.toml"
+  lib="$(require_install_lib_dir)" || return 1
+  "$NODE_BIN" "$lib/host-json-config.mjs" write-grok \
+    "$root" "$hooks_path" "$config_path" grok "$NODE_BIN" "$SOURCE_MODE" || return 1
+  mkdir -p "$HOME/.grok/skills"
+  for skill in openviking-memory openviking-skills ov-experience-memory; do
+    skill_tmp="$HOME/.grok/skills/$skill.tmp"
+    rm -rf "$skill_tmp"
+    cp -R "$source/hosts/cursor/skills/$skill" "$skill_tmp"
+    rm -rf "$HOME/.grok/skills/$skill"
+    mv "$skill_tmp" "$HOME/.grok/skills/$skill"
+  done
+  info "$(t 'Grok Build hooks installed:' 'Grok Build hooks 已安装：') $hooks_path"
+  info "$(t 'Grok Build MCP installed:' 'Grok Build MCP 已安装：') $config_path"
+  info "$(t 'OpenViking skills installed under ~/.grok.' 'OpenViking skills 已安装到 ~/.grok。')"
 }
 
 zcode_mcp_path() {
@@ -2818,7 +2876,7 @@ install_pi() {
 # Validation
 # ---------------------------------------------------------------------------
 
-# Cursor, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
+# Cursor, Grok Build, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
 # in where their hooks and MCP entries live and in the session-start event name.
 validate_hook_host() { # validate_hook_host <client>
   local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
@@ -2831,6 +2889,12 @@ validate_hook_host() { # validate_hook_host <client>
         "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
         "$HOME/.cursor/skills/ov-experience-memory/SKILL.md"
       ;;
+    grok)
+      hooks="$HOME/.grok/hooks/openviking-memory.json"; mcp="$HOME/.grok/config.toml"; event=session-start
+      set -- "$@" "$HOME/.grok/skills/openviking-memory/SKILL.md" \
+        "$HOME/.grok/skills/openviking-skills/SKILL.md" \
+        "$HOME/.grok/skills/ov-experience-memory/SKILL.md"
+      ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
   esac
@@ -2838,9 +2902,9 @@ validate_hook_host() { # validate_hook_host <client>
     [ -f "$file" ] || complete=0
   done
   grep -q 'scripts/hook.mjs' "$hooks" 2>/dev/null \
-    && grep -q 'scripts/uri-guard.mjs' "$hooks" 2>/dev/null \
     && grep -q 'OPENVIKING_INTEGRATION_ID' "$hooks" 2>/dev/null \
     && grep -q 'mcp-proxy.mjs' "$mcp" 2>/dev/null || complete=0
+  if [ "$client" != "grok" ] && ! grep -q 'scripts/uri-guard.mjs' "$hooks" 2>/dev/null; then complete=0; fi
   if [ "$complete" -eq 0 ]; then
     warn "$client: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
     return 1
@@ -2896,7 +2960,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor grok trae trae-cn zcode; do
     contains_harness "$client" || continue
     validate_hook_host "$client" || { ok=0; agent_fatal=1; }
   done
@@ -3078,7 +3142,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode opencode pi dsh cli; do
+  for h in cursor grok trae trae-cn zcode kimicode opencode pi dsh cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3186,7 +3250,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
+  if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness grok || contains_harness trae || contains_harness trae-cn \
     || contains_harness zcode || contains_harness kimicode || contains_harness opencode || contains_harness pi; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
@@ -3194,6 +3258,11 @@ EOF
     plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
       "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
       "$HOME/.cursor/skills/ov-experience-memory" "$OV_HOME/agent-integrations/cursor"
+  fi
+  if contains_harness grok; then
+    plan_paths "Grok Build" "$HOME/.grok/hooks/openviking-memory.json" "$HOME/.grok/config.toml" \
+      "$HOME/.grok/skills/openviking-memory" "$HOME/.grok/skills/openviking-skills" \
+      "$HOME/.grok/skills/ov-experience-memory" "$OV_HOME/agent-integrations/grok"
   fi
   if contains_harness trae; then
     plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"
@@ -3204,7 +3273,7 @@ EOF
   if contains_harness zcode; then
     plan_paths ZCode "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
   fi
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
+  if contains_harness cursor || contains_harness grok || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
     plan_paths "$(t 'Shared hook runtime' '共享 hook 运行时')" "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness kimicode; then
@@ -3314,7 +3383,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor grok trae trae-cn zcode; do
     contains_harness "$client" || continue
     label="$(tui_bin_label "$client" "$client")"
     doctor="node $(short_path "$OV_HOME/agent-integrations/$client/scripts/ov-memory-doctor.mjs")"
@@ -3403,6 +3472,7 @@ $CODEX_BINS
 EOF
 fi
 if contains_harness cursor; then install_cursor; fi
+if contains_harness grok; then install_grok; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi

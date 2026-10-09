@@ -62,7 +62,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor nothing: the installer copies the
+// cursor, grok, trae, trae-cn and zcode vendor nothing: the installer copies the
 // canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
 // and they import it by the relative path that resolves both there and here.
 export const ASSEMBLED_ROOTS = [

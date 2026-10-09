@@ -3,10 +3,11 @@
   "id": "openviking-memory",
   "version": "0.5.15",
   "clients": [
-    "zcode"
+    "grok"
   ],
   "capabilities": [
     "hooks",
-    "mcp"
+    "mcp",
+    "skills"
   ]
 }
