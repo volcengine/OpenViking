@@ -36,7 +36,22 @@ Legend: **verified** = observed in a real session · *documented* = only in the 
 | --- | --- |
 | `codebuddy --plugin-dir <dir>` (session-scoped) | **verified** — plugin loaded, hooks fired, 3 runs |
 | `CODEBUDDY_PLUGIN_DIRS` env var | *documented* equivalent of `--plugin-dir` |
+| Plugin `.mcp.json` → stdio MCP server | **verified** — see below |
 | Local marketplace → versioned cache | **pending** (P6) |
+
+The plugin's `.mcp.json` is picked up from the plugin root and started as a local
+stdio MCP server. With **no** user-scope MCP configured, a `--plugin-dir` session
+reported `mcp_servers: [{"name":"openviking","status":"connected"}]` and listed **20
+`mcp__openviking__*` tools**, so the tools demonstrably come from the plugin.
+
+- Shape used: `{"mcpServers": {"openviking": {"command": "node", "args": ["${CODEBUDDY_PLUGIN_ROOT}/servers/mcp-proxy.mjs"]}}}`.
+  (The Claude Code plugin's `.mcp.json` is a *bare* server map instead; CodeBuddy
+  accepts the wrapped `mcpServers` form.)
+- `${CODEBUDDY_PLUGIN_ROOT}` substitution works in the MCP `args` as well as in
+  hook commands.
+- The stdio proxy needs stdin to stay open: feeding the initialize/tools-list
+  exchange through a pipe that **closes immediately** produces no output at all
+  (the proxy shuts down before processing). Real MCP clients hold stdin open.
 
 - `${CODEBUDDY_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` are both exported to hook processes
   and both point at the plugin directory (**verified**, run 1).
@@ -181,11 +196,12 @@ non-blocking error shown to the user. **Not exercised by the probe** — every h
 ## 9. Remaining unknowns
 
 1. `PreCompact` — never fired (no compaction in any run). Register it, but treat as unproven.
-2. Plugin `.mcp.json` shape — `{"mcpServers":{…}}` vs the bare map the Claude Code plugin
-   uses. Verify at P2/P10.
-3. Marketplace install → versioned cache behaviour (P6), including the "installed plugins
+2. Marketplace install → versioned cache behaviour (P6), including the "installed plugins
    cannot reference files outside their directory" rule.
-4. Non-blocking-exit (code 1 / other) and exit-2 semantics — documented but unexercised.
+3. Non-blocking-exit (code 1 / other) and exit-2 semantics — documented but unexercised.
+4. Whether a plugin hook can be disabled individually from `settings.json` (the host docs
+   only offer disabling the whole plugin, or `CODEBUDDY_DISABLE_EXTENDED_PLUGIN_HOOKS` to
+   restrict hook types).
 
 ## 10. Naming divergence
 
