@@ -1702,9 +1702,7 @@ async def merge_one_memory_type_operations(
                     tools=None,
                     thinking=False,
                 )
-                retry_finish_reason = str(
-                    getattr(response, "finish_reason", "") or ""
-                ).lower()
+                retry_finish_reason = str(getattr(response, "finish_reason", "") or "").lower()
                 if retry_finish_reason in {"length", "max_tokens"}:
                     tracer.info(
                         "[streaming_memory_updater] retrying truncated corrected Case merge "
@@ -1729,9 +1727,7 @@ async def merge_one_memory_type_operations(
                         tools=None,
                         thinking=False,
                     )
-                    retry_finish_reason = str(
-                        getattr(response, "finish_reason", "") or ""
-                    ).lower()
+                    retry_finish_reason = str(getattr(response, "finish_reason", "") or "").lower()
                 if retry_finish_reason in {"length", "max_tokens"}:
                     raise MemoryMergePlanError(
                         "LLM corrected Case merge output truncated after concise retry: "
@@ -1744,9 +1740,8 @@ async def merge_one_memory_type_operations(
                 try:
                     merged = await resolve_parsed_merge_plan(corrected_plan)
                 except MemoryMergePlanError as corrected_exc:
-                    if (
-                        correction_attempt >= 1
-                        or not str(corrected_exc).startswith(retryable_case_errors)
+                    if correction_attempt >= 1 or not str(corrected_exc).startswith(
+                        retryable_case_errors
                     ):
                         raise
                     previous_content = corrected_content

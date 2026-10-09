@@ -698,6 +698,67 @@ def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
     assert evaluation.communicate_checks[0].met is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("plain_text", [False, True], ids=["done", "plain-text"])
+@pytest.mark.parametrize("limit", [1, 30])
+async def test_tau2_terminal_response_stops_without_extra_model_call(plain_text, limit):
+    from unittest.mock import AsyncMock, Mock
+
+    from vikingbot.agent.context import ContextBuilder
+    from vikingbot.agent.loop import AgentLoop
+    from vikingbot.agent.tools.registry import ToolRegistry
+    from vikingbot.config.schema import SessionKey
+    from vikingbot.providers.base import LLMResponse, ToolCallRequest
+
+    from benchmark.tau2.common.tau2_env.tau2_environment import _GymTau2BenchEnv
+    from benchmark.tau2.train import rollout_executor_vikingbot as module
+
+    observation = "user: Goodbye!" if plain_text else ""
+    env = _GymTau2BenchEnv.__new__(_GymTau2BenchEnv)
+    env.terminated = False
+    env.env = SimpleNamespace(step=Mock(return_value=(observation, 1.0, True, False, {})))
+    response = (
+        LLMResponse(content="Goodbye!")
+        if plain_text
+        else LLMResponse(content=None, tool_calls=[ToolCallRequest("call-1", "done", {}, 0)])
+    )
+    agent = AgentLoop.__new__(AgentLoop)
+    agent.max_iterations = limit
+    agent.sandbox_manager = None
+    agent.tools = ToolRegistry()
+    agent.context = ContextBuilder.__new__(ContextBuilder)
+    agent.context.build_messages = AsyncMock(return_value=[{"role": "user", "content": "help"}])
+    agent._chat_with_stream_events = AsyncMock(side_effect=[(response, None, None)])
+    for name in ("done", "communicate_with_user"):
+        agent.tools.register(
+            module._make_tau2_tool(
+                {"function": {"name": name, "parameters": {"type": "object"}}},
+                SimpleNamespace(call_tool=env.tool_call),
+            )
+        )
+
+    result = await module._run_agent(
+        agent=agent,
+        system_prompt="policy",
+        user_prompt="help",
+        session_key=SessionKey(type="cli", channel_id="tau2", chat_id="termination-test"),
+        sender_id="user",
+        keep_default_tools=False,
+        loader_mode="none",
+    )
+
+    assert agent._chat_with_stream_events.await_count == 1
+    env.env.step.assert_called_once()
+    assert result[0] == ("Goodbye!" if plain_text else None)
+    assert result[4] == 1
+    tool_result = result[2][-1]
+    assert tool_result["execute_success"] is True
+    assert tool_result["result"].count("###STOP###") == 1
+    if plain_text:
+        env.env.step.assert_called_once_with("Goodbye!")
+        assert "Goodbye!" in tool_result["result"]
+
+
 def test_tau2_configure_tools_keeps_read_file_and_lists_loader_tools_last():
     from benchmark.tau2.train.rollout_executor import _configure_tools
     from benchmark.tau2.train.rollout_executor_vikingbot import (

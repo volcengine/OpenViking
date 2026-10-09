@@ -1800,8 +1800,7 @@ def _configure_tools(
                 record_tool_timing=record_tool_timing,
             )
         )
-    # Loader tools follow the business tools: listed first, they made the agent
-    # serialize business tool calls
+    # Keep business tools before loader tools.
     for tool in loader_tools:
         agent.tools.register(tool)
 
