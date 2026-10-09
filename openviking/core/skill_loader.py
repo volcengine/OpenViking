@@ -14,6 +14,32 @@ class SkillLoader:
 
     FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 
+    @classmethod
+    def _validate_metadata_cycles(
+        cls,
+        value: Any,
+        path: str,
+        active: frozenset[int] = frozenset(),
+    ) -> None:
+        """Reject recursive aliases while allowing shared acyclic values."""
+        if not isinstance(value, (dict, list, tuple)):
+            return
+        if id(value) in active:
+            raise ValueError(f"Skill 'metadata' contains a cyclic alias at '{path}'")
+
+        active = active | {id(value)}
+        if isinstance(value, dict):
+            for key, child in value.items():
+                cls._validate_metadata_cycles(child, f"{path}.{key}", active)
+            return
+
+        for index, child in enumerate(value):
+            cls._validate_metadata_cycles(child, f"{path}[{index}]", active)
+
+    @classmethod
+    def _validate_metadata(cls, value: Any) -> None:
+        cls._validate_metadata_cycles(value, "metadata")
+
     @staticmethod
     def _normalize_allowed_tools(value: Any) -> list[str]:
         """Normalize standard scalar and legacy list forms of ``allowed-tools``."""
@@ -93,6 +119,7 @@ class SkillLoader:
             "tags": meta.get("tags", []),
         }
         if "metadata" in meta:
+            cls._validate_metadata(meta["metadata"])
             skill["metadata"] = meta["metadata"]
         return skill
 
@@ -125,9 +152,10 @@ class SkillLoader:
         if tags:
             frontmatter["tags"] = tags
         if "metadata" in skill_dict:
+            cls._validate_metadata(skill_dict["metadata"])
             frontmatter["metadata"] = skill_dict["metadata"]
 
-        yaml_str = yaml.dump(frontmatter, allow_unicode=True, sort_keys=False)
+        yaml_str = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False)
 
         return f"---\n{yaml_str}---\n\n{skill_dict.get('content', '')}"
 
@@ -173,6 +201,9 @@ def _parse_skill_for_validation(data: Any) -> Dict[str, Any]:
     tags = parsed.get("tags")
     if tags is not None and not isinstance(tags, list):
         parsed["tags"] = [tags]
+
+    if "metadata" in parsed:
+        SkillLoader._validate_metadata(parsed["metadata"])
 
     return parsed
 
