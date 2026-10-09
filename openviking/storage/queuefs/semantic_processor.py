@@ -460,6 +460,15 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            # Normalize before the work object is built, so its telemetry records
+            # the flags this message will actually execute under rather than the
+            # legacy pair that cannot be scheduled.
+            if not msg.aggregate_directory and msg.recursive:
+                logger.info(
+                    "Normalizing legacy file-only semantic message to non-recursive: uri=%s",
+                    msg.uri,
+                )
+                msg.recursive = False
             breaker = self._account_breaker(msg.account_id)
             work = self._message_work(msg, lock)
             work.start()
@@ -488,6 +497,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         msg.coalesce_version,
                     )
                     msg.aggregate_directory = False
+                    msg.recursive = False
                     msg.changes = live_file_changes
                     msg.coalesce_key = ""
                     msg.coalesce_version = 0
