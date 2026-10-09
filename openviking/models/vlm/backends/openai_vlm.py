@@ -45,6 +45,12 @@ _DASHSCOPE_HOSTS = {
 # gpt-5 and later generations (gpt-6, gpt-7, ...) share the o-series request contract.
 _OPENAI_REASONING_MODEL_PATTERN = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d)|o[134])")
 
+# These Chat Completions models accept function tools only when reasoning is disabled.
+# GPT-6 Astra and GPT-6.1 Sol require the Responses API and are intentionally excluded.
+_OPENAI_CHAT_TOOL_NO_REASONING_PATTERN = re.compile(
+    r"(?:gpt-5\.(?:4|5|6)|gpt-6-(?:sol|luna))(?:-|$)"
+)
+
 
 def _build_openai_client_kwargs(
     provider: str,
@@ -180,7 +186,11 @@ class OpenAIVLM(VLMBase):
         return host.lower() in _DASHSCOPE_HOSTS
 
     def _apply_completion_params(
-        self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
+        self,
+        kwargs: Dict[str, Any],
+        thinking: bool,
+        max_tokens: Optional[int] = None,
+        has_tools: bool = False,
     ) -> None:
         """Apply model defaults, explicit settings, and provider-specific body fields."""
         if _OPENAI_REASONING_MODEL_PATTERN.match(kwargs["model"].lower()):
@@ -195,6 +205,8 @@ class OpenAIVLM(VLMBase):
             kwargs[max_tokens_param] = effective_max_tokens
         if self.reasoning_effort is not None:
             kwargs["reasoning_effort"] = self.reasoning_effort
+        if has_tools and _OPENAI_CHAT_TOOL_NO_REASONING_PATTERN.match(kwargs["model"].lower()):
+            kwargs["reasoning_effort"] = "none"
 
         extra_body = dict(self.extra_request_body)
         if self._supports_enable_thinking():
@@ -286,7 +298,12 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking, max_tokens=max_tokens)
+        self._apply_completion_params(
+            kwargs,
+            effective_thinking,
+            max_tokens=max_tokens,
+            has_tools=bool(tools),
+        )
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -317,7 +334,7 @@ class OpenAIVLM(VLMBase):
             "model": model,
             "messages": kwargs_messages,
         }
-        self._apply_completion_params(kwargs, effective_thinking)
+        self._apply_completion_params(kwargs, effective_thinking, has_tools=bool(tools))
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

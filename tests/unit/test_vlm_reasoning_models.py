@@ -86,6 +86,47 @@ class TestOpenAITextCompletionParams:
         assert "max_completion_tokens" not in kwargs
         assert "temperature" not in kwargs
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-5.4",
+            "gpt-5.5-2026-04-23",
+            "gpt-5.6-luna",
+            "gpt-6-sol",
+            "gpt-6-luna-2026-09-30",
+        ],
+    )
+    def test_chat_tool_models_disable_reasoning(self, model):
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": model,
+                "api_base": "https://api.openai.com/v1",
+                "reasoning_effort": "high",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(
+            prompt="hi",
+            tools=[{"type": "function", "function": {"name": "read"}}],
+        )
+
+        assert kwargs["reasoning_effort"] == "none"
+
+    def test_gpt6_luna_keeps_configured_reasoning_without_tools(self):
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-6-luna",
+                "api_base": "https://api.openai.com/v1",
+                "reasoning_effort": "high",
+            }
+        )
+
+        kwargs = vlm._build_text_kwargs(prompt="hi")
+
+        assert kwargs["reasoning_effort"] == "high"
+
 
 class TestOpenAIVisionCompletionParams:
     """Vision requests preserve the same OpenAI defaults as text requests."""
@@ -119,3 +160,20 @@ class TestOpenAIVisionCompletionParams:
         assert kwargs["max_tokens"] == 1024
         assert "max_completion_tokens" not in kwargs
         assert kwargs["temperature"] == 0.2
+
+    def test_gpt6_luna_vision_tools_disable_reasoning(self):
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-6-luna",
+                "api_base": "https://api.openai.com/v1",
+                "reasoning_effort": "high",
+            }
+        )
+
+        kwargs = vlm._build_vision_kwargs(
+            prompt="describe this",
+            tools=[{"type": "function", "function": {"name": "read"}}],
+        )
+
+        assert kwargs["reasoning_effort"] == "none"
