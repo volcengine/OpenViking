@@ -87,7 +87,8 @@ class HierarchicalRetriever:
                     self._rerank_clients[name] = client
                     provider = p_cfg._effective_provider()
                     logger.info(
-                        f"[HierarchicalRetriever] Rerank profile '{name}' enabled (provider={provider}), threshold={p_cfg.threshold}"
+                        f"[HierarchicalRetriever] Rerank profile '{name}' enabled "
+                        f"(provider={provider}), threshold={p_cfg.threshold}"
                     )
 
         # Initialize legacy rerank client — all providers go through unified dispatch
@@ -95,13 +96,15 @@ class HierarchicalRetriever:
             self._rerank_client = RerankClient.from_config(rerank_config)
             provider = rerank_config._effective_provider()
             logger.info(
-                f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.threshold}"
+                f"[HierarchicalRetriever] Rerank enabled "
+                f"(provider={provider}), threshold={self.threshold}"
             )
         else:
             self._rerank_client = None
             if not self._rerank_clients:
                 logger.info(
-                    f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}"
+                    f"[HierarchicalRetriever] Rerank not configured, using vector search "
+                    f"only with threshold={self.threshold}"
                 )
 
     def _resolve_lane(self, ctx: Optional[RequestContext]) -> Optional[str]:
@@ -171,7 +174,7 @@ class HierarchicalRetriever:
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
         effective_lane = self._resolve_lane(ctx)
-        client, lane_cfg, lane_thresh, lane_max_tokens = self._get_lane_resources(effective_lane)
+        client, _, lane_thresh, lane_max_tokens = self._get_lane_resources(effective_lane)
         effective_threshold = self._resolve_threshold(score_threshold, lane_thresh)
         image_query = query.image_query
         if mode is None:
@@ -392,7 +395,8 @@ class HierarchicalRetriever:
 
         if not scores or len(scores) != len(rerank_documents):
             logger.warning(
-                "[HierarchicalRetriever] Invalid rerank result (lane=%s), fallback to vector scores",
+                "[HierarchicalRetriever] Invalid rerank result (lane=%s), "
+                "fallback to vector scores",
                 lane_label,
             )
             return fallback_scores

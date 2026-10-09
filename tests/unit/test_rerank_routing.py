@@ -94,6 +94,8 @@ class TestOpenAIRerankClientRetry:
         # Initial attempt + 2 retries = 3 attempts total
         assert mock_post.call_count == 3
         assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(0.5)
+        mock_sleep.assert_any_call(1.0)
 
     @patch("requests.post")
     def test_zero_retries_fails_immediately(self, mock_post):

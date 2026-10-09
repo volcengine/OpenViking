@@ -1098,6 +1098,7 @@ using Choice through MCP.
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `max_retries` | int | Maximum retry attempts on HTTP connection errors with exponential backoff. Default: `2` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
@@ -1108,6 +1109,46 @@ using Choice through MCP.
 - `jev`: Jev (TypeSafe System One) structured-decision API with Choice comparison and independent Noul scoring
 
 If rerank is not configured, search uses vector similarity only.
+
+#### Tiered Rerank Profiles and Routing
+
+Configure multiple named rerank profiles under `rerank_profiles` and route endpoints/operations using `rerank_routing`:
+
+```json
+{
+  "rerank_profiles": {
+    "light": {
+      "provider": "openai",
+      "model": "novelaide/Qwen3-Reranker-4B-MLX",
+      "api_base": "http://127.0.0.1:8082/v1/rerank",
+      "timeout": 45.0,
+      "threshold": 0.1,
+      "max_retries": 2,
+      "max_input_tokens": 512
+    },
+    "heavy": {
+      "provider": "openai",
+      "model": "Qwen3-Reranker-8B",
+      "api_key": "your-key",
+      "api_base": "https://ai.gitee.com/v1/rerank",
+      "timeout": 75.0,
+      "threshold": 0.1,
+      "max_retries": 2,
+      "max_input_tokens": 1024
+    }
+  },
+  "rerank_routing": {
+    "context": "light",
+    "find": "heavy",
+    "search": "light",
+    "default": "light"
+  }
+}
+```
+
+- When `rerank_profiles` is absent or empty, OpenViking falls back byte-identically to legacy single `rerank` configuration.
+- `rerank_routing` maps endpoint operations (`"context"`, `"find"`, `"search"`, `"default"`) to configured profile names.
+- Individual `/find` or `/search` requests can optionally specify `rerank_lane` to explicitly override profile selection.
 
 ### retrieval
 

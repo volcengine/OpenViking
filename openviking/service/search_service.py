@@ -236,8 +236,6 @@ class SearchService:
             storage=storage,
             embedder=embedder,
             rerank_config=fs.rerank_config,
-            rerank_profiles=getattr(fs, "rerank_profiles", None),
-            rerank_routing=getattr(fs, "rerank_routing", None),
         )
         result = await retriever.retrieve_skills(
             TypedQuery(query, ContextType.SKILL, "", target_directories=targets),

@@ -165,10 +165,12 @@ class OpenAIRerankClient(RerankBase):
                     break
                 except requests.exceptions.ConnectionError as e:
                     if attempt < self.max_retries:
+                        delay = 0.5 * (2 ** attempt)
                         logger.warning(
-                            f"[OpenAIRerankClient] Connection error on rerank attempt {attempt + 1}, retrying after 0.5s: {e}"
+                            f"[OpenAIRerankClient] Connection error on attempt {attempt + 1}"
+                            f"/{self.max_retries + 1}, retrying in {delay:.1f}s: {e}"
                         )
-                        time.sleep(0.5)
+                        time.sleep(delay)
                     else:
                         raise
             if response is None:
