@@ -133,11 +133,15 @@ def test_collection_upsert_rejects_native_store_failure(tmp_path, monkeypatch):
         )
         assert collection.upsert_data([{"id": "seed", "vector": [1, 0, 0, 0]}]).ids == ["seed"]
         local = collection._Collection__collection
+        index = local.indexes.get("default")
+        labels_before = index.search([1, 0, 0, 0], limit=10)[0]
+        assert len(labels_before) == 1
         with monkeypatch.context() as failure:
             failure.setattr(local.store_mgr.storage.storage_engine, "exec_op", lambda _ops: -1)
             with pytest.raises(RuntimeError, match="exec_op.*-1"):
                 collection.upsert_data([{"id": "lost", "vector": [0, 1, 0, 0]}])
         assert collection.fetch_data(["lost"]).ids_not_exist == ["lost"]
+        assert index.search([1, 0, 0, 0], limit=10)[0] == labels_before
         result = collection.search_by_vector("default", dense_vector=[0, 1, 0, 0], limit=10)
         assert [item.id for item in result.data] == ["seed"]
     finally:
