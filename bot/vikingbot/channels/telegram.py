@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 
@@ -329,7 +330,8 @@ class TelegramChannel(BaseChannel):
                     media_dir = get_media_path()
                 media_dir.mkdir(parents=True, exist_ok=True)
 
-                file_path = media_dir / f"{media_file.file_id[:16]}{ext}"
+                media_key = f"{chat_id}:{message.message_id}:{media_file.file_id}".encode()
+                file_path = media_dir / f"telegram_{hashlib.sha256(media_key).hexdigest()}{ext}"
                 await file.download_to_drive(str(file_path))
 
                 media_paths.append(str(file_path))
