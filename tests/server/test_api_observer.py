@@ -4,6 +4,7 @@
 """Tests for observer endpoints (/api/v1/observer/*)."""
 
 import asyncio
+import copy
 
 import httpx
 
@@ -36,7 +37,7 @@ async def test_observer_queue_structured(client: httpx.AsyncClient):
     assert isinstance(result["status"]["summary"], dict)
 
 
-async def test_observer_vikingdb(client: httpx.AsyncClient, service):
+async def test_observer_vikingdb(client: httpx.AsyncClient, service, monkeypatch):
     """VikingDB status should preserve table output and expose loaded index semantics."""
     table_resp = await client.get("/api/v1/observer/vikingdb")
     assert table_resp.status_code == 200
@@ -45,7 +46,16 @@ async def test_observer_vikingdb(client: httpx.AsyncClient, service):
     manager = service.vikingdb_manager
     assert manager is not None
     backend = await manager.get_account_backend("default")
-    backend._distance_metric = "l2"
+    original_collection_meta = backend._async_adapter.collection_meta
+
+    async def l2_collection_meta(index_name, *, raise_on_error=False):
+        meta = copy.deepcopy(
+            await original_collection_meta(index_name, raise_on_error=raise_on_error)
+        )
+        meta["VectorIndex"]["Distance"] = "l2"
+        return meta
+
+    monkeypatch.setattr(backend._async_adapter, "collection_meta", l2_collection_meta)
 
     resp = await client.get("/api/v1/observer/vikingdb", params={"format": "json"})
     assert resp.status_code == 200
@@ -55,8 +65,8 @@ async def test_observer_vikingdb(client: httpx.AsyncClient, service):
     assert result["name"] == "vikingdb"
     assert result["is_healthy"] is True
     assert result["status"]["backend"] == "local"
-    assert result["status"]["distance_metric"] == "cosine"
-    assert result["status"]["pure_dense_score_scale"] == "cosine_affine_0_1"
+    assert result["status"]["distance_metric"] == "l2"
+    assert result["status"]["pure_dense_score_scale"] == "reciprocal_squared_l2_0_1"
 
 
 async def test_observer_models(client: httpx.AsyncClient):

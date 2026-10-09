@@ -7,6 +7,7 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Local L2 score normalization (behavior change)**: Pure-dense L2 scores from the local CPU and cuVS paths now use `1 / (1 + squared_l2)` instead of `1 - squared_l2`. Scores stay in `(0, 1]`; ranking and stored indexes do not change. Retune custom thresholds that were calibrated to the old scale. Sparse and hybrid score fusion is unchanged.
 - **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
   and extract long-term memories, but generate no WM/checkpoint summaries by default.
   Update installed agent plugins separately: automatic archive injection and takeover now

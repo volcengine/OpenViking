@@ -161,7 +161,7 @@ cuVS 版本、CAGRA 参数、query batch 和并行 GPU workload 都可能进一�
 因此 auto 模式会先初始化 runtime、读取剩余空闲显存，再应用保守 safety factor
 和独立 reserve，而不会只按 vector payload 准入。
 
-距离语义与原本的 OpenViking 本地后端保持一致：cosine 会先做 L2 归一化再执行 inner product；L2 的返回分数仍为 `1 - squared_l2`，分数越大越相似。
+距离语义与 OpenViking 本地后端保持一致：cosine 会先做 L2 归一化再执行 inner product；纯 dense L2 分数使用 `1 / (1 + squared_l2)`，分数保持在 `(0, 1]`，并且越大越相似。稀疏与混合检索继续使用独立的融合尺度。
 
 ## 数据类型与原生索引行为
 

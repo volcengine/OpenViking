@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 _LOCAL_PURE_DENSE_SCORE_SCALES = {
     "cosine": "cosine_affine_0_1",
     "ip": "inner_product",
-    "l2": "one_minus_squared_l2",
+    "l2": "reciprocal_squared_l2_0_1",
 }
 
 RETRIEVAL_OUTPUT_FIELDS = [
