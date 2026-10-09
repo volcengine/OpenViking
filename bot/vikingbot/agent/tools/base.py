@@ -229,6 +229,8 @@ class Tool(ABC):
             not be called directly from outside the class.
         """
         t, label = schema.get("type"), path or "parameter"
+        if val is None and schema.get("nullable") is True:
+            return []
         if t in self._TYPE_MAP and not isinstance(val, self._TYPE_MAP[t]):
             return [f"{label} should be {t}"]
 
