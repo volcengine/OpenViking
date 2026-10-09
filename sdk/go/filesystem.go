@@ -285,6 +285,7 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
+	setString(payload, "metadata_mode", opts.MetadataMode)
 	if opts.ACL != nil {
 		payload["acl"] = opts.ACL
 	}

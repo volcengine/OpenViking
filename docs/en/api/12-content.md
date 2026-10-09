@@ -217,6 +217,7 @@ Write a file and automatically refresh related semantics and vectors.
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
+| metadata_mode | string | No | `preserve` | Memory metadata policy for `mode=replace`: `preserve` keeps the existing `MEMORY_FIELDS`; `replace` rebuilds them from the supplied content |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
@@ -227,6 +228,7 @@ Write a file and automatically refresh related semantics and vectors.
 - `replace` and `append` create a missing target file. `append` uses the supplied content as the initial file content in that case. `create` targets only a missing file and returns `409 Conflict` when the path already exists. Directories are always rejected.
 - Explicit `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
+- Memory files preserve their existing `MEMORY_FIELDS` by default, even when `mode=replace`. Set `metadata_mode=replace` to treat the supplied body and optional `MEMORY_FIELDS` trailer as the complete replacement. A body without a trailer starts with `version: 1`. This option is valid only for memory files with `mode=replace`.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
@@ -356,6 +358,7 @@ Each operation contains:
 | `content` | string | Conditional | UTF-8 text; exactly one of `content` and `content_base64` is required |
 | `content_base64` | string | Conditional | Base64-encoded bytes; not supported for Memory targets |
 | `mode` | string | No | `replace` (default), `append`, `create`, or `upsert` |
+| `metadata_mode` | string | No | Memory metadata policy: `preserve` (default) or `replace`; `replace` requires operation mode `replace` or `upsert` |
 
 **Notes**
 
@@ -363,6 +366,7 @@ Each operation contains:
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
+- Memory operations preserve existing `MEMORY_FIELDS` by default. Set `metadata_mode=replace` on a `replace` or `upsert` operation to rebuild metadata from that operation's content.
 - The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.

@@ -188,6 +188,28 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
     assert resp.status_code == 400
 
 
+async def test_write_forwards_metadata_mode(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_write(**kwargs):
+        captured.update(kwargs)
+        return {"uri": kwargs["uri"], "mode": kwargs["mode"]}
+
+    monkeypatch.setattr(service.fs, "write", fake_write)
+    resp = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": "viking://user/default/memories/preferences/theme.md",
+            "content": "updated",
+            "mode": "replace",
+            "metadata_mode": "replace",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["metadata_mode"] == "replace"
+
+
 async def test_api_create_mode_new_file_success(client):
     """Test create mode with a new file."""
     resp = await client.post(

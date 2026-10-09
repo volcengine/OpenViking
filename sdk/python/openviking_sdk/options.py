@@ -97,6 +97,7 @@ class WriteOptions(_ExtraOptions, total=False):
     acl: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
+    metadata_mode: Literal["preserve", "replace"]
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
 

@@ -107,6 +107,7 @@ export interface AddResourceOptions extends WaitOptions {
 export interface WriteOptions extends WaitOptions {
   acl?: AclSpec;
   mode?: string;
+  metadataMode?: "preserve" | "replace";
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
@@ -118,6 +119,7 @@ export interface BatchWriteOperation {
   content?: string;
   contentBase64?: string;
   mode?: "replace" | "append" | "create" | "upsert";
+  metadataMode?: "preserve" | "replace";
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {

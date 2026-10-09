@@ -770,18 +770,19 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 	}
 }
 
-func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
+func TestWriteSendsProcessingModeMetadataModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
+		if body["processing_mode"] != "vectors_only" || body["metadata_mode"] != "replace" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
 	}))
 	defer closeServer()
 
-	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
+	if _, err := client.Write(context.Background(), "user/default/memories/preferences/a.md", "", &WriteOptions{
 		ProcessingMode: "vectors_only",
+		MetadataMode:   "replace",
 		Tags:           []string{},
 		TagMode:        "replace",
 		Wait:           true,
@@ -914,6 +915,38 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 	}
 	if string(data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("data = %v", data)
+	}
+}
+
+func TestBatchWriteSendsMetadataMode(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		operations, ok := body["operations"].([]any)
+		if !ok || len(operations) != 1 {
+			t.Fatalf("operations = %#v", body["operations"])
+		}
+		operation, ok := operations[0].(map[string]any)
+		if !ok || operation["metadata_mode"] != "replace" {
+			t.Fatalf("operation = %#v", operations[0])
+		}
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	if _, err := client.BatchWrite(
+		context.Background(),
+		"user/default/memories/preferences",
+		[]BatchWriteOperation{
+			{
+				URI:          "user/default/memories/preferences/theme.md",
+				Content:      String("updated"),
+				Mode:         "replace",
+				MetadataMode: "replace",
+			},
+		},
+		nil,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

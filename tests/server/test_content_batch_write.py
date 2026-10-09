@@ -270,6 +270,52 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_batch_replace_memory_can_reset_metadata(monkeypatch):
+    root = "viking://user/default/memories/preferences"
+    memory_uri = f"{root}/theme.md"
+    original = MemoryFileUtils.write(
+        MemoryFile(
+            content="Original preference",
+            memory_type="preferences",
+            extra_fields={
+                "peer_id": "foreign-peer",
+                "topic": "theme",
+                "version": 339,
+            },
+        )
+    )
+    vfs = _VFS(root, {memory_uri: original})
+    coordinator = ContentWriteCoordinator(vfs)
+
+    async def refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": memory_uri,
+                "content": "Updated preference",
+                "mode": "replace",
+                "metadata_mode": "replace",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    stored = MemoryFileUtils.read(vfs.files[memory_uri], uri=memory_uri)
+    assert result["updated"] == [memory_uri]
+    assert stored.content == "Updated preference"
+    assert stored.extra_fields == {"version": 1}
+    assert stored.memory_type is None
+
+
+@pytest.mark.asyncio
 async def test_batch_reports_skipped_directory_and_queued_file_vectors(monkeypatch):
     root = "viking://resources/wide"
     page = f"{root}/page.md"

@@ -250,6 +250,7 @@ type WriteOptions struct {
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	MetadataMode   string
 	Tags           []string
 	TagMode        string
 	Extra          map[string]any
@@ -261,6 +262,7 @@ type BatchWriteOperation struct {
 	Content       *string `json:"content,omitempty"`
 	ContentBase64 *string `json:"content_base64,omitempty"`
 	Mode          string  `json:"mode,omitempty"`
+	MetadataMode  string  `json:"metadata_mode,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.

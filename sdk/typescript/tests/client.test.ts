@@ -461,6 +461,47 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends metadata_mode for single and batch memory writes", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.write(
+      "user/default/memories/preferences/theme.md",
+      "updated",
+      {
+        mode: "replace",
+        metadataMode: "replace",
+      },
+    );
+    await client.batchWrite("user/default/memories/preferences", [
+      {
+        uri: "user/default/memories/preferences/theme.md",
+        content: "updated",
+        mode: "replace",
+        metadataMode: "replace",
+      },
+    ]);
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      metadata_mode: "replace",
+    });
+    expect(
+      JSON.parse(String(fetcher.mock.calls[1]![1]?.body)).operations,
+    ).toEqual([
+      {
+        uri: "viking://user/default/memories/preferences/theme.md",
+        content: "updated",
+        mode: "replace",
+        metadata_mode: "replace",
+      },
+    ]);
+  });
+
   it("sends explicit tags for write, list, tree, and grep", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

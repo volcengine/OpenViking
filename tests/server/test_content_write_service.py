@@ -104,6 +104,100 @@ async def test_memory_replace_preserves_metadata(service):
 
 
 @pytest.mark.asyncio
+async def test_memory_replace_can_reset_metadata(service):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/theme.md"
+    original_mf = MemoryFile(
+        content="Original preference",
+        memory_type="preferences",
+        extra_fields={
+            "peer_id": "foreign-peer",
+            "topic": "theme",
+            "version": 339,
+        },
+    )
+    await service.viking_fs.write_file(
+        memory_uri,
+        MemoryFileUtils.write(original_mf),
+        ctx=ctx,
+    )
+
+    await service.fs.write(
+        memory_uri,
+        content="Updated preference",
+        ctx=ctx,
+        mode="replace",
+        metadata_mode="replace",
+    )
+
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    stored_result = MemoryFileUtils.read(stored, uri=memory_uri)
+
+    assert stored_result.content == "Updated preference"
+    assert stored_result.extra_fields == {"version": 1}
+    assert stored_result.memory_type is None
+
+    replacement = MemoryFileUtils.write(
+        MemoryFile(
+            content="Migrated preference",
+            memory_type="preferences",
+            extra_fields={
+                "peer_id": "correct-peer",
+                "topic": "migrated-theme",
+                "version": 7,
+            },
+        )
+    )
+    await service.fs.write(
+        memory_uri,
+        content=replacement,
+        ctx=ctx,
+        mode="replace",
+        metadata_mode="replace",
+    )
+
+    stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
+    stored_result = MemoryFileUtils.read(stored, uri=memory_uri)
+    assert stored_result.content == "Migrated preference"
+    assert stored_result.extra_fields == {
+        "peer_id": "correct-peer",
+        "topic": "migrated-theme",
+        "version": 7,
+    }
+    assert stored_result.memory_type == "preferences"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("uri", "mode", "message"),
+    [
+        (
+            "viking://resources/docs/readme.md",
+            "replace",
+            "only supported for memory files",
+        ),
+        (
+            "viking://user/default/memories/preferences/theme.md",
+            "append",
+            "requires write mode='replace'",
+        ),
+    ],
+)
+async def test_metadata_replace_rejects_unsupported_write_targets(uri, mode, message):
+    coordinator = ContentWriteCoordinator(SimpleNamespace())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match=message):
+        await coordinator.write(
+            uri=uri,
+            content="updated",
+            ctx=ctx,
+            mode=mode,
+            metadata_mode="replace",
+        )
+
+
+@pytest.mark.asyncio
 async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     service, sample_markdown_file, monkeypatch
 ):

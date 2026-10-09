@@ -44,6 +44,7 @@ class WriteContentRequest(BaseModel):
     uri: str
     content: str
     mode: str = "replace"
+    metadata_mode: Literal["preserve", "replace"] = "preserve"
     wait: bool = False
     timeout: float | None = None
     telemetry: TelemetryRequest = False
@@ -60,6 +61,7 @@ class BatchWriteOperation(BaseModel):
     content: str | None = None
     content_base64: str | None = None
     mode: Literal["replace", "append", "create", "upsert"] = "replace"
+    metadata_mode: Literal["preserve", "replace"] = "preserve"
 
     @model_validator(mode="after")
     def validate_content_shape(self) -> "BatchWriteOperation":
@@ -244,6 +246,7 @@ async def write(
             content=request.content,
             ctx=_ctx,
             mode=request.mode,
+            metadata_mode=request.metadata_mode,
             wait=request.wait,
             timeout=request.timeout,
             processing_mode=request.processing_mode,

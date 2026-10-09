@@ -384,6 +384,23 @@ async def test_async_http_client_write_forwards_processing_mode():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_write_forwards_metadata_mode():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://user/default/memories/preferences/theme.md",
+        "updated",
+        options={"metadata_mode": "replace"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert payload["metadata_mode"] == "replace"
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_write_forwards_explicit_tags_and_mode():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

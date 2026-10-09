@@ -217,6 +217,7 @@ ov read viking://resources/docs/api.md
 | uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
+| metadata_mode | string | 否 | `preserve` | `mode=replace` 时的 Memory metadata 策略：`preserve` 保留现有 `MEMORY_FIELDS`；`replace` 根据传入内容重新构建 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
@@ -227,6 +228,7 @@ ov read viking://resources/docs/api.md
 - `replace` 和 `append` 在目标文件缺失时都会创建文件；其中 `append` 会以传入内容作为新文件的初始内容。`create` 仅用于创建缺失文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
 - 显式 `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
+- Memory 文件默认保留现有 `MEMORY_FIELDS`，即使使用 `mode=replace`。设置 `metadata_mode=replace` 后，传入正文及可选的 `MEMORY_FIELDS` trailer 将成为完整替换内容；未提供 trailer 时从 `version: 1` 开始。此选项仅适用于使用 `mode=replace` 的 Memory 文件。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
@@ -356,6 +358,7 @@ ov write viking://resources/docs/api.md \
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
 | `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
+| `metadata_mode` | string | 否 | Memory metadata 策略：`preserve`（默认）或 `replace`；`replace` 要求 operation mode 为 `replace` 或 `upsert` |
 
 **说明**
 
@@ -363,6 +366,7 @@ ov write viking://resources/docs/api.md \
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
+- Memory operation 默认保留现有 `MEMORY_FIELDS`。在 `replace` 或 `upsert` operation 中设置 `metadata_mode=replace`，可根据该 operation 的 content 重新构建 metadata。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。所有文件写完并释放锁后才启动语义处理，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。

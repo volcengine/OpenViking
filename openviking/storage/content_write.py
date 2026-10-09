@@ -130,6 +130,7 @@ class ContentWriteCoordinator:
         content: str,
         ctx: RequestContext,
         mode: str = "replace",
+        metadata_mode: str = "preserve",
         wait: bool = False,
         timeout: Optional[float] = None,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -138,11 +139,20 @@ class ContentWriteCoordinator:
         acl: AclSpec | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
+        self._validate_metadata_mode(metadata_mode)
         processing_mode = normalize_processing_mode(processing_mode)
         normalized_uri = normalize_storage_target_uri(
             self._validate_uri_path(uri, field_name="uri")
         )
         self._ensure_content_write_policy(normalized_uri)
+        context_type = context_type_for_uri(normalized_uri)
+        if metadata_mode == "replace":
+            if context_type != "memory" or is_abstract_overview_uri(normalized_uri):
+                raise InvalidArgumentError(
+                    "metadata_mode='replace' is only supported for memory files"
+                )
+            if mode != "replace":
+                raise InvalidArgumentError("metadata_mode='replace' requires write mode='replace'")
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:
@@ -182,7 +192,6 @@ class ContentWriteCoordinator:
                 f"write only supports existing files, got directory: {normalized_uri}"
             )
 
-        context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
@@ -193,6 +202,7 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 content=content,
                 mode=mode,
+                metadata_mode=metadata_mode,
                 wait=wait,
                 timeout=timeout,
                 ctx=ctx,
@@ -299,12 +309,18 @@ class ContentWriteCoordinator:
             for operation, existed, write_mode in pending:
                 uri = operation["uri"]
                 try:
+                    metadata_options = (
+                        {"metadata_mode": operation["metadata_mode"]}
+                        if operation["metadata_mode"] != "preserve"
+                        else {}
+                    )
                     final_content = await self._write_in_place(
                         uri,
                         operation["content"],
                         mode=write_mode,
                         ctx=ctx,
                         lease_ref=lease,
+                        **metadata_options,
                     )
                     if context_type_for_uri(uri) in {
                         "resource",
@@ -514,6 +530,17 @@ class ContentWriteCoordinator:
 
             mode = raw.get("mode", "replace")
             self._validate_batch_mode(mode)
+            metadata_mode = raw.get("metadata_mode", "preserve")
+            self._validate_metadata_mode(metadata_mode)
+            if metadata_mode == "replace":
+                if context_type != "memory" or is_abstract_overview_uri(uri):
+                    raise InvalidArgumentError(
+                        "metadata_mode='replace' is only supported for memory files"
+                    )
+                if mode not in {"replace", "upsert"}:
+                    raise InvalidArgumentError(
+                        "metadata_mode='replace' requires batch-write mode='replace' or 'upsert'"
+                    )
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
@@ -527,6 +554,7 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
+                    "metadata_mode": metadata_mode,
                 }
             )
         return sorted(normalized, key=lambda operation: operation["uri"])
@@ -1103,6 +1131,10 @@ class ContentWriteCoordinator:
         if not isinstance(mode, str) or mode not in {"replace", "append", "create", "upsert"}:
             raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
+    def _validate_metadata_mode(self, mode: str) -> None:
+        if mode not in {"preserve", "replace"}:
+            raise InvalidArgumentError(f"unsupported metadata mode: {mode}")
+
     def _validate_tag_mode(self, mode: str) -> None:
         if mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
@@ -1216,6 +1248,7 @@ class ContentWriteCoordinator:
         content: str | bytes,
         *,
         mode: str,
+        metadata_mode: str = "preserve",
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]] = None,
         existing_raw: str | bytes | None = None,
@@ -1236,7 +1269,7 @@ class ContentWriteCoordinator:
             return rendered.encode("utf-8")
 
         if context_type_for_uri(uri) == "memory":
-            if mode == "replace":
+            if mode == "replace" and metadata_mode == "preserve":
                 existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
                 mf = MemoryFileUtils.read(existing_raw, uri=uri)
                 mf.content = content
@@ -1359,6 +1392,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
+        metadata_mode: str = "preserve",
         response_mode: Optional[str] = None,
         wait: bool,
         timeout: Optional[float],
@@ -1382,7 +1416,17 @@ class ContentWriteCoordinator:
         released = False
         request_registered = False
         try:
-            await self._write_in_place(uri, content, mode=mode, ctx=ctx, lease_ref=lease)
+            metadata_options = (
+                {"metadata_mode": metadata_mode} if metadata_mode != "preserve" else {}
+            )
+            await self._write_in_place(
+                uri,
+                content,
+                mode=mode,
+                ctx=ctx,
+                lease_ref=lease,
+                **metadata_options,
+            )
             await self._viking_fs._async_agfs.pathlock_release(lease)
             released = True
             if wait and telemetry_id and self._vikingdb_has_queue():
