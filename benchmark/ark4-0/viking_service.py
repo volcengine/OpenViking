@@ -27,6 +27,7 @@ class VikingAdapter:
         self.client, self.settings, self.store = client, settings, store
         self.run_locks, self.batch_locks, self.workers = {}, {}, {}
         self.last_polls = {}
+        self.task_admission_lock = asyncio.Lock()
 
     def run(self, run_id):
         run = self.store.get("runs", run_id)
@@ -275,23 +276,28 @@ class VikingAdapter:
                     concurrency=run["concurrency"],
                     settings=settings,
                 )
-                # Trials must not multiply the requested remote concurrency. Only one
-                # experiment per local run is active; Viking parallelizes its selected rows.
-                async with self.run_locks.setdefault(run["run_id"], asyncio.Lock()):
+                # Bound platform tasks across this adapter, including separate runs.
+                # Hold the admission lock through POST so concurrent callers cannot
+                # both claim the final slot. Row concurrency remains task-local.
+                async with self.task_admission_lock:
                     while True:
-                        waiting = False
+                        active = 0
                         for other in self.store.all("batches"):
-                            if other["run_id"] != run["run_id"] or other["state"] in TERMINAL:
+                            if other["state"] in TERMINAL:
                                 continue
                             if not other.get("task_id"):
                                 raise UnresolvedCreation("另一个批次创建待核对：" + other["name"])
                             detail = await self.client.request(
                                 "GET", f"task-executions/{other['task_id']}"
                             )
-                            waiting |= detail["status"] not in TERMINAL
+                            if detail["status"] not in TERMINAL:
+                                active += 1
+                            else:
+                                other["state"] = detail["status"]
+                                self.store.put("batches", other["batch_id"], other)
                         if self.run(run["run_id"])["status"] != "active":
                             raise ValueError("Run is not active")
-                        if not waiting:
+                        if active < self.settings.service.max_active_tasks:
                             break
                         await asyncio.sleep(settings.poll_interval_seconds)
                     await preflight(self.client, body)

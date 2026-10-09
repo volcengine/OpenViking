@@ -1,5 +1,6 @@
 {
   "service": {
+    "max_active_tasks": 1,
     "port": 8765,
     "dataset": "ark-viking-local-smoke-20260907"
   },
@@ -7,6 +8,7 @@
     "base_url": "https://viking-exp.byted.org",
     "api_token": "YOUR_VIKING_API_TOKEN",
     "template_task_id": 3327,
+    "group_timeout_seconds": {"group_1": 1800},
     "group_concurrency": {
       "group_2": 20,
       "group_3": 20,

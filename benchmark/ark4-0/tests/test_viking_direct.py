@@ -204,6 +204,45 @@ def test_launch_no_inherited_identity_and_all_groups_concurrent():
     assert source["launch_request"]["config"]["concurrency"] == 2
 
 
+def test_launch_group_timeout_override_preserves_other_settings():
+    source = draft()
+    for group in source["launch_request"]["execution_plan"]["groups"]:
+        group["execution_overrides"].update(timeout_seconds=3200, max_retries=3)
+    original = copy.deepcopy(source)
+    configured = Viking(api_token="test", template_task_id=1, group_timeout_seconds={"g1": 1800})
+    body = launch_request(
+        source,
+        selection={"experiment_set_id": 421, "version": "V2"},
+        row_ids=[10],
+        name="new",
+        concurrency=36,
+        settings=configured,
+    )
+    overrides = [g["execution_overrides"] for g in body["execution_plan"]["groups"]]
+    assert [g["timeout_seconds"] for g in overrides] == [1800, 3200]
+    assert all(g["max_retries"] == 3 and g["concurrency"] == 36 for g in overrides)
+    assert source == original
+
+
+@pytest.mark.parametrize("value", [0, 604801, True, "1800"])
+def test_group_timeout_requires_bounded_integer(value):
+    with pytest.raises(ValueError):
+        Viking(api_token="test", template_task_id=1, group_timeout_seconds={"g1": value})
+
+
+def test_unknown_group_timeout_rejected():
+    configured = Viking(api_token="test", template_task_id=1, group_timeout_seconds={"typo": 1800})
+    with pytest.raises(ValueError, match="Unknown group_timeout_seconds"):
+        launch_request(
+            draft(),
+            selection={"experiment_set_id": 421, "version": "V2"},
+            row_ids=[10],
+            name="new",
+            concurrency=36,
+            settings=configured,
+        )
+
+
 def test_launch_group_concurrency_overrides():
     source = draft()
     source["launch_request"]["execution_plan"]["groups"].extend(
@@ -416,6 +455,52 @@ async def test_trials_cannot_multiply_remote_concurrency(tmp_path):
     await asyncio.wait_for(second, timeout=1)
     assert len(client.creates) == 2
     await app.router.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_two_active_tasks_share_slots_across_runs(tmp_path):
+    class RunningClient(FakeClient):
+        async def request(self, method, path, **kwargs):
+            result = await super().request(method, path, **kwargs)
+            if path == "task-executions" and method == "POST":
+                result["status"] = "running"
+            return result
+
+    config = settings()
+    config.service.max_active_tasks = 2
+    client = RunningClient()
+    app = create_app(client, config, state_dir=tmp_path)
+    adapter, cases = await start(app)
+    original = adapter.run("r1")
+    second_run = copy.deepcopy(original)
+    second_run["run_id"] = "r2"
+    adapter.store.put("runs", "r2", second_run)
+
+    def execution(trial, run="r1"):
+        return {"run_id": run, "batch_id": f"batch-{trial}", "request": request(cases[0], trial)}
+
+    first, second = await asyncio.gather(
+        adapter.ensure_batch(execution(0)), adapter.ensure_batch(execution(1, "r2"))
+    )
+    assert len(client.creates) == 2
+    third = asyncio.create_task(adapter.ensure_batch(execution(2)))
+    await asyncio.sleep(0.02)
+    assert len(client.creates) == 2
+    # Either task finishing frees one slot; it need not be the oldest task.
+    client.tasks[second["task_id"]]["status"] = "success"
+    await asyncio.wait_for(third, timeout=1)
+    assert len(client.creates) == 3
+    assert client.tasks[first["task_id"]]["status"] == "running"
+    assert sum(t["status"] == "running" for t in client.tasks.values()) == 2
+    await app.router.shutdown()
+
+
+@pytest.mark.parametrize("value", [0, 3, True, "2"])
+def test_active_task_limit_validation(value):
+    from adapter_settings import Service
+
+    with pytest.raises(ValueError):
+        Service(max_active_tasks=value)
 
 
 @pytest.mark.asyncio

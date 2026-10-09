@@ -33,6 +33,11 @@ def launch_request(draft, *, selection, row_ids, name, concurrency, settings):
     unknown_groups = set(settings.group_concurrency) - {group["key"] for group in groups}
     if unknown_groups:
         raise ValueError(f"Unknown group_concurrency keys in template: {sorted(unknown_groups)}")
+    unknown_timeouts = set(settings.group_timeout_seconds) - {group["key"] for group in groups}
+    if unknown_timeouts:
+        raise ValueError(
+            f"Unknown group_timeout_seconds keys in template: {sorted(unknown_timeouts)}"
+        )
     for group in groups:
         group_concurrency = settings.group_concurrency.get(group["key"], concurrency)
         group["execution_overrides"].update(
@@ -40,6 +45,10 @@ def launch_request(draft, *, selection, row_ids, name, concurrency, settings):
             ramp_up_enabled=False,
             ramp_up_concurrency_per_minute=group_concurrency,
         )
+        if group["key"] in settings.group_timeout_seconds:
+            group["execution_overrides"]["timeout_seconds"] = settings.group_timeout_seconds[
+                group["key"]
+            ]
     if body.get("execution_type", "standard") == "standard":
         body.pop("execution_plan", None)
     return body

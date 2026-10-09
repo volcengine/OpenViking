@@ -8,7 +8,7 @@
 
 - 每次启动 runner 新建一个本地 run；每个页批次、epoch、trial 对应新的 Viking 实验。
 - 一个实验包含多道题，不是每道题创建一个实验。Viking 的 `run_times` 固定为 1，多轮由 runner 控制。
-- `--concurrency` 设置实验总并发及未单独配置的组并发；`viking.group_concurrency` 可按组覆盖。当前 G1 跟随 runner，G2～G4 各为 20。同一个 run 的实验依次启动，避免 trial 把并发翻倍。
+- `--concurrency` 设置单个实验总并发及未单独配置的组并发；`viking.group_concurrency` 可按组覆盖。当前 G1 跟随 runner，G2～G4 各为 20。`service.max_active_tasks` 控制本 Adapter 同时运行的平台 Task 数（默认 1，最多 2，跨 run 共用）；设为 2 后两个实验可以同时运行，合计负载也会增加，不改变单个实验的并发。
 - 只跑 Eval：`--epochs 0 --skip-baseline-eval`。不会 Train，也不会 commit。
 - Memory 是否启用由下面的 `sandbox_config` 控制，`--loader-mode none` **不代表关闭远端 Memory**。
 
@@ -23,10 +23,12 @@
 | viking.api_token | Viking API Token。不是旧网关 API Key |
 | viking.template_task_id | 已有实验的编排模板，当前 3327；只复制算子、分组、资源，不复用实验 |
 | viking.group_concurrency | 可选，按模板的 group key 指定题目并发，例如 `{"group_2":20,"group_3":20,"group_4":20}`；未配置的组跟随 `--concurrency`，组名不存在则报错 |
+| service.max_active_tasks | 平台 Task 同时运行上限，1 或 2；占满时等待，某个 Task 结束后再发起下一个。修改后重启 Adapter 生效，不修改或取消已创建的 Task。 |
 | viking.train / viking.eval | 分别指定 `experiment_set_id`、`version`；可加 `row_ids` 选题 |
 | viking.sandbox_config | 发给 Agent 算子的完整运行配置，包含 headers 和 Memory |
 | viking.score_column | 读取哪个评分列，默认 `answer_score`，保留原始 0～1 分数 |
-| viking.task_time_limit_seconds | 单个 Viking 实验总时限，默认 14400 秒；算子时限保留模板设置 |
+| viking.task_time_limit_seconds | 单个 Viking 实验总时限，默认 14400 秒 |
+| viking.group_timeout_seconds | 按组覆盖一次尝试的超时；当前 `{"group_1":1800}` 表示 G1「Vaka调用」30分钟，其他组保留模板设置。不是 shell 工具超时，也不是每轮对话各30分钟；修改后重启 Adapter，对新建 run 生效 |
 | memory_proxy | 保留原来的本地 OpenViking 地址、配置文件路径、鉴权读取位置 |
 | kubevpn | 保留原来的 kubeconfig、namespace |
 

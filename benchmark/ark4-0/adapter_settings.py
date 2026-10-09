@@ -25,6 +25,7 @@ class Service(SettingsModel):
     domain: str = "ark"
     log_level: str = "info"
     state_dir: str = ".adapter-state"
+    max_active_tasks: int = Field(default=1, ge=1, le=2)
 
 
 class Viking(SettingsModel):
@@ -32,6 +33,9 @@ class Viking(SettingsModel):
     api_token: str = Field(repr=False)
     template_task_id: int = Field(gt=0)
     group_concurrency: dict[str, Annotated[int, Field(ge=1, le=500)]] = Field(default_factory=dict)
+    group_timeout_seconds: dict[str, Annotated[int, Field(ge=1, le=604800)]] = Field(
+        default_factory=dict
+    )
     train: Selection | None = None
     eval: Selection | None = None
     sandbox_config: dict[str, Any] = Field(default_factory=dict)
