@@ -81,6 +81,10 @@ class AnthropicProtocol(ToolProtocol):
     def join_replayed_history(messages):
         return merge_tool_results(messages)
 
+    @staticmethod
+    def repair_history(messages):
+        return deduplicate_server_tool_history(messages)
+
     omits_reasoning = True
 
     @staticmethod
@@ -351,3 +355,62 @@ def merge_tool_results(messages):
         else:
             result.append(message)
     return result
+
+
+def deduplicate_server_tool_history(messages):
+    """Remove exact duplicate server-call groups within an assistant turn.
+
+    Claude Code compaction can repeat provider-owned blocks inside one assistant
+    message. Anthropic rejects repeated ``server_tool_use`` IDs. Only identical
+    call/result groups are safe to remove; conflicting copies remain untouched so the
+    gateway never guesses which provider transcript is authoritative.
+    """
+    repaired, removed = [], 0
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") != "assistant" or not isinstance(content, list):
+            repaired.append(message)
+            continue
+
+        seen_groups = {}
+        result_repaired = []
+        index = 0
+        while index < len(content):
+            block = content[index]
+            if not isinstance(block, dict) or block.get("type") != "server_tool_use":
+                result_repaired.append(block)
+                index += 1
+                continue
+
+            identifier = block.get("id")
+            if not isinstance(identifier, str) or not identifier:
+                result_repaired.append(block)
+                index += 1
+                continue
+
+            end = index + 1
+            while end < len(content):
+                result = content[end]
+                result_type = result.get("type") if isinstance(result, dict) else None
+                if not (
+                    isinstance(result_type, str)
+                    and result_type.endswith("_tool_result")
+                    and result.get("tool_use_id") == identifier
+                ):
+                    break
+                end += 1
+            group = content[index:end]
+            prior = seen_groups.get(identifier)
+            if prior is not None and group == prior:
+                removed += len(group)
+            else:
+                seen_groups.setdefault(identifier, group)
+                result_repaired.extend(group)
+            index = end
+
+        repaired.append(
+            {**message, "content": result_repaired}
+            if len(result_repaired) != len(content)
+            else message
+        )
+    return repaired, removed

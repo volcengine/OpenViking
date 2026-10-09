@@ -267,6 +267,11 @@ class ToolProtocol(ABC):
         return messages
 
     @staticmethod
+    def repair_history(messages: list[dict]) -> tuple[list[dict], int]:
+        """Repair a known-safe malformed-history shape before forwarding it."""
+        return messages, 0
+
+    @staticmethod
     def split_reasoning(output: list[dict]) -> tuple[list[dict], dict[int, dict]]:
         """A reply as a client that drops reasoning resends it, and the reasoning to restore.
 

@@ -667,6 +667,9 @@ class MemoryKernel:
             if cleaned != messages:
                 messages = cleaned
                 request.metrics.setdefault("degradation", "hidden_tool_history_unavailable")
+        messages, repaired = adapter.repair_history(messages)
+        if repaired:
+            request.metrics["server_tool_duplicates_removed"] = repaired
         request.body[adapter.field] = messages
 
     @staticmethod
