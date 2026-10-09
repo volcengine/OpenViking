@@ -6,8 +6,9 @@ Mirrors the Win32 device-name guard that PR #4517 added to the memory path
 (``openviking/session/memory/utils/uri.py``) onto the resource path's
 ``VikingURI.sanitize_segment``. A segment whose stem is a Win32 reserved
 name (``CON``, ``PRN``, ``NUL``, ``AUX``, ``COM1``..``COM9``,
-``LPT1``..``LPT9``) is prefixed with ``_`` so it does not collide with a
-Windows device name and cause a silent write failure.
+``LPT1``..``LPT9``, and the superscript-digit aliases ``COM¹``..``COM³``
+and ``LPT¹``..``LPT³``) is prefixed with ``_`` so it does not collide with
+a Windows device name and cause a silent write failure.
 """
 
 import pytest
@@ -17,7 +18,20 @@ from openviking_cli.utils.uri import VikingURI
 
 @pytest.mark.parametrize(
     "reserved",
-    ["CON", "PRN", "NUL", "AUX", "COM1", "LPT1"],
+    [
+        "CON",
+        "PRN",
+        "NUL",
+        "AUX",
+        "COM1",
+        "LPT1",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+    ],
 )
 def test_sanitize_segment_rejects_windows_reserved_names(reserved: str):
     """A bare Win32 reserved stem is prefixed so it is not a device name."""
@@ -38,6 +52,7 @@ def test_sanitize_segment_reserved_with_extension():
     survives and only the stem is defused.
     """
     assert VikingURI.sanitize_segment("CON.txt") == "_CON.txt"
+    assert VikingURI.sanitize_segment("com¹.txt") == "_com¹.txt"
 
 
 def test_sanitize_segment_preserves_normal_names():
