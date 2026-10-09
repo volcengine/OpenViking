@@ -162,6 +162,7 @@ const common = {
   field: {
     default: 'Default: {{value}}',
     notSet: 'Not set',
+    noLimit: 'No limit',
     advanced: 'Advanced settings',
     sectionInvalid: 'Fix the highlighted settings in this section to save.',
     storedSecret: 'Stored — leave blank to keep',

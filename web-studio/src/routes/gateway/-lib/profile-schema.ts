@@ -43,11 +43,11 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   gateway_tools: true,
   show_tool_calls: true,
   disabled_tools: WRITE_TOOLS,
-  tool_max_rounds: 5,
+  tool_max_rounds: null,
   tool_timeout_seconds: 30,
   tool_result_bytes: 65536,
-  tool_total_seconds: 120,
-  tool_total_tokens: 100000,
+  tool_total_seconds: null,
+  tool_total_tokens: null,
 }
 
 type NumericField = {
@@ -72,7 +72,7 @@ export const PROFILE_LIMITS: Record<NumericField, NumberRule> = {
   context_window: { min: 1024, integer: true, optional: true, unit: 'tokens' },
   window_soft_ratio: { min: 0.3, max: 0.95, step: 0.01 },
   window_hard_ratio: { min: 0.4, max: 0.97, step: 0.01 },
-  tool_max_rounds: { min: 1, max: 20, integer: true, unit: 'rounds' },
+  tool_max_rounds: { min: 1, integer: true, unlimited: true, unit: 'rounds' },
   tool_timeout_seconds: {
     min: 0,
     max: 120,
@@ -80,13 +80,13 @@ export const PROFILE_LIMITS: Record<NumericField, NumberRule> = {
     unit: 'seconds',
   },
   tool_result_bytes: { min: 1024, max: 1048576, integer: true, unit: 'bytes' },
-  tool_total_seconds: { min: 0, max: 600, exclusiveMin: true, unit: 'seconds' },
-  tool_total_tokens: {
-    min: 1024,
-    max: 1000000,
-    integer: true,
-    unit: 'tokens',
+  tool_total_seconds: {
+    min: 0,
+    exclusiveMin: true,
+    unlimited: true,
+    unit: 'seconds',
   },
+  tool_total_tokens: { min: 1024, integer: true, unlimited: true, unit: 'tokens' },
 }
 
 /** Per-category entry limit used by "Limit by category". */

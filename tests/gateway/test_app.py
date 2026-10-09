@@ -527,6 +527,39 @@ async def test_tool_round_limit_refuses_gateway_calls_but_keeps_client_tools(
         assert message["tool_calls"] == [weather] and "— skipped" in message["content"]
 
 
+async def test_default_policy_does_not_limit_tool_rounds(running_gateway):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+    requests, mcp_calls = [], []
+
+    async def backend(request):
+        if request.path == "/mcp":
+            mcp_calls.append(await request.json())
+            return web.json_response({"id": 1, "result": {"content": []}})
+        if request.path == "/v1/chat/completions":
+            requests.append(await request.json())
+            number = len(requests)
+            if number > 25:
+                return web.json_response(completion({"role": "assistant", "content": "done"}))
+            call = tool_call(identifier=f"g-{number}")
+            return web.json_response(
+                completion(
+                    {"role": "assistant", "content": None, "tool_calls": [call]}, "tool_calls"
+                )
+            )
+        return None
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "tools"},
+        json={"model": "model", "messages": [{"role": "user", "content": "find blue"}]},
+    )
+    assert response.status_code == 200, response.text
+    assert len(mcp_calls) == 25
+    assert all(m.get("content") != REFUSED for r in requests for m in r["messages"])
+
+
 @pytest.mark.parametrize(
     "header", [{"X-Claude-Code-Agent-Id": "child"}, {"X-OpenViking-Plugin": "1"}]
 )

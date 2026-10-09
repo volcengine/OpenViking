@@ -344,11 +344,14 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
+            # Without a total tool deadline each continuation gets the usual upstream timeout.
             return await self.app.state.http.post(
                 self.target,
                 data=orjson.dumps(payload),
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(total=timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=timeout or self.config.upstream_timeout_seconds
+                ),
                 allow_redirects=False,
             )
 

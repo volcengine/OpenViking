@@ -532,11 +532,13 @@ The limits sit under **Advanced settings** in the profile's **OpenViking tools**
 
 | Setting | API name | Default | Range | At the limit |
 | --- | --- | --- | --- | --- |
-| Rounds per request | `tool_max_rounds` | 5 | 1–20 | Further OpenViking calls are refused; the model continues with the results it has and the client's own tools. |
+| Rounds per request | `tool_max_rounds` | No limit | 1 or more | Further OpenViking calls are refused; the model continues with the results it has and the client's own tools. |
 | Time limit per call | `tool_timeout_seconds` | 30 s | up to 120 s | The call returns an error to the model. |
 | Result size | `tool_result_bytes` | 65,536 bytes | 1,024–1,048,576 | The result is truncated. |
-| Total time | `tool_total_seconds` | 120 s | up to 600 s | The request fails with 504 "Hidden tool request timed out". |
-| Token budget | `tool_total_tokens` | 100,000 | 1,024–1,000,000 | Further OpenViking calls are refused; the model continues with the results it has and the client's own tools. This is not a billing cap; the final answer can exceed it. |
+| Total time | `tool_total_seconds` | No limit | more than 0 s | The request fails with 504 "Hidden tool request timed out". |
+| Token budget | `tool_total_tokens` | No limit | 1,024 or more | Further OpenViking calls are refused; the model continues with the results it has and the client's own tools. This is not a billing cap; the final answer can exceed it. |
+
+Rounds, total time and the token budget are unlimited by default, as in an agent's own tool loop: the model keeps using OpenViking tools until it finishes. In a streaming request, the user can stop the reply at any time, and the gateway stops when the client disconnects. A non-streaming request keeps running after the client disconnects, so set **Total time** if your clients send non-streaming requests. Leave a field empty for no limit. Profiles saved before this default changed keep their earlier values (5 rounds, 120 s, 100,000 tokens); clear the fields to remove the limits.
 
 The token budget covers the extra calls, results and subsequent model output from using OpenViking tools. Existing conversation history, tool definitions and images do not count. The gateway preserves the client's answer-length limit (`max_tokens`, `max_completion_tokens` or `max_output_tokens`). Once the budget is spent, the gateway refuses further OpenViking calls, and the model continues with the results already available and the client's own tools.
 
@@ -758,11 +760,11 @@ URL settings must be plain `http` or `https` addresses without credentials, quer
 | OpenViking tools | `gateway_tools` | `true` | | Offer OpenViking tools for Chat, full-history Responses and Anthropic Messages. |
 | Unselected tools | `disabled_tools` | The 8 tools that change data: `remember`, `write`, `edit`, `add_resource`, `add_skill`, `forget`, `set_acl` and `cancel_watch` | Tool names from OpenViking, without `openviking_` | Tools unavailable to new conversations; every other available tool is offered, including ones added later. API requests that omit the field get the default list; an empty list enables every available tool when the main switch is on. |
 | Show tool calls | `show_tool_calls` | `true` | | Add a one-line notice to the reply for each OpenViking tool call. |
-| Rounds per request | `tool_max_rounds` | `5` | 1–20 | See [OpenViking tools](#openviking-tools). |
+| Rounds per request | `tool_max_rounds` | `null` (no limit) | 1 or more | See [OpenViking tools](#openviking-tools). |
 | Time limit per call | `tool_timeout_seconds` | `30` | up to 120 | |
 | Result size | `tool_result_bytes` | `65536` | 1,024–1,048,576 | |
-| Total time | `tool_total_seconds` | `120` | up to 600 | |
-| Token budget | `tool_total_tokens` | `100000` | 1,024–1,000,000 | |
+| Total time | `tool_total_seconds` | `null` (no limit) | more than 0 | |
+| Token budget | `tool_total_tokens` | `null` (no limit) | 1,024 or more | |
 
 **Upstream settings:**
 
@@ -858,7 +860,7 @@ These rejections happen before a request reaches a provider, so they do not appe
 | 426 | A WebSocket connection to the Responses API. Expected: Codex falls back to HTTP. |
 | 502 "Model upstream is unavailable" | The gateway could not reach the provider, or the call exceeded `upstream_timeout_seconds`. Use **Test connection** on the upstream. |
 | 503 "Dev authentication requires a loopback gateway" | OpenViking runs in dev mode. Switch it to API key mode. |
-| 504 "Hidden tool request timed out" | OpenViking tool rounds exceeded the profile's **Total time** for tools. |
+| 504 "Hidden tool request timed out" | OpenViking tool rounds exceeded the profile's **Total time** for tools, or, when **Total time** is not set, one model request inside the tool rounds exceeded `upstream_timeout_seconds`. |
 
 ### No memory is added
 

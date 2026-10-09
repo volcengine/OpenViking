@@ -306,6 +306,8 @@ export function ProfileSettingsForm({
     const fallback = PROFILE_DEFAULTS[field]
     const unit = rule.unit ? t(`units.${rule.unit}`) : undefined
     const hint = humanize(rule.unit, current, locale)
+    const empty = rule.optional || rule.unlimited
+    const emptyLabel = t(rule.unlimited ? 'field.noLimit' : 'field.notSet')
     return (
       <SettingField
         label={t(`${copy}.label`)}
@@ -317,7 +319,7 @@ export function ProfileSettingsForm({
             : unit
         }
         defaultValue={
-          fallback === null ? t('field.notSet') : formatNumber(fallback, locale)
+          fallback === null ? emptyLabel : formatNumber(fallback, locale)
         }
         error={message(field)}
       >
@@ -327,11 +329,11 @@ export function ProfileSettingsForm({
           min={rule.min}
           max={rule.max}
           step={rule.step ?? (rule.integer ? 1 : 'any')}
-          placeholder={rule.optional ? t('field.notSet') : undefined}
+          placeholder={empty ? emptyLabel : undefined}
           aria-invalid={Boolean(errors[field])}
           onChange={(next) =>
             onChange({
-              [field]: rule.optional && Number.isNaN(next) ? null : next,
+              [field]: empty && Number.isNaN(next) ? null : next,
             } as Partial<ProfileSettings>)
           }
         />

@@ -532,11 +532,13 @@ server {
 
 | 设置 | API 名称 | 默认值 | 范围 | 达到上限时 |
 | --- | --- | --- | --- | --- |
-| 每次请求的工具轮数 | `tool_max_rounds` | 5 | 1–20 | 拒绝后续的 OpenViking 调用，模型用已有结果和客户端自己的工具继续。 |
+| 每次请求的工具轮数 | `tool_max_rounds` | 不限 | 1 及以上 | 拒绝后续的 OpenViking 调用，模型用已有结果和客户端自己的工具继续。 |
 | 单次调用超时 | `tool_timeout_seconds` | 30 秒 | 最多 120 秒 | 这次调用向模型返回错误。 |
 | 结果大小上限 | `tool_result_bytes` | 65,536 字节 | 1,024–1,048,576 | 结果被截断。 |
-| 总时长 | `tool_total_seconds` | 120 秒 | 最多 600 秒 | 请求失败，返回 504 "Hidden tool request timed out"。 |
-| Token 预算 | `tool_total_tokens` | 100,000 | 1,024–1,000,000 | 拒绝后续的 OpenViking 调用，模型用已有结果和客户端自己的工具继续。这不是计费上限，最终回答可能超出它。 |
+| 总时长 | `tool_total_seconds` | 不限 | 大于 0 秒 | 请求失败，返回 504 "Hidden tool request timed out"。 |
+| Token 预算 | `tool_total_tokens` | 不限 | 1,024 及以上 | 拒绝后续的 OpenViking 调用，模型用已有结果和客户端自己的工具继续。这不是计费上限，最终回答可能超出它。 |
+
+轮数、总时长和 Token 预算默认都不限，和 Agent 自己的工具循环一样：模型会一直使用 OpenViking 工具直到完成。流式请求中，用户可以随时中断回复，客户端断开后网关也会停止。非流式请求在客户端断开后仍会继续执行，所以如果客户端发送非流式请求，请设置**总时长**。字段留空即表示不限。这项默认值修改之前保存的上下文配置仍保留原来的值（5 轮、120 秒、100,000 Token），清空这几项即可取消限制。
 
 Token 预算用于模型使用 OpenViking 工具时新增的调用、结果和后续生成内容，客户端已有的对话、工具定义和图片不计入。网关保留客户端设置的回答长度上限（`max_tokens`、`max_completion_tokens` 或 `max_output_tokens`）。预算用完后，网关会拒绝之后的 OpenViking 调用，模型利用已有结果和客户端自己的工具继续回答。
 
@@ -758,11 +760,11 @@ URL 类设置必须是普通的 `http` 或 `https` 地址，不能包含账号�
 | OpenViking 工具 | `gateway_tools` | `true` | | 为 Chat、完整历史的 Responses 和 Anthropic Messages 提供 OpenViking 工具。 |
 | 取消勾选的工具 | `disabled_tools` | 会修改数据的 8 个工具：`remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl` 和 `cancel_watch` | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都会提供，包括以后新增的。API 请求省略这个字段时使用默认列表；列表为空且总开关开启时，提供全部可用工具。 |
 | 显示工具调用 | `show_tool_calls` | `true` | | 每次 OpenViking 工具调用都在回复里加一行提示。 |
-| 每次请求的工具轮数 | `tool_max_rounds` | `5` | 1–20 | 见 [OpenViking 工具](#openviking-工具)。 |
+| 每次请求的工具轮数 | `tool_max_rounds` | `null`（不限） | 1 及以上 | 见 [OpenViking 工具](#openviking-工具)。 |
 | 单次调用超时 | `tool_timeout_seconds` | `30` | 最多 120 | |
 | 结果大小上限 | `tool_result_bytes` | `65536` | 1,024–1,048,576 | |
-| 总时长 | `tool_total_seconds` | `120` | 最多 600 | |
-| Token 预算 | `tool_total_tokens` | `100000` | 1,024–1,000,000 | |
+| 总时长 | `tool_total_seconds` | `null`（不限） | 大于 0 | |
+| Token 预算 | `tool_total_tokens` | `null`（不限） | 1,024 及以上 | |
 
 **上游设置：**
 
@@ -858,7 +860,7 @@ OpenViking Server 无法使用网关时，OpenViking 网关页面会显示一张
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
 | 502 "Model upstream is unavailable" | 网关连不上服务商，或者调用超过了 `upstream_timeout_seconds`。在上游上运行**测试连接**。 |
 | 503 "Dev authentication requires a loopback gateway" | OpenViking 运行在 dev 模式。把它切换到 API Key 模式。 |
-| 504 "Hidden tool request timed out" | OpenViking 工具的往返超过了上下文配置中工具的**总时长**。 |
+| 504 "Hidden tool request timed out" | OpenViking 工具的往返超过了上下文配置中工具的**总时长**；未设置**总时长**时，是工具往返中的某次模型请求超过了 `upstream_timeout_seconds`。 |
 
 ### 没有补充记忆
 

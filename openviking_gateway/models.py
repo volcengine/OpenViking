@@ -52,11 +52,12 @@ class Policy(BaseModel):
     gateway_tools: bool = True
     # MCP tool names; tools the server adds later stay enabled.
     disabled_tools: list[str] = Field(default_factory=lambda: list(WRITE_TOOLS))
-    tool_max_rounds: int = Field(default=5, ge=1, le=20)
+    # None means no limit, as in an agent harness's own tool loop.
+    tool_max_rounds: int | None = Field(default=None, ge=1)
     tool_timeout_seconds: float = Field(default=30, gt=0, le=120)
     tool_result_bytes: int = Field(default=65536, ge=1024, le=1048576)
-    tool_total_seconds: float = Field(default=120, gt=0, le=600)
-    tool_total_tokens: int = Field(default=100000, ge=1024, le=1000000)
+    tool_total_seconds: float | None = Field(default=None, gt=0)
+    tool_total_tokens: int | None = Field(default=None, ge=1024)
     show_tool_calls: bool = True
     # Experimental: the model starts fresh context windows itself (needs gateway tools).
     agent_windows: bool = False

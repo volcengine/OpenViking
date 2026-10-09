@@ -118,11 +118,11 @@ export type ProfileSettings = {
   gateway_tools: boolean
   show_tool_calls: boolean
   disabled_tools: string[]
-  tool_max_rounds: number
+  tool_max_rounds: number | null
   tool_timeout_seconds: number
   tool_result_bytes: number
-  tool_total_seconds: number
-  tool_total_tokens: number
+  tool_total_seconds: number | null
+  tool_total_tokens: number | null
 }
 
 export type Profile = ProfileSettings & { id: string; revision: number }

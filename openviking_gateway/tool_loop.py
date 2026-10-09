@@ -39,11 +39,8 @@ class HiddenToolLoop:
         # A request without gateway tools comes here only to show the recall notice: every
         # call is the client's, nothing runs, and the reply takes as long as it takes.
         self.allowed = executor.allowed if prepared.tools_active else set()
-        self.deadline = (
-            time.monotonic() + self.policy.get("tool_total_seconds", 120)
-            if prepared.tools_active
-            else None
-        )
+        seconds = self.policy.get("tool_total_seconds")
+        self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage = [], {}
         self.final, self.hidden, self.window = None, False, None
@@ -111,11 +108,12 @@ class HiddenToolLoop:
         the model goes on with the client's tools; calling again right after a refused
         round ends the request.
         """
-        budget = self.policy.get("tool_total_tokens", 100000)
+        budget = self.policy.get("tool_total_tokens") or float("inf")
+        rounds = self.policy.get("tool_max_rounds") or float("inf")
         closed = (
             self.prepared.tools_closed
             or self.adapter.tool_choice(self.body) == "none"
-            or self.rounds >= self.policy.get("tool_max_rounds", 5)
+            or self.rounds >= rounds
             or self.token_cost >= budget
         )
         if closed and self.refused:
@@ -260,7 +258,8 @@ class HiddenToolLoop:
                             for event in self.adapter.terminal(self.final):
                                 yield self.adapter.encode(event)
                         return
-                    response = await send(self.body, max(0.01, self.deadline - time.monotonic()))
+                    remaining = self.deadline and max(0.01, self.deadline - time.monotonic())
+                    response = await send(self.body, remaining)
         except (ValueError, TypeError, KeyError, IndexError) as error:
             raise ToolLoopError("Invalid model tool response") from error
         except asyncio.TimeoutError as error:

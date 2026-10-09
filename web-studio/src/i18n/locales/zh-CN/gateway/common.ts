@@ -154,6 +154,7 @@ const common = {
   field: {
     default: '默认值：{{value}}',
     notSet: '未设置',
+    noLimit: '不限',
     advanced: '高级设置',
     sectionInvalid: '这一部分有设置需要修改，改好后才能保存。',
     storedSecret: '已保存，留空则保持不变',

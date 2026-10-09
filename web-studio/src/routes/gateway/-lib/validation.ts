@@ -29,6 +29,8 @@ export type NumberRule = {
   integer?: boolean
   /** Empty (`null`) is allowed. */
   optional?: boolean
+  /** Empty (`null`) is allowed and means no limit. */
+  unlimited?: boolean
   step?: number
   unit?: Unit
 }
@@ -39,7 +41,9 @@ export function checkNumber(
   rule: NumberRule,
 ): FieldIssue | undefined {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return rule.optional ? undefined : { key: 'validation.required' }
+    return rule.optional || rule.unlimited
+      ? undefined
+      : { key: 'validation.required' }
   }
   if (!Number.isFinite(value)) return { key: 'validation.number' }
   if (rule.integer && !Number.isInteger(value)) {

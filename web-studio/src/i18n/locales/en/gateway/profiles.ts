@@ -212,7 +212,7 @@ const profiles = {
     maxRounds: {
       label: 'Rounds per request',
       description:
-        "After this many tool rounds, further OpenViking calls are refused; the model continues with the results it has and the client's own tools.",
+        "After this many tool rounds, further OpenViking calls are refused; the model continues with the results it has and the client's own tools. Leave empty for no limit.",
     },
     timeoutSeconds: {
       label: 'Time limit per call',
@@ -225,12 +225,12 @@ const profiles = {
     totalSeconds: {
       label: 'Total time',
       description:
-        'If the model is still using tools after this long, the request fails.',
+        'If the model is still using tools after this long, the request fails. Leave empty for no limit.',
     },
     totalTokens: {
       label: 'Token budget',
       description:
-        "Estimated tokens that tool calls and results may add to one request. Once used up, further OpenViking calls are refused; the model continues with the results it has and the client's own tools.",
+        "Estimated tokens that tool calls and results may add to one request. Once used up, further OpenViking calls are refused; the model continues with the results it has and the client's own tools. Leave empty for no limit.",
     },
   },
 }
