@@ -146,7 +146,8 @@ Envelope is **byte-compatible with Claude Code**:
 
 | Behaviour | Result |
 | --- | --- |
-| Unknown JSON field tolerated? | **yes** — a `SessionStart` response carrying an extra `_probe_unknown_field` **plus** `additionalContext` still got the context injected: the marker `__CB_PROBE_CTX__` appeared **4×** in the session transcript and the model reasoned about it. The Claude Code envelope (including `decision: "approve"`) can be reused as-is. |
+| Unknown JSON field tolerated? | **yes** — a `SessionStart` response carrying an extra `_probe_unknown_field` **plus** `additionalContext` still got the context injected, and the model reasoned about it. The Claude Code envelope (including `decision: "approve"`) can be reused as-is. |
+| Is the injected context persisted in the transcript? | **No.** `additionalContext` is delivered to the model for that request but is **not** written as a transcript record — the probe marker only appeared in the transcript because the *model echoed it* while reasoning. **Verify injection by asking the model to quote the block, not by grepping the transcript** (grepping yields 0 even when delivery works). |
 | Empty output (`{}`) safe? | **yes** — every probe hook returned `{}` and no session was blocked or delayed. |
 | `permissionDecision: "allow"` honoured? | **yes** — the probe allowed a `Bash` call that carried `viking://`; it ran. |
 | Is `permissionDecisionReason` visible to the model? | **NO** — the probe returned `permissionDecisionReason: "__CB_PROBE_NOTICE__ …"` on that same `PreToolUse`; the marker count in the transcript is **0**. No in-band model notice channel exists on `PreToolUse`. |
