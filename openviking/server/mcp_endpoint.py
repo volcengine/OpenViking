@@ -1212,7 +1212,7 @@ async def write(
 
     - mode="replace" (default): overwrite the file; creates it and any missing parent directories if needed.
     - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
-    - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
+    - Any new file (whether created by "replace", "append", or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
     - acl: optional shared-resource ACL with acl_mode (inherit/restricted) and entries
       (principal=user:<id>/group:<id>/user:*, level=read/write/manage). Explicit ACL

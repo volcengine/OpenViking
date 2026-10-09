@@ -38,7 +38,12 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.context_update_execution import commit_and_enqueue_plan
-from openviking.storage.context_update_plan import build_context_update_plan_from_snapshot
+from openviking.storage.context_update_plan import (
+    ContentTreeAction,
+    ContentTreeOperation,
+    ContextUpdatePlan,
+    build_context_update_plan_from_snapshot,
+)
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -952,6 +957,10 @@ class ContentWriteCoordinator:
                 ingest_options=ingest_options,
                 root_is_file=True,
             )
+            plan = self._ensure_explicit_write_content_action(
+                plan,
+                md5=inline_inventory.entries[""].md5,
+            )
 
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
@@ -999,15 +1008,46 @@ class ContentWriteCoordinator:
                 vector_status=vector_status,
             )
         except Exception:
-            # Content and derived state follow the RNFV "content persists, derived
-            # data is eventually consistent" model: a committed file is not rolled
-            # back if a later enqueue fails. Only release the lock and propagate.
+            # Once formal content is committed it is not rolled back for a later
+            # enqueue failure. The request propagates that failure so the caller
+            # can retry; explicit writes always recommit their final bytes, even
+            # when N already matches V, which makes that retry safe while V lags F.
             if not lock_released:
                 await self._viking_fs._async_agfs.pathlock_release(lease)
             raise
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
+
+    @staticmethod
+    def _ensure_explicit_write_content_action(
+        plan: ContextUpdatePlan,
+        *,
+        md5: str,
+    ) -> ContextUpdatePlan:
+        """Make an explicit single-file write authoritative for formal content.
+
+        RNFV may classify N as unchanged when its MD5 matches V. That is enough
+        to skip derived work, but V can temporarily lag F while an earlier
+        asynchronous write is still being indexed. Keep the shared planner's
+        convergence behavior unchanged and add the formal UPSERT only at the
+        content-write adapter boundary.
+        """
+        if plan.content_tree_actions:
+            return plan
+        return replace(
+            plan,
+            content_tree_actions=(
+                ContentTreeAction(
+                    ContentTreeOperation.UPSERT,
+                    "",
+                    old_kind="file",
+                    new_kind="file",
+                    artifact_path="",
+                    md5=md5,
+                ),
+            ),
+        )
 
     @staticmethod
     def _plan_statuses(
