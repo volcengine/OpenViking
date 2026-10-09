@@ -10,6 +10,7 @@ import pytest
 
 from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
+    _build_queuefs_plugin_config,
     _generate_plugin_config,
     create_agfs_client,
     mount_agfs_backend,
@@ -147,7 +148,7 @@ def test_agfs_s3_auto_detect_content_type_is_forwarded_to_ragfs_plugin_config():
             {
                 "mode": "shared",
                 "backend": "sqlite",
-                "recover_stale_sec": 0,
+                "recover_stale_sec": 300,
                 "busy_timeout_ms": 5000,
             },
         ),
@@ -156,7 +157,7 @@ def test_agfs_s3_auto_detect_content_type_is_forwarded_to_ragfs_plugin_config():
             {
                 "mode": "worker",
                 "backend": "memory",
-                "recover_stale_sec": 0,
+                "recover_stale_sec": 300,
                 "busy_timeout_ms": 5000,
             },
         ),
@@ -188,6 +189,41 @@ def test_agfs_queuefs_validation_accepts_supported_shapes(queuefs, expected):
 def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
     with pytest.raises(ValueError, match=match):
         AGFSConfig(path="/tmp/ov-test", backend="local", queuefs=queuefs)
+
+
+def test_generate_plugin_config_defaults_recover_stale_sec_to_300(tmp_path):
+    """Regression test for the 0 -> 300 default flip.
+
+    With the historical default of 0, the sqlite backend's mount-time recovery
+    reset ALL processing rows on every mount (the UPDATE is not scoped per
+    queue), duplicating in-flight work in mode='worker'. The default (and the
+    plugin-config fallback when no queuefs block is present) must be the
+    bounded 300s window instead.
+    """
+    config = AGFSConfig(path="/tmp/ov-test", backend="local")
+
+    plugin_config = _build_queuefs_plugin_config(config, tmp_path)
+
+    assert plugin_config["backend"] == "sqlite"
+    assert plugin_config["recover_stale_sec"] == 300
+
+    # Fallback path: agfs_config without a queuefs block at all.
+    plugin_config = _build_queuefs_plugin_config(object(), tmp_path)
+
+    assert plugin_config["recover_stale_sec"] == 300
+
+
+def test_generate_plugin_config_forwards_explicit_recover_stale_sec(tmp_path):
+    """Explicit values must be forwarded unchanged (0 stays 0 = recover-all)."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        queuefs={"backend": "sqlite", "recover_stale_sec": 1200},
+    )
+
+    plugin_config = _build_queuefs_plugin_config(config, tmp_path)
+
+    assert plugin_config["recover_stale_sec"] == 1200
 
 
 def test_top_level_cache_provider_params_build_redis_binding_config():
