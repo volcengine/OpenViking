@@ -24,6 +24,24 @@ def estimate_embedding_input_tokens(text: str) -> int:
     return max(1, cjk_chars + math.ceil(other_chars / 4))
 
 
+def _truncate_prefix_to_token_budget(text: str, max_tokens: int) -> str:
+    """Return the longest prefix within the local estimated-token budget."""
+    if not text or max_tokens <= 0:
+        return ""
+    if estimate_embedding_input_tokens(text) <= max_tokens:
+        return text
+
+    low = 0
+    high = len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
+
+
 def truncate_embedding_input(
     text: str,
     max_tokens: int,
@@ -37,15 +55,12 @@ def truncate_embedding_input(
     if estimate_embedding_input_tokens(text) <= max_tokens:
         return text
 
-    low = 0
-    high = len(text)
-    while low < high:
-        mid = (low + high + 1) // 2
-        if estimate_embedding_input_tokens(text[:mid]) <= max_tokens:
-            low = mid
-        else:
-            high = mid - 1
-    return text[:low].rstrip() + suffix
+    suffix_tokens = estimate_embedding_input_tokens(suffix)
+    if suffix_tokens > max_tokens:
+        return _truncate_prefix_to_token_budget(suffix.lstrip(), max_tokens)
+
+    prefix = _truncate_prefix_to_token_budget(text, max_tokens - suffix_tokens)
+    return prefix.rstrip() + suffix
 
 
 def resolve_embedding_max_input_tokens(
