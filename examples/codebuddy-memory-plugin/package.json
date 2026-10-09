@@ -1,0 +1,10 @@
+{
+  "name": "codebuddy-openviking-memory",
+  "version": "0.1.0",
+  "description": "OpenViking memory plugin for the CodeBuddy Code CLI — semantic long-term memory",
+  "type": "module",
+  "scripts": {
+    "test": "node --test scripts/"
+  },
+  "private": true
+}

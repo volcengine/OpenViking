@@ -1,0 +1,5 @@
+node_modules/
+*.tsbuildinfo
+# Top-level .gitignore excludes lib/ (Python setuptools convention); this
+# plugin's scripts/lib/ is a JS module directory and must be tracked.
+!scripts/lib/
