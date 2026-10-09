@@ -29,7 +29,7 @@ except ImportError:
 
 from openviking.utils.model_retry import retry_async, retry_sync
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, trace_vlm_call
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
@@ -84,6 +84,9 @@ class OpenAIVLM(VLMBase):
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort")
         self.keepalive_expiry = config.get("keepalive_expiry")
+
+    def _get_request_model(self) -> str:
+        return self.model or "gpt-4o-mini"
 
     def _http_client_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"timeout": self.timeout}
@@ -218,7 +221,7 @@ class OpenAIVLM(VLMBase):
                 getattr(completion_tokens_details, "reasoning_tokens", 0) or 0
             )
             self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
+                model_name=self._get_request_model(),
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -281,7 +284,7 @@ class OpenAIVLM(VLMBase):
         kwargs_messages = sanitize_openai_messages(
             messages or [{"role": "user", "content": prompt}]
         )
-        model = self.model or "gpt-4o-mini"
+        model = self._get_request_model()
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
@@ -312,7 +315,7 @@ class OpenAIVLM(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
 
-        model = self.model or "gpt-4o-mini"
+        model = self._get_request_model()
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
@@ -333,6 +336,7 @@ class OpenAIVLM(VLMBase):
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
+    @trace_vlm_call
     def get_completion(
         self,
         prompt: str = "",
@@ -362,6 +366,7 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM completion",
         )
 
+    @trace_vlm_call
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -451,6 +456,7 @@ class OpenAIVLM(VLMBase):
             }
         return {"type": "image_url", "image_url": {"url": image}}
 
+    @trace_vlm_call
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -483,6 +489,7 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM vision completion",
         )
 
+    @trace_vlm_call
     async def get_vision_completion_async(
         self,
         prompt: str = "",
