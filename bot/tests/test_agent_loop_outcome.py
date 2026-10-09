@@ -95,6 +95,29 @@ def _image_call(call_id, label=None):
     )
 
 
+@pytest.mark.asyncio
+async def test_agent_loop_help_lists_every_session_command(make_loop):
+    loop = make_loop()
+
+    response = await loop._process_message(
+        InboundMessage(
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="help"),
+            sender_id="user-1",
+            content="/help",
+            timestamp=datetime.fromisoformat("2026-10-05T00:00:00"),
+        )
+    )
+
+    assert response is not None
+    assert response.content.splitlines() == [
+        "🐈 vikingbot commands:",
+        "/new — Start a new conversation",
+        "/compact — Consolidate memory and start a new conversation",
+        "/remember — Submit the current conversation to memory",
+        "/help — Show available commands",
+    ]
+
+
 class _MediaProvider(_FakeProvider):
     def __init__(self, rounds, *, supports_media=True):
         super().__init__()

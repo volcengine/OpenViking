@@ -2157,7 +2157,13 @@ class AgentLoop:
             if cmd == "/help":
                 return OutboundMessage(
                     session_key=msg.session_key,
-                    content="🐈 vikingbot commands:\n/new — Start a new conversation\n/remember — Submit current session to memories and start new session\n/help — Show available commands",
+                    content=(
+                        "🐈 vikingbot commands:\n"
+                        "/new — Start a new conversation\n"
+                        "/compact — Consolidate memory and start a new conversation\n"
+                        "/remember — Submit the current conversation to memory\n"
+                        "/help — Show available commands"
+                    ),
                     metadata=msg.metadata,
                 )
 
