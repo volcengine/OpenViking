@@ -164,11 +164,11 @@ test("once a write is queued, later messages and the final commit stay ordered o
   ]);
   assert.deepEqual(
     pending.map(item => (
-      item.entry.payload.parts?.[0]?.text
-      || item.entry.payload.content
-      || item.entry.payload.keep_recent_count
+      item.entry.type === "commitSession"
+        ? item.entry.payload.keep_recent_count
+        : item.entry.payload.parts?.[0]?.text || item.entry.payload.content
     )),
-    ["First queued message.", "Second queued message.", 10],
+    ["First queued message.", "Second queued message.", 0],
   );
   assert.deepEqual(
     pending.map(item => item.entry.createdAt),
@@ -248,10 +248,32 @@ test("dispose waits for the final commit before deleting session state", async (
 
   assert.equal(settled, false);
   assert.equal(runtime.states.has(session.id), true);
-  assert.deepEqual(commitOptions, { timeoutMs: 3000 });
+  assert.deepEqual(commitOptions, { timeoutMs: 3000, keepRecentCount: 0 });
   releaseCommit();
   await disposing;
   assert.equal(runtime.states.has(session.id), false);
+});
+
+test("the disposal commit archives every message while threshold commits keep the configured tail", async () => {
+  const commits = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 20000 };
+    },
+    async commitSession(_sessionId, _peerId, options = {}) {
+      commits.push(options.keepRecentCount);
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "dispose-archives-all", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "turn/end" });
+  await runtime.flush(session);
+  await runtime.dispose(session);
+
+  // undefined: the threshold commit falls back to commitKeepRecentCount.
+  assert.deepEqual(commits, [undefined, 0]);
 });
 
 test("persisted profile delivery survives dispose and re-seed", async () => {

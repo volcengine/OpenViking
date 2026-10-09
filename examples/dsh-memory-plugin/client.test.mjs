@@ -43,6 +43,30 @@ test("client sends OpenViking identity headers and preserves response trace ids"
   assert.equal(seen.init.headers["X-OpenViking-Actor-Peer"], "peer-a");
 });
 
+test("commitSession sends the configured tail unless the caller overrides it", async () => {
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ status: "ok", result: {} }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    apiKey: "",
+    account: "",
+    user: "",
+    requestTimeoutMs: 1000,
+    commitKeepRecentCount: 10,
+  });
+
+  await client.commitSession("dsh-1");
+  await client.commitSession("dsh-1", "", { keepRecentCount: 0 });
+
+  assert.deepEqual(bodies, [{ keep_recent_count: 10 }, { keep_recent_count: 0 }]);
+});
+
 test("per-session actor peer overrides the process default", async () => {
   let headers;
   globalThis.fetch = async (_url, init) => {

@@ -49,7 +49,9 @@ export class OpenVikingClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       {
         method: "POST",
-        body: JSON.stringify({ keep_recent_count: this.config.commitKeepRecentCount }),
+        body: JSON.stringify({
+          keep_recent_count: options.keepRecentCount ?? this.config.commitKeepRecentCount,
+        }),
       },
       { timeoutMs: options.timeoutMs ?? 30000, actorPeerId },
     );

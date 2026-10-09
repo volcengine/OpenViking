@@ -215,9 +215,12 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
-        const commitPayload = {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        };
+        // Disposal is the session's last commit. A live tail kept here is not
+        // archived or extracted until a later commit that may never come (it
+        // only arrives if this session is resumed), so archive everything and
+        // let the closing turns, usually the outcome, reach memory extraction.
+        // Threshold commits keep commitKeepRecentCount.
+        const commitPayload = { keep_recent_count: 0 };
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
@@ -226,7 +229,10 @@ export class OpenVikingRuntime {
         const response = await this.client.commitSession(
           state.ovSessionId,
           state.config.peerId,
-          { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
+          {
+            timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000),
+            keepRecentCount: commitPayload.keep_recent_count,
+          },
         );
         this.log("shutdown_commit", {
           sessionId: state.ovSessionId,
