@@ -284,8 +284,15 @@ class AioSandboxBackend(SandboxBackend):
         if not self._client:
             raise SandboxNotStartedError()
         self._validate_max_bytes(max_bytes)
-        stream = self._client.file.download_file(path=self._sandbox_path(path))
-        return await self._collect_stream_bytes(stream, path, max_bytes)
+        from agent_sandbox.core.api_error import ApiError
+
+        try:
+            stream = self._client.file.download_file(path=self._sandbox_path(path))
+            return await self._collect_stream_bytes(stream, path, max_bytes)
+        except ApiError as exc:
+            if exc.status_code == 404:
+                raise FileNotFoundError(path) from exc
+            raise
 
     async def export_file(
         self,
