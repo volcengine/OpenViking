@@ -638,6 +638,24 @@ describe('profile editor', () => {
     })
   })
 
+  it('hides the recall summary by default and saves the switch', async () => {
+    renderAt('/context-gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    const showRecall = screen.getByRole('switch', {
+      name: 'profiles.recall.showRecall.label',
+    })
+    expect(showRecall.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(showRecall)
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      recall: false,
+      show_recall: true,
+    })
+  })
+
   it('starts category limits from the searched sources', async () => {
     renderAt('/context-gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')

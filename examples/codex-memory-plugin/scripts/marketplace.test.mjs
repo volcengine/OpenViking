@@ -32,28 +32,42 @@ const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-mem
 const PLUGIN_NAME = "openviking-memory";
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
-test("usage hook delivers current-turn footer context without restarting the answer", () => {
+function usageReporter(dir, view) {
+  const env = { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir, OPENVIKING_USAGE_VIEW: view, OPENVIKING_USAGE_OUTPUT: "desktop" };
+  const hook = (file, input) => JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", file)], {
+    input: JSON.stringify(input), env, encoding: "utf8",
+  }));
+  return (input) => {
+    assert.deepEqual(hook("track-lookup.mjs", input), {});
+    return JSON.parse(execFileSync(process.execPath, [join(scriptsDir, "usage", "report.mjs")], {
+      input: JSON.stringify({ session_id: input.session_id, turn_id: input.turn_id }),
+      env: { ...env, OPENVIKING_USAGE_OUTPUT: "terminal" }, encoding: "utf8",
+    })).systemMessage || "";
+  };
+}
+
+test("usage lookup hook records lookups without returning additionalContext", () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-usage-display-"));
   const hook = join(scriptsDir, "usage", "track-lookup.mjs");
   const env = { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir, OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "desktop" };
-  const run = (turn, uri, extra = {}, overrides = {}) => JSON.parse(execFileSync(process.execPath, [hook], {
-    input: JSON.stringify({ session_id: "display-contract", turn_id: turn,
-      tool_use_id: uri, tool_name: "mcp__openviking_memory__read",
-      tool_input: { uris: [uri] }, tool_response: { content: [] }, ...extra }),
-    env: { ...env, ...overrides }, encoding: "utf8",
+  const report = usageReporter(dir, "summary");
+  const input = (turn, uri, extra = {}) => ({ session_id: "display-contract", turn_id: turn,
+    tool_use_id: uri, tool_name: "mcp__openviking_memory__read",
+    tool_input: { uris: [uri] }, tool_response: { content: [] }, ...extra });
+  const run = (value, overrides = {}) => JSON.parse(execFileSync(process.execPath, [hook], {
+    input: JSON.stringify(value), env: { ...env, ...overrides }, encoding: "utf8",
   }));
   try {
-    const first = run("one", "viking://resources/team/a.md");
-    assert.equal(first.hookSpecificOutput.hookEventName, "PostToolUse");
-    assert.match(first.hookSpecificOutput.additionalContext, /OpenViking · 1 source · 1 team doc · 1 read/);
-    assert.equal(first.decision, undefined);
-    const second = run("one", "viking://resources/team/b.md");
-    assert.match(second.hookSpecificOutput.additionalContext, /OpenViking · 2 sources · 2 team docs · 2 read/);
-    const failed = run("two", "viking://resources/team/c.md", { tool_response: { isError: true } });
-    assert.match(failed.hookSpecificOutput.additionalContext, /OpenViking · 0 sources/);
-    assert.doesNotMatch(failed.hookSpecificOutput.additionalContext, /1 read/);
-    assert.deepEqual(run("off", "viking://resources/team/a.md", {}, { OPENVIKING_USAGE_VIEW: "off" }), {});
-    assert.deepEqual(run("other", "ignored", { tool_name: "unrelated" }), {});
+    assert.match(report(input("one", "viking://resources/team/a.md")), /OpenViking · 1 source · 1 team doc · 1 read/);
+    assert.match(report(input("one", "viking://resources/team/b.md")), /OpenViking · 2 sources · 2 team docs · 2 read/);
+    const failed = report(input("two", "viking://resources/team/c.md", { tool_response: { isError: true } }));
+    assert.match(failed, /OpenViking · 0 sources/);
+    assert.doesNotMatch(failed, /1 read/);
+    for (const channel of ["desktop", "terminal"]) {
+      assert.deepEqual(run(input("three", "viking://resources/team/d.md"), { OPENVIKING_USAGE_OUTPUT: channel }), {});
+    }
+    assert.deepEqual(run(input("off", "viking://resources/team/a.md"), { OPENVIKING_USAGE_VIEW: "off" }), {});
+    assert.deepEqual(run(input("other", "ignored", { tool_name: "unrelated" })), {});
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -79,14 +93,9 @@ test("usage wrapper credits successful output without inferring executed reads",
   const dir = mkdtempSync(join(tmpdir(), "ov-usage-wrapper-"));
   const uri = "viking://resources/team/checklist.md";
   const failedUri = "viking://resources/team/failed.md";
-  const hook = join(scriptsDir, "usage", "track-lookup.mjs");
-  const run = (code, content) => JSON.parse(execFileSync(process.execPath, [hook], {
-    input: JSON.stringify({ session_id: "wrapper", turn_id: "turn", tool_use_id: "lookup",
-      tool_name: "functions.exec", tool_input: { code }, tool_response: { content } }),
-    env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
-      OPENVIKING_USAGE_VIEW: "expanded", OPENVIKING_USAGE_OUTPUT: "desktop" },
-    encoding: "utf8",
-  })).hookSpecificOutput?.additionalContext || "";
+  const report = usageReporter(dir, "expanded");
+  const run = (code, content) => report({ session_id: "wrapper", turn_id: "turn", tool_use_id: "lookup",
+    tool_name: "functions.exec", tool_input: { code }, tool_response: { content } });
   const text = (value) => ({ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) });
   try {
     for (const code of [
@@ -122,13 +131,9 @@ test("usage wrapper credits successful output without inferring executed reads",
 test("usage attributes Experience through the registered generic search and read tools", () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-usage-experience-"));
   const uri = "viking://user/test/memories/experiences/hook-review.md";
-  const run = (method, input, response) => JSON.parse(execFileSync(process.execPath,
-    [join(scriptsDir, "usage", "track-lookup.mjs")], {
-      input: JSON.stringify({ session_id: "experience", turn_id: "turn", tool_use_id: method,
-        tool_name: `mcp__openviking_memory__${method}`, tool_input: input, tool_response: response }),
-      env: { ...process.env, OPENVIKING_CODEX_STATE_DIR: dir,
-        OPENVIKING_USAGE_VIEW: "summary", OPENVIKING_USAGE_OUTPUT: "desktop" }, encoding: "utf8",
-    })).hookSpecificOutput.additionalContext;
+  const report = usageReporter(dir, "summary");
+  const run = (method, input, response) => report({ session_id: "experience", turn_id: "turn",
+    tool_use_id: method, tool_name: `mcp__openviking_memory__${method}`, tool_input: input, tool_response: response });
   try {
     assert.match(run("find", { query: "hook review", target_uri: "viking://~/memories/experiences" },
       { content: [{ type: "text", text: uri }] }), /OpenViking · 1 source · 1 work memory/);
@@ -402,7 +407,7 @@ test("terminal and desktop use exactly one usage output channel", () => {
       }));
       const lookup = run("track-lookup.mjs");
       const stop = run("report.mjs");
-      assert.equal(Boolean(lookup.hookSpecificOutput?.additionalContext), channel === "desktop");
+      assert.deepEqual(lookup, {});
       assert.equal(Boolean(stop.systemMessage), channel === "terminal");
     }
   } finally {

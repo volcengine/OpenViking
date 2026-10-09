@@ -44,8 +44,13 @@ class ResponseCapture:
 
     @property
     def output(self) -> list[dict]:
-        """The reply as native history items."""
-        return self.output_items or ([self.message] if self.message else [])
+        """The reply as native history items, as the client's next request resends it.
+
+        The recall notice a reply starts with is the gateway's: the next request strips
+        it before anything is matched, so every reader of the reply goes without it too.
+        """
+        output = self.output_items or ([self.message] if self.message else [])
+        return tool_protocol(self.protocol).strip_lead(output)
 
     def nonstream(self, body):
         adapter = tool_protocol(self.protocol)({})

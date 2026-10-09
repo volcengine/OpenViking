@@ -128,21 +128,23 @@ class ChatProtocol(ToolProtocol):
         self.accumulate(value)
         if not choices:
             return [] if value.get("usage") else [{**value, "id": self.identifier}]
+        # The lead comes before the first completion's content, in its envelope.
+        events = self.lead_notice()
         choice = choices[0]
         delta = {
             k: copy.deepcopy(v) for k, v in (choice.get("delta") or {}).items() if k != "tool_calls"
         }
         merge_delta(self.visible[0], delta)
         if delta or any(k not in {"delta", "finish_reason", "index"} for k in choice):
-            return [
+            events.append(
                 {
                     **value,
                     "id": self.identifier,
                     "usage": None,
                     "choices": [{**choice, "index": 0, "delta": delta, "finish_reason": None}],
                 }
-            ]
-        return []
+            )
+        return events
 
     def load(self, value):
         choices = value.get("choices") or []
@@ -155,6 +157,7 @@ class ChatProtocol(ToolProtocol):
             merge_delta(
                 self.visible[0], {k: v for k, v in self.message.items() if k != "tool_calls"}
             )
+            self.lead_notice()
 
     def assembled(self):
         if not self.chosen:
@@ -190,6 +193,14 @@ class ChatProtocol(ToolProtocol):
     def notice(self, text):
         self.visible[0]["content"] = (self.visible[0].get("content") or "") + text
         return [self.chunk({"content": text})]
+
+    def lead_notice(self):
+        text, self.lead = self.lead, ""
+        if not text:
+            return []
+        self.visible[0]["content"] = text + (self.visible[0].get("content") or "")
+        # It may be the stream's first chunk, which names the role.
+        return [self.chunk({"role": "assistant", "content": text})]
 
     def results(self, results):
         return [{key: value for key, value in r.items() if key != "failed"} for r in results]

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { loadConfig } from "./config.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
+import { usageEnabled, usageOutput, usageView } from "./usage/settings.mjs";
 
 // The layers, the knobs and the peer are the shared loader's, and
 // memory-plugin-shared/plugin-config.test.mjs holds this harness to them. What
@@ -34,6 +35,8 @@ const OVERRIDES = [
   "OPENVIKING_CREDENTIALS_SOURCE",
   "OPENVIKING_RECALL_QUERY_FILTERS",
   "OPENVIKING_CAPTURE_FILTERS",
+  "OPENVIKING_USAGE_VIEW",
+  "OPENVIKING_USAGE_OUTPUT",
 ];
 
 /**
@@ -226,4 +229,33 @@ test("slash-form directory patterns match a Windows working directory", () => {
     true,
     "a backslash pattern still matches the raw path",
   );
+});
+
+test("OV-Usage settings come from the config files, and env overrides them", () => {
+  withConfigs({
+    cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { codex: { usageView: "OFF", usageOutput: "terminal" } } },
+  }, ({ otherDir }) => {
+    const cfg = loadConfig(otherDir);
+    assert.equal(usageEnabled(cfg), false);
+    assert.equal(usageOutput(cfg), "terminal");
+  });
+
+  withConfigs({
+    cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { usageView: false } },
+    workspace: { version: 1, usage: { output: "desktop" } },
+  }, ({ workspaceDir }) => {
+    const cfg = loadConfig(workspaceDir);
+    assert.equal(usageEnabled(cfg), false);
+    assert.equal(usageOutput(cfg), "desktop");
+  });
+
+  withConfigs({
+    cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { usageView: "off", usageOutput: "terminal" } },
+    env: { OPENVIKING_USAGE_VIEW: "expanded", OPENVIKING_USAGE_OUTPUT: "desktop" },
+  }, ({ otherDir }) => {
+    const cfg = loadConfig(otherDir);
+    assert.equal(usageEnabled(cfg), true);
+    assert.equal(usageView(cfg), "expanded");
+    assert.equal(usageOutput(cfg), "desktop");
+  });
 });

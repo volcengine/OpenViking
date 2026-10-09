@@ -208,6 +208,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `capture.enabled` | boolean | 是否启用 Capture |
 | `capture.commit_token_threshold` | integer，`1000`–`1000000` | 累计多少 token 后提交一次 Capture |
 | `bypass.session_patterns` | glob 列表 | 会话 id 或工作目录命中时跳过 Recall 与 Capture |
+| `usage.view` / `usage.output` | string | Codex OV-Usage 来源摘要：`summary` / `expanded` / `off`，以及 `auto` / `terminal` / `desktop` |
 | `labels` | object | 给人看的自由元数据，插件不读取 |
 
 超出范围的数值会被夹到最近的边界并给出提示；无法识别的枚举值会被忽略。表格列出常用字段；完整字段由共享 `config-schema.mjs` 定义，未识别的键不会生效。

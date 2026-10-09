@@ -30,7 +30,8 @@ from utils import atomic_json_write
 DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
-OPENVIKING_REQUIREMENT = "openviking[local-embed]==0.4.22"
+# Accept new releases in the server API series; resolve only in explicit setup.
+OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
 # Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
 # This restriction applies only to the private server, never Hermes's dependencies.
 
@@ -470,9 +471,14 @@ class QuickLocalSetup:
 
     def _ensure_openviking_installed(self, paths: QuickLocalPaths) -> bool:
         """Ensure a compatible runtime, returning whether installation was needed."""
-        from .local_packages import install_requirements, verified_requirements
+        from .local_packages import (
+            install_requirements,
+            resolve_server_requirement,
+            verified_requirements,
+        )
 
         requirements = install_requirements(allow_source_build=self.allow_source_build)
+        requirements[0] = resolve_server_requirement(allow_source_build=self.allow_source_build)
         receipt = paths.root / "runtime-requirements.json"
         try:
             installed_requirements = json.loads(receipt.read_text(encoding="utf-8"))
@@ -542,6 +548,8 @@ class QuickLocalSetup:
                     uv,
                     "pip",
                     "install",
+                    "--upgrade-package",
+                    "openviking",
                     "--python",
                     str(paths.runtime_python),
                     *requirements,

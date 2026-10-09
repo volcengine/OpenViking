@@ -115,6 +115,14 @@ jobs:
           STATIC_CACHE_CONTROL="public, max-age=31536000, immutable"
           NO_CACHE_CONTROL="no-store, no-cache, must-revalidate, max-age=0"
 
+          # Upload hashed assets before any HTML. A page whose new HTML lands
+          # before its chunk renders VitePress's 404 until the chunk arrives.
+          aws s3 cp "${DIST_DIR}/assets" "s3://${TOS_BUCKET}/assets/" \
+            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
+            --recursive \
+            --cache-control "${STATIC_CACHE_CONTROL}" \
+            --only-show-errors
+
           aws s3 cp "${DIST_DIR}" "s3://${TOS_BUCKET}/" \
             --endpoint-url "https://${TOS_S3_ENDPOINT}" \
             --recursive \
@@ -137,12 +145,6 @@ jobs:
               --cache-control "${HTML_CACHE_CONTROL}" \
               --only-show-errors
           done < <(find "${DIST_DIR}" -type f -name "*.html" -print0)
-
-          aws s3 cp "${DIST_DIR}/assets" "s3://${TOS_BUCKET}/assets/" \
-            --endpoint-url "https://${TOS_S3_ENDPOINT}" \
-            --recursive \
-            --cache-control "${STATIC_CACHE_CONTROL}" \
-            --only-show-errors
 
           if [ -d "${DIST_DIR}/agents" ]; then
             aws s3 cp "${DIST_DIR}/agents" "s3://${TOS_BUCKET}/agents/" \

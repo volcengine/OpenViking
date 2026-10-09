@@ -160,9 +160,10 @@ class ProxyRequest:
             raise HTTPException(502, "Model upstream is unavailable")
         self.metrics.update(status=self.response.status, upstream_id=self.upstream["id"])
         self.capture = ResponseCapture(self.protocol or self.upstream["protocol"])
+        # Only the tool loop rewrites a reply, so the recall notice goes through it too.
         if (
             self.prepared
-            and self.prepared.tools_active
+            and (self.prepared.tools_active or self.prepared.reply_lead)
             and self.response.status < 300
             and not self.path.endswith("count_tokens")
         ):

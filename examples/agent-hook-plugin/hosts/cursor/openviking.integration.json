@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "openviking-memory",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "clients": [
     "cursor"
   ],

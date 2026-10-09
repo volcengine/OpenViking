@@ -213,7 +213,7 @@ async def build_profile(viking, key, policy, tools):
     catalog = "openviking_read" in names
     budget = policy.profile_max_tokens
     if not budget or not (policy.profile or catalog):
-        return {"text": "", "reason": "disabled"}
+        return {"text": "", "reason": "disabled", "parts": []}
     deadline = asyncio.get_running_loop().time() + policy.recall_timeout
     failures = []
 
@@ -286,8 +286,10 @@ async def build_profile(viking, key, policy, tools):
         if pref or ent
         else ""
     )
-    text = "\n".join(part for part in (profile_text, memory_text, skill_text) if part)
+    produced = {"profile": profile_text, "memories": memory_text, "skills": skill_text}
+    text = "\n".join(part for part in produced.values() if part)
     reason = "injected" if text else "empty"
     if failures:
         reason = "partial" if text else failures[0]
-    return {"text": text, "reason": reason}
+    # Which parts the text holds, for the recall notice.
+    return {"text": text, "reason": reason, "parts": [k for k, v in produced.items() if v]}

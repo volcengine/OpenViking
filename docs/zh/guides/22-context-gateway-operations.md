@@ -394,6 +394,15 @@ server {
 - OpenViking 在**超时时间**内没有返回时，这条消息不带记忆直接发给模型，之后也不会补上，客户端重试也一样。
 - **按分类限量**（在“高级设置”中）可以给事件、实体、偏好、经验、资源和技能六个分类分别设置条数上限，只搜索上限大于 0 的分类。关闭时，所有来源放在一起排序。
 
+**召回摘要。** 开启**显示召回摘要**（默认关闭）后，每条新用户消息的回复都以一段简短的摘要开头，说明网关给这条消息补充了什么：
+
+```text
+> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
+```
+
+`context` 行只出现在对话的第一条回复里，并且只列出开头实际提供的内容：用户画像、记忆目录、技能目录，以及这段对话较早部分在 OpenViking 中的保存位置。`recall` 行按类别统计召回的条目数，并列出最多三个条目名。搜索失败时，这一行改为说明原因，例如 `> OpenViking recall failed: OpenViking unavailable`。没有找到相关内容、召回已关闭或预算已用完时不显示 `recall` 行，因此在第一条回复之后，这样的消息没有摘要。工具步骤等后续请求从不显示摘要；客户端重试同一条消息时，摘要和第一次相同。在 Anthropic Messages 中，摘要单独占一个文本块；在 Responses 中单独占一条助手消息；在 Chat Completions 中是回复文本的开头。要求结构化输出（JSON 格式）的请求，以及 `n` 大于 1 的 Chat Completions 请求，不显示摘要。无论是否开启 OpenViking 工具，这项设置都有效。模型看不到摘要：客户端随下一条消息把回复发回来时，网关会先删掉摘要再转发请求，也不会把它保存到 OpenViking。和其他上下文配置一样，改动只影响新对话。
+
 保存设置的实际效果：
 
 - 下一条用户消息到达时，上一轮就会保存。**最新回复等待时长**决定网关等多久之后把最后一轮也保存下来并提交会话，这样短对话也能被提交。
@@ -727,6 +736,7 @@ URL 类设置必须是普通的 `http` 或 `https` 地址，不能包含账号�
 | 召回记忆 | `recall` | `true` | | 为每条新的用户消息搜索记忆。 |
 | 会话开头提供用户画像 | `profile` | `true` | | 新对话开始时提供画像，独立于召回。 |
 | 开头内容预算 | `profile_max_tokens` | `4000` | 0–32,000 | 画像和目录的独立预算；0 表示省略。目录需要启用读取工具。 |
+| 显示召回摘要 | `show_recall` | `false` | | 在回复开头用一行说明 OpenViking 补充了什么，或召回失败的原因。模型看不到这一行。 |
 | 检索范围 | `context_types` | `memory`、`resource`、`skill` | 至少一个 | 搜索范围：记忆、资源、技能。 |
 | 单条消息预算 | `max_tokens` | `1600` | 64–32,000 | 一条消息最多补充的 token 数。 |
 | 单个上下文窗口预算 | `session_max_tokens` | `30000` | ≥ 0 | 一个上下文窗口内最多补充的 token 数，每次压缩后重新计算；0 表示关闭召回。 |

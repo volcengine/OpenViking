@@ -39,6 +39,8 @@ class Policy(BaseModel):
     score_threshold: float = Field(default=0.35, ge=0, le=1)
     recall_timeout: float = Field(default=2, gt=0, le=30)
     query_max_chars: int = Field(default=8000, ge=3, le=32000)
+    # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
+    show_recall: bool = False
     commit_tokens: int = Field(default=20000, ge=1)
     keep_recent_messages: int = Field(default=10, ge=0, le=1000)
     idle_seconds: float = Field(default=600, ge=1)

@@ -104,6 +104,7 @@ export type ProfileSettings = {
   score_threshold: number
   recall_timeout: number
   query_max_chars: number
+  show_recall: boolean
   commit_tokens: number
   keep_recent_messages: number
   idle_seconds: number

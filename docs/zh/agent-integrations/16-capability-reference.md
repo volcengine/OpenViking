@@ -60,6 +60,9 @@
 | Hermes（内置） | 是，带会话，有回退路径 | profile 与记忆清单 | 否；只在会话边界 | 是，前提是待上传内容在 10 秒内完成 | fork 型压缩时提交 |
 | ov CLI | 否 | 否 | 只有 `ov session commit` | 不适用 | 不适用 |
 
+标为 **Hermes（内置）** 的行描述旧版 Hermes 中固定提交的内置 provider。
+使用目录插件的版本会加载外部插件，其不同的生命周期行为见 [Hermes](#hermes)。
+
 表格说明：
 
 - **带会话的召回**会发送会话 ID，服务端借助对话内容理解查询。共享插件的 context 模式还会扩写查询，并记录最近注入过的记忆，避免重复注入。Hermes 用 list 模式，没有注入台账。OpenClaw 用 context search 并发送会话 ID，但关闭去重，因为它注入的上下文每轮重建，不写入历史。请求路径和回退见[召回请求如何到达服务端](#召回请求如何到达服务端)。
@@ -666,10 +669,20 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 
 ### Hermes
 
-[Hermes](./05-hermes.md)。Hermes 有两个 OpenViking memory provider，都以 provider 名 `openviking` 注册：
+[Hermes](./05-hermes.md)。Hermes 通过两种分发方式提供名为 `openviking` 的
+memory provider：
 
-- **内置 provider** 位于 Hermes 的 `plugins/memory/openviking`，无需安装，用 `hermes memory setup openviking` 配置。本页的 Hermes 行描述的是 [Hermes 提交 `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking) 时的内置 provider。
-- **外部插件**在本仓库的 [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) 维护，用 `hermes plugins install` 安装。据其 README，仍内置该 provider 的 Hermes 版本会加载内置副本，外部插件要在内置副本移除后才生效。配置和已存数据可以沿用。
+- **目录插件**在本仓库的
+  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
+  中维护。先运行 `hermes plugins install openviking --enable`，再运行
+  `hermes memory setup openviking`。
+- **内置 provider** 存在于旧版 Hermes 的 `plugins/memory/openviking` 中，
+  无需安装。本页的 Hermes 行描述
+  [Hermes 提交 `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)
+  时的内置 provider。
+
+仍包含内置 provider 的版本会优先加载内置副本。当更新移除内置副本时，已配置
+OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置和已存数据均保持不变。
 
 两者是独立的代码库。行为差异如下：
 
@@ -681,7 +694,7 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 | `viking_forget` | 带明确用户 ID 的用户记忆文件 | 还接受 `viking://~/`，拒绝不带用户 ID 的路径，删除前检查归属 |
 | cron、子代理和 flush 上下文 | 该提交中没有说明 | 召回可用；跳过自动写入和镜像 |
 
-内置 provider 的行为：
+上述固定提交中内置 provider 的行为：
 
 - 每次模型调用前召回，走带会话的 `search/search`，以 `/find` 作为回退。默认值：6 条结果、分数阈值 0.15、4,000 字符、总计 4 秒、单请求 3 秒。
 - `viking_remember` 把事实原样通过独立会话发送并提交，返回 `status: submitted`。
@@ -787,7 +800,8 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 - hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode 和 Kimi Code。
 - pi takeover：`examples/pi-coding-agent-extension/lib/takeover-core.mjs`。
 - OpenClaw 工具和生命周期 hook：`examples/openclaw-plugin/registries/openviking-tools.ts` 和 `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`。
-- Hermes：[Hermes](#hermes) 中链接的固定 Hermes 提交里的内置 provider，以及外部插件的 [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md)。
+- Hermes：[Hermes](#hermes) 中链接的旧版内置 provider 固定提交，以及目录插件的
+  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md)。
 
 ## 参见
 

@@ -784,7 +784,12 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
         close=lambda: closed.append(True),
     )
     prepared = SimpleNamespace(
-        body=request_body(protocol, True), protocol=protocol, root={"policy": {}}, metrics={}
+        body=request_body(protocol, True),
+        protocol=protocol,
+        root={"policy": {}},
+        metrics={},
+        tools_active=True,
+        reply_lead="",
     )
     loop = HiddenToolLoop(
         prepared, SimpleNamespace(allowed={"openviking_search"}), None, ResponseCapture(protocol)

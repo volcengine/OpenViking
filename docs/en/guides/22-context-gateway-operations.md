@@ -394,6 +394,15 @@ How the recall settings play out:
 - If OpenViking does not answer within the **Time limit**, the message goes to the model without memory and never gets it later, even when the client retries.
 - **Limit by category** (under **Advanced settings**) searches only the categories with a limit above 0, among events, entities, preferences, experiences, resources and skills, and takes at most that many entries from each. When it is off, all sources are ranked together.
 
+**Recall summary.** With **Show recall summary** on (off by default), the reply to each new user message starts with a short summary of what the gateway added to that message:
+
+```text
+> OpenViking context: user profile, memory index, skill list, earlier sessions
+> OpenViking recall: 4 items (3 memories, 1 resource) — booking_duplicate_handling, user_lang_pref, +2 more
+```
+
+The `context` line appears only in the first reply of a conversation and lists only what was actually provided at its start: the user profile, the memory and skill catalogs, and where earlier parts of the conversation are saved in OpenViking. The `recall` line counts the recalled entries by kind and names up to three of them. When the search fails, the line gives the reason instead, for example `> OpenViking recall failed: OpenViking unavailable`. The `recall` line is left out when nothing relevant was found, when recall is off or when its budget is used up, so after the first reply such a message gets no summary at all. Tool steps and other follow-up requests never get one, and a retry of the same message shows the same summary again. In Anthropic Messages the summary is a text block of its own, in Responses an assistant message of its own, and in Chat Completions the start of the reply text. Requests that ask for structured output (a JSON format) and Chat Completions requests with `n` above 1 get no summary. The setting works with or without OpenViking tools. The model never sees it: when the client sends the reply back with the next message, the gateway removes the summary before it forwards the request, and it never saves the summary to OpenViking. Like the other profile settings, the change applies to new conversations.
+
 How the saving settings play out:
 
 - A turn is saved when the next user message arrives. **Save the latest reply after** sets how long the gateway waits before it also saves the last turn and commits the session, so short conversations get committed too.
@@ -727,6 +736,7 @@ URL settings must be plain `http` or `https` addresses without credentials, quer
 | Recall memory | `recall` | `true` | | Search memory for each new user message. |
 | User profile at conversation start | `profile` | `true` | | Provide the user profile when a conversation starts, independently of recall. |
 | Opening context budget | `profile_max_tokens` | `4000` | 0–32,000 | Separate budget for the profile and catalogs; 0 omits them. Catalogs require the Read tool. |
+| Show recall summary | `show_recall` | `false` | | Start the reply with a one-line summary of what OpenViking added, or why recall failed. The model never sees it. |
 | Sources | `context_types` | `memory`, `resource`, `skill` | at least one | What to search: memories, resources, skills. |
 | Budget per message | `max_tokens` | `1600` | 64–32,000 | Most tokens added to one message. |
 | Budget per context window | `session_max_tokens` | `30000` | ≥ 0 | Most tokens added within one context window; starts over after each compaction. 0 turns recall off. |

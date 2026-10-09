@@ -6,6 +6,7 @@ import copy
 
 import orjson
 
+from .notices import clip, tool_head
 from .protocols import replays_reasoning
 from .tool_protocols import tool_protocol
 from .tool_protocols.common import PREFIX
@@ -40,6 +41,21 @@ TOOL_OVERRIDES = {
 }
 
 
+def reply_block_reason(body):
+    """Why the reply is not a single text completion the gateway may add to, or ``""``."""
+    if body.get("n", 1) != 1:
+        return "tools_multiple_choices"
+    output_format = (
+        body.get("response_format")
+        or body.get("text", {}).get("format")
+        or body.get("output_config", {}).get("format")
+        or {}
+    )
+    if output_format.get("type", "text") != "text":
+        return "tools_structured_output"
+    return ""
+
+
 def tool_block_reason(body, protocol, upstream, restores_reasoning=True):
     """Why the request gets no gateway tools, or ``""``.
 
@@ -51,17 +67,7 @@ def tool_block_reason(body, protocol, upstream, restores_reasoning=True):
         return "tools_require_full_history"
     if not upstream.get("allow_gateway_tools", True):
         return "upstream_tools_disabled"
-    if body.get("n", 1) != 1:
-        return "tools_multiple_choices"
-    output_format = (
-        body.get("response_format")
-        or body.get("text", {}).get("format")
-        or body.get("output_config", {}).get("format")
-        or {}
-    )
-    if output_format.get("type", "text") != "text":
-        return "tools_structured_output"
-    reason = adapter.block_reason(body)
+    reason = reply_block_reason(body) or adapter.block_reason(body)
     if reason:
         return reason
     # With tools, DeepSeek rejects history whose replies lack their reasoning.
@@ -103,11 +109,6 @@ def select_tools(catalog, policy):
     return [*selected, *native_definitions(selected, policy)]
 
 
-def clip(value, limit=80):
-    value = " ".join(value.split())
-    return value if len(value) <= limit else value[: limit - 1] + "…"
-
-
 def notice_head(item):
     """The visible line for one gateway-run call, shown before it runs."""
     short = item["function"]["name"].removeprefix(PREFIX)
@@ -133,4 +134,4 @@ def notice_head(item):
                 target = "SKILL.md text"
         if target:
             break
-    return "> OpenViking " + short + (": " + target if target else "")
+    return tool_head(short, target)

@@ -221,7 +221,7 @@ A repository can carry its own plugin settings in `<repo-root>/.openviking/confi
 }
 ```
 
-`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
+`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, `usage.view`, `usage.output`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
 
 These files are trusted without a prompt, because a hook is non-interactive and an approval gate would mean one command per workspace. What is refused is structural: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in them. What a committed file switches off is announced by `$ov-memory-doctor` rather than blocked.
 
@@ -550,9 +550,9 @@ uses the deterministic fallback for that turn; later turns use the server.
 
 ## OV-Usage source summaries
 
-OV-Usage is built into the memory plugin; no separate plugin is needed. Independent
-`PostToolUse` and `Stop` hooks summarize automatic recall and explicit OpenViking
-lookups; the recall hook also supplies a footer for turns with recall alone.
+OV-Usage is built into the memory plugin; no separate plugin is needed. A
+`PostToolUse` hook records explicit OpenViking lookups, and the `Stop` hook
+summarizes them together with automatic recall.
 A typical summary is:
 
 ```text
@@ -566,7 +566,7 @@ excluded from source counts.
 
 ### Configure the output
 
-Set `OPENVIKING_USAGE_VIEW` before launching Codex:
+Set `OPENVIKING_USAGE_VIEW` before launching Codex, or `usageView` in `ovcli.conf`'s `plugin` / `plugin.codex` section (also `usage.view` in a workspace config file, or `codex.usageView` in `ov.conf`). The environment variable wins over the files:
 
 | Value | Behavior |
 | --- | --- |
@@ -578,14 +578,20 @@ Set `OPENVIKING_USAGE_VIEW` before launching Codex:
 OPENVIKING_USAGE_VIEW=expanded codex
 ```
 
-Usage uses one display channel per client. In terminal mode, the Stop hook emits
-an informational `systemMessage`; recall and lookup hooks do not request an answer
-footer. In desktop mode, recall and lookup hooks supply `additionalContext` for a
-model-rendered answer footer, and Stop does not emit a second message. Later
-lookups replace earlier snapshots. Higher-priority formatting requirements can
-suppress the footer. Interactive expand/collapse controls are not implemented.
+```json
+{ "plugin": { "codex": { "usageView": "off" } } }
+```
 
-Set `OPENVIKING_USAGE_OUTPUT=terminal` or `desktop` to select the channel explicitly.
+Usage uses one display channel per client. In terminal mode, the Stop hook emits
+an informational `systemMessage`; the recall hook does not request an answer
+footer. In desktop mode, the recall hook supplies `additionalContext` for a
+model-rendered answer footer covering automatic recall, and Stop does not emit a
+second message. The lookup hook never returns `additionalContext`: Codex would
+insert it between the outputs of parallel tool calls, which strict model
+providers reject. Higher-priority formatting requirements can suppress the footer.
+Interactive expand/collapse controls are not implemented.
+
+Set `OPENVIKING_USAGE_OUTPUT=terminal` or `desktop` (file key `usageOutput`, workspace `usage.output`) to select the channel explicitly.
 The default `auto` selects terminal when `TERM_PROGRAM` or a non-`dumb` `TERM` is
 present, and desktop otherwise. This is a heuristic, not a guaranteed client ID;
 use the explicit setting if your client inherits a terminal environment. This
@@ -602,7 +608,7 @@ Turns with no recall or lookups produce no summary.
    summary; with `expanded`, check that its URI matches the document.
 
 Working MCP tools alone do not establish that hooks are enabled. If a summary is
-missing, check hook trust and `OPENVIKING_USAGE_VIEW`, then restart Codex after
+missing, check hook trust and `OPENVIKING_USAGE_VIEW` / `usageView`, then restart Codex after
 changing environment variables. With `OPENVIKING_DEBUG=1`, reporting failures
 write a generic notice to the existing Codex debug log. Exception text and hook
 input are never logged; reporting and logging failures leave memory hooks intact.

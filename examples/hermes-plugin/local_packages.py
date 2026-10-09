@@ -1,4 +1,4 @@
-"""Reviewed binary packages, verified before either installer receives them."""
+"""Resolve the server at setup; retain verified native embedding packages."""
 
 from __future__ import annotations
 
@@ -12,34 +12,28 @@ from urllib.parse import parse_qs, urldefrag, urlparse
 
 import httpx
 from packaging.requirements import Requirement
-from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+from packaging.tags import sys_tags
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+from packaging.version import InvalidVersion, Version
 
-_OV = "https://files.pythonhosted.org/packages/"
 _CPP = "https://github.com/abetlen/llama-cpp-python/releases/download/"
 # macOS uses the working Metal archive. The same release's CPU macOS archive
 # fails CRC validation and must not be substituted here.
 _PACKAGES = {
     ("Darwin", "arm64"): (
-        "5c/f4/222b2eb392a09cf2e13648d4f2f509c6043d16385ebd48a457a453816245/openviking-0.4.22-cp310-abi3-macosx_14_0_arm64.whl",
-        "ddfa3d23274cbd9afcdfaf1a1542b0a9e5e8286221a96bb7e40bd63e312d5bae",
         "v0.3.30-metal/llama_cpp_python-0.3.30-py3-none-macosx_11_0_arm64.whl",
         "4f5b385f31dbda502d7118aff0c07c9e98961fa0402c025b89ff3250db843eb3",
     ),
     ("Linux", "x86_64"): (
-        "aa/02/69642eddcbced2d52dc8489a0e8f618b7ae11e6caede9b02fac0f6f54528/openviking-0.4.22-cp310-abi3-manylinux_2_31_x86_64.whl",
-        "fa508fc9c84a32b3206d2f719c415bad5c50e88c1838fb19349881e087da72c8",
         "v0.3.30/llama_cpp_python-0.3.30-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
         "591337ea31b6fea25f02da53db136041899a530eda1b2c2611f0bebe7c560a15",
     ),
     ("Linux", "aarch64"): (
-        "29/ef/8bda981fae06066d2c462d051ceb6038043e776cac7b87f723fe65e34f17/openviking-0.4.22-cp310-abi3-manylinux_2_31_aarch64.whl",
-        "480070405e5c64c0a7d8d1d2afba7e98a55f151a67c785e4e5d0d54320096afc",
         "v0.3.30/llama_cpp_python-0.3.30-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
         "0720e1d122a4d1ad46607813bd34018ff46b0f50cd0a38fb93fad650b3b98ade",
     ),
     ("Windows", "x86_64"): (
-        "3f/26/e0d259f1a9fb53d02b99487f232265f79965fefb9b956563612c7acf5ae5/openviking-0.4.22-cp310-abi3-win_amd64.whl",
-        "cad1f3e4ea843c47178a8d5056df733b1e3f49d4e902b6f803b9e192320bb89b",
         "v0.3.36/llama_cpp_python-0.3.36-py3-none-win_amd64.whl",
         "ae5e88a2cf464e5a2dde7c8898c2d5c71cc24d03cac6396bf7509456bde0b9fb",
     ),
@@ -70,14 +64,82 @@ def install_requirements(*, allow_source_build=False):
             )
         requirements = [OPENVIKING_REQUIREMENT, "llama-cpp-python==0.3.30"]
     else:
-        ov_path, ov_hash, cpp_path, cpp_hash = packages
+        cpp_path, cpp_hash = packages
         requirements = [
-            f"openviking[local-embed] @ {_OV}{ov_path}#sha256={ov_hash}",
+            OPENVIKING_REQUIREMENT,
             f"llama-cpp-python @ {_CPP}{cpp_path}#sha256={cpp_hash}",
         ]
     # The PM resolver otherwise chooses a LiteLLM release that excludes Python
     # 3.14. This constraint belongs only to OpenViking's private environment.
     return [*requirements, 'litellm==1.83.7; python_version >= "3.14"']
+
+
+def resolve_server_requirement(*, allow_source_build=False):
+    """Select a stable PyPI release only during explicit Quick Local setup."""
+    from .quick_local import QuickLocalSetupError
+
+    try:
+        response = httpx.get("https://pypi.org/pypi/openviking/json", timeout=30)
+        response.raise_for_status()
+        return _select_server_requirement(
+            response.json()["releases"],
+            python_version=platform.python_version(),
+            tags=list(sys_tags()),
+            allow_source_build=allow_source_build,
+        )
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise QuickLocalSetupError(
+            "Could not check OpenViking releases on PyPI. Check network access and retry setup."
+        ) from exc
+
+
+def _select_server_requirement(releases, *, python_version, tags, allow_source_build=False):
+    from .quick_local import OPENVIKING_REQUIREMENT, QuickLocalSetupError
+
+    specifier = Requirement(OPENVIKING_REQUIREMENT).specifier
+    ranked_tags = {tag: rank for rank, tag in enumerate(tags)}
+    versions = []
+    for raw_version, files in releases.items():
+        try:
+            version = Version(raw_version)
+        except InvalidVersion:
+            continue
+        if version in specifier and not version.is_prerelease and not version.is_devrelease:
+            versions.append((version, files))
+    for version, files in sorted(versions, key=lambda item: item[0], reverse=True):
+        wheels = []
+        source_available = False
+        for file in files:
+            if file.get("yanked") or python_version not in SpecifierSet(
+                file.get("requires_python") or ""
+            ):
+                continue
+            if file.get("packagetype") == "sdist":
+                source_available = True
+                continue
+            try:
+                name, wheel_version, _build, wheel_tags = parse_wheel_filename(file["filename"])
+            except (InvalidWheelFilename, KeyError):
+                continue
+            matches = wheel_tags.intersection(ranked_tags)
+            if name == "openviking" and wheel_version == version and matches:
+                wheels.append((min(ranked_tags[tag] for tag in matches), file))
+        if wheels:
+            file = min(wheels, key=lambda item: item[0])[1]
+            url = file["url"]
+            if (
+                urlparse(url).scheme != "https"
+                or urlparse(url).hostname != "files.pythonhosted.org"
+            ):
+                raise QuickLocalSetupError("OpenViking's release download must come from PyPI.")
+            digest = file["digests"]["sha256"]
+            return f"openviking[local-embed] @ {url}#sha256={digest}"
+        if allow_source_build and source_available:
+            return f"openviking[local-embed]=={version}"
+    raise QuickLocalSetupError(
+        "No compatible OpenViking release is available for this Python and platform. "
+        "Use a separate server or explicitly allow a source build in setup."
+    )
 
 
 def verified_requirements(requirements: list[str], cache: Path) -> list[str]:

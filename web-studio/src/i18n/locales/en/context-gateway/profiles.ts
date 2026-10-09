@@ -77,6 +77,11 @@ const profiles = {
       description:
         'Limit the profile and memory and skill catalogs provided at the start. Catalogs require the read tool. This budget is separate from recall; 0 omits all three.',
     },
+    showRecall: {
+      label: 'Show recall summary',
+      description:
+        'Start the reply with a one-line summary of what OpenViking added: how many entries, of which kinds, and a few names, or why recall failed. The model never sees it, and it is not saved to OpenViking. Applies to new conversations.',
+    },
     sources: {
       label: 'Sources',
       description: 'What recall searches.',

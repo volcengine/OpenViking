@@ -188,7 +188,9 @@ class AnthropicProtocol(ToolProtocol):
             if not self.started:
                 self.started = True
                 return [
-                    {**value, "message": {**self.envelope, "id": self.identifier, "content": []}}
+                    {**value, "message": {**self.envelope, "id": self.identifier, "content": []}},
+                    # The lead is block 0; upstream blocks follow it through self.indices.
+                    *self.lead_notice(),
                 ]
         elif kind == "content_block_start":
             index = value["index"]
@@ -210,6 +212,7 @@ class AnthropicProtocol(ToolProtocol):
         self.envelope = copy.deepcopy(value)
         self.finish, self.usage = value.get("stop_reason"), value.get("usage") or {}
         self.blocks = dict(enumerate(copy.deepcopy(value.get("content") or [])))
+        self.lead_notice()
         self.visible[0]["content"].extend(
             b for b in self.blocks.values() if b["type"] != "tool_use"
         )

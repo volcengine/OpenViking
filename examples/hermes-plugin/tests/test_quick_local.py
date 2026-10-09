@@ -25,6 +25,10 @@ def plugin_modules(external_provider, monkeypatch):
     monkeypatch.setattr(quick_local.secrets, "token_urlsafe", lambda _size: "local-test-key")
     monkeypatch.setattr(quick_local, "_validate_local_embedding", MagicMock())
     monkeypatch.setattr(quick_local, "_validate_vlm", MagicMock())
+    packages = importlib.import_module(openviking_module.__name__ + ".local_packages")
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.4.23"
+    )
 
 
 def _preflight(tmp_path: Path) -> quick_local.QuickLocalPreflight:
@@ -961,9 +965,11 @@ def test_current_installer_uses_pm_and_private_root(tmp_path, monkeypatch):
     )
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(paths)
+    requirements = packages.install_requirements()
+    requirements[0] = packages.resolve_server_requirement()
     install.assert_called_once_with(
         "openviking-local",
-        importlib.import_module(quick_local.__package__ + ".local_packages").install_requirements(),
+        requirements,
         "openviking-server",
         root=paths.runtime,
         explicit=True,
@@ -998,11 +1004,51 @@ def test_compatible_runtime_avoids_installer(tmp_path, monkeypatch):
     packages = importlib.import_module(quick_local.__package__ + ".local_packages")
     paths = quick_local.managed_paths(tmp_path)
     paths.root.mkdir()
-    (paths.root / "runtime-requirements.json").write_text(
-        json.dumps(packages.install_requirements())
-    )
+    requirements = packages.install_requirements()
+    requirements[0] = packages.resolve_server_requirement()
+    (paths.root / "runtime-requirements.json").write_text(json.dumps(requirements))
     engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
     assert engine._ensure_openviking_installed(quick_local.managed_paths(tmp_path)) is False
+    run.assert_not_called()
+
+
+def test_setup_checks_new_release_even_with_a_compatible_installed_runtime(tmp_path, monkeypatch):
+    pm = pytest.importorskip("pm.client")
+    packages = importlib.import_module(quick_local.__package__ + ".local_packages")
+    paths = quick_local.managed_paths(tmp_path)
+    paths.root.mkdir()
+    requirements = packages.install_requirements()
+    requirements[0] = "openviking[local-embed]==0.4.22"
+    (paths.root / "runtime-requirements.json").write_text(json.dumps(requirements))
+    monkeypatch.setattr(quick_local, "openviking_install_satisfies_requirement", lambda _p: True)
+    monkeypatch.setattr(packages, "verified_requirements", lambda values, _cache: values)
+    install = MagicMock()
+    monkeypatch.setattr(pm, "ensure_python_tool", install)
+
+    engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
+    assert engine._ensure_openviking_installed(paths) is True
+    assert install.call_args.args[1][0] == "openviking[local-embed]==0.4.23"
+    assert json.loads((paths.root / "runtime-requirements.json").read_text())[0] == (
+        "openviking[local-embed]==0.4.23"
+    )
+
+
+def test_release_check_failure_preserves_runtime_receipt(tmp_path, monkeypatch):
+    packages = importlib.import_module(quick_local.__package__ + ".local_packages")
+    paths = quick_local.managed_paths(tmp_path)
+    paths.root.mkdir()
+    receipt = paths.root / "runtime-requirements.json"
+    receipt.write_text('["previous requirements"]')
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement",
+        MagicMock(side_effect=quick_local.QuickLocalSetupError("PyPI unavailable")),
+    )
+    run = MagicMock()
+    monkeypatch.setattr(quick_local.subprocess, "run", run)
+    engine = quick_local.QuickLocalSetup(health_check=lambda _url: (False, ""))
+    with pytest.raises(quick_local.QuickLocalSetupError, match="PyPI unavailable"):
+        engine._ensure_openviking_installed(paths)
+    assert receipt.read_text() == '["previous requirements"]'
     run.assert_not_called()
 
 

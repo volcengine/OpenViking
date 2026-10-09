@@ -463,6 +463,13 @@ export function ProfileSettingsForm({
               onCheckedChange={(profile) => onChange({ profile })}
             />
             {numberField('profile_max_tokens')}
+            <ToggleRow
+              id="profile-show_recall"
+              label={t('profiles.recall.showRecall.label')}
+              description={t('profiles.recall.showRecall.description')}
+              checked={value.show_recall}
+              onCheckedChange={(show_recall) => onChange({ show_recall })}
+            />
           </div>
         }
         advanced={

@@ -10,21 +10,19 @@ access storage. The shared loop owns those steps.
 
 import copy
 import functools
-import re
+import itertools
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import orjson
 
+from ..notices import TOOL_NOTICE, without_recall_notice
 from ..protocols import prefix_chain, usage_of
 
 PREFIX = "openviking_"
 # None is the Chat Completions [DONE] marker; all other events are native JSON.
 StreamEvent = dict | None
-# One rendered notice line, with the blank lines that separate it. Capture
-# strips exactly these lines, so this pattern must follow notice_head/tail.
-NOTICE = re.compile(r"^> OpenViking \w+(?:: [^\n]+)? — (?:done|failed|skipped)$\n*", re.M)
 # Reasoning counts against these output caps, and some models reason without being
 # asked, so a summary request first asks for this room beyond its own text. Models
 # with a smaller output limit reject that cap, and the kernel retries without it.
@@ -104,35 +102,59 @@ def call(identifier, name, arguments):
     }
 
 
-def notice_tail(failed, skipped):
-    """The outcome that completes a notice line once the call has run."""
-    if skipped:
-        return " — skipped"
-    return " — failed" if failed else " — done"
+def edit_text(content, edit, first=False):
+    """``content`` with ``edit`` applied to its text, or ``content`` itself if unchanged.
+
+    A string is edited whole. In a list ``edit`` gets the text of every part that has some,
+    or with ``first`` only of the first such part, and a part the edit empties is dropped.
+    """
+    if isinstance(content, str):
+        edited = edit(content)
+        return content if edited == content else edited
+    if not isinstance(content, list):
+        return content
+    parts, changed, offered = [], False, False
+    for part in content:
+        text = part.get("text") if isinstance(part, dict) else None
+        if isinstance(text, str) and not (first and offered):
+            offered, edited = True, edit(text)
+            if edited != text:
+                changed = True
+                if not edited.strip():
+                    continue
+                part = {**part, "text": edited}
+        parts.append(part)
+    return parts if changed else content
+
+
+def edit_replies(messages, edit, rebuild, first=False):
+    """``messages`` with ``edit`` applied to assistant text, or ``messages`` itself if unchanged.
+
+    ``edit_text`` says which text ``edit`` gets. ``rebuild(message, content, previous)``
+    returns an edited message with its new content, None to drop it, or ``message`` to keep
+    the edit out; ``previous`` is the item before it, ``{}`` for the first.
+    """
+    result, changed = [], False
+    for previous, message in itertools.pairwise([{}, *messages]):
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            content = edit_text(message.get("content"), edit, first)
+            if content is not message.get("content"):
+                rebuilt = rebuild(message, content, previous)
+                changed = changed or rebuilt is not message
+                if rebuilt is None:
+                    continue
+                message = rebuilt
+        result.append(message)
+    return result if changed else messages
 
 
 def strip_notices(messages):
-    """Remove tool notices from echoed assistant text, dropping emptied text parts."""
-    result = []
-    for message in messages:
-        content = message.get("content")
-        if message.get("role") == "assistant" and isinstance(content, str):
-            message = {**message, "content": NOTICE.sub("", content)}
-        elif message.get("role") == "assistant" and isinstance(content, list):
-            parts = []
-            for part in content:
-                text = part.get("text") if isinstance(part, dict) else None
-                if isinstance(text, str) and NOTICE.search(text):
-                    text = NOTICE.sub("", text)
-                    if not text.strip():
-                        continue
-                    part = {**part, "text": text}
-                parts.append(part)
-            if not parts and content:
-                continue
-            message = {**message, "content": parts}
-        result.append(message)
-    return result
+    """Remove tool notices from echoed assistant text, dropping emptied text parts and messages."""
+
+    def rebuild(message, content, previous):
+        return {**message, "content": content} if content != [] else None
+
+    return edit_replies(messages, lambda text: TOOL_NOTICE.sub("", text), rebuild)
 
 
 @dataclass(frozen=True)
@@ -173,6 +195,8 @@ class ToolProtocol(ABC):
         self.identifier = self.id_prefix + "ovcg-" + uuid.uuid4().hex
         self.visible: list[dict] = []
         self.started = False
+        # Text the reply starts with, shown before any upstream content.
+        self.lead = ""
 
     @classmethod
     def messages(cls, body: dict) -> list:
@@ -258,6 +282,22 @@ class ToolProtocol(ABC):
         A message that still carries reasoning comes back unchanged.
         """
         return [message]
+
+    @classmethod
+    def strip_lead(cls, messages: list[dict]) -> list[dict]:
+        """The history without the recall notice the gateway put at the start of replies.
+
+        Only an assistant message's first text can hold this lead; a user quoting it keeps
+        it. Returns ``messages`` itself when nothing changed.
+        """
+
+        def rebuild(message, content, previous):
+            # A reply of tool calls alone had no content before the lead.
+            if content == "" and message.get("tool_calls"):
+                content = None
+            return {**message, "content": content}
+
+        return edit_replies(messages, without_recall_notice, rebuild, first=True)
 
     # Whether omit_hidden_history removes reasoning, so none is restored before it.
     omits_reasoning = False
@@ -359,6 +399,17 @@ class ToolProtocol(ABC):
 
     def close_notice(self) -> list[dict]:
         return []
+
+    def lead_with(self, text: str) -> None:
+        """Start the visible reply with ``text``; the adapter shows it before upstream content."""
+        self.lead = text
+
+    def lead_notice(self) -> list[dict]:
+        """Put the pending lead text first in visible history and return its events, once."""
+        text, self.lead = self.lead, ""
+        if not text:
+            return []
+        return [*self.open_notice(), *self.notice(text), *self.close_notice()]
 
     @abstractmethod
     def results(self, receipts: list[dict]) -> list[dict]:

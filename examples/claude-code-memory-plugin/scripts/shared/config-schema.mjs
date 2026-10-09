@@ -203,6 +203,11 @@ export const KNOBS = [
     capability: "session",
   },
 
+  // Codex's OV-Usage footer. Strings rather than enums: the reader matches
+  // several spellings case-insensitively (off/false/0/disabled, expanded/full/details).
+  { name: "usageView", type: "string", default: "summary", env: "OPENVIKING_USAGE_VIEW", workspace: "usage.view", capability: "session" },
+  { name: "usageOutput", type: "string", default: "auto", env: "OPENVIKING_USAGE_OUTPUT", workspace: "usage.output", capability: "session" },
+
   // ── debug ─────────────────────────────────────────────────────────────
   { name: "debug", type: "bool", default: false, env: "OPENVIKING_DEBUG", capability: "debug" },
   // The default path is per-harness and built from a log directory the loader

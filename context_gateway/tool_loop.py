@@ -10,11 +10,12 @@ import orjson
 
 from .capture import CapturePipeline
 from .compaction import cut_messages
+from .notices import tool_tail
 from .protocols import SSEDecoder, replays_reasoning, usage_of
 from .records import RecordKind as K
 from .tool_catalog import notice_head
 from .tool_protocols import hidden_chain, tool_protocol
-from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage, notice_tail
+from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage
 from .windows import ALONE, NEW_CONTEXT, window_number
 
 REFUSED = "OpenViking tools are unavailable for the rest of this request; continue without them."
@@ -34,8 +35,16 @@ class HiddenToolLoop:
             **prepared.body,
             self.adapter.field: list(self.adapter.messages(prepared.body)),
         }
-        self.policy, self.allowed = prepared.root["policy"], executor.allowed
-        self.deadline = time.monotonic() + self.policy.get("tool_total_seconds", 120)
+        self.policy = prepared.root["policy"]
+        # A request without gateway tools comes here only to show the recall notice: every
+        # call is the client's, nothing runs, and the reply takes as long as it takes.
+        self.allowed = executor.allowed if prepared.tools_active else set()
+        self.deadline = (
+            time.monotonic() + self.policy.get("tool_total_seconds", 120)
+            if prepared.tools_active
+            else None
+        )
+        self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage = [], {}
         self.final, self.hidden, self.window = None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
@@ -141,7 +150,7 @@ class HiddenToolLoop:
                 result = await self.executor.execute(call)
             window = result.pop("cut", window)
             if show:
-                events = self.adapter.notice(notice_tail(result.get("failed", False), skipped))
+                events = self.adapter.notice(tool_tail(result.get("failed", False), skipped))
             results.append(result)
             self.token_cost += added_tokens(result)
         if show:
@@ -172,7 +181,9 @@ class HiddenToolLoop:
         self.prepared.metrics.update(window=window_number(self.prepared), window_reset=True)
 
     async def persist(self):
-        visible = self.adapter.visible
+        # The next request strips the recall notice before matching, so the anchor,
+        # the visible count and the replaced span all go without it.
+        visible = self.adapter.strip_lead(self.adapter.visible)
         anchor = (
             hidden_chain([*self.prepared.messages, *visible], self.protocol)[-1] if visible else ""
         )
@@ -227,6 +238,11 @@ class HiddenToolLoop:
                     self.observe()
                     owned, client = [], []
                     for call in self.round.calls:
+                        if not self.prepared.tools_active:
+                            # Every call is the client's, whatever its shape: a Chat custom
+                            # tool call has no `function` (such tools keep gateway tools out).
+                            client.append(call)
+                            continue
                         name = call["function"]["name"]
                         if name.startswith(PREFIX) and name not in self.allowed:
                             raise ToolLoopError("Model called an unavailable gateway tool")

@@ -73,6 +73,11 @@ const profiles = {
       description:
         '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。',
     },
+    showRecall: {
+      label: '显示召回摘要',
+      description:
+        '在回复开头用一行说明 OpenViking 附加了什么：几条、属于哪些类别、几个条目名，召回失败时说明原因。模型看不到这行摘要，它也不会保存到 OpenViking。只对新对话生效。',
+    },
     sources: {
       label: '检索范围',
       description: '召回时检索哪些内容。',

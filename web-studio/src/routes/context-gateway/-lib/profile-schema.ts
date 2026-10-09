@@ -29,6 +29,7 @@ export const PROFILE_DEFAULTS: ProfileSettings = {
   score_threshold: 0.35,
   recall_timeout: 2,
   query_max_chars: 8000,
+  show_recall: false,
   commit_tokens: 20000,
   keep_recent_messages: 10,
   idle_seconds: 600,

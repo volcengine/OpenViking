@@ -27,6 +27,7 @@ from .compaction import (
     window_size,
 )
 from .models import Policy
+from .notices import recall_notice
 from .profile import build_profile
 from .protocols import (
     classify,
@@ -43,7 +44,7 @@ from .protocols import (
 from .records import RecordKind as K
 from .state_store import get_state
 from .storage import KernelStore, digest
-from .tool_catalog import select_tools, tool_block_reason
+from .tool_catalog import reply_block_reason, select_tools, tool_block_reason
 from .tool_protocols import hidden_chain, replay_hidden, tool_protocol
 from .tool_protocols.common import SummaryError
 from .vendors import parameter_fingerprint
@@ -92,6 +93,8 @@ class Prepared:
     # The reply's anchor; ``relayed`` records it once it succeeds.
     relayed: bool = False
     reply_anchor: str = ""
+    # What the reply starts with for the user: the recall notice of this turn's injection.
+    reply_lead: str = ""
 
 
 class MemoryKernel:
@@ -187,6 +190,9 @@ class MemoryKernel:
         sent = adapter.messages(body)
         if not isinstance(sent, list) or not all(isinstance(m, dict) for m in sent):
             raise ValueError("invalid message list")
+        # The lead is the gateway's, not the model's: the client resends it, but nothing
+        # matches, captures or forwards it, as replies were recorded without it.
+        sent = adapter.strip_lead(sent)
         scope = digest(credential["account"] + "\0" + credential["user_id"] + "\0" + protocol)
         # Anchors, capture and recall read the history as the gateway relayed it;
         # the upstream still gets exactly what the client sent.
@@ -275,6 +281,16 @@ class MemoryKernel:
             if kind == "user" and anchor >= 0 and (K.INJECTION, chain[anchor]) not in records:
                 await self.recall(prepared, credential, policy)
             await remind(self.store, prepared, policy)
+        if (
+            not disabled
+            and kind == "user"
+            and anchor >= 0
+            and policy.show_recall
+            and not reply_block_reason(body)
+        ):
+            # A retry of the turn shows the same notice: it is part of the immutable decision.
+            decision = prepared.records.get((K.INJECTION, chain[anchor]), {})
+            prepared.reply_lead = decision.get("notice", "")
         self.assemble(prepared)
         if isinstance(body.get("input"), str) and result.get("input") == sent:
             result["input"] = body["input"]
@@ -417,6 +433,8 @@ class MemoryKernel:
         if any(tool["function"]["name"] == "openviking_read" for tool in tools):
             lead += " Use the openviking_read tool to expand URIs."
         overhead = token_estimate(block("gateway-recall", lead + "\n"))
+        # The search entries a recall returned, for the notice.
+        entries = []
 
         async def retrieve():
             if not reserved:
@@ -429,6 +447,8 @@ class MemoryKernel:
                 )
                 rendered = response.get("rendered") or ""
                 text = lead + "\n" + rendered if rendered else ""
+                if text:
+                    entries.extend(e for e in response.get("entries", []) if isinstance(e, dict))
                 return {
                     "text": text,
                     "uris": [
@@ -444,21 +464,22 @@ class MemoryKernel:
 
         async def opening():
             if existing:
-                return ""
+                return "", []
             profile = await build_profile(self.viking, credential["openviking_key"], policy, tools)
             request.metrics["profile_reason"] = profile["reason"]
             # After client-side compaction, the capture document still names the earlier sessions.
             hint = history_hint(
                 credential["user_id"], lineage(request.capture.value), tools, policy.capture
             )
-            return block(
+            text = block(
                 "gateway-session-start",
                 "\n\n".join(
                     part for part in (gateway_note(policy, tools), hint, profile["text"]) if part
                 ),
             )
+            return text, [*profile["parts"], *(["history"] if hint else [])]
 
-        decision, start = await asyncio.gather(retrieve(), opening())
+        decision, (start, parts) = await asyncio.gather(retrieve(), opening())
         status, reminder = status_line(request, policy)
         recalled = block("gateway-recall", "\n\n".join(p for p in (decision["text"], status) if p))
         # The opening block is immutable with recall but has its own budget, and
@@ -466,6 +487,9 @@ class MemoryKernel:
         decision["text"] = "\n\n".join(part for part in (start, recalled) if part)
         if reminder:
             decision["reminder"] = reminder
+        if policy.show_recall:
+            # Replay reads only text, so the notice never changes what the model gets.
+            decision["notice"] = recall_notice(parts, decision["reason"], entries)
         anchor = request.chain[request.anchor]
         decision = await self.store.replay.put(
             request.scope, request.session, K.INJECTION, anchor, decision
