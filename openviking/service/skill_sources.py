@@ -73,7 +73,30 @@ def _skill_paths(root: Path, names: list[str], repo_root: Path | None) -> list[P
             for entry in path.rglob("*"):
                 if not entry.resolve().is_relative_to(repo_root):
                     raise InvalidArgumentError("Skill file escapes the source repository")
+    _reject_duplicate_declared_names(root, selected)
     return selected
+
+
+def _reject_duplicate_declared_names(root: Path, paths: list[Path]) -> None:
+    """Reject source directories that would install to the same Skill root."""
+    sources_by_name: dict[str, str] = {}
+    for path in paths:
+        skill = SkillLoader.load(str(path / "SKILL.md"))
+        name = validate_skill_name(skill.get("name"))
+        source = path.relative_to(root).as_posix()
+        previous = sources_by_name.get(name)
+        if previous is not None:
+            source_directories = [previous, source]
+            raise InvalidArgumentError(
+                f"Skill name '{name}' is declared by more than one source directory: "
+                + ", ".join(source_directories),
+                details={
+                    "field": "name",
+                    "name": name,
+                    "source_directories": source_directories,
+                },
+            )
+        sources_by_name[name] = source
 
 
 @asynccontextmanager
