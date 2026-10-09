@@ -140,7 +140,7 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 ### 怎么开启、有什么上限
 
 - **默认只提供只读工具。** 新建的上下文配置默认打开 **OpenViking 工具**，“使用推荐设置创建”也一样。默认勾选的是只读工具：`find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`list_watches`、`get_acl`、`list_users`、`list_groups` 和 `health`。会修改数据的工具默认不勾选：`remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl` 和 `cancel_watch`。想让模型保存记忆，就勾选 `remember`；想让它导入网页或附件，就勾选 `add_resource`。OpenViking 以后新增的工具会自动勾选。已有的上下文配置保留原来的设置。全部工具定义约占 3,500 个输入 token，会随对话中的每个请求发送，所以取消用不到的工具也能节省 token。改动只影响新对话。
-- **上限。** 默认每个请求最多 5 轮工具调用、新增 100,000 token。用完后网关拒绝之后的 OpenViking 调用，模型用已有结果继续回答；模型被拒后仍坚持调用，这个请求就会报错。单次调用超过 30 秒，这次调用向模型返回错误；整个请求超过 120 秒，请求失败。
+- **上限。** 工具轮数、**总时长**和 **Token 预算**默认都不限：模型会一直使用 OpenViking 工具直到完成。流式请求中，用户可以随时中断回复；非流式请求在客户端断开后仍会继续执行，如果客户端发送非流式请求，建议设置**总时长**。设置了工具轮数或 Token 预算的，用完后网关拒绝之后的 OpenViking 调用，模型用已有结果继续回答；模型被拒后仍坚持调用，这个请求就会报错。设置了**总时长**的，请求超过这个时长就会失败。单次调用超过 30 秒，这次调用向模型返回错误。
 - **客户端要求。** 客户端要每轮回传完整历史；使用 OpenAI Responses 时要设置 `store: false`。客户端强制指定某个工具或要求结构化输出、上游关闭了**允许 OpenViking 工具**，或者上游是 DeepSeek、关闭了**补全推理内容回传**而请求又没有关闭思考模式时，网关不提供 OpenViking 工具。DeepSeek 要求带工具的请求回传之前每条回复的推理内容，而很多客户端不会发回来；DeepSeek 上游默认开启**补全推理内容回传**，由网关补回这部分内容，所以保持思考模式也能使用工具，见[上游](22-gateway-operations.md#上游)。对话是否带工具，在它的第一个请求时就决定了。
 
 完整的条件、上限设置、文件导入方式和失败处理，见[OpenViking 工具](22-gateway-operations.md#openviking-工具)。
