@@ -406,21 +406,22 @@ def _start_vikingbot_gateway(
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
 
-    # Check if vikingbot is available
+    # Prefer the module from the running OpenViking environment. A PATH-first
+    # lookup can select a different OpenViking installation whose optional bot
+    # dependencies or configuration do not match this server.
     vikingbot_cmd = None
-    if shutil.which("vikingbot"):
+    python_cmd = sys.executable
+    try:
+        result = subprocess.run(
+            [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=15
+        )
+        if result.returncode == 0:
+            vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    if vikingbot_cmd is None and shutil.which("vikingbot"):
         vikingbot_cmd = ["vikingbot", "gateway"]
-    else:
-        # Try python -m vikingbot
-        python_cmd = sys.executable
-        try:
-            result = subprocess.run(
-                [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=15
-            )
-            if result.returncode == 0:
-                vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
 
     if vikingbot_cmd is None:
         print("Warning: vikingbot not found. Please install vikingbot first.")
