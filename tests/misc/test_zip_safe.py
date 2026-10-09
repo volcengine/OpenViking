@@ -263,6 +263,43 @@ class TestSafeExtractZipNormal:
         assert (dest / "file (1).txt").exists()
 
 
+class TestSafeExtractZipMemberCollisions:
+    """Verify ambiguous member destinations are rejected before extraction."""
+
+    def test_rejects_case_variant_files_before_any_write(self, tmp_path: Path) -> None:
+        dest = tmp_path / "out"
+        dest.mkdir()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("safe.txt", "safe")
+            zf.writestr("Report.txt", "first")
+            zf.writestr("report.txt", "second")
+        buf.seek(0)
+
+        with zipfile.ZipFile(buf, "r") as zf:
+            with pytest.raises(ValueError, match="ZIP member path collision"):
+                safe_extract_zip(zf, dest)
+
+        assert list(dest.iterdir()) == []
+
+    def test_allows_case_variant_directories_with_distinct_files(self, tmp_path: Path) -> None:
+        dest = tmp_path / "out"
+        dest.mkdir()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("Docs/", "")
+            zf.writestr("docs/", "")
+            zf.writestr("Docs/first.txt", "first")
+            zf.writestr("docs/second.txt", "second")
+        buf.seek(0)
+
+        with zipfile.ZipFile(buf, "r") as zf:
+            safe_extract_zip(zf, dest)
+
+        assert (dest / "Docs" / "first.txt").read_text() == "first"
+        assert (dest / "docs" / "second.txt").read_text() == "second"
+
+
 class TestSafeExtractZipSlipPrevention:
     """Verify Zip Slip path traversal attacks are rejected."""
 

@@ -5,7 +5,9 @@
 import os
 import re
 import shutil
+import stat
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
 _UTF8_FLAG = 0x800
@@ -81,6 +83,26 @@ def _safe_zip_member_path(filename: str) -> Path:
     return Path(*safe_parts)
 
 
+def validate_zip_member_paths(members: Iterable[zipfile.ZipInfo]) -> None:
+    """Reject file members that map to the same portable destination."""
+    claimed_paths: dict[str, tuple[str, bool]] = {}
+    for member in members:
+        safe_path = _safe_zip_member_path(member.filename).as_posix()
+        collision_key = safe_path.casefold()
+        is_directory = (
+            member.is_dir()
+            or member.filename.endswith(("/", "\\"))
+            or stat.S_ISDIR(member.external_attr >> 16)
+        )
+        previous = claimed_paths.get(collision_key)
+        if previous is not None:
+            previous_path, previous_is_directory = previous
+            if not (previous_is_directory and is_directory):
+                raise ValueError(f"ZIP member path collision: {previous_path!r} and {safe_path!r}")
+            continue
+        claimed_paths[collision_key] = (safe_path, is_directory)
+
+
 def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     """Extract ZIP archive with Zip Slip protection.
 
@@ -91,7 +113,9 @@ def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     """
     dest_dir = Path(dest_dir).resolve()
     normalize_zip_filenames(zipf)
-    for member in zipf.infolist():
+    members = zipf.infolist()
+    validate_zip_member_paths(members)
+    for member in members:
         safe_rel_path = _safe_zip_member_path(member.filename)
         member_path = (dest_dir / safe_rel_path).resolve()
         # Ensure the resolved path is inside dest_dir
