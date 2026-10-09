@@ -116,3 +116,4 @@ describe('FilePreview Markdown raw HTML', () => {
     expect(container.querySelector('script')).toBeNull()
   })
 })
+vi.mock('#/components/ttl-settings', () => ({ RootTtlSettings: () => null }))

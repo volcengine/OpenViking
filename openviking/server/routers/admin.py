@@ -4,12 +4,13 @@
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from openviking.config.scope import ConfigScope
+from openviking.config.ttl import validate_ttl_policy_modes
 from openviking.config.validate import ConfigPatchError
 from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.auth import (
@@ -39,6 +40,7 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import (
     get_task_tracker,
 )
+from openviking.service.ttl_policy import patch_ttl_configuration
 from openviking.session.memory.account_templates import (
     EDITABLE_MEMORY_TEMPLATE_FIELDS,
     default_memory_template,
@@ -70,7 +72,7 @@ class CreateAccountRequest(BaseModel):
     user_config: UserConfig | None = None
     # Optional initial AccountConfig override, validated against the active
     # account-level runtime field surface before the account is created.
-    settings: dict[str, Any] | None = None
+    settings: Annotated[dict[str, Any], AfterValidator(validate_ttl_policy_modes)] | None = None
 
 
 class RegisterUserRequest(BaseModel):
@@ -137,7 +139,9 @@ class ConfigPatchRequest(BaseModel):
     the model surface, not this envelope.
     """
 
-    settings: dict[str, Any] = Field(default_factory=dict)
+    settings: Annotated[dict[str, Any], AfterValidator(validate_ttl_policy_modes)] = Field(
+        default_factory=dict
+    )
 
 
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
@@ -785,7 +789,12 @@ async def patch_account_configuration(
     await _check_account_exists(request, account_id)
     _authorize_account_config_patch(ctx, body.settings)
     try:
-        await _get_runtime_config_manager().patch_account(account_id, body.settings)
+        await patch_ttl_configuration(
+            get_service().viking_fs,
+            _get_runtime_config_manager(),
+            body.settings,
+            account_id=account_id,
+        )
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     settings = await _get_runtime_config_manager().get_settings(
@@ -822,7 +831,7 @@ async def patch_cluster_configuration(
     """Apply a three-state PATCH to the cluster configuration layer."""
     runtime_config = _get_runtime_config_manager()
     try:
-        await runtime_config.patch_cluster(body.settings)
+        await patch_ttl_configuration(get_service().viking_fs, runtime_config, body.settings)
     except (ConfigPatchError, ValueError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
     settings = await runtime_config.get_settings(ConfigScope.cluster())

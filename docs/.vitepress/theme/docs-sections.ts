@@ -62,6 +62,7 @@ export const sections: DocSection[] = [
         p('concepts/01-architecture'),
         p('concepts/05-storage'),
         p('concepts/16-queue-lifecycle'),
+        p('concepts/17-ttl'),
         p('concepts/09-transaction'),
         p('concepts/14-multi-write-storage'),
         p('concepts/12-metrics')

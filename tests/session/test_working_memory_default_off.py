@@ -11,6 +11,7 @@ import pytest
 from openviking.message import TextPart
 from openviking.session import Session
 from openviking.session.checkpoints import CheckpointPlanner
+from tests.server.conftest import service as service
 from tests.session.test_session_commit import _wait_for_task
 
 

@@ -41,6 +41,11 @@ static ALL_FIELDS: &[FieldDef] = &[
     FieldDef { name: "size", header: "SIZE", alignment: FieldAlignment::Right },
     FieldDef { name: "mode", header: "MODE", alignment: FieldAlignment::Left },
     FieldDef { name: "mtime", header: "MTIME", alignment: FieldAlignment::Left },
+    FieldDef {
+        name: "expires_at",
+        header: "EXPIRES_AT",
+        alignment: FieldAlignment::Left,
+    },
     FieldDef { name: "locked", header: "LOCKED", alignment: FieldAlignment::Left },
     FieldDef { name: "id", header: "ID", alignment: FieldAlignment::Left },
     FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
@@ -123,6 +128,7 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
             .map(|m| format_mode(m, entry_is_dir(obj)))
             .unwrap_or_else(|| "-".to_string()),
         "mtime" => entry_mod_time(obj).unwrap_or_else(|| "-".to_string()),
+        "expires_at" => entry_string(obj, "expires_at").unwrap_or("-").to_string(),
         "locked" => obj
             .and_then(|o| o.get("isLocked"))
             .and_then(Value::as_bool)
@@ -728,6 +734,9 @@ fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String
     if let Some(mod_time) = entry_mod_time(object) {
         metadata.push(theme::muted(mod_time).to_string());
     }
+    if let Some(expires_at) = entry_string(object, "expires_at") {
+        metadata.push(theme::muted(format!("expires {expires_at}")).to_string());
+    }
 
     metadata
 }
@@ -770,6 +779,9 @@ fn tree_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String>
 
     if let Some(mod_time) = entry_mod_time(object) {
         metadata.push(mod_time);
+    }
+    if let Some(expires_at) = entry_string(object, "expires_at") {
+        metadata.push(format!("expires {expires_at}"));
     }
 
     metadata

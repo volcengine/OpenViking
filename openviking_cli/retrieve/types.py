@@ -286,6 +286,7 @@ class MatchedContext:
     score: float = 0.0
     match_reason: str = ""
     search_tags: List[str] = field(default_factory=list)
+    expires_at: Optional[str] = None
     # Recall-stage vector score and time factor, retained after model rerank.
     origin_score: Optional[float] = None
     time_score: Optional[float] = None
@@ -378,6 +379,7 @@ class FindResult:
         result: Dict[str, Any] = {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
+            "expires_at": ctx.expires_at,
             "level": ctx.level,
             "score": ctx.score,
             "abstract": ctx.abstract,
@@ -405,6 +407,7 @@ class FindResult:
             "matched_contexts": [
                 {
                     "uri": ctx.uri,
+                    "expires_at": ctx.expires_at,
                     "tier": f"L{ctx.level}",
                     "context_type": ctx.context_type.value,
                     "score": ctx.score,

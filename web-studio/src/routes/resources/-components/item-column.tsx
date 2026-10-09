@@ -2,6 +2,8 @@ import { ChevronRight, FileText, Folder } from 'lucide-react'
 import type { TFunction } from 'i18next'
 
 import { cn } from '#/lib/utils'
+import { TtlExpiry } from '#/components/ttl-expiry'
+import { isTtlRoot, ttlRootForPath } from '#/lib/ttl'
 import { useTransientScrollbar } from '#/hooks/use-transient-scrollbar'
 import type { VikingFsEntry } from '../-types/viking-fm'
 
@@ -87,7 +89,12 @@ export function ItemColumn({
                     )}
                   />
                 )}
-                <span className="truncate font-medium">{entry.name}</span>
+                <span className="min-w-0 truncate font-medium">
+                  {entry.name}
+                  {ttlRootForPath(entry.uri) && !isTtlRoot(entry.uri) && (
+                    <TtlExpiry expiresAt={entry.expiresAt} />
+                  )}
+                </span>
                 {isDir && (
                   <ChevronRight className="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform group-hover:translate-x-0.5" />
                 )}

@@ -1,6 +1,7 @@
 export type FsOutputFormat = 'agent' | 'original' | (string & {})
 
 export type FileStat = {
+  expires_at?: string | null
   abstract?: string
   contentLength?: number
   content_length?: number

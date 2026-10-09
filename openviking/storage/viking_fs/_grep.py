@@ -93,15 +93,11 @@ class _GrepMixin:
             if vector_store is None:
                 return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
             records = await vector_store.filter(
-                filter=And(
-                    [
-                        PathScope("uri", uri, depth=level_limit),
-                        RawDSL(tag_filter),
-                    ]
-                ),
+                filter=And([PathScope("uri", uri, depth=level_limit), RawDSL(tag_filter)]),
                 limit=100000,
                 output_fields=["uri", "search_tags"],
                 ctx=ctx,
+                include_expired=False,
             )
             allowed_uris = {str(record["uri"]) for record in records if record.get("uri")}
             if not allowed_uris:
@@ -251,7 +247,15 @@ class _GrepMixin:
             return False
 
     async def _get_cached_count(self, uri: str, ctx) -> int:
-        """Get cached count of records for a URI (TTL=1h)."""
+        """Get cached count of records for a URI (TTL=1h).
+
+        This count only feeds engine-selection thresholds (fs vs. vikingdb for
+        grep/glob); it is never surfaced to callers or used to truncate results.
+        The TTL read barrier is therefore intentionally not applied here — both
+        engines filter expired objects out of their own result sets, and the
+        threshold is about total indexed volume, not visible count. The
+        user-facing directory count in ``stat`` applies the barrier separately.
+        """
         _COUNT_CACHE_TTL = 3600
         vector_store = self._get_vector_store()
 
@@ -381,7 +385,9 @@ class _GrepMixin:
         """VikingDB bm25 recall + local fs precise matching."""
         vector_store = self._get_vector_store()
         tags_by_uri: Dict[str, List[str]] = {}
-        output_fields = ["uri", "search_tags"] if tag_filter is not None or include_tags else ["uri"]
+        output_fields = (
+            ["uri", "search_tags"] if tag_filter is not None or include_tags else ["uri"]
+        )
 
         # Split regex alternation (e.g. "error|warning|fail") and join as a
         # single query string for bm25 search. VikingDB's standard tokenizer
@@ -435,15 +441,11 @@ class _GrepMixin:
             if tag_filter is not None and allowed_uris is None:
                 try:
                     records = await vector_store.filter(
-                        filter=And(
-                            [
-                                PathScope("uri", uri, depth=level_limit),
-                                RawDSL(tag_filter),
-                            ]
-                        ),
+                        filter=And([PathScope("uri", uri, depth=level_limit), RawDSL(tag_filter)]),
                         limit=100000,
                         output_fields=["uri", "search_tags"],
                         ctx=ctx,
+                        include_expired=False,
                     )
                 except Exception as filter_error:
                     logger.warning(
@@ -609,6 +611,11 @@ class _GrepMixin:
             Dict with matches, count, match_count, files_scanned
         """
         path = self._uri_to_path(uri, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        # Native grep applies node_limit before VikingFS can enforce object TTL.
+        # Only accounts that have ever registered TTL objects need the wider
+        # candidate set; default-off accounts preserve the existing fast path.
+        apply_ttl_filter = await self.ttl_registry.account_may_have_records(real_ctx.account_id)
 
         excluded_path = None
         if exclude_uri:
@@ -623,7 +630,7 @@ class _GrepMixin:
                 recursive=True,
                 case_insensitive=case_insensitive,
                 stream=False,
-                node_limit=node_limit,
+                node_limit=None if apply_ttl_filter else node_limit,
                 exclude_path=excluded_path,
                 level_limit=level_limit,
                 before_context=before_context,
@@ -637,7 +644,6 @@ class _GrepMixin:
         matches = result.get("matches", [])
         results = []
         files_scanned_set = set()
-        real_ctx = self._ctx_or_default(ctx)
 
         # Resolve every matched file to a Viking URI first, then run one
         # ACL-aware batch authorization. ``_is_accessible`` is ACL-blind for
@@ -653,6 +659,19 @@ class _GrepMixin:
             match_uris.append(self._path_to_uri(agfs_file_path, ctx=ctx))
 
         access = await self._can_access_many(match_uris, real_ctx)
+        ttl_visible: Dict[str, bool] = {}
+        if apply_ttl_filter:
+            from openviking.storage.ttl_view import TTLView
+
+            ttl_view = TTLView(self, real_ctx)
+            unique_uris = list(dict.fromkeys(match_uris))
+            visible = await asyncio.gather(
+                *(
+                    self._ttl_uri_visible(match_uri, real_ctx, ttl_view=ttl_view)
+                    for match_uri in unique_uris
+                )
+            )
+            ttl_visible = dict(zip(unique_uris, visible, strict=True))
 
         for match in matches:
             match_file = match.get("file", "")
@@ -662,7 +681,7 @@ class _GrepMixin:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            if not access.get(file_uri, False):
+            if not access.get(file_uri, False) or not ttl_visible.get(file_uri, True):
                 continue
 
             files_scanned_set.add(file_uri)
@@ -928,14 +947,12 @@ class _GrepMixin:
         if before_context > 0:
             start = max(0, line_index - before_context)
             match["before_context"] = [
-                {"line": index + 1, "content": lines[index]}
-                for index in range(start, line_index)
+                {"line": index + 1, "content": lines[index]} for index in range(start, line_index)
             ]
         if after_context > 0:
             end = min(len(lines), line_index + after_context + 1)
             match["after_context"] = [
-                {"line": index + 1, "content": lines[index]}
-                for index in range(line_index + 1, end)
+                {"line": index + 1, "content": lines[index]} for index in range(line_index + 1, end)
             ]
         return match
 

@@ -47,6 +47,7 @@ class Candidate:
     origin: str
     is_directory: bool
     read_ctx: RequestContext
+    expires_at: str | None = None
 
 
 def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
@@ -264,6 +265,7 @@ async def gather_candidates(
             built.append(
                 Candidate(
                     uri=uri,
+                    expires_at=_get_attr(item, "expires_at"),
                     base_uri=base_uri,
                     category=category,
                     score=score,

@@ -9,6 +9,7 @@ import { normalizeDirUri, fileNameFromUri } from '../-lib/normalize'
 import { useVikingFsList, useDebouncedValue } from '../-hooks/viking-fm'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { ItemColumn } from './item-column'
+import { RootTtlSettings } from '#/components/ttl-settings'
 import { LazyFilePreview } from './lazy-file-preview'
 
 const VIKING_ROOT_URI = 'viking://'
@@ -120,6 +121,7 @@ export function DirBrowser({
         <div className="max-w-[55%] truncate rounded-md bg-blue-500/10 px-2.5 py-1 text-sm font-semibold text-blue-700 dark:text-blue-300">
           {currentUri}
         </div>
+        <RootTtlSettings uri={currentUri} />
       </div>
       <div className="flex min-h-0 flex-1 min-w-0 justify-start overflow-hidden bg-[linear-gradient(180deg,color-mix(in_oklch,var(--muted)_35%,transparent),transparent_18%)]">
         {loading ? (

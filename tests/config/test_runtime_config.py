@@ -493,6 +493,67 @@ def test_refresh_picks_up_out_of_band_write():
     asyncio.run(run())
 
 
+def test_effective_account_validator_guards_load_refresh_and_cluster_publish():
+    async def run():
+        source = MemoryConfigSource()
+        holder = {"config": ClusterConfig()}
+
+        def validate_effective(cluster, account):
+            account_model = account.vlm.model if account.vlm is not None else None
+            if cluster.vlm.model == account_model == "conflict":
+                raise ValueError("effective config conflict")
+
+        manager = RuntimeConfigManager(
+            source,
+            base_config=holder["config"],
+            get_config=lambda: holder["config"],
+            set_config=lambda c: holder.__setitem__("config", c),
+            build_config=_build_cluster,
+            build_account=_build_account,
+            validate_account_effective=validate_effective,
+        )
+        await manager.initialize()
+        await source.update(
+            ConfigScope.account("bad-at-load"),
+            lambda _: {"vlm": {"model": "conflict"}},
+        )
+        await manager.patch_cluster({"vlm": {"model": "conflict"}})
+        with pytest.raises(ValueError, match="effective config conflict"):
+            await manager.get_account("bad-at-load", "vlm")
+
+        await manager.patch_cluster({"vlm": {"model": "safe"}})
+        await manager.patch_account("active", {"vlm": {"model": "conflict"}})
+        with pytest.raises(ValueError, match="effective config conflict"):
+            await manager.patch_cluster({"vlm": {"model": "conflict"}})
+        assert holder["config"].vlm.model == "safe"
+        assert await source.load(ConfigScope.cluster()) == {"vlm": {"model": "safe"}}
+
+        await source.update(
+            ConfigScope.account("active"),
+            lambda _: {"vlm": {"model": "safe"}},
+        )
+        await manager.refresh_once()
+        assert (await manager.get_account("active", "vlm")).model == "safe"
+
+        await source.update(
+            ConfigScope.account("active"),
+            lambda _: {"vlm": {"model": "conflict"}},
+        )
+        holder["config"] = ClusterConfig(vlm={"model": "conflict"})
+        await manager.refresh_once()
+        assert (await manager.get_account("active", "vlm")).model == "safe"
+
+        holder["config"] = ClusterConfig(vlm={"model": "safe"})
+        await manager.patch_account("active", {"vlm": {"model": "conflict"}})
+        await manager.patch_cluster({"vlm": None})
+        with pytest.raises(ValueError, match="effective config conflict"):
+            await manager.replace_base_config(ClusterConfig(vlm={"model": "conflict"}))
+        assert manager._base_config.vlm.model is None
+        assert holder["config"].vlm.model is None
+
+    asyncio.run(run())
+
+
 def test_refresh_does_not_resurrect_unloaded_account():
     async def run():
         source = MemoryConfigSource()

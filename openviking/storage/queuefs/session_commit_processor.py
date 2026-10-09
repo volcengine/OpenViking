@@ -12,6 +12,7 @@ from openviking.observability.context import (
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
+from openviking.session.commit_lifetime import StaleSessionCommit
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
@@ -61,7 +62,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
                 msg.session_id,
                 session_uri=msg.session_uri,
             )
-            if not await session.exists():
+            if not await session.exists(include_expired=True):
                 error = f"Session '{msg.session_id}' no longer exists"
                 tracker = get_task_tracker()
                 await tracker.create(
@@ -78,9 +79,23 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            await session.load()
+            await session.load(include_expired=True)
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
-                processed = await session.resume_queued_commit(msg)
+                try:
+                    processed = await session.resume_queued_commit(msg)
+                except StaleSessionCommit as exc:
+                    tracker = get_task_tracker()
+                    await tracker.create(
+                        "session_commit",
+                        resource_id=msg.session_id,
+                        task_id=msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    await tracker.fail(
+                        msg.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+                    )
+                    return True
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
@@ -99,7 +114,10 @@ class SessionCommitProcessor(DequeueHandlerBase):
             session_uri=msg.session_uri,
         )
         if await session.exists():
-            await session.finalize_cancelled_commit(msg.archive_uri)
+            try:
+                await session.finalize_cancelled_commit(msg.archive_uri, task_id=msg.task_id)
+            except StaleSessionCommit:
+                pass
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         if not data:

@@ -6,6 +6,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 import { Route } from './route'
 
+vi.mock('#/components/ttl-settings', () => ({ LibraryTtlSettings: () => null }))
+
 const { probe } = vi.hoisted(() => ({ probe: vi.fn() }))
 vi.mock('#/lib/admin', () => ({ probeStudioConnection: probe }))
 vi.mock('#/hooks/use-app-connection', () => ({

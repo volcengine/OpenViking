@@ -5,42 +5,20 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from openviking.server.identity import RequestContext, Role
 from openviking.service import reindex_executor as reindex_module
 from openviking.service.reindex_executor import ReindexExecutor
-from openviking_cli.session.user_id import UserIdentifier
-
-
-class _FakeVikingFS:
-    def __init__(self, uri: str, path: str):
-        self._uri = uri
-        self._path = path
-
-    def _uri_to_path(self, uri: str, ctx=None):
-        assert uri == self._uri
-        return self._path
-
-    async def exists(self, uri: str, ctx=None):
-        return uri == self._uri
-
-    async def stat(self, uri: str, ctx=None, skip_count=False):
-        assert uri == self._uri
-        assert skip_count is True
-        return {"isDir": False}
-
-    async def read_file(self, uri: str, ctx=None):
-        assert uri == self._uri
-        return "# Profile\nSingle file reindex source.\n"
+from tests.storage.test_transfer_merge_binding import binding_fs as binding_fs
+from tests.storage.test_transfer_merge_binding import root_ctx
 
 
 async def test_reindex_single_file_uri_acquires_tree_lock_without_not_a_directory(
-    agfs_client, test_dir, monkeypatch, caplog
+    binding_fs, monkeypatch, caplog
 ):
     uri = "viking://resources/profile.md"
-    path = f"{test_dir}/profile.md"
-    agfs_client.write(path, b"# Profile\nSingle file reindex source.\n")
+    viking_fs = binding_fs
+    ctx = root_ctx()
+    await viking_fs.write_file(uri, "# Profile\nSingle file reindex source.\n", ctx=ctx)
 
-    viking_fs = _FakeVikingFS(uri, path)
     service = SimpleNamespace(
         viking_fs=viking_fs,
         vikingdb_manager=SimpleNamespace(has_queue_manager=True),
@@ -48,23 +26,21 @@ async def test_reindex_single_file_uri_acquires_tree_lock_without_not_a_director
     monkeypatch.setattr(reindex_module, "get_service", lambda: service)
     monkeypatch.setattr(reindex_module, "get_viking_fs", lambda: viking_fs)
 
-    executor = ReindexExecutor()
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    executor = ReindexExecutor(
+        vector_config_resolver=SimpleNamespace(
+            resolve=AsyncMock(return_value=SimpleNamespace(embedding=EmbeddingConfig()))
+        )
+    )
     executor._fetch_existing_record = AsyncMock(return_value=None)
     executor._upsert_context = AsyncMock()
-    ctx = RequestContext(
-        user=UserIdentifier("acc1", "test_user"),
-        role=Role.ROOT,
+    result = await executor._run(
+        uri=uri,
+        object_type="resource",
+        mode="vectors_only",
+        ctx=ctx,
     )
-
-    try:
-        result = await executor._run(
-            uri=uri,
-            object_type="resource",
-            mode="vectors_only",
-            ctx=ctx,
-        )
-    finally:
-        pass
 
     assert result["status"] == "completed"
     assert result["uri"] == uri

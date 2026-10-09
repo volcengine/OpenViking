@@ -78,6 +78,12 @@ def _child_model_type(annotation: Any) -> Optional[type[BaseModel]]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation
 
+    # Mapping keys are data (for example concrete Viking directory URIs), not
+    # config field names. Their values are still validated by Pydantic, but the
+    # unknown-field diagnostic must not descend through the key space.
+    if get_origin(annotation) in (dict, Mapping):
+        return None
+
     args = get_args(annotation)
     if not args or any(get_origin(arg) in (dict, Mapping) for arg in args):
         return None
@@ -101,15 +107,17 @@ def warn_unknown_config_fields(
     ``extra_valid_fields`` lists keys consumed by another owner (for example the
     ``server`` section) so they are not reported as unknown.
     """
+    fields = dict(model.model_fields)
+    fields.update({field.alias: field for field in model.model_fields.values() if field.alias})
     warn_unknown_fields(
         data=data,
-        valid_fields=set(model.model_fields) | (extra_valid_fields or set()),
+        valid_fields=set(fields) | (extra_valid_fields or set()),
         logger=logger,
         path_prefix=path_prefix,
     )
 
     for key, value in data.items():
-        field = model.model_fields.get(key)
+        field = fields.get(key)
         if field is None:
             continue
         child_model = _child_model_type(field.annotation)

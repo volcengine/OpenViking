@@ -3,10 +3,18 @@
 """Snapshot/git-like version control mixin for VikingFS."""
 
 import asyncio
+import json
 import sys
 from dataclasses import replace
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.core.ttl import (
+    OBJECT_TYPE_EVENT,
+    hidden_by_ttl,
+    ttl_metadata_uri,
+    ttl_object_for_uri,
+    ttl_scope_for_uri,
+)
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -21,6 +29,7 @@ from openviking.storage.viking_fs._base import (
     logger,
 )
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -120,6 +129,56 @@ class _SnapshotMixin:
     @staticmethod
     def _restore_reindex_context(ctx: RequestContext) -> RequestContext:
         return replace(ctx, bypass_acl=True)
+
+    @staticmethod
+    def _restore_tree_path(tree_dir: Optional[str], relative_path: str) -> str:
+        return f"{tree_dir or ''}/{relative_path}".strip("/")
+
+    async def _ensure_restore_targets_ttl(self, uris, *, ctx: RequestContext) -> None:
+        """Check each affected owner once, under the restore operation's lock."""
+        from openviking.storage.directory_ttl import read_directory_fields
+
+        owners = {target[1] for uri in uris if (target := ttl_object_for_uri(uri))}
+        for owner in sorted(owners):
+            fields = await read_directory_fields(self, owner, ctx=ctx)
+            if hidden_by_ttl(fields.get("expires_at")):
+                raise NotFoundError(owner, "restore target")
+            if fields.get("expires_at"):
+                raise ConflictError(
+                    "Raw restore cannot preserve an existing TTL lifecycle; "
+                    "update the live content through the content API instead",
+                    resource=owner,
+                )
+
+    async def _ensure_restore_plan_ttl(self, plan, *, tree_dir, real_ctx) -> None:
+        """Validate every target and source fence before native writeback."""
+        writes = {
+            self._tree_path_to_uri(self._restore_tree_path(tree_dir, str(item["path"])))
+            for item in plan["diff"]["to_write"]
+        }
+        # Removing ordinary content does not detach its owner. Removing owner
+        # metadata can, even if native writeback fails partway through.
+        targets = set(writes)
+        for relative_path in plan["diff"]["to_delete"]:
+            uri = self._tree_path_to_uri(self._restore_tree_path(tree_dir, str(relative_path)))
+            if self._ttl_metadata_target(uri):
+                targets.add(uri)
+        await self._ensure_restore_targets_ttl(targets, ctx=real_ctx)
+        sources = {target for uri in writes if (target := ttl_object_for_uri(uri))}
+        for target in sorted(sources):
+            metadata = await self._snapshot_ttl_metadata(target, str(plan["source"]), ctx=real_ctx)
+            if metadata is None:
+                continue
+            metadata_uri, blob = metadata
+            expires_at = self._ttl_expiry_for_write(metadata_uri, blob["bytes"])
+            if expires_at is not None:
+                if hidden_by_ttl(expires_at):
+                    raise NotFoundError(target[1], "restore source")
+                await self.ttl_registry.mark_account(real_ctx.account_id)
+                if metadata_uri not in writes:
+                    raise ConflictError(
+                        "Restore must include the source object's TTL metadata", resource=target[1]
+                    )
 
     async def system_sync_status(
         self, uri: str, ctx: Optional[RequestContext] = None
@@ -448,19 +507,26 @@ class _SnapshotMixin:
             )
 
         try:
+            # Freeze and validate the restore before native writeback.
+            # Directory metadata carries its own expiry without a second index.
+            plan = await self._async_agfs.run(
+                "git_restore",
+                **{**kwargs, "dry_run": True},
+            )
             if acl_project_dir is not None:
                 await self._ensure_access(acl_project_dir, real_ctx)
-                plan = await self._async_agfs.run(
-                    "git_restore",
-                    **{**kwargs, "dry_run": True},
-                )
                 await self._ensure_restore_plan_access(
                     plan,
                     tree_dir=tree_dir or "",
                     ctx=real_ctx,
                 )
+            await self._ensure_restore_plan_ttl(plan, tree_dir=tree_dir, real_ctx=real_ctx)
+            apply_kwargs = {
+                **kwargs,
+                "source_commit": str(plan["source"]),
+            }
             try:
-                result = await self._async_agfs.run("git_restore", **kwargs)
+                result = await self._async_agfs.run("git_restore", **apply_kwargs)
             except GitRestoreWritebackPartialError as exc:
                 # The ref already advanced — capture the exception and
                 # finish the lock scope cleanly. Reindex scheduling and
@@ -561,6 +627,61 @@ class _SnapshotMixin:
         background.add_done_callback(self._background_tasks.discard)
         return task.task_id
 
+    async def _snapshot_ttl_metadata(self, target, source_ref, *, ctx):
+        kind, owner = target
+        candidates = [ttl_metadata_uri(kind, owner)]
+        if kind == OBJECT_TYPE_EVENT:
+            candidates.append(owner + "/.ttl.json")
+        for metadata_uri in candidates:
+            try:
+                blob = await self._async_agfs.run(
+                    "git_show",
+                    account=ctx.account_id,
+                    target_ref=source_ref,
+                    path=self._uri_to_tree_path(metadata_uri, ctx=ctx),
+                )
+                return metadata_uri, blob
+            except AGFSPathNotFoundError:
+                continue
+        return None
+
+    async def _ensure_snapshot_ttl_visible(self, uri, source_ref, *, ctx):
+        """Use the live deadline, falling back to the snapshot after deletion."""
+        target = ttl_object_for_uri(uri)
+        if target is None:
+            return
+        from openviking.storage.directory_ttl import read_directory_fields
+
+        fields = await read_directory_fields(self, target[1], ctx=ctx)
+        if "expires_at" not in fields:
+            metadata = await self._snapshot_ttl_metadata(target, source_ref, ctx=ctx)
+            fields = json.loads(metadata[1]["bytes"]) if metadata else {}
+        if hidden_by_ttl(fields.get("expires_at")):
+            raise NotFoundError(uri, "git_blob")
+
+    async def _read_snapshot_blob(self, target_ref, *, path, ctx, max_blob_bytes=None):
+        await self._ensure_access(path, ctx)
+        scoped = ttl_scope_for_uri(path) is not None
+        if scoped:
+            # Resolve moving refs once: content and sidecar must come from one commit.
+            metadata = await self._async_agfs.run(
+                "git_show", account=ctx.account_id, target_ref=target_ref, path=None
+            )
+            target_ref = metadata["oid"]
+        kwargs = {
+            "account": ctx.account_id,
+            "target_ref": target_ref,
+            "path": self._uri_to_tree_path(path, ctx=ctx),
+        }
+        if max_blob_bytes is not None:
+            kwargs["max_blob_bytes"] = max_blob_bytes
+        response = await self._async_agfs.run("git_show", **kwargs)
+        if not isinstance(response, dict) or "bytes" not in response:
+            raise TypeError("git_show returned unexpected blob response")
+        if scoped:
+            await self._ensure_snapshot_ttl_visible(path, target_ref, ctx=ctx)
+        return response
+
     async def show(
         self,
         target_ref: str,
@@ -569,33 +690,21 @@ class _SnapshotMixin:
         max_blob_bytes: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Union[Dict[str, Any], bytes]:
-        """Read a commit's metadata or a single blob.
-
-        ``path=None`` returns the commit metadata dict (oid, tree, parents,
-        author, committer, message). ``path=str`` returns the blob bytes
-        directly, stripping the oid/size envelope returned by the binding.
-        """
+        """Read commit metadata or a TTL-visible blob from a snapshot."""
         real_ctx = self._ctx_or_default(ctx)
-        if real_ctx.role != Role.ROOT and path is None:
-            raise PermissionDeniedError(
-                "Snapshot show requires an explicit path",
-                resource="viking://",
-            )
         if path is not None:
-            await self._ensure_access(path, real_ctx)
-        account = real_ctx.account_id
-        tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
-        kwargs: Dict[str, Any] = {
-            "account": account,
-            "target_ref": target_ref,
-            "path": tree_path,
-        }
+            response = await self._read_snapshot_blob(
+                target_ref, path=path, ctx=real_ctx, max_blob_bytes=max_blob_bytes
+            )
+            return response["bytes"]
+        if real_ctx.role != Role.ROOT:
+            raise PermissionDeniedError(
+                "Snapshot show requires an explicit path", resource="viking://"
+            )
+        kwargs = {"account": real_ctx.account_id, "target_ref": target_ref, "path": None}
         if max_blob_bytes is not None:
             kwargs["max_blob_bytes"] = max_blob_bytes
-        resp = await self._async_agfs.run("git_show", **kwargs)
-        if path is not None and isinstance(resp, dict) and "bytes" in resp:
-            return resp["bytes"]
-        return resp
+        return await self._async_agfs.run("git_show", **kwargs)
 
     async def show_blob_raw(
         self,
@@ -604,27 +713,8 @@ class _SnapshotMixin:
         path: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        """Like ``show(target_ref, path=...)`` but returns the full envelope.
-
-        Returns ``{"oid": str, "size": int, "bytes": bytes}`` without
-        stripping. Used by the HTTP snapshot router to populate
-        ``X-Snapshot-Oid`` / ``X-Snapshot-Size`` response headers.
-        """
-        real_ctx = self._ctx_or_default(ctx)
-        await self._ensure_access(path, real_ctx)
-        account = real_ctx.account_id
-        tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=target_ref,
-            path=tree_path,
-        )
-        if not isinstance(resp, dict) or "bytes" not in resp:
-            raise TypeError(
-                f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
-            )
-        return resp
+        """Return a TTL-visible blob with its oid and size for HTTP headers."""
+        return await self._read_snapshot_blob(target_ref, path=path, ctx=self._ctx_or_default(ctx))
 
     async def diff(
         self,
@@ -686,6 +776,8 @@ class _SnapshotMixin:
                 raise TypeError(
                     f"git_show returned unexpected blob response: {type(response).__name__}"
                 )
+            if ttl_scope_for_uri(path) is not None:
+                await self._ensure_snapshot_ttl_visible(path, ref, ctx=real_ctx)
             return response["bytes"]
 
         before_bytes = await read_optional(from_oid) if from_ref else None

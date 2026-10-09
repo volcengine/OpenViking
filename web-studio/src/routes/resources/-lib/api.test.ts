@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchDirectorySidecarContent, fetchFsList } from './api'
+import { fetchDirectorySidecarContent, fetchFsList, fetchFsStat } from './api'
 
-const { getContentReadMock, getFsLsMock } = vi.hoisted(() => ({
+const { getContentReadMock, getFsLsMock, getFsStatMock } = vi.hoisted(() => ({
   getContentReadMock: vi.fn(),
   getFsLsMock: vi.fn(),
+  getFsStatMock: vi.fn(),
 }))
 
 vi.mock('#/lib/ov-client', async (importOriginal) => {
@@ -13,12 +14,14 @@ vi.mock('#/lib/ov-client', async (importOriginal) => {
     ...original,
     getContentRead: getContentReadMock,
     getFsLs: getFsLsMock,
+    getFsStat: getFsStatMock,
   }
 })
 
 beforeEach(() => {
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
+  getFsStatMock.mockReset()
   getFsLsMock.mockResolvedValue({
     data: { status: 'ok', result: [] },
     headers: {},
@@ -74,3 +77,18 @@ describe('fetchFsList', () => {
     })
   })
 })
+
+it.each(['2030-10-10T00:00:00Z', null, undefined])(
+  'preserves expiry %s in file and directory stat previews',
+  async (expiresAt) => {
+    getFsStatMock.mockResolvedValue({
+      data: { status: 'ok', result: { isDir: true, expires_at: expiresAt } },
+      headers: {},
+      status: 200,
+    })
+    const entry = await fetchFsStat(
+      'viking://user/alice/memories/events/2030/10/01/',
+    )
+    expect(entry.expiresAt).toBe(expiresAt)
+  },
+)

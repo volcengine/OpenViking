@@ -487,6 +487,7 @@ async def test_tenant_search_preserves_raw_scope_across_decay_routes():
     assert backend.search.await_count == 1
     assert call["filter"] == scope
     assert (call["limit"], call["offset"]) == (1, 1)
+    assert call["include_expired"] is False
     assert "advance" not in call
 
     backend.search.reset_mock()
@@ -506,6 +507,8 @@ async def test_tenant_search_preserves_raw_scope_across_decay_routes():
     )
     assert events["filter"] == And([scope, Eq("search_tags", "memory_type=events")])
     assert (other["limit"], events["limit"], other["offset"], events["offset"]) == (2, 2, 0, 0)
+    assert other["include_expired"] is False
+    assert events["include_expired"] is False
     assert result == [event]
 
 

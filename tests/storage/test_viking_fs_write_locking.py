@@ -50,7 +50,7 @@ class _AsyncAppendAGFS:
         self.events.append(("read", path, fs_ctx))
         return b"old"
 
-    async def write(self, path, data, fs_ctx=None):
+    async def write(self, path, data, fs_ctx=None, **kwargs):
         """Record writes with propagated fs_ctx."""
         self.events.append(("write", path, data, fs_ctx))
         return len(data)
@@ -185,6 +185,10 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     await fs.append_file("viking://a.md", "+new")
 
     assert fake.events[0] == ("ensure_parent", "/local/default/resources/a.md", None)
+    # Parent preparation may repeat through write_file; content stays inside the lease.
+    fake.events = [
+        event for i, event in enumerate(fake.events) if i == 0 or event[0] != "ensure_parent"
+    ]
     assert fake.events[1][0] == "acquire"
     assert fake.events[2][0:2] == ("read", "/local/default/resources/a.md")
     assert fake.events[2][2]["lease_ref"] == "lease-1"

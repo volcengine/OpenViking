@@ -14,7 +14,7 @@ from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_session_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ContentResponse, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
@@ -83,13 +83,13 @@ class AutoCommitPolicyRequest(BaseModel):
     the HTTP, SDK, and CLI entrypoints.
     """
 
+    model_config = {"extra": "forbid"}
+
     pending_token_threshold: Optional[int] = None
     message_count_threshold: Optional[int] = None
     idle_timeout_seconds: Optional[int] = None
     keep_recent_count: Optional[int] = None
     min_commit_interval_seconds: Optional[int] = None
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
@@ -174,6 +174,18 @@ class CreateSessionRequest(BaseModel):
     auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_object_ttl_fields(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            unsupported = sorted(
+                set(value)
+                & {"ttl_relative", "ttl_absolute", "ttl_days", "ttl_per_file", "expires_at"}
+            )
+            if unsupported:
+                raise ValueError(f"Session TTL is configured on the sessions root: {unsupported}")
+        return value
 
 
 def _event_tags_from_extraction_config(
@@ -289,6 +301,18 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _session_content_response(result, session):
+    result = _to_jsonable(result)
+    expiry = session.meta.expires_at or None
+    if isinstance(result, dict):
+        result = {**result, "expires_at": expiry}
+    elif isinstance(result, list):
+        result = [
+            {**item, "expires_at": expiry} if isinstance(item, dict) else item for item in result
+        ]
+    return ContentResponse(status="ok", result=result, expires_at=expiry)
+
+
 @router.post("")
 async def create_session(
     request: CreateSessionRequest = Body(default_factory=CreateSessionRequest),
@@ -320,6 +344,7 @@ async def create_session(
         )
         return {
             "session_id": session.session_id,
+            "expires_at": session.meta.expires_at or None,
             "uri": session.uri,
             "user": session.user.to_dict(),
             "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
@@ -360,7 +385,10 @@ async def get_session(
         session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
+    from openviking.storage.ttl_view import lifetime_fields
+
     result = session.meta.to_dict()
+    result.update(lifetime_fields(result))
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
@@ -375,8 +403,7 @@ async def get_session(
 class UpdateSessionConfigRequest(BaseModel):
     """Request body for PATCH /sessions/{id}/config.
 
-    Only the mutable extraction config is editable. Fields left unset are not
-    changed; setting ``events.tags`` to an empty list clears the default.
+    Fields left unset are not changed; setting ``events.tags`` to an empty list clears tags.
     """
 
     memory_extraction_config: Optional[MemoryExtractionConfigRequest] = None
@@ -418,6 +445,7 @@ async def update_session_config(
         )
         return {
             "session_id": session.session_id,
+            "expires_at": session.meta.expires_at or None,
             "auto_commit_policy": service.sessions.effective_auto_commit_policy(session),
             "memory_extraction_config": service.sessions.effective_memory_extraction_config(
                 session
@@ -448,7 +476,7 @@ async def list_tool_results(
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=False)
     result = await session.list_tool_results(tool_name=tool_name, limit=limit)
-    return Response(status="ok", result=_to_jsonable(result))
+    return _session_content_response(result, session)
 
 
 @router.get("/{session_id}/tool-results/{tool_result_id}")
@@ -475,7 +503,7 @@ async def read_tool_result(
         limit=limit,
         include_metadata=include_metadata,
     )
-    return Response(status="ok", result=_to_jsonable(result))
+    return _session_content_response(result, session)
 
 
 @router.get("/{session_id}/tool-results/{tool_result_id}/search")
@@ -496,7 +524,7 @@ async def search_tool_result(
         limit=limit,
         context_chars=context_chars,
     )
-    return Response(status="ok", result=_to_jsonable(result))
+    return _session_content_response(result, session)
 
 
 @router.get("/{session_id}/context")
@@ -516,7 +544,7 @@ async def get_session_context(
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=False)
     result = await session.get_session_context(token_budget=token_budget)
-    return Response(status="ok", result=_to_jsonable(result))
+    return _session_content_response(result, session)
 
 
 @router.get("/{session_id}/archives/{archive_id}")
@@ -534,7 +562,7 @@ async def get_session_archive(
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
         return error_response(code="NOT_FOUND", message=f"Archive {archive_id} not found")
-    return Response(status="ok", result=_to_jsonable(result))
+    return _session_content_response(result, session)
 
 
 @router.delete("/{session_id}")
@@ -710,7 +738,10 @@ async def extract_session(
     """Extract memories from a session."""
     service = get_service()
     result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
+    from openviking.storage.ttl_view import TTLView
+
+    result = await TTLView(service.viking_fs, _ctx).attach_many(_to_jsonable(result))
+    return Response(status="ok", result=result)
 
 
 @router.post("/{session_id}/messages")
@@ -764,6 +795,7 @@ async def add_message(
         )
         return {
             "session_id": session_id,
+            "expires_at": session.meta.expires_at or None,
             "message_count": len(session.messages),
             # Post-write value so a commit policy can decide without a
             # follow-up get_session round trip.
@@ -820,6 +852,7 @@ async def batch_add_messages(
         )
         return {
             "session_id": session_id,
+            "expires_at": session.meta.expires_at or None,
             "message_count": len(session.messages),
             "added": len(msgs),
             # Post-write value so a commit policy can decide without a

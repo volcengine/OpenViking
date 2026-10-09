@@ -3,6 +3,7 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import json
 import math
 import uuid
 from dataclasses import replace
@@ -15,19 +16,25 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.core.ttl import (
+    ttl_metadata_uri,
+    ttl_object_for_uri,
+)
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error, map_exception
+from openviking.server.error_mapping import is_not_found_error, is_storage_not_found, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
+from openviking.storage.directory_ttl import content_update, directory_write
+from openviking.storage.errors import StorageException
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
@@ -142,6 +149,8 @@ class _OpsMixin:
         offset: int = 0,
         size: int = -1,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> bytes:
         """Read file. Accepts a Viking URI or a 32-char hex vector record id."""
         real_ctx = self._ctx_or_default(ctx)
@@ -154,7 +163,9 @@ class _OpsMixin:
         # offset/size through and let the Rust layer return the requested slice.
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 result = await self._async_agfs.read(path, offset, size)
@@ -175,20 +186,9 @@ class _OpsMixin:
 
         return raw
 
-    async def write(
-        self,
-        uri: str,
-        data: Union[bytes, str],
-        ctx: Optional[RequestContext] = None,
-    ) -> str:
-        """Write file"""
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        path = self._uri_to_path(uri, ctx=ctx)
-        if isinstance(data, str):
-            data = data.encode("utf-8")
-
-        # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+    async def write(self, uri, data, ctx=None):
+        """Write through the same lifecycle boundary as write_file."""
+        return await self.write_file(uri, data, ctx=ctx)
 
     async def mkdir(
         self,
@@ -219,6 +219,9 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
+        *,
+        strict: bool = False,
+        file_locks: bool = False,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -235,17 +238,36 @@ class _OpsMixin:
         target is not concurrently mutated (e.g. best-effort shared upload
         cleanup that only deletes already-expired directories).
 
+        When ``strict`` is True, vector and filesystem deletion must be
+        confirmed. Backend errors or remaining records raise an error.
+        The default keeps the historical best-effort confirmation semantics.
+
+        TTL uses ``file_locks`` to remove each file under an exact lock.
+        Its caller holds the lifecycle metadata and vector locks until cleanup
+        completes. Vectors are confirmed before removing files; metadata is
+        removed last so failed deletions remain discoverable by the next scan.
+
         Returns:
             Dict with 'estimated_deleted_count' indicating the estimated number
             of nodes deleted from vector index.
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        real_ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(real_ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+
+        async def confirm(*, vectors=True, files=True) -> None:
+            try:
+                if vectors:
+                    await self._confirm_vector_scope_cleared(target_uri, ctx=ctx)
+                if files:
+                    await self._confirm_fs_scope_cleared(path, target_uri)
+            except Exception as exc:
+                raise StorageException(str(exc), action="confirm_delete") from exc
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -265,7 +287,7 @@ class _OpsMixin:
             stat = await self._async_agfs.stat(path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
         except Exception as exc:
-            if not is_not_found_error(exc):
+            if not (is_storage_not_found(exc) if strict else is_not_found_error(exc)):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
@@ -275,9 +297,14 @@ class _OpsMixin:
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-            real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(
+                uris_to_delete,
+                ctx=ctx,
+                recursive_uri=target_uri if strict and recursive else None,
+            )
+            if strict:
+                await confirm()
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -305,6 +332,8 @@ class _OpsMixin:
                 raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
 
         try:
+            if file_locks and is_dir:
+                await self._async_agfs.pathlock_check_descendants(path, lease)
             uris_to_delete = (
                 await self._collect_uris(
                     path,
@@ -312,22 +341,35 @@ class _OpsMixin:
                     ctx=ctx,
                     strict=is_dir and await self._acl_enabled(ctx),
                 )
-                if is_dir
+                # Strict system cleanup deletes vectors by URI scope. It needs
+                # no per-file vector list or descendant ACL walk as ROOT.
+                if is_dir and not (strict and real_ctx.role == Role.ROOT)
                 else []
             )
             uris_to_delete.append(target_uri)
             if is_dir:
                 await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
-            real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(
+                uris_to_delete,
+                ctx=ctx,
+                recursive_uri=target_uri if strict and recursive else None,
+            )
+            if strict and file_locks:
+                # Retain the expiry and body until the vector backend confirms
+                # deletion. The cleanup caller holds the shared vector lock.
+                await confirm(files=False)
             try:
-                result = await self._async_agfs.rm(
-                    path,
-                    recursive=recursive,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease),
-                    auto_pathlock=auto_pathlock,
-                )
+                if file_locks and is_dir:
+                    await self._remove_directory_files(path, ctx=ctx, lease_ref=lease)
+                    result = {}
+                else:
+                    result = await self._async_agfs.rm(
+                        path,
+                        recursive=recursive,
+                        fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+                        auto_pathlock=auto_pathlock,
+                    )
             except AGFSDirectoryNotEmptyError:
                 raise InvalidArgumentError(
                     f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -344,6 +386,8 @@ class _OpsMixin:
                 result["estimated_deleted_count"] = estimated_count
             else:
                 result = {"estimated_deleted_count": estimated_count}
+            if strict:
+                await confirm(vectors=not file_locks)
             return result
         finally:
             if lease_ref is None and lease is not None:
@@ -442,6 +486,9 @@ class _OpsMixin:
             source_uris = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
+            await self._mark_transferred_ttl(
+                source_uris, old_scope, new_scope, ctx=ctx, lease_ref=lease
+            )
             files_created = await self._copy_agfs_entry(
                 old_path,
                 new_path,
@@ -519,6 +566,10 @@ class _OpsMixin:
         ctx: Optional[RequestContext],
     ) -> List[str]:
         """Validate all affected entries under the lease before the first content write."""
+        from openviking.storage.ttl_view import TTLView
+
+        real_ctx = self._ctx_or_default(ctx)
+        ttl_view = TTLView(self, real_ctx)
         source_uris: List[str] = []
 
         async def visit(source: str, target: str, directory: bool) -> None:
@@ -532,6 +583,13 @@ class _OpsMixin:
             else:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=ctx)
             await self._ensure_access(target, ctx, action=AclAction.WRITE)
+            if not directory:
+                for uri in (source, target):
+                    if not await self._ttl_uri_visible(uri, real_ctx, ttl_view=ttl_view):
+                        raise NotFoundError(uri, "file")
+                await self._ensure_transfer_ttl_scope(
+                    source, target, old_scope=old_uri, new_scope=new_uri, ttl_view=ttl_view
+                )
             await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
@@ -543,14 +601,36 @@ class _OpsMixin:
                     name = entry.get("name", "")
                     if not name or name in (".", ".."):
                         continue
+                    child_uri = f"{source.rstrip('/')}/{name}"
                     await visit(
-                        f"{source.rstrip('/')}/{name}",
+                        child_uri,
                         f"{target.rstrip('/')}/{name}",
                         bool(entry.get("isDir", False)),
                     )
 
         await visit(old_uri, new_uri, is_dir)
         return source_uris
+
+    async def _ensure_transfer_ttl_scope(
+        self, source: str, target: str, *, old_scope: str, new_scope: str, ttl_view
+    ) -> None:
+        """Reject moves/copies that would detach content from its TTL owner."""
+        source_owner = ttl_object_for_uri(source)
+        target_owner = ttl_object_for_uri(target)
+        if source_owner is None or source_owner == target_owner:
+            return
+        object_type, object_uri = source_owner
+        compatible = target_owner is not None and target_owner[0] == object_type
+        old_root = old_scope.rstrip("/")
+        compatible = (
+            compatible
+            and (object_uri == old_root or object_uri.startswith(old_root + "/"))
+            and target_owner[1] == new_scope.rstrip("/") + object_uri[len(old_root) :]
+        )
+        if compatible:
+            return
+        if (await ttl_view.fields(source))["expires_at"]:
+            raise InvalidArgumentError("Transfer destination cannot preserve the source TTL owner")
 
     async def _ensure_copy_source_access(
         self,
@@ -656,13 +736,32 @@ class _OpsMixin:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
-
-        await self._async_agfs.cp(
-            old_path,
-            new_path,
-            recursive=False,
-            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-        )
+        real_ctx = self._ctx_or_default(ctx)
+        for uri in (old_uri, new_uri):
+            if not await self._ttl_uri_visible(uri, real_ctx):
+                raise NotFoundError(uri, "file")
+        source_owner = ttl_object_for_uri(old_uri)
+        target_owner = ttl_object_for_uri(new_uri)
+        if target_owner and (source_owner is None or source_owner == target_owner):
+            # A content-only transfer into a bucket follows its shared lifetime.
+            # Whole-directory transfers carry the owner's saved metadata intact.
+            raw = self._handle_agfs_read(await self._async_agfs.read(old_path))
+            async with content_update(
+                self, new_uri, raw, ctx=real_ctx, lease_ref=lease_ref
+            ) as content_lease:
+                await self._async_agfs.cp(
+                    old_path,
+                    new_path,
+                    recursive=False,
+                    fs_ctx=self._pathlock_fs_ctx(ctx, content_lease),
+                )
+        else:
+            await self._async_agfs.cp(
+                old_path,
+                new_path,
+                recursive=False,
+                fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+            )
         return 1
 
     async def _cleanup_transfer_target(
@@ -768,6 +867,9 @@ class _OpsMixin:
             uris_to_move = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
+            await self._mark_transferred_ttl(
+                uris_to_move, old_scope, new_scope, ctx=ctx, lease_ref=lease
+            )
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -788,7 +890,13 @@ class _OpsMixin:
                     or 0
                 )
             except Exception as transfer_error:
+                source_missing = False
                 if is_not_found_error(transfer_error):
+                    try:
+                        await self._async_agfs.stat(old_path, bypass_cache=True)
+                    except Exception as source_error:
+                        source_missing = is_storage_not_found(source_error)
+                if source_missing:
                     try:
                         await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                     except Exception:
@@ -983,11 +1091,14 @@ class _OpsMixin:
                         fs_ctx=fs_ctx,
                     )
                 else:
-                    await self._async_agfs.cp(
+                    await self._copy_agfs_entry(
                         old_child,
                         new_child,
-                        recursive=False,
-                        fs_ctx=fs_ctx,
+                        old_uri=old_child_uri,
+                        new_uri=new_child_uri,
+                        is_dir=False,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
                     )
                 copied += 1
         return copied
@@ -1072,6 +1183,9 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        *,
+        include_expired: bool = False,
+        ttl_view=None,
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1104,14 +1218,24 @@ class _OpsMixin:
                 Leave disabled for internal metadata checks to avoid the extra
                 PathLock filesystem lookup.
         """
+        from openviking.storage.ttl_view import TTLView
+
         real_ctx = self._ctx_or_default(ctx)
+        ttl_view = ttl_view or TTLView(self, real_ctx)
         uri = await self.resolve_uri(uri, real_ctx)
         await self._ensure_access(uri, ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
         last_not_found: Optional[Exception] = None
         for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri,
+                candidate_path,
+                primary_path,
+                real_ctx,
+                include_expired=include_expired,
+                ttl_view=ttl_view,
+            ):
                 continue
             try:
                 result = await self._async_agfs.stat(candidate_path)
@@ -1151,16 +1275,23 @@ class _OpsMixin:
                     vector_store = self._get_vector_store()
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
-                            filter_expr = PathScope("uri", uri, depth=-1)
+                            # Counts converge after physical cleanup; content
+                            # visibility is checked separately at read time.
                             result["count"] = await vector_store.count(
-                                filter=filter_expr,
+                                filter=PathScope("uri", uri, depth=-1),
                                 ctx=real_ctx,
                             )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
 
-    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+    async def exists(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
+    ) -> bool:
         """Check whether a URI is physically present in the caller's namespace.
 
         Resource ACLs control access to content, not namespace occupancy.  In
@@ -1175,7 +1306,13 @@ class _OpsMixin:
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
         for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri,
+                candidate_path,
+                primary_path,
+                real_ctx,
+                include_expired=include_expired,
+            ):
                 continue
             if await self._agfs_path_exists(candidate_path):
                 return True
@@ -1761,6 +1898,7 @@ class _OpsMixin:
         include_abstract: Optional[bool] = None,
         include_overview: bool = False,
         overview_limit: int = 4000,
+        ttl_view=None,
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
@@ -1796,6 +1934,7 @@ class _OpsMixin:
             sort_by=sort_by,
             sort_order=sort_order,
             ctx=ctx,
+            ttl_view=ttl_view,
         )
         return await self._finalize_listing_entries(
             entries,
@@ -1820,6 +1959,7 @@ class _OpsMixin:
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
         directories_only: bool = False,
+        ttl_view=None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
         result = []
@@ -1833,6 +1973,7 @@ class _OpsMixin:
             sort_by=sort_by,
             sort_order=sort_order,
             ctx=ctx,
+            ttl_view=ttl_view,
         ):
             info = entry["info"]
             if entry.get("access") == "denied":
@@ -1966,7 +2107,9 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
-    ) -> None:
+        *,
+        allow_empty_directory: bool = False,
+    ) -> Any:
         """Write file directly. Encryption lock handled internally by EncryptionWrappedFS.
 
         When ``auto_pathlock`` is False the underlying AGFS write runs with
@@ -1974,18 +2117,33 @@ class _OpsMixin:
         concurrently (e.g. unique-per-request shared upload directories).
         """
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
-
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-
-        await self._async_agfs.write(
-            path,
+        async with directory_write(
+            self,
+            uri,
             content,
-            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-            auto_pathlock=auto_pathlock,
-        )
+            ctx=self._ctx_or_default(ctx),
+            lease_ref=lease_ref,
+            allow_empty_directory=allow_empty_directory,
+        ) as effective_lease:
+            path = self._uri_to_path(uri, ctx=ctx)
+            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=effective_lease)
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            owned_lease = None
+            if effective_lease is None and auto_pathlock:
+                effective_lease = await self._async_agfs.pathlock_acquire_exact(path)
+                owned_lease = effective_lease
+            try:
+                await self._mark_ttl_write(uri, content, ctx=ctx)
+                return await self._async_agfs.write(
+                    path,
+                    content,
+                    fs_ctx=self._pathlock_fs_ctx(ctx, effective_lease),
+                    auto_pathlock=False if effective_lease is not None else auto_pathlock,
+                )
+            finally:
+                if owned_lease is not None:
+                    await self._async_agfs.pathlock_release(owned_lease)
 
     async def read_file(
         self,
@@ -1993,6 +2151,8 @@ class _OpsMixin:
         offset: int = 0,
         limit: int = -1,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> str:
         """Read single file, optionally sliced by line range.
 
@@ -2012,7 +2172,9 @@ class _OpsMixin:
         # empty bytes for non-existent files instead of raising an error.
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 stat = await self._async_agfs.stat(path)
@@ -2055,6 +2217,8 @@ class _OpsMixin:
         self,
         uri: str,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> bytes:
         """Read single binary file. Accepts a Viking URI or a 32-char hex vector record id."""
         real_ctx = self._ctx_or_default(ctx)
@@ -2063,7 +2227,9 @@ class _OpsMixin:
         primary_path = self._uri_to_path(uri, ctx=ctx)
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 stat = await self._async_agfs.stat(path)
@@ -2095,23 +2261,139 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
+        *,
+        allow_empty_directory: bool = False,
     ) -> None:
-        """Write single binary file. Encryption lock handled internally by EncryptionWrappedFS.
-
-        When ``auto_pathlock`` is False the underlying AGFS write runs with
-        automatic pathlock disabled. Only safe for URIs that are never written
-        concurrently (e.g. unique-per-request shared upload directories).
-        """
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        path = self._uri_to_path(uri, ctx=ctx)
-        await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
-
-        await self._async_agfs.write(
-            path,
+        """Write binary content with the same lifecycle and locks as write_file."""
+        await self.write_file(
+            uri,
             content,
-            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+            ctx=ctx,
+            lease_ref=lease_ref,
             auto_pathlock=auto_pathlock,
+            allow_empty_directory=allow_empty_directory,
         )
+
+    @staticmethod
+    def _ttl_metadata_target(uri: str) -> Optional[tuple[str, str]]:
+        """Identify the source file that owns an event or session's TTL snapshot."""
+        target = ttl_object_for_uri(uri)
+        if target is None or uri.rstrip("/") not in {
+            ttl_metadata_uri(*target),
+            target[1] + "/.ttl.json",
+        }:
+            return None
+        return target
+
+    async def _mark_ttl_write(self, uri, content, *, ctx) -> None:
+        if self._ttl_expiry_for_write(uri, content) is not None:
+            await self.ttl_registry.mark_account(self._ctx_or_default(ctx).account_id)
+
+    async def _mark_transferred_ttl(self, source_uris, old_scope, new_scope, *, ctx, lease_ref):
+        # Native transfers carry the metadata itself; only account discovery
+        # needs a marker. Failed transfers need no per-object rollback.
+        for source_uri in source_uris:
+            target_uri = new_scope + source_uri.rstrip("/")[len(old_scope) :]
+            if self._ttl_metadata_target(target_uri) is not None:
+                raw = self._handle_agfs_read(
+                    await self._async_agfs.read(
+                        self._uri_to_path(source_uri, ctx=ctx),
+                        fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
+                    )
+                )
+                await self._mark_ttl_write(target_uri, raw, ctx=ctx)
+
+    def _ttl_expiry_for_write(self, uri: str, content: bytes) -> Optional[str]:
+        """Read the saved deadline when writing or restoring owner metadata."""
+        if self._ttl_metadata_target(uri) is None:
+            return None
+        return str(json.loads(content).get("expires_at") or "") or None
+
+    async def _remove_empty_lock_directory(self, path):
+        """Remove empty directories recreated by metadata lock acquisition.
+
+        The caller holds the owner metadata lease. Never remove residual payload.
+        """
+
+        async def empty(directory):
+            try:
+                entries = await self._ls_entries(directory)
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    return True
+                raise
+            for entry in entries:
+                name = entry.get("name", "")
+                if not name or name in {".", ".."}:
+                    continue
+                if not entry.get("isDir") or not await empty(directory.rstrip("/") + "/" + name):
+                    return False
+            return True
+
+        if not await empty(path):
+            return
+        try:
+            await self._async_agfs.rm(path, recursive=True, auto_pathlock=False)
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+
+    async def _remove_directory_files(self, path, *, ctx, lease_ref):
+        """Delete a directory bottom-up with exact file locks, metadata last.
+
+        The owner metadata lease excludes scoped writes until removal completes.
+        Only empty directories and runtime lock artifacts remain at the final rm.
+        A busy file is retried; no tree lock or per-file TTL lookup is used.
+        """
+        try:
+            entries = await self._ls_entries(path)
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return
+            raise
+        for entry in entries:
+            name = entry.get("name", "")
+            if name in {"", ".", "..", ".meta.json", ".ttl.json"} or is_storage_internal_name(name):
+                continue
+            child = path.rstrip("/") + "/" + name
+            if entry.get("isDir"):
+                await self._remove_directory_files(child, ctx=ctx, lease_ref=lease_ref)
+                continue
+            lease = await self._async_agfs.pathlock_acquire_exact(
+                child, owner_lease_ref=lease_ref, timeout_secs=0.0
+            )
+            try:
+                await self._async_agfs.rm(child, fs_ctx=self._pathlock_fs_ctx(ctx, lease))
+            except Exception as exc:
+                if not is_storage_not_found(exc):
+                    raise
+            finally:
+                await self._async_agfs.pathlock_release(lease)
+        # Preserve expiry until every body/child has actually disappeared,
+        # including backends that acknowledge rm without deleting the file.
+        # Only metadata and lock artifacts may be removed by the final rm.
+        remaining = await self._ls_entries(path)
+        if any(
+            e.get("name") not in {".", "..", ".meta.json", ".ttl.json"}
+            and not is_storage_internal_name(e.get("name", ""))
+            for e in remaining
+        ):
+            raise RuntimeError(f"Directory changed during cleanup: {path}")
+        try:
+            await self._async_agfs.rm(path, recursive=True, auto_pathlock=False)
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+
+    async def _confirm_fs_scope_cleared(self, path: str, uri: str) -> None:
+        """Confirm that the entire directory has left the primary store."""
+        try:
+            await self._async_agfs.stat(path, bypass_cache=True)
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return
+            raise
+        raise RuntimeError(f"Filesystem data still present after delete: {uri}")
 
     async def append_file(
         self,
@@ -2148,12 +2430,7 @@ class _OpsMixin:
             except AGFSClientError:
                 raise
 
-            final_content = (existing + content).encode("utf-8")
-            await self._async_agfs.write(
-                path,
-                final_content,
-                fs_ctx=fs_ctx,
-            )
+            await self.write_file(uri, existing + content, ctx=ctx, lease_ref=lease)
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -2177,6 +2454,7 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
         offset: int = 0,
+        ttl_view=None,
     ) -> List[Dict[str, Any]]:
         """
         List directory contents (URI version).
@@ -2216,6 +2494,7 @@ class _OpsMixin:
             sort_by=sort_by,
             sort_order=sort_order,
             ctx=ctx,
+            ttl_view=ttl_view,
         )
         return await self._finalize_listing_entries(
             entries,
@@ -2299,6 +2578,7 @@ class _OpsMixin:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
+        ttl_view=None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         entry_items = await self._ls_browsable_items(
@@ -2309,6 +2589,7 @@ class _OpsMixin:
             sort_by=sort_by,
             sort_order=sort_order,
             ctx=ctx,
+            ttl_view=ttl_view,
         )
         # AGFS returns read-only structure, need to create new dict
         all_entries = []
@@ -2361,6 +2642,7 @@ class _OpsMixin:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
+        ttl_view=None,
     ) -> List[tuple[Dict[str, Any], str]]:
         """Return one visible page while preserving RagFS ordering."""
         if offset < 0:
@@ -2368,6 +2650,9 @@ class _OpsMixin:
         if node_limit == 0:
             return []
 
+        from openviking.storage.ttl_view import TTLView
+
+        ttl_view = ttl_view or TTLView(self, self._ctx_or_default(ctx))
         raw_offset = 0
         raw_limit = None if node_limit is None else max(node_limit, 256)
         remaining_offset = offset
@@ -2384,6 +2669,7 @@ class _OpsMixin:
                 sort_by=sort_by,
                 sort_order=sort_order,
                 ctx=ctx,
+                ttl_view=ttl_view,
             )
             if merge_paths:
                 entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)

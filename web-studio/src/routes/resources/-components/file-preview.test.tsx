@@ -980,3 +980,4 @@ describe('FilePreview JSONL rendering', () => {
     expect(screen.queryByText('2')).toBeNull()
   })
 })
+vi.mock('#/components/ttl-settings', () => ({ RootTtlSettings: () => null }))

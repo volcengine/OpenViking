@@ -76,7 +76,7 @@ async def test_find_omits_unset_optional_fields():
 async def test_find_keeps_explicit_tags():
     client, fake = _client_with_fake()
 
-    await client.find("hello", tags=["a", "b"])
+    await client.find("hello", options={"tags": ["a", "b"]})
 
     payload = fake.calls[-1]["json"]
     assert payload["tags"] == ["a", "b"]
@@ -126,7 +126,9 @@ async def test_add_resource_omits_empty_args_and_null_fields():
 async def test_add_resource_keeps_explicit_args():
     client, fake = _client_with_fake()
 
-    await client.add_resource("https://example.com/doc", args={"feishu_access_token": "u-x"})
+    await client.add_resource(
+        "https://example.com/doc", options={"args": {"feishu_access_token": "u-x"}}
+    )
 
     payload = fake.calls[-1]["json"]
     assert payload["args"] == {"feishu_access_token": "u-x"}
@@ -137,7 +139,7 @@ async def test_add_resource_keeps_explicit_no_split_mode():
 
     await client.add_resource(
         "https://example.com/doc",
-        args={"parse_mode": "no_split"},
+        options={"args": {"parse_mode": "no_split"}},
     )
 
     payload = fake.calls[-1]["json"]

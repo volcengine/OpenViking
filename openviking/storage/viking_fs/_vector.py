@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from openviking.server.identity import RequestContext
+from openviking.storage.expr import Eq, Or, PathScope
 from openviking.storage.viking_fs._base import logger
 
 if TYPE_CHECKING:
@@ -16,7 +17,11 @@ class _VectorMixin:
     """Vector store integration: delete/update URIs, get store/embedder."""
 
     async def _delete_from_vector_store(
-        self, uris: List[str], ctx: Optional[RequestContext] = None
+        self,
+        uris: List[str],
+        ctx: Optional[RequestContext] = None,
+        *,
+        recursive_uri: Optional[str] = None,
     ) -> None:
         """Delete records with specified URIs from vector store.
 
@@ -28,12 +33,44 @@ class _VectorMixin:
         real_ctx = self._ctx_or_default(ctx)
 
         try:
-            await vector_store.delete_uris(real_ctx, uris)
+            if recursive_uri is not None:
+                await vector_store.delete_uri_scope(real_ctx, recursive_uri)
+            else:
+                await vector_store.delete_uris(real_ctx, uris)
             for uri in uris:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
+
+    async def _confirm_vector_scope_cleared(
+        self, target_uri: str, ctx: Optional[RequestContext] = None
+    ) -> None:
+        """Strict-mode check: raise unless the vector scope is fully cleared.
+
+        After vector deletion, re-count the recursive URI scope and refuse to
+        report success while any record remains. Backend count errors propagate
+        (they are not swallowed here), so a strict caller never observes a false
+        success. A lingering residue means either a partial vector delete or an
+        eventual-consistency lag; the caller (e.g. the cleanup queue) retries.
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return
+        scope = Or(
+            [
+                Eq("uri", target_uri),
+                PathScope("uri", target_uri, depth=-1),
+            ]
+        )
+        residue = await vector_store.count(
+            filter=scope,
+            ctx=self._ctx_or_default(ctx),
+        )
+        if residue:
+            raise RuntimeError(
+                f"Vector records still present after delete: {target_uri} (residue={residue})"
+            )
 
     async def _copy_vector_store_uris(
         self,

@@ -280,9 +280,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
         "direct_entries"
     ] == inherited_entries
-    await service.fs.write(
-        explicit_file, "first", ctx=admin, wait=True, acl={"entries": []}
-    )
+    await service.fs.write(explicit_file, "first", ctx=admin, wait=True, acl={"entries": []})
     assert (await service.fs.get_acl(explicit_file, ctx=admin))["effective_entries"] == []
 
     explicit_import = "viking://resources/explicit_import"
@@ -293,9 +291,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl(explicit_import, ctx=admin))[
         "direct_entries"
     ] == inherited_entries
-    imported_children = (
-        await service.fs.ls(explicit_import, ctx=admin, simple=True)
-    ).entries
+    imported_children = (await service.fs.ls(explicit_import, ctx=admin, simple=True)).entries
     for child in imported_children:
         report = await service.fs.get_acl(child, ctx=admin)
         assert report["direct_entries"] == []
@@ -489,7 +485,7 @@ async def test_memory_create_refreshes_nested_schema_overview(service):
 
     overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert result["root_uri"] == memory_dir
-    assert "[不二周助-link-test.md](./不二周助-link-test.md)" in overview
+    assert "[不二周助-link-test](./不二周助-link-test.md)" in overview
 
 
 @pytest.mark.asyncio
@@ -544,6 +540,9 @@ class _FakePathLock:
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
 
+    async def stat(self, path, **kwargs):
+        raise FileNotFoundError(path)
+
 
 class _FakeVikingFS:
     def __init__(self, file_uri: str, root_uri: str):
@@ -556,6 +555,9 @@ class _FakeVikingFS:
         self.vector_store = None
         self.tree_entries = []
         self._async_agfs = _FakePathLock()
+        self.ttl_registry = SimpleNamespace(
+            get=AsyncMock(return_value=None), account_may_have_records=AsyncMock(return_value=False)
+        )
 
     async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
@@ -946,6 +948,9 @@ class _FakeVikingFSForCreate:
         self.content = {}
         self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
         self._async_agfs = _FakePathLock()
+        self.ttl_registry = SimpleNamespace(
+            get=AsyncMock(return_value=None), account_may_have_records=AsyncMock(return_value=False)
+        )
 
     async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx

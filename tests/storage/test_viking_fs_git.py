@@ -1,11 +1,24 @@
 # tests/storage/test_viking_fs_git.py
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError, AGFSPathNotFoundError
+from openviking.pyagfs.exceptions import (
+    AGFSNotFoundError,
+    AGFSPathNotFoundError,
+    GitRestoreWritebackPartialError,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import PermissionDeniedError, ResourceExhaustedError
+from openviking_cli.exceptions import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ResourceExhaustedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
@@ -308,9 +321,7 @@ async def test_diff_uses_bounded_native_diff_builder():
             {
                 "before": "old\n",
                 "after": "new\n",
-                "fromfile": (
-                    "viking://user/user/memories/experiences/example.md@from"
-                ),
+                "fromfile": ("viking://user/user/memories/experiences/example.md@from"),
                 "tofile": "viking://user/user/memories/experiences/example.md@to",
                 "timeout_ms": viking_fs_module.SNAPSHOT_DIFF_TIMEOUT_MS,
                 "max_output_bytes": viking_fs_module.SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
@@ -348,3 +359,243 @@ async def test_diff_does_not_treat_missing_storage_object_as_absent():
             to_ref="to",
             ctx=_request_context(),
         )
+
+
+def _ttl_metadata(expires_at: str = "2030-01-02T00:00:00.000Z") -> bytes:
+    return json.dumps({"expires_at": expires_at}).encode()
+
+
+class _RestoreAGFS:
+    def __init__(self, *, plan, blobs, result=None, error=None, current=None):
+        self.plan = plan
+        self.blobs = blobs
+        self.result = result
+        self.error = error
+        self.calls = []
+        self.current = current or {}
+
+    async def stat(self, path, **kwargs):
+        self.calls.append(("stat", path))
+        if path not in self.current:
+            raise FileNotFoundError(path)
+        return {"isDir": False}
+
+    async def read(self, path, **kwargs):
+        if path not in self.current:
+            raise FileNotFoundError(path)
+        return self.current[path]
+
+    async def pathlock_acquire_tree(self, path):
+        self.calls.append(("lock", path))
+        return {"lease_ref": "restore"}
+
+    async def pathlock_release(self, lease):
+        self.calls.append(("unlock", lease))
+
+    async def run(self, operation, **kwargs):
+        self.calls.append((operation, kwargs))
+        if operation == "git_show":
+            if kwargs["path"] not in self.blobs:
+                raise AGFSPathNotFoundError(kwargs["path"])
+            data = self.blobs[kwargs["path"]]
+            return {"oid": "b" * 40, "size": len(data), "bytes": data}
+        assert operation == "git_restore"
+        if kwargs.get("dry_run"):
+            return self.plan
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def _restore_vfs(agfs):
+    vfs = object.__new__(VikingFS)
+    vfs._async_agfs = agfs
+    vfs.ttl_registry = SimpleNamespace(mark_account=AsyncMock())
+    vfs.acl_manager = None
+    vfs.vector_store = None
+    vfs._background_tasks = set()
+    vfs._schedule_restore_reindex_for_paths = AsyncMock(return_value=None)
+    return vfs
+
+
+def _restore_plan(*, to_write=(), to_delete=()):
+    return {
+        "result": "dry_run",
+        "source": "a" * 40,
+        "head": "c" * 40,
+        "diff": {
+            "to_write": [
+                {"path": path, "oid": str(index) * 40}
+                for index, path in enumerate(to_write, start=1)
+            ],
+            "to_delete": list(to_delete),
+            "unchanged": [],
+        },
+    }
+
+
+@pytest.mark.parametrize("partial", [False, True])
+async def test_restore_marks_account_before_writeback_and_preserves_partial_error(partial):
+    event_path = "user/user/memories/events/2026/09/28/.ttl.json"
+    session_meta = "user/user/sessions/s1/.meta.json"
+    result = {
+        "result": "applied",
+        "written_paths": [event_path, session_meta],
+        "deleted_paths": [],
+    }
+    error = (
+        GitRestoreWritebackPartialError(
+            "partial",
+            {
+                "written_paths": [event_path],
+                "deleted_paths": [],
+                "failed_writes": [(session_meta, "injected")],
+            },
+        )
+        if partial
+        else None
+    )
+    agfs = _RestoreAGFS(
+        plan=_restore_plan(
+            to_write=(
+                event_path,
+                session_meta,
+                *(f"user/user/sessions/s1/{i}.txt" for i in range(20)),
+            )
+        ),
+        blobs={event_path: _ttl_metadata(), session_meta: _ttl_metadata()},
+        result=result,
+        error=error,
+    )
+    vfs = _restore_vfs(agfs)
+
+    async def mark_account(account_id):
+        assert account_id == "account"
+        assert not any(
+            op == "git_restore" and not args.get("dry_run")
+            for op, args in agfs.calls
+            if isinstance(args, dict)
+        )
+
+    vfs.ttl_registry.mark_account.side_effect = mark_account
+    if partial:
+        with pytest.raises(GitRestoreWritebackPartialError):
+            await vfs.restore(source_commit="source", ctx=_request_context())
+    else:
+        await vfs.restore(source_commit="source", ctx=_request_context())
+    assert vfs.ttl_registry.mark_account.await_count == 2
+    assert len([op for op, _ in agfs.calls if op == "stat"]) == 2
+    assert (
+        next(args for op, args in agfs.calls if op == "git_restore" and not args.get("dry_run"))[
+            "source_commit"
+        ]
+        == "a" * 40
+    )
+
+
+@pytest.mark.parametrize("scope", ["event", "session"])
+@pytest.mark.parametrize(
+    "entry,delete,expires_at",
+    [
+        ("metadata", False, "2040-01-01T00:00:00Z"),
+        ("metadata", True, "2040-01-01T00:00:00Z"),
+        ("body", False, "2000-01-01T00:00:00Z"),
+        ("body", False, "2040-01-01T00:00:00Z"),
+    ],
+)
+async def test_restore_cannot_detach_existing_expiry(scope, entry, delete, expires_at):
+    owner = (
+        "user/user/sessions/s1" if scope == "session" else "user/user/memories/events/2026/09/28"
+    )
+    # Exercise legacy event metadata as well as the current .meta.json format.
+    metadata_path = owner + (
+        "/.ttl.json" if scope == "event" and entry == "metadata" else "/.meta.json"
+    )
+    path = (
+        metadata_path
+        if entry == "metadata"
+        else owner + ("/messages.jsonl" if scope == "session" else "/body.md")
+    )
+    current = {"/local/account/" + metadata_path: _ttl_metadata(expires_at)}
+    agfs = _RestoreAGFS(
+        plan=_restore_plan(**{"to_delete" if delete else "to_write": (path,)}),
+        blobs={path: _ttl_metadata() if entry == "metadata" else b"old unmanaged body"},
+        current=current,
+    )
+    vfs = _restore_vfs(agfs)
+    expected = NotFoundError if expires_at.startswith("2000") else ConflictError
+    with pytest.raises(expected):
+        await vfs.restore(source_commit="source", ctx=_request_context())
+    assert agfs.current == current
+    vfs.ttl_registry.mark_account.assert_not_awaited()
+    assert not any(
+        op == "git_restore" and not args.get("dry_run")
+        for op, args in agfs.calls
+        if isinstance(args, dict)
+    )
+
+
+async def test_restore_dry_run_does_not_write_account_marker():
+    path = "user/user/memories/events/2026/09/28/.ttl.json"
+    agfs = _RestoreAGFS(plan=_restore_plan(to_write=(path,)), blobs={path: _ttl_metadata()})
+    vfs = _restore_vfs(agfs)
+    result = await vfs.restore(source_commit="source", dry_run=True, ctx=_request_context())
+    assert result["result"] == "dry_run"
+    vfs.ttl_registry.mark_account.assert_not_awaited()
+    assert [call[0] for call in agfs.calls] == ["git_restore"]
+
+
+@pytest.mark.parametrize("operation", ["show", "show_blob_raw", "diff"])
+@pytest.mark.parametrize("scope", ["event", "session"])
+@pytest.mark.parametrize("live_expiry", [None, "2000-01-01T00:00:00Z", "", "2040-01-01T00:00:00Z"])
+async def test_snapshot_reads_enforce_historical_and_current_expiry(operation, scope, live_expiry):
+    from openviking.core import ttl
+    from openviking.storage.ttl_registry import TTLRegistry
+    from tests.unit.storage.ttl_test_storage import MemoryAGFS
+
+    fs = VikingFS(agfs=SimpleNamespace())
+    agfs = MemoryAGFS()
+    fs._async_agfs = agfs
+    fs.ttl_registry = TTLRegistry(agfs)
+    ctx = _request_context()
+    paths = {
+        "event": "viking://user/user/memories/events/2026/09/28/snapshot.md",
+        "session": "viking://user/user/sessions/s1/messages.jsonl",
+    }
+    uri = paths[scope]
+    kind = scope
+    owner = uri.rsplit("/", 1)[0]
+    meta_uri = ttl.ttl_metadata_uri(kind, owner)
+    fields = {"expires_at": "2000-01-01T00:00:00Z"}
+    metadata = json.dumps(fields).encode()
+    blobs = {
+        uri.removeprefix("viking://"): b"expired body",
+        meta_uri.removeprefix("viking://"): metadata,
+    }
+    if live_expiry is not None:
+        await fs.write_file(meta_uri, json.dumps({"expires_at": live_expiry}), ctx=ctx)
+    if live_expiry == "2000-01-01T00:00:00Z":
+        # Even a snapshot predating TTL adoption must obey the current fence.
+        blobs = {uri.removeprefix("viking://"): b"old unmanaged body"}
+
+    async def run(operation, **kwargs):
+        if operation == "git_diff_text":
+            return kwargs["after"]
+        assert operation == "git_show"
+        path = kwargs.get("path")
+        if path is None:
+            return {"oid": "a" * 40}
+        if path not in blobs:
+            raise AGFSPathNotFoundError(path)
+        value = blobs[path]
+        return {"oid": "blob", "bytes": value, "size": len(value)}
+
+    agfs.run = run
+    from contextlib import nullcontext
+
+    expired = live_expiry is None or live_expiry == "2000-01-01T00:00:00Z"
+    with pytest.raises(NotFoundError) if expired else nullcontext():
+        if operation == "diff":
+            await fs.diff(path=uri, from_ref=None, to_ref="main", ctx=ctx)
+        else:
+            await getattr(fs, operation)("main", path=uri, ctx=ctx)

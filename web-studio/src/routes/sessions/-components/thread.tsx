@@ -3,6 +3,7 @@ import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
+import { TtlExpiry } from '#/components/ttl-expiry'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
   useCreateSession,
@@ -151,6 +152,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
             ? t('threadList.newSession')
             : title || sessionId}
         </h2>
+        <TtlExpiry expiresAt={session?.expires_at} />
         <MemoryImpact session={session} />
       </div>
 

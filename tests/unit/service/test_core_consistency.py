@@ -12,6 +12,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.queue_worker_config import QueueWorkersConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -30,12 +31,13 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         vlm=SimpleNamespace(max_concurrent=32),
         parser_api=SimpleNamespace(),
         compile_api=SimpleNamespace(base_url=""),
-        queue_workers=SimpleNamespace(
-            external_parse=SimpleNamespace(max_concurrent=9),
-            add_resource=SimpleNamespace(max_concurrent=7),
-            session_commit=SimpleNamespace(max_concurrent=5),
-            external_task=SimpleNamespace(max_concurrent=6),
+        queue_workers=QueueWorkersConfig(
+            external_parse={"max_concurrent": 9},
+            add_resource={"max_concurrent": 7},
+            session_commit={"max_concurrent": 5},
+            external_task={"max_concurrent": 6},
         ),
+        agent_evolution=SimpleNamespace(model_copy=lambda **_kwargs: object()),
         git=object(),
     )
 
@@ -135,6 +137,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
+    service._ttl_cleanup_service = None
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()

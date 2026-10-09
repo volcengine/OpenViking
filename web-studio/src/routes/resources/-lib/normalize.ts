@@ -371,6 +371,9 @@ export function normalizeFsEntry(
       sizeBytes: parseSizeToBytes(sizeRaw),
       modTime: formatModTime(modRaw),
       modTimestamp: parseModTimeToTs(modRaw),
+      ...(typeof item.expires_at === 'string' || item.expires_at === null
+        ? { expiresAt: item.expires_at }
+        : {}),
       abstract: String(
         pickFirstNonEmpty([item.abstract, item.summary, item.description]),
       ),

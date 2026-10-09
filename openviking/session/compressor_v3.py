@@ -147,9 +147,7 @@ def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
     for file_content in getattr(operations, "delete_file_contents", []) or []:
         uri = str(getattr(file_content, "uri", "") or "")
         if uri:
-            types_by_uri[uri] = str(
-                getattr(file_content, "memory_type", "") or "unknown"
-            )
+            types_by_uri[uri] = str(getattr(file_content, "memory_type", "") or "unknown")
     return types_by_uri
 
 
@@ -228,11 +226,7 @@ async def _commit_experience_snapshot(
         f"{json.dumps(trajectory_map, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
     )
     try:
-        await commit(
-            message=message,
-            paths=paths,
-            ctx=ctx,
-        )
+        await commit(message=message, paths=paths, ctx=ctx)
     except Exception as exc:
         logger.warning("Failed to commit experience snapshot for %s: %s", paths, exc, exc_info=True)
 
@@ -260,9 +254,10 @@ class SessionCompressorV3:
     ):
         self.vikingdb = vikingdb
         self.skill_processor = skill_processor
+        # Resolve VikingFS when extraction starts. Construction is also used by
+        # CLI and unit-test paths before the process singleton is initialized.
         self.vlm_resolver = vlm_resolver
         self.rollout_analyzer = rollout_analyzer or TrajectoryRolloutAnalyzer(
-            viking_fs=get_viking_fs(),
             vikingdb=vikingdb,
             vlm_resolver=vlm_resolver,
         )
@@ -282,9 +277,7 @@ class SessionCompressorV3:
         vlm_config: VLMHandle | None = None,
     ) -> ExtractLoop:
         if vlm_config is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires an explicitly resolved VLM config"
-            )
+            raise RuntimeError("SessionCompressorV3 requires an explicitly resolved VLM config")
         vlm = vlm_config
         viking_fs = get_viking_fs()
         if context_provider is None:
@@ -701,9 +694,7 @@ class SessionCompressorV3:
             )
 
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "SessionCompressorV3 requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("SessionCompressorV3 requires a VLM resolver for account-owned work")
         vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
         context_provider = SessionExtractContextProvider(
             messages=messages,
@@ -1067,36 +1058,45 @@ class SessionCompressorV3:
                         if (uri := str(getattr(trajectory, "uri", "") or ""))
                     }
 
-                    async def commit_experience_batch(
-                        batch_result: RolloutTrainingResult,
-                        *,
-                        _fallback_trajectory_uris: set[str] = fallback_trajectory_uris,
-                    ) -> None:
-                        persisted_result = (
-                            getattr(batch_result, "batch_result", None) or batch_result
-                        )
-                        snapshot_apply_result, experience_trajectory_map = (
-                            _experience_snapshot_provenance(
-                                batch_result,
-                                fallback_trajectory_uris=_fallback_trajectory_uris,
+                    batch_finalizer = None
+                    if callable(getattr(viking_fs, "commit", None)):
+
+                        async def commit_experience_batch(
+                            batch_result: RolloutTrainingResult,
+                            *,
+                            _fallback_trajectory_uris: set[str] = fallback_trajectory_uris,
+                        ) -> None:
+                            persisted_result = (
+                                getattr(batch_result, "batch_result", None) or batch_result
                             )
-                        )
-                        await _commit_experience_snapshot(
-                            viking_fs,
-                            ctx=ctx,
-                            experience_uris=_visible_experience_snapshot_uris(
-                                plan=persisted_result.plan,
-                                apply_result=snapshot_apply_result,
-                            ),
-                            archive_uri=archive_uri,
-                            experience_trajectory_map=experience_trajectory_map,
-                        )
+                            snapshot_apply_result, experience_trajectory_map = (
+                                _experience_snapshot_provenance(
+                                    batch_result,
+                                    fallback_trajectory_uris=_fallback_trajectory_uris,
+                                )
+                            )
+                            await _commit_experience_snapshot(
+                                viking_fs,
+                                ctx=ctx,
+                                experience_uris=_visible_experience_snapshot_uris(
+                                    plan=persisted_result.plan,
+                                    apply_result=snapshot_apply_result,
+                                ),
+                                archive_uri=archive_uri,
+                                experience_trajectory_map=experience_trajectory_map,
+                            )
+
+                        batch_finalizer = commit_experience_batch
 
                     exp_training_result = await exp_trainer.submit_gradients(
                         exp_gradients,
                         analysis=analysis,
                         rollout=rollout,
-                        batch_finalizer=commit_experience_batch,
+                        **(
+                            {"batch_finalizer": batch_finalizer}
+                            if batch_finalizer is not None
+                            else {}
+                        ),
                     )
                 if case_uri:
                     await self._link_case_to_training_outputs(
@@ -1281,10 +1281,7 @@ class SessionCompressorV3:
         if not links:
             return
         await _render_case_links_from_template(
-            case_uri=case_uri,
-            links=links,
-            ctx=ctx,
-            viking_fs=viking_fs,
+            case_uri=case_uri, links=links, ctx=ctx, viking_fs=viking_fs
         )
         await write_stored_links(links, ctx, viking_fs, skip_uris={case_uri})
 

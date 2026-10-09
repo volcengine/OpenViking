@@ -11,6 +11,7 @@ export type TokenUsage = {
 }
 
 export type SessionListItem = {
+  expires_at?: string | null
   is_dir: boolean
   mod_time: string
   session_id: string
@@ -18,6 +19,7 @@ export type SessionListItem = {
 }
 
 export type SessionDetail = {
+  expires_at?: string | null
   commit_count: number
   created_at: string
   embedding_token_usage: {

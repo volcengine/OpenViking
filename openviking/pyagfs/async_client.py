@@ -570,6 +570,14 @@ class AsyncAGFSClient:
             handoff_ref,
         )
 
+    async def pathlock_check_descendants(
+        self, path: str, owned_lease_ref: Dict[str, Any], *, fs_ctx=None
+    ) -> None:
+        """Check for foreign file writers while the caller blocks new admissions."""
+        await self.run(
+            "pathlock_check_descendants", _fs_ctx_or_default(path, fs_ctx), path, owned_lease_ref
+        )
+
     async def pathlock_is_locked(
         self,
         path: str,

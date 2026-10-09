@@ -14,7 +14,7 @@ use crate::{
 };
 
 const BOX_WIDTH: usize = 74;
-const COMMAND_WIDTH: usize = 16;
+const COMMAND_WIDTH: usize = 22;
 const COMMAND_HELP_LEFT_WIDTH: usize = 34;
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +62,7 @@ struct CommandHelpSpec {
 
 const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "add-resource",
+    "ttl",
     "add-skill",
     "skills",
     "find",
@@ -124,6 +125,21 @@ const HELP_SECTIONS: &[HelpSection] = &[
 ];
 
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
+    CommandHelpSpec {
+        path: &["ttl"],
+        purpose: "Read an event date directory or session's expiry.",
+        examples: &[
+            HelpItem {
+                label: "ov ttl get viking://user/alice/memories/events/2026/09/28",
+                description: "Read the frozen deadline and lifecycle owner.",
+            },
+            HelpItem {
+                label: "ov ttl get viking://user/alice/sessions/session-1",
+                description: "Read the session deadline inherited from its root policy.",
+            },
+        ],
+        next_steps: &[],
+    },
     CommandHelpSpec {
         path: &["add-resource"],
         purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
@@ -2356,6 +2372,7 @@ fn localized_command_description<'a>(
     }
     match name {
         "add-resource" => "添加文件、文件夹、URL 或仓库",
+        "ttl" => "查看 events 日期目录或 Session 的到期时间",
         "add-skill" => "添加技能到 OpenViking",
         "skills" => "管理已安装技能",
         "find" => "语义检索相关上下文",
@@ -2983,10 +3000,9 @@ mod tests {
     }
 
     #[test]
-    fn curated_help_lists_timeout_for_waiting_commands() {
+    fn curated_help_lists_supported_timeouts() {
         for args in [
             ["ov", "add-resource", "--help"],
-            ["ov", "add-skill", "--help"],
             ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
         ] {

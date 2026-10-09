@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
+import { InitialTtlSettings } from '#/components/ttl-settings'
 import {
   Dialog,
   DialogContent,
@@ -512,6 +513,12 @@ export function AccountSwitcher() {
                   {...PLAIN_INPUT_PROPS}
                 />
               </label>
+              <InitialTtlSettings
+                value={createDraft.ttl}
+                onChange={(ttl) =>
+                  setCreateDraft((current) => ({ ...current, ttl }))
+                }
+              />
             </div>
             <DialogFooter>
               <Button

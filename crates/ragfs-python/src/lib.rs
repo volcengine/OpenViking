@@ -203,10 +203,10 @@ use ragfs::core::builder::{
     CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig, EncryptionConfig,
 };
 use ragfs::core::{
-    build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS,
-    OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
-    FS_CTX,
+    ConfigValue, FS_CTX, FileInfo, FileSystem, FilesystemStats, FsContext, FsContextInner,
+    FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS, OperationStats,
+    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
+    build_configured_stack,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
@@ -2925,6 +2925,37 @@ impl RAGFSBindingClient {
             })
             .map_err(pathlock_err_to_py)?;
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
+    }
+
+    /// Reject foreign descendant writers, including files not yet materialized.
+    #[pyo3(signature = (ctx, path, owned_lease_ref))]
+    fn pathlock_check_descendants(
+        &self,
+        py: Python<'_>,
+        ctx: Option<HashMap<String, String>>,
+        path: String,
+        owned_lease_ref: Py<PyAny>,
+    ) -> PyResult<()> {
+        let mgr = self.clone_pathlock_manager();
+        let fs_ctx = build_fs_context(ctx);
+        let (lease_ref, ownership_ref) = extract_owned_lease_ref(py, &owned_lease_ref)?;
+        self.run_scoped(py, fs_ctx, move || {
+            let mgr = mgr.clone();
+            let lr = lease_ref.clone();
+            let ownership = ownership_ref.clone();
+            let path = path.clone();
+            async move {
+                let lease = mgr
+                    .get_owned_lease_by_capability(&lr, &ownership)
+                    .await
+                    .ok_or_else(|| {
+                        PathLockError::InvalidRequest("invalid owned lease capability".to_string())
+                    })?;
+                mgr.check_descendant_locks(&path, &lease.lease.owner_id)
+                    .await
+            }
+        })
+        .map_err(pathlock_err_to_py)
     }
 
     /// Check if a path is locked.

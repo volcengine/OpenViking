@@ -197,6 +197,9 @@ export async function fetchFsStat(
             : null,
       modTime: formatModTime(rawModTime),
       modTimestamp: null,
+      ...(typeof data.expires_at === 'string' || data.expires_at === null
+        ? { expiresAt: data.expires_at }
+        : {}),
       abstract: String(data.abstract ?? ''),
       overview: String(data.overview ?? ''),
     }

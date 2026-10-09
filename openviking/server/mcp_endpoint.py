@@ -1405,6 +1405,15 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def get_ttl(uri: str) -> str:
+    """Read an event or session path's effective directory expiry."""
+    ctx = _get_ctx()
+    uri = validate_request_viking_uri(uri, ctx)
+    return str(await get_service().fs.get_ttl(uri, ctx))
+
+
 def _resource_add_error(result: Any) -> _MCPToolFailure | None:
     if not isinstance(result, dict) or result.get("status") != "error":
         return None

@@ -8,6 +8,7 @@ export type VikingFileType =
   | 'binary'
 
 export interface VikingFsEntry {
+  expiresAt?: string | null
   uri: string
   name: string
   isDir: boolean

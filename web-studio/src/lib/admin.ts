@@ -14,6 +14,7 @@ import {
 } from '#/lib/ov-client'
 
 import type { UserMemoryPolicy } from './user-memory-policy'
+import type { TtlConfig } from './ttl'
 
 export type AdminUserRole = 'admin' | 'root' | 'user'
 
@@ -41,6 +42,7 @@ export type AdminUser = {
 export type CreateAccountInput = {
   accountId: string
   adminUserId: string
+  ttl?: TtlConfig
 }
 
 export type CreateUserInput = {
@@ -455,6 +457,7 @@ export async function createAdminAccount(
       body: {
         account_id: input.accountId,
         admin_user_id: input.adminUserId,
+        ...(input.ttl ? { settings: { ttl: input.ttl } } : {}),
       },
       client: createAdminClient(connection),
     }),

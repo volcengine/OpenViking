@@ -350,6 +350,7 @@ class HierarchicalRetriever:
             results.append(
                 MatchedContext(
                     uri=display_uri,
+                    expires_at=c.get("expires_at"),
                     context_type=ContextType(c["context_type"])
                     if c.get("context_type")
                     else ContextType.RESOURCE,

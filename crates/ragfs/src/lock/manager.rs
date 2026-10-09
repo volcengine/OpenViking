@@ -1253,8 +1253,9 @@ impl PathLockManager {
         Ok(())
     }
 
-    /// Check for descendant locks that would conflict with a tree lock.
-    async fn check_descendant_locks(&self, path: &str, owner_id: &str) -> PathLockResult<()> {
+    /// Check existing descendant writers without acquiring a tree lock.
+    /// The caller must exclude new admissions while checking and deleting.
+    pub async fn check_descendant_locks(&self, path: &str, owner_id: &str) -> PathLockResult<()> {
         let scan_start = Instant::now();
         let descendants = self.provider.scan_descendant_locks(path).await?;
         let now_ns = Self::now_ns();

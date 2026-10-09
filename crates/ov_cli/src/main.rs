@@ -363,6 +363,11 @@ enum AclCommands {
 #[derive(Subcommand)]
 enum Commands {
     // --- Data Operations ---
+    /// [Data] Inspect directory expiry and inherited TTL policy
+    Ttl {
+        #[command(subcommand)]
+        action: TtlCommands,
+    },
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
@@ -599,7 +604,7 @@ enum Commands {
             help_heading = "Common options"
         )]
         sort_order: Option<String>,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract,overview)
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,expires_at,locked,id,count,tags,abstract,overview)
         #[arg(
             short = 'f',
             long = "fields",
@@ -702,7 +707,7 @@ enum Commands {
         /// Simple path output (just paths, no tree formatting)
         #[arg(short, long, help_heading = "Common options")]
         simple: bool,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract,overview)
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,expires_at,locked,id,count,tags,abstract,overview)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
         /// Comma-separated k=v retrieval tags; all tags must match
@@ -1151,7 +1156,7 @@ enum Commands {
         /// Comma-separated k=v retrieval tags; all tags must match
         #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,tags)
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,expires_at,locked,id,tags)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
     },
@@ -2067,7 +2072,25 @@ enum PrivacyCommands {
 }
 
 #[derive(Subcommand)]
+enum TtlCommands {
+    /// Read a directory lifetime or inherited policy
+    Get { uri: String },
+}
+
+#[derive(Subcommand)]
 enum AdminCommands {
+    /// Read runtime configuration overrides (omit --account-id for cluster settings)
+    GetConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+    },
+    /// Patch runtime settings; JSON null removes an override and restores inheritance
+    PatchConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        settings: serde_json::Value,
+    },
     /// Create a new account with its first admin user
     CreateAccount {
         /// Account ID to create
@@ -2833,6 +2856,8 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "set-role"
             | "regenerate-key"
             | "set-account-settings"
+            | "get-configuration"
+            | "patch-configuration"
     )
 }
 
@@ -3439,6 +3464,17 @@ async fn main() {
                 ))
             }
         }
+        Commands::Ttl { action } => {
+            let client = ctx.get_client();
+            let result: Result<serde_json::Value> = match action {
+                TtlCommands::Get { uri } => {
+                    client
+                        .get("/api/v1/content/ttl", &[("uri".into(), uri)])
+                        .await
+                }
+            };
+            result.map(|value| output::output_success(&value, ctx.output_format, ctx.compact))
+        }
         Commands::AddSkill(args) => {
             handlers::handle_add_skill(args, legacy_upload_options, ctx).await
         }
@@ -4030,6 +4066,34 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn resource_ttl_is_out_of_scope() {
+        assert!(
+            Cli::try_parse_from(["ov", "add-resource", "a.md", "--ttl-relative", "7"]).is_err()
+        );
+    }
+
+    #[test]
+    fn object_ttl_configuration_is_rejected() {
+        for args in [
+            vec![
+                "ov",
+                "ttl",
+                "set",
+                "viking://user/alice/sessions/s1",
+                "--ttl-relative",
+                "30",
+            ],
+            vec!["ov", "session", "new", "--ttl-relative", "30"],
+            vec!["ov", "session", "config", "set", "s1", "--inherit-ttl"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        assert!(
+            Cli::try_parse_from(["ov", "ttl", "get", "viking://user/alice/sessions/s1"]).is_ok()
+        );
     }
 
     #[test]

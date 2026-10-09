@@ -9,6 +9,7 @@ worker binds the committing account/user (so tokens are not attributed to
 """
 
 import json
+from unittest.mock import AsyncMock
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
@@ -24,10 +25,12 @@ class _FakeSession:
         self._captured = captured
         self._processed = processed
 
-    async def exists(self) -> bool:
+    async def exists(self, *, include_expired=False) -> bool:
+        assert include_expired
         return True
 
-    async def load(self) -> None:
+    async def load(self, *, include_expired=False) -> None:
+        assert include_expired
         return None
 
     async def resume_queued_commit(self, msg) -> bool:
@@ -49,6 +52,15 @@ class _FakeSessionService:
 class _MemoryVikingFS:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
+        self._async_agfs = AsyncMock()
+
+    def _uri_to_path(self, uri, ctx=None):
+        return "/local/" + uri.removeprefix("viking://")
+
+    async def read_file(self, uri, ctx=None, include_expired=False):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return self.files[uri]
 
     async def stat(self, uri, ctx=None, skip_count=False):
         return {"path": uri}
@@ -115,6 +127,10 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
 async def test_cancelled_queued_commit_writes_terminal_marker_before_returning():
     msg = _make_msg()
     viking_fs = _MemoryVikingFS()
+    viking_fs.files[msg.session_uri + "/.meta.json"] = json.dumps({"session_id": msg.session_id})
+    viking_fs.files[msg.archive_uri + "/.meta.json"] = json.dumps(
+        {"phase1": {"queue_message": {"task_id": msg.task_id}}}
+    )
     session = Session(
         viking_fs=viking_fs,
         session_id=msg.session_id,

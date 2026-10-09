@@ -106,6 +106,64 @@ async def _async_true():
     return True
 
 
+@pytest.mark.asyncio
+async def test_glob_applies_node_limit_after_ttl_filter(monkeypatch, fs):
+    root_uri = "viking://user/default/memories/events"
+    root_path = "/local/test_account/user/default/memories/events"
+    calls = []
+
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda uri, **_kwargs: uri.replace("viking://", "/local/test_account/"),
+    )
+    monkeypatch.setattr(
+        fs,
+        "_read_paths",
+        lambda uri, **_kwargs: [uri.replace("viking://", "/local/test_account/")],
+    )
+    monkeypatch.setattr(
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace("/local/test_account/", "viking://"),
+    )
+
+    async def read_path_visible(_uri, path, _primary, _ctx):
+        return not path.endswith("expired.md")
+
+    async def glob_directory(_path, _pattern, **kwargs):
+        calls.append(kwargs.get("continuation_token"))
+        if kwargs.get("continuation_token") is None:
+            return {
+                "entries": [
+                    {
+                        "path": f"{root_path}/expired.md",
+                        "name": "expired.md",
+                        "is_dir": False,
+                    }
+                ],
+                "next_token": "page-2",
+            }
+        return {
+            "entries": [
+                {
+                    "path": f"{root_path}/live.md",
+                    "name": "live.md",
+                    "is_dir": False,
+                }
+            ],
+            "next_token": None,
+        }
+
+    monkeypatch.setattr(fs, "_read_path_visible", read_path_visible)
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", glob_directory)
+
+    result = await fs.glob("*.md", uri=root_uri, node_limit=1, ctx=_default_ctx())
+
+    assert result == {"matches": [f"{root_uri}/live.md"], "count": 1}
+    assert calls == [None, "page-2"]
+
+
 def test_glob_config_defaults_to_fs_with_threshold_100():
     config = GlobConfig()
 
@@ -593,10 +651,7 @@ async def test_glob_remote_pushes_tag_filter_before_limit(fs):
     call = vector_store.random_calls[0]
     assert call["limit"] == 2
     assert call["filter"] == And(
-        [
-            PathScope("uri", "viking://resources", depth=-1),
-            RawDSL(tag_filter),
-        ]
+        [PathScope("uri", "viking://resources", depth=-1), RawDSL(tag_filter)]
     )
 
 

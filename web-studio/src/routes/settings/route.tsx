@@ -23,6 +23,7 @@ import {
 } from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import { LibraryTtlSettings } from '#/components/ttl-settings'
 import { probeStudioConnection } from '#/lib/admin'
 import type { CapabilityProbeResult } from '#/lib/admin'
 import { DEFAULT_ACCOUNT_ID, DEFAULT_USER_ID } from '#/lib/admin-options'
@@ -406,6 +407,7 @@ function ConnectionSettingsRoute() {
           )}
         </CardContent>
       </Card>
+      <LibraryTtlSettings />
     </div>
   )
 }

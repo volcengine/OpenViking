@@ -1732,6 +1732,8 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        if any(kwargs.get(key) is not None for key in ("ttl_relative", "ttl_absolute")):
+            raise InvalidArgumentError("Resources are outside the TTL scope")
         tos_signature = kwargs.get("tos_signature")
         tos_access = kwargs.get("tos_access")
         if tos_signature is not None or tos_access is not None:

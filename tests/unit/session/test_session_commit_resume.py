@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.pyagfs.exceptions import AGFSNetworkError, AGFSTimeoutError
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.session import Session
@@ -77,7 +78,7 @@ class _MemoryVikingFS:
     def _uri_to_path(self, uri, ctx=None):
         return "/local/session-1"
 
-    async def read_file(self, uri, ctx=None):
+    async def read_file(self, uri, ctx=None, *, include_expired=False):
         if uri not in self.files:
             raise FileNotFoundError(uri)
         return self.files[uri]
@@ -88,7 +89,7 @@ class _MemoryVikingFS:
     async def append_file(self, uri, content, ctx=None):
         self.files[uri] += content
 
-    async def exists(self, uri, ctx=None):
+    async def exists(self, uri, ctx=None, *, include_expired=False):
         return uri in self.files or any(path.startswith(f"{uri}/") for path in self.files)
 
     async def ls(self, uri, ctx=None):
@@ -193,7 +194,12 @@ async def test_phase2_cancellation_marks_archive_only_when_requested(
         await tracker.start("task-1", account_id="default", user_id="default")
 
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
-    files = {}
+    files = {
+        f"{session_uri}/.meta.json": json.dumps({"session_id": "session-1"}),
+        f"{archive_uri}/.meta.json": json.dumps(
+            {"phase1": {"queue_message": {"task_id": "task-1"}}}
+        ),
+    }
     session = Session(
         viking_fs=_MemoryVikingFS(files),
         session_id="session-1",
@@ -231,6 +237,10 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
         ),
         f"{archive_uri}/messages.jsonl": f"{archived.to_jsonl()}\n",
     }
+    files.setdefault(f"{session_uri}/.meta.json", json.dumps({"session_id": "session-1"}))
+    marker = json.loads(files.get(f"{archive_uri}/.meta.json", "{}"))
+    marker["phase1"] = {"status": "ready", "queue_message": {"task_id": "task-1"}}
+    files[f"{archive_uri}/.meta.json"] = json.dumps(marker)
     viking_fs = _MemoryVikingFS(files)
     session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
     tracker = TaskTracker(_TaskStore())
@@ -263,6 +273,46 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_phase1_does_not_renew_frozen_ttl(monkeypatch):
+    session_uri = "viking://user/default/sessions/session-1"
+    message = Message(id="old-user", role="user", parts=[TextPart("old question")])
+    storage = _MemoryVikingFS({f"{session_uri}/messages.jsonl": f"{message.to_jsonl()}\n"})
+    tracker = TaskTracker(_TaskStore())
+    monkeypatch.setattr("openviking.session.session._enabled_memory_types", lambda: set())
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
+    session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+    session.meta.expires_at = "2999-01-08T00:00:00.000Z"
+
+    result = await session.commit_async()
+
+    assert result["status"] == "accepted"
+    assert session.meta.expires_at == "2999-01-08T00:00:00.000Z"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [AGFSNetworkError, AGFSTimeoutError])
+async def test_phase2_final_meta_read_outage_is_not_stale(error_type):
+    uri = "viking://user/default/sessions/session-1"
+    metadata = json.dumps({"expires_at": "2999-01-01T00:00:00Z"})
+    storage = _MemoryVikingFS({uri + "/.meta.json": metadata})
+    # The current metadata read must propagate storage errors.
+    storage.read_file = AsyncMock(side_effect=error_type("endpoint not found"))
+    session = Session(viking_fs=storage, session_id="session-1", session_uri=uri)
+    with pytest.raises(error_type, match="endpoint not found"):
+        await session._merge_and_save_commit_meta(
+            task_id="task-1",
+            archive_index=1,
+            memories_extracted={},
+            telemetry_snapshot=None,
+        )
+    assert storage.files == {uri + "/.meta.json": metadata}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("archive_content", [None, "{invalid json", "{}"])
 async def test_resume_queued_commit_fails_terminally_for_unreadable_archive(
     monkeypatch, archive_content
@@ -272,6 +322,10 @@ async def test_resume_queued_commit_fails_terminally_for_unreadable_archive(
     files = {}
     if archive_content is not None:
         files[f"{archive_uri}/messages.jsonl"] = archive_content
+    files.setdefault(f"{session_uri}/.meta.json", json.dumps({"session_id": "session-1"}))
+    marker = json.loads(files.get(f"{archive_uri}/.meta.json", "{}"))
+    marker["phase1"] = {"status": "ready", "queue_message": {"task_id": "task-1"}}
+    files[f"{archive_uri}/.meta.json"] = json.dumps(marker)
     viking_fs = _MemoryVikingFS(files)
     session = Session(viking_fs=viking_fs, session_id="session-1", session_uri=session_uri)
     tracker = TaskTracker(_TaskStore())
@@ -340,6 +394,10 @@ async def test_resume_queued_commit_uses_agent_evolution_archive_snapshot(monkey
             }
         ),
     }
+    files.setdefault(f"{session_uri}/.meta.json", json.dumps({"session_id": "session-1"}))
+    marker = json.loads(files.get(f"{archive_uri}/.meta.json", "{}"))
+    marker["phase1"] = {"status": "ready", "queue_message": {"task_id": "task-1"}}
+    files[f"{archive_uri}/.meta.json"] = json.dumps(marker)
     session = Session(
         viking_fs=_MemoryVikingFS(files),
         session_id="session-1",

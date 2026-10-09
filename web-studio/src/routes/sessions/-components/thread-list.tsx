@@ -20,6 +20,8 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { Button } from '#/components/ui/button'
+import { RootTtlSettings } from '#/components/ttl-settings'
+import { TtlExpiry } from '#/components/ttl-expiry'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   useCreateSession,
@@ -35,7 +37,7 @@ interface ThreadListProps {
 
 export function ThreadList({ activeSessionId }: ThreadListProps) {
   const { i18n, t } = useTranslation('sessions')
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey, connection } = useAppConnection()
   const navigate = useNavigate()
   const { data: sessions, isLoading } = useSessionListByRecency()
   const { getTitle, removeTitle, setTitle } = useSessionTitles(identityScopeKey)
@@ -117,6 +119,9 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
         </Button>
       </div>
 
+      <div className="px-4 py-2">
+        <RootTtlSettings uri={`viking://user/${connection.userId}/sessions`} />
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {isLoading ? (
           <div className="flex h-28 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -172,6 +177,7 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
                           i18n.resolvedLanguage,
                         )}
                       </span>
+                      <TtlExpiry expiresAt={session.expires_at} />
                     </span>
                   </Link>
                   <button

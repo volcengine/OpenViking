@@ -19,7 +19,8 @@ from openviking_cli.utils.config.grep_config import GrepConfig
 
 
 class _DummyAgfs:
-    pass
+    def stat(self, path, **kwargs):
+        raise FileNotFoundError(path)
 
 
 class _DummyVectorStore:
@@ -127,11 +128,14 @@ async def test_collect_grep_files_skips_directory_vector_count(monkeypatch):
     monkeypatch.setattr(viking_fs, "stat", stat)
     monkeypatch.setattr(viking_fs, "ls", AsyncMock(return_value=[]))
 
-    assert await viking_fs._collect_grep_files(
-        "viking://resources",
-        excluded_prefix=None,
-        level_limit=1,
-    ) == []
+    assert (
+        await viking_fs._collect_grep_files(
+            "viking://resources",
+            excluded_prefix=None,
+            level_limit=1,
+        )
+        == []
+    )
     stat.assert_awaited_once_with("viking://resources", ctx=None, skip_count=True)
 
 
@@ -642,9 +646,7 @@ async def test_grep_vikingdb_does_not_project_tags_without_filter_or_request(mon
     )
 
     assert vector_store.calls[0]["output_fields"] == ["uri"]
-    assert result["matches"] == [
-        {"uri": "viking://resources/a.md", "line": 1, "content": "needle"}
-    ]
+    assert result["matches"] == [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}]
 
 
 @pytest.mark.asyncio
@@ -746,14 +748,19 @@ async def test_grep_vikingdb_pushes_exclude_uri_to_filter(monkeypatch):
     assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
     filter_expr = vector_store.calls[0]["filter"]
     assert isinstance(filter_expr, And)
-    assert filter_expr.conds[0] == PathScope("uri", "viking://resources", depth=3)
-    assert isinstance(filter_expr.conds[1], RawDSL)
-    assert filter_expr.conds[1].payload == {
-        "op": "must_not",
-        "field": "uri",
-        "conds": ["viking://resources/archive"],
-        "para": "-d=-1",
-    }
+    assert filter_expr == And(
+        [
+            PathScope("uri", "viking://resources", depth=3),
+            RawDSL(
+                {
+                    "op": "must_not",
+                    "field": "uri",
+                    "conds": ["viking://resources/archive"],
+                    "para": "-d=-1",
+                }
+            ),
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -1184,7 +1191,8 @@ async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch)
 
     assert result["count"] == 2
     assert result["files_scanned"] == 1
-    assert read_paths == ["/resources/file0.md", "/resources/file1.md"]
+    # Reads in one batch run concurrently; only batch membership is guaranteed.
+    assert sorted(read_paths) == ["/resources/file0.md", "/resources/file1.md"]
 
 
 @pytest.mark.asyncio
@@ -1196,6 +1204,7 @@ async def test_grep_delegates_to_agfs_with_expected_filters(monkeypatch, fs):
         return {"matches": [], "files_scanned": 0}
 
     monkeypatch.setattr(fs._async_agfs, "grep", fake_grep)
+    monkeypatch.setattr(fs.ttl_registry, "account_may_have_records", AsyncMock(return_value=False))
 
     result = await fs.grep(
         "viking://resources",
@@ -1330,6 +1339,38 @@ async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
         "viking://resources/a.md",
         "viking://resources/b.md",
     ]
+
+
+@pytest.mark.asyncio
+async def test_native_grep_applies_node_limit_after_ttl_filter(monkeypatch, fs):
+    async def fake_grep(**kwargs):
+        assert kwargs["node_limit"] is None
+        return {
+            "matches": [
+                {"file": "expired.md", "line": 1, "content": "match"},
+                {"file": "live.md", "line": 1, "content": "match"},
+            ],
+            "files_scanned": 2,
+        }
+
+    async def ttl_visible(uri, _ctx, **_kwargs):
+        return not uri.endswith("expired.md")
+
+    monkeypatch.setattr(fs._async_agfs, "grep", fake_grep)
+    monkeypatch.setattr(fs.ttl_registry, "account_may_have_records", AsyncMock(return_value=True))
+    monkeypatch.setattr(fs, "_ttl_uri_visible", ttl_visible)
+
+    result = await fs._grep_with_agfs(
+        "viking://user/default/memories/events",
+        pattern="match",
+        node_limit=1,
+        ctx=RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT),
+    )
+
+    assert [match["uri"] for match in result["matches"]] == [
+        "viking://user/default/memories/events/live.md"
+    ]
+    assert result["count"] == 1
 
 
 class _RestrictedAclManager:

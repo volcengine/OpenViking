@@ -98,6 +98,7 @@ fn render_session_get_for_table(value: &Value) -> Option<String> {
     push_row(&mut lines, "id", session_id);
     push_optional_row(&mut lines, "created", object.get("created_at"));
     push_optional_row(&mut lines, "updated", object.get("updated_at"));
+    push_optional_row(&mut lines, "expires_at", object.get("expires_at"));
     push_optional_row(&mut lines, "last commit", object.get("last_commit_at"));
 
     lines.push(String::new());
@@ -644,6 +645,7 @@ mod tests {
             "session_id": "d34f8a7c-eb14-49c4-b689-2743ddb9b75e",
             "created_at": "2026-05-26T09:53:03.661Z",
             "updated_at": "2026-05-26T10:00:07.603Z",
+            "expires_at": "2026-06-25T09:53:03.661Z",
             "created_by_user_id": "haozhe",
             "message_count": 0,
             "commit_count": 1,
@@ -683,6 +685,7 @@ mod tests {
         assert!(rendered.contains("Memory"));
         assert!(rendered.contains("Tokens"));
         assert!(rendered.contains("d34f8a7c-eb14-49c4-b689-2743ddb9b75e"));
+        assert!(rendered.contains("expires_at") && rendered.contains("2026-06-25T09:53:03.661Z"));
         assert!(rendered.contains("memories extracted"));
         assert!(rendered.contains("event tags"));
         assert!(rendered.contains("team=search"));

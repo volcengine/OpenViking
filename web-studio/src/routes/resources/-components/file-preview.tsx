@@ -19,6 +19,9 @@ import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
+import { TtlExpiry } from '#/components/ttl-expiry'
+import { RootTtlSettings } from '#/components/ttl-settings'
+import { isTtlRoot, ttlRootForPath } from '#/lib/ttl'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
 import { getContentDownload, ovClient } from '#/lib/ov-client'
@@ -1359,7 +1362,9 @@ export function FilePreview({
     file && !file.isDir && file.name.toLowerCase().endsWith('.json'),
   )
   const needsMetadata = Boolean(
-    isJsonPath && file && (file.sizeBytes === null || !file.modTime),
+    file &&
+    (ttlRootForPath(file.uri) ||
+      (isJsonPath && (file.sizeBytes === null || !file.modTime))),
   )
   const statQuery = useVikingFsStat(needsMetadata ? file?.uri : undefined)
   const resolvedFile = useMemo(() => {
@@ -1392,7 +1397,10 @@ export function FilePreview({
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
   )
-  const frontmatter = useMemo(() => splitMarkdownFrontmatter(displayContent || ''), [displayContent])
+  const frontmatter = useMemo(
+    () => splitMarkdownFrontmatter(displayContent || ''),
+    [displayContent],
+  )
   const okfDocument = useMemo(
     () =>
       file && preview?.fileType === 'markdown'
@@ -1585,6 +1593,15 @@ export function FilePreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {ttlRootForPath(file.uri) && (
+        <div className="shrink-0 border-b px-4 py-2">
+          {isTtlRoot(file.uri) ? (
+            <RootTtlSettings uri={file.uri} />
+          ) : (
+            <TtlExpiry expiresAt={previewFile.expiresAt} />
+          )}
+        </div>
+      )}
       {showHeader ? (
         <div className="flex min-h-14 shrink-0 items-center justify-between border-b px-4">
           <div className="flex min-w-0 items-center gap-2">
@@ -1942,7 +1959,12 @@ export function FilePreview({
                     onNavigate={onNavigate}
                     rawFrontmatter={okfDocument.rawFrontmatter}
                   />
-                ) : frontmatter ? <YamlMetadata rawFrontmatter={frontmatter.rawFrontmatter} defaultOpen /> : null}
+                ) : frontmatter ? (
+                  <YamlMetadata
+                    rawFrontmatter={frontmatter.rawFrontmatter}
+                    defaultOpen
+                  />
+                ) : null}
                 <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
