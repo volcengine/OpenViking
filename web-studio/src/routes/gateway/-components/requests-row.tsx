@@ -30,7 +30,7 @@ import {
 } from './status-badges'
 
 function TokensCell({ record }: { record: LogRecord }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const {
     input_tokens: input,
@@ -73,7 +73,7 @@ const DESKTOP_ONLY = 'hidden md:table-cell'
 
 /** Column headers of the request table, kept next to the row that fills them. */
 export function RequestsTableHeader() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <TableHeader>
       <TableRow className="bg-muted/20 hover:bg-muted/20">
@@ -121,7 +121,7 @@ export function RequestRow({
   keys,
   onResync,
 }: RequestRowProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const [expanded, setExpanded] = React.useState(false)
   const detailsId = React.useId()

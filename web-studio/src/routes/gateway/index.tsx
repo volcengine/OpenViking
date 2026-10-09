@@ -2,6 +2,6 @@ import { createFileRoute } from '@tanstack/react-router'
 
 import { OverviewPage } from './-components/overview-page'
 
-export const Route = createFileRoute('/context-gateway/')({
+export const Route = createFileRoute('/gateway/')({
   component: OverviewPage,
 })

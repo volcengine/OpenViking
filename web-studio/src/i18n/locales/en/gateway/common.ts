@@ -1,13 +1,13 @@
 const common = {
-  title: 'Context Gateway',
+  title: 'OpenViking Gateway',
   description:
     'Give any API-key model client OpenViking memory. Point the client at the gateway, and it adds relevant memory to each new message and saves conversations back to OpenViking.',
   beta: {
     label: 'Beta',
-    hint: 'Beta: Context Gateway is still evolving; later releases may change its settings and APIs.',
+    hint: 'Beta: OpenViking Gateway is still evolving; later releases may change its settings and APIs.',
   },
   tabs: {
-    label: 'Context Gateway sections',
+    label: 'OpenViking Gateway sections',
     overview: 'Overview',
     upstreams: 'Upstreams',
     profiles: 'Profiles',
@@ -48,14 +48,14 @@ const common = {
   access: {
     title: 'Account administrator access required',
     description:
-      'Managing the Context Gateway needs an account administrator or root key for this account. Add one in Connection settings.',
+      'Managing the OpenViking Gateway needs an account administrator or root key for this account. Add one in Connection settings.',
     action: 'Open connection settings',
   },
   unavailable: {
     notEnabled: {
-      title: 'The Context Gateway is turned off',
+      title: 'The OpenViking Gateway is turned off',
       description:
-        'This OpenViking server has the Context Gateway turned off. Turn it on in ov.conf, restart OpenViking, then start the gateway.',
+        'This server has the OpenViking Gateway turned off. Turn it on in ov.conf, restart OpenViking, then start the gateway.',
     },
     tokenMissing: {
       title: 'The management token is missing',
@@ -68,9 +68,9 @@ const common = {
         'OpenViking and the gateway were started with different management tokens, so the gateway turns OpenViking away. Set this environment variable to the same value for both, then restart them.',
     },
     unsupported: {
-      title: "This OpenViking server can't manage a Context Gateway",
+      title: "This OpenViking server can't manage an OpenViking Gateway",
       description:
-        'Studio is connected to an OpenViking server without Context Gateway support. Upgrade OpenViking Server, restart it, then retry.',
+        'Studio is connected to an OpenViking server without gateway support. Upgrade OpenViking Server, restart it, then retry.',
     },
     devMode: {
       title: 'OpenViking runs in development mode',
@@ -80,10 +80,10 @@ const common = {
     unreachable: {
       title: "OpenViking can't reach the gateway",
       description:
-        'The gateway is not running, or context_gateway.url in ov.conf points to the wrong address. Start the gateway and check that OpenViking can reach that address.',
+        'The gateway is not running, or gateway.url in ov.conf points to the wrong address. Start the gateway and check that OpenViking can reach that address.',
     },
     failed: {
-      title: "Couldn't load the Context Gateway",
+      title: "Couldn't load the OpenViking Gateway",
     },
     fixLabel: 'What to change',
     terminal: 'Terminal',
@@ -92,14 +92,14 @@ const common = {
   },
   errors: {
     reasons: {
-      not_enabled: 'The Context Gateway is turned off on this server.',
+      not_enabled: 'The OpenViking Gateway is turned off on this server.',
       token_missing:
         "OpenViking can't manage the gateway because the management token isn't set.",
       token_mismatch:
         "The gateway rejected OpenViking's management token. Both must use the same token.",
-      unreachable: "OpenViking can't reach the Context Gateway.",
+      unreachable: "OpenViking can't reach the gateway.",
       unsupported:
-        "This OpenViking server doesn't support the Context Gateway.",
+        "This OpenViking server doesn't support the OpenViking Gateway.",
       conflict: 'This change conflicts with existing settings.',
       invalid:
         'The gateway rejected these settings. Check the values and try again.',

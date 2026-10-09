@@ -85,7 +85,7 @@ export function UpstreamTest({
   variant = 'row',
   note,
 }: UpstreamTestProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection } = useGateway()
   const test = useMutation<UpstreamTestResult, unknown>({
     mutationFn: () => testUpstream(connection, upstream.id),
@@ -155,7 +155,7 @@ export function DeleteUpstreamButton({
   usedBy,
   onClick,
 }: DeleteUpstreamButtonProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const blocked = Boolean(usedBy)
   return (
     <ExplainedButton
@@ -187,7 +187,7 @@ export function DeleteUpstreamDialog({
   onOpenChange,
   onDeleted,
 }: DeleteUpstreamDialogProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, invalidate } = useGateway()
   const remove = useMutation({
     mutationFn: (target: Upstream) => deleteUpstream(connection, target.id),

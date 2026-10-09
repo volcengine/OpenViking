@@ -94,7 +94,7 @@ function ProfileCard({
   tools: GatewayTool[] | undefined
   onDelete: () => void
 }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const summary = summarize(t, profile, tools, i18n.resolvedLanguage)
   const inUse = Boolean(usedBy)
   const deleteHint = inUse
@@ -106,7 +106,7 @@ function ProfileCard({
       <CardHeader className="border-b px-5 py-4 [.border-b]:pb-4">
         <CardTitle className="min-w-0 truncate">
           <Link
-            to="/context-gateway/profiles/$profileId"
+            to="/gateway/profiles/$profileId"
             params={{ profileId: profile.id }}
             title={profile.name}
             className="rounded-sm hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
@@ -152,7 +152,7 @@ function ProfileCard({
             nativeButton={false}
             render={
               <Link
-                to="/context-gateway/profiles/$profileId"
+                to="/gateway/profiles/$profileId"
                 params={{ profileId: profile.id }}
               />
             }
@@ -167,7 +167,7 @@ function ProfileCard({
             nativeButton={false}
             render={
               <Link
-                to="/context-gateway/profiles/$profileId"
+                to="/gateway/profiles/$profileId"
                 params={{ profileId: NEW_ID }}
                 search={{ from: profile.id }}
               />
@@ -196,7 +196,7 @@ function ProfileCard({
 
 /** Context profiles: recall, saving, long conversations and tools. */
 export function ProfilesPage() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, invalidate } = useGateway()
   const profiles = useProfiles()
   const keys = useKeys()
@@ -258,7 +258,7 @@ export function ProfilesPage() {
                 nativeButton={false}
                 render={
                   <Link
-                    to="/context-gateway/profiles/$profileId"
+                    to="/gateway/profiles/$profileId"
                     params={{ profileId: NEW_ID }}
                   />
                 }
@@ -310,7 +310,7 @@ export function ProfilesPage() {
               nativeButton={false}
               render={
                 <Link
-                  to="/context-gateway/profiles/$profileId"
+                  to="/gateway/profiles/$profileId"
                   params={{ profileId: NEW_ID }}
                 />
               }

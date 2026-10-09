@@ -19,7 +19,7 @@ export type RequestsSearch = { filter?: RequestsFilter }
 
 const REQUESTS_FILTERS: RequestsFilter[] = ['messages', 'tools', 'issues']
 
-/** `/context-gateway/requests?filter=issues`. */
+/** `/gateway/requests?filter=issues`. */
 export function parseRequestsSearch(
   search: Record<string, unknown>,
 ): RequestsSearch {
@@ -44,7 +44,7 @@ export function parseProfileEditorSearch(
 export type ConnectSearch = { client?: ClientId; protocol?: Protocol }
 
 /**
- * `/context-gateway/connect?client=pi&protocol=anthropic`. The page checks
+ * `/gateway/connect?client=pi&protocol=anthropic`. The page checks
  * that the client supports the protocol.
  */
 export function parseConnectSearch(

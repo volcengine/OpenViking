@@ -6,11 +6,11 @@ import time
 import pytest
 from conftest import make_due, replay_records
 
-from context_gateway.capture import MAX_ATTEMPTS, CaptureWorker
-from context_gateway.client import VikingError
-from context_gateway.protocols import plugin_present
-from context_gateway.storage import ManagementStore, SQLiteKernelStore
-from context_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.capture import MAX_ATTEMPTS, CaptureWorker
+from openviking_gateway.client import VikingError
+from openviking_gateway.protocols import plugin_present
+from openviking_gateway.storage import ManagementStore, SQLiteKernelStore
+from openviking_gateway.tool_protocols import ResponseCapture
 
 
 async def prepare(kernel, credential, policy, messages, **body):
@@ -322,7 +322,7 @@ async def test_hot_read_ignores_unrelated_operational_documents(
 
 async def test_conditional_budget_is_atomic_across_stores(setup_kernel, credential, policy):
     kernel, store, viking, encryption = setup_kernel
-    from context_gateway.kernel import MemoryKernel
+    from openviking_gateway.kernel import MemoryKernel
 
     other = MemoryKernel(SQLiteKernelStore(store.path, encryption), viking)
     policy.update(session_max_tokens=160, capture=False)
@@ -342,8 +342,8 @@ async def test_conditional_budget_is_atomic_across_stores(setup_kernel, credenti
             for i, messages in enumerate(branches)
         )
     )
-    from context_gateway.protocols import prefix_chain
-    from context_gateway.storage import digest
+    from openviking_gateway.protocols import prefix_chain
+    from openviking_gateway.storage import digest
 
     anchors = [prefix_chain(messages)[-1] for messages in branches]
     records = await store.replay.read(digest("tenant\0alice\0chat"), digest("review"), anchors)

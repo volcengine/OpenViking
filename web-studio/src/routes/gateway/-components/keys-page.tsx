@@ -67,7 +67,7 @@ type Missing = 'upstream' | 'profile' | 'both'
 
 /** Issue and revoke gateway keys. */
 export function KeysPage() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, invalidate } = useGateway()
   const keysQuery = useKeys()
   const profilesQuery = useProfiles()
@@ -201,7 +201,7 @@ export function KeysPage() {
                       nativeButton={false}
                       render={
                         <Link
-                          to="/context-gateway/upstreams/$upstreamId"
+                          to="/gateway/upstreams/$upstreamId"
                           params={{ upstreamId: NEW_ID }}
                         />
                       }
@@ -217,7 +217,7 @@ export function KeysPage() {
                       nativeButton={false}
                       render={
                         <Link
-                          to="/context-gateway/profiles/$profileId"
+                          to="/gateway/profiles/$profileId"
                           params={{ profileId: NEW_ID }}
                         />
                       }
@@ -344,7 +344,7 @@ function IssueButton({
   reason?: string
   onClick: () => void
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <ExplainedButton
       type="button"
@@ -369,7 +369,7 @@ function ChipList<T>({
   render: (item: T) => React.ReactNode
   label: (item: T) => string
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const shown = items.slice(0, CHIP_LIMIT)
   const rest = items.slice(CHIP_LIMIT)
   return (
@@ -402,7 +402,7 @@ function KeyRow({
   onRevoke: () => void
   onDeleteUser: () => void
 }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const profile = profiles?.find((item) => item.id === key.policy_id)
 
@@ -435,7 +435,7 @@ function KeyRow({
       <TableCell className={DESKTOP_ONLY}>
         {profile ? (
           <Link
-            to="/context-gateway/profiles/$profileId"
+            to="/gateway/profiles/$profileId"
             params={{ profileId: profile.id }}
             className="block max-w-48 truncate underline-offset-4 hover:underline"
             title={profile.name}

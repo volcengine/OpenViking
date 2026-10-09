@@ -5,10 +5,10 @@ import pytest
 from aiohttp import web
 from test_app import completion, enable_tools
 
-from context_gateway.models import Upstream
-from context_gateway.protocols import replays_reasoning
-from context_gateway.records import RecordKind as K
-from context_gateway.tool_protocols import ResponseCapture, hidden_chain
+from openviking_gateway.models import Upstream
+from openviking_gateway.protocols import replays_reasoning
+from openviking_gateway.records import RecordKind as K
+from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain
 
 QUESTION = {"role": "user", "content": "How do I deploy?"}
 FOLLOW_UP = {"role": "user", "content": "And then?"}
@@ -333,7 +333,7 @@ async def test_responses_hidden_rounds_replay_when_the_client_drops_reasoning(
 ):
     from types import SimpleNamespace
 
-    from context_gateway.tool_loop import HiddenToolLoop
+    from openviking_gateway.tool_loop import HiddenToolLoop
 
     kernel, store, _, _ = setup_kernel
     policy.update(gateway_tools=True, recall=False, profile=False, capture=False)

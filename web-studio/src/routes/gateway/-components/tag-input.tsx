@@ -41,7 +41,7 @@ export function TagInput({
   disabled,
   ...aria
 }: TagInputProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const [text, setText] = React.useState('')
 
   function add(items: string[]) {

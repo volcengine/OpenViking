@@ -68,7 +68,7 @@ const SESSION = 'a'.repeat(64)
 
 const UPSTREAMS = [{ id: 'u1', name: 'OpenAI production' }] as Upstream[]
 const KEYS = [
-  { id: 'k1', name: 'Laptop', prefix: 'ovcg_Ab3dE9x' },
+  { id: 'k1', name: 'Laptop', prefix: 'ovgw_Ab3dE9x' },
 ] as GatewayKey[]
 
 const RECORDS: LogRecord[] = [
@@ -134,19 +134,19 @@ const RECORDS: LogRecord[] = [
   },
 ]
 
-function renderPage(path = '/context-gateway/requests') {
+function renderPage(path = '/gateway/requests') {
   const root = createRootRoute({ component: Outlet })
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/requests',
+        path: '/gateway/requests',
         validateSearch: parseRequestsSearch,
         component: RequestsPage,
       }),
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/connect',
+        path: '/gateway/connect',
       }),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
@@ -244,7 +244,7 @@ describe('RequestsPage', () => {
   })
 
   it('opens the issues view from the URL and switches views', async () => {
-    const router = renderPage('/context-gateway/requests?filter=issues')
+    const router = renderPage('/gateway/requests?filter=issues')
     expect(await screen.findByText('deepseek-chat')).toBeTruthy()
     expect(screen.getByText('claude-sonnet')).toBeTruthy()
     expect(screen.getByText('Paused')).toBeTruthy()
@@ -267,7 +267,7 @@ describe('RequestsPage', () => {
   })
 
   it('filters by request type and leaves a conflicting view', async () => {
-    const router = renderPage('/context-gateway/requests?filter=messages')
+    const router = renderPage('/gateway/requests?filter=messages')
     await screen.findByText('gpt-5')
     fireEvent.click(screen.getByRole('combobox', { name: 'Request type' }))
     const option = await screen.findByRole('option', { name: 'Memory sync' })
@@ -461,8 +461,6 @@ describe('RequestsPage', () => {
     renderPage()
     expect(await screen.findByText('No requests yet')).toBeTruthy()
     const connect = screen.getByRole('button', { name: 'Connect a client' })
-    expect(connect.closest('a')?.getAttribute('href')).toBe(
-      '/context-gateway/connect',
-    )
+    expect(connect.closest('a')?.getAttribute('href')).toBe('/gateway/connect')
   })
 })

@@ -30,7 +30,7 @@ import {
 import { UPSTREAM_FIELD_LABELS, UpstreamForm } from './upstreams-form'
 import type { UpstreamField } from './upstreams-form'
 
-const route = getRouteApi('/context-gateway/upstreams/$upstreamId')
+const route = getRouteApi('/gateway/upstreams/$upstreamId')
 
 /** Create (`$upstreamId` = `new`) or edit an upstream. */
 export function UpstreamEditorPage() {
@@ -40,7 +40,7 @@ export function UpstreamEditorPage() {
 
 /** Loads the upstream (unless creating one) and shows the editor or a state. */
 export function UpstreamEditor({ upstreamId }: { upstreamId: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const isNew = upstreamId === NEW_ID
   const upstreams = useUpstreams({ enabled: !isNew })
   const keys = useKeys({ enabled: !isNew })
@@ -77,7 +77,7 @@ export function UpstreamEditor({ upstreamId }: { upstreamId: string }) {
         description={t('upstreams.editor.notFound.description')}
         action={
           <Button
-            render={<Link to="/context-gateway/upstreams" />}
+            render={<Link to="/gateway/upstreams" />}
             nativeButton={false}
             variant="outline"
             size="sm"
@@ -91,10 +91,7 @@ export function UpstreamEditor({ upstreamId }: { upstreamId: string }) {
   }
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
-      <BackLink
-        to="/context-gateway/upstreams"
-        label={t('upstreams.editor.back')}
-      />
+      <BackLink to="/gateway/upstreams" label={t('upstreams.editor.back')} />
       <Card className="py-0">{state}</Card>
     </div>
   )
@@ -118,7 +115,7 @@ type UpstreamEditorFormProps = {
 }
 
 function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const navigate = useNavigate()
   const { connection, invalidate } = useGateway()
   const [id] = React.useState(() => stored?.id ?? newObjectId())
@@ -183,7 +180,7 @@ function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
         }),
       )
       await invalidate('upstreams')
-      await navigate({ to: '/context-gateway/upstreams' })
+      await navigate({ to: '/gateway/upstreams' })
     },
     onError: (error) => toast.error(gatewayErrorMessage(t, error)),
   })
@@ -210,7 +207,7 @@ function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
         <SectionHeader
           back={
             <BackLink
-              to="/context-gateway/upstreams"
+              to="/gateway/upstreams"
               label={t('upstreams.editor.back')}
             />
           }
@@ -252,7 +249,7 @@ function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
               ? t('upstreams.editor.missing', { fields: missing })
               : undefined
           }
-          cancelTo="/context-gateway/upstreams"
+          cancelTo="/gateway/upstreams"
           saveLabel={t(stored ? 'actions.save' : 'upstreams.editor.create')}
           saving={save.isPending}
           disabled={!canSave}
@@ -263,7 +260,7 @@ function UpstreamEditorForm({ stored, usedBy }: UpstreamEditorFormProps) {
         onOpenChange={(open) => {
           if (!open) setDeleting(null)
         }}
-        onDeleted={() => void navigate({ to: '/context-gateway/upstreams' })}
+        onDeleted={() => void navigate({ to: '/gateway/upstreams' })}
       />
     </>
   )

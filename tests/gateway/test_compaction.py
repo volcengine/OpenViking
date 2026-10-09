@@ -9,9 +9,9 @@ from aiohttp import web
 from conftest import make_due, replay_records
 from test_review_regressions import worker_for
 
-from context_gateway.blocks import block, history_hint
-from context_gateway.client import VikingClient
-from context_gateway.compaction import (
+from openviking_gateway.blocks import block, history_hint
+from openviking_gateway.client import VikingClient
+from openviking_gateway.compaction import (
     HEADER,
     IN_PROGRESS,
     INSTRUCTION,
@@ -20,10 +20,10 @@ from context_gateway.compaction import (
     estimate,
     opening_block,
 )
-from context_gateway.protocols import text_content, usage_of
-from context_gateway.state_store import get_state
-from context_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
-from context_gateway.tool_protocols.common import SUMMARY_HEADROOM, SummaryError
+from openviking_gateway.protocols import text_content, usage_of
+from openviking_gateway.state_store import get_state
+from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
+from openviking_gateway.tool_protocols.common import SUMMARY_HEADROOM, SummaryError
 
 FIELD = {"chat": "messages", "anthropic": "messages", "responses": "input"}
 INSTRUCTION_START = INSTRUCTION[:40]

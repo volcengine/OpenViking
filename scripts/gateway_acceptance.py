@@ -2,7 +2,7 @@
 """Opt-in live protocol/cache acceptance using explicit gateway credentials.
 
 Reports contain usage and protocol metadata only. Credentials come from the
-OV_CG_TEST_* environment variables and are never printed or written to reports.
+OV_GW_TEST_* environment variables and are never printed or written to reports.
 """
 
 import argparse
@@ -15,8 +15,8 @@ from pathlib import Path
 
 import aiohttp
 
-from context_gateway.protocols import SSEDecoder
-from context_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.protocols import SSEDecoder
+from openviking_gateway.tool_protocols import ResponseCapture
 
 
 def check_cache(turns, block_tokens):
@@ -33,7 +33,7 @@ def check_cache(turns, block_tokens):
 
 async def run(args):
     base, key, model = (
-        os.environ[name] for name in ("OV_CG_TEST_BASE_URL", "OV_CG_TEST_KEY", "OV_CG_TEST_MODEL")
+        os.environ[name] for name in ("OV_GW_TEST_BASE_URL", "OV_GW_TEST_KEY", "OV_GW_TEST_MODEL")
     )
     paths = {
         "anthropic": "/v1/messages",

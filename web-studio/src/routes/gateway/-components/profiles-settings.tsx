@@ -279,7 +279,7 @@ export function ProfileSettingsForm({
   onChange,
   errors,
 }: ProfileSettingsFormProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const tools = useTools({ enabled: value.gateway_tools })
   const locale = i18n.resolvedLanguage
   // Limits the admin turned off, restored if they turn the limit back on.

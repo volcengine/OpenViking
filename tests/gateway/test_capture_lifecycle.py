@@ -8,12 +8,12 @@ import pytest
 from conftest import make_due, replay_records, update_capture
 from test_review_regressions import history, prepare, worker_for
 
-from context_gateway.capture import reset_capture
-from context_gateway.capture_store import Document
-from context_gateway.client import VikingClient, VikingError
-from context_gateway.kernel import THINKING
-from context_gateway.storage import digest
-from context_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.capture import reset_capture
+from openviking_gateway.capture_store import Document
+from openviking_gateway.client import VikingClient, VikingError
+from openviking_gateway.kernel import THINKING
+from openviking_gateway.storage import digest
+from openviking_gateway.tool_protocols import ResponseCapture
 
 
 @pytest.mark.parametrize("terminal", ["completed", "failed"])
@@ -253,11 +253,11 @@ async def test_archive_state_uses_server_terminal_markers(marker, expected):
 
 
 def test_missing_optional_dependencies_explain_install(monkeypatch):
-    from context_gateway import cli
+    from openviking_gateway import cli
 
-    monkeypatch.setattr("sys.argv", ["openviking-context-gateway"])
+    monkeypatch.setattr("sys.argv", ["openviking-gateway"])
     monkeypatch.setattr(cli, "find_spec", lambda _: None)
-    with pytest.raises(SystemExit, match=r"openviking\[context-gateway\]"):
+    with pytest.raises(SystemExit, match=r"openviking\[gateway\]"):
         cli.main()
 
 

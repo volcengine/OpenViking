@@ -8,8 +8,8 @@ import statistics
 import time
 from collections import defaultdict
 
-from context_gateway.proxy import ProxyRequest
-from context_gateway.storage import Database
+from openviking_gateway.proxy import ProxyRequest
+from openviking_gateway.storage import Database
 
 
 def summary(values):

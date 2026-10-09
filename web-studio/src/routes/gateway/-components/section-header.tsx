@@ -60,9 +60,7 @@ export function SectionHeader({
 }
 
 /** List page an editor returns to. */
-export type EditorListPath =
-  | '/context-gateway/upstreams'
-  | '/context-gateway/profiles'
+export type EditorListPath = '/gateway/upstreams' | '/gateway/profiles'
 
 /** Small "← Upstreams" link above an editor's title. */
 export function BackLink({ to, label }: { to: EditorListPath; label: string }) {

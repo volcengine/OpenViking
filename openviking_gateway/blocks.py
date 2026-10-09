@@ -53,7 +53,7 @@ def gateway_note(policy, tools):
     if not (policy.recall or tools):
         return ""
     lines = [
-        "The OpenViking Context Gateway, a proxy between the client and the model, added this "
+        "The OpenViking Gateway, a proxy between the client and the model, added this "
         "block. The user did not write it, and the client does not show it."
     ]
     if policy.recall:

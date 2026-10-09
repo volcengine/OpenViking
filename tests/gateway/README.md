@@ -1,28 +1,28 @@
-# Context Gateway tests
+# OpenViking Gateway tests
 
-Tests for `context_gateway`. They need no vector engine, model SDK, OpenViking
+Tests for `openviking_gateway`. They need no vector engine, model SDK, OpenViking
 Server or network access beyond localhost: OpenViking and the model upstreams are faked in
 process. For what the gateway does and how to deploy it, see the user guides
-[Context Gateway](../../docs/en/guides/15-context-gateway.md) and
-[Context Gateway deployment and operations](../../docs/en/guides/22-context-gateway-operations.md).
+[OpenViking Gateway](../../docs/en/guides/15-gateway.md) and
+[OpenViking Gateway deployment and operations](../../docs/en/guides/22-gateway-operations.md).
 
 ## Run the suite
 
 Install the gateway extra and the test dependencies in your development environment:
 
 ```bash
-pip install -e ".[context-gateway,test]"
+pip install -e ".[gateway,test]"
 ```
 
 Run from the repository root:
 
 ```bash
-PYTHONPATH=. pytest tests/context_gateway --confcutdir=tests/context_gateway -o addopts=''
+PYTHONPATH=. pytest tests/gateway --confcutdir=tests/gateway -o addopts=''
 ```
 
 `--confcutdir` keeps pytest from loading `tests/conftest.py`, which needs the full OpenViking
 service, and `-o addopts=''` drops the repository-wide coverage options. Select a single file or
-test as usual, for example `tests/context_gateway/test_kernel.py::<test_name>`.
+test as usual, for example `tests/gateway/test_kernel.py::<test_name>`.
 
 `fixtures/` holds sanitized requests recorded from real clients; see
 [fixtures/README.md](fixtures/README.md) before updating them.
@@ -66,7 +66,7 @@ Those remain live acceptance items, and should be reported separately from proto
 
 ## Live acceptance check
 
-`scripts/context_gateway_acceptance.py` sends a three-turn conversation through a running
+`scripts/gateway_acceptance.py` sends a three-turn conversation through a running
 gateway to a real model provider, using one protocol per run. Each turn must return 200 and a
 complete response. The script prints one JSON line per turn with usage and timing, and never
 prints credentials or response bodies. It spends real tokens.
@@ -76,12 +76,12 @@ connection through environment variables:
 
 | Variable | Value |
 | --- | --- |
-| `OV_CG_TEST_BASE_URL` | Gateway origin without `/v1`, for example `http://127.0.0.1:1935` |
-| `OV_CG_TEST_KEY` | Gateway key (`ovcg_…`) |
-| `OV_CG_TEST_MODEL` | A model name the key allows |
+| `OV_GW_TEST_BASE_URL` | Gateway origin without `/v1`, for example `http://127.0.0.1:1935` |
+| `OV_GW_TEST_KEY` | Gateway key (`ovgw_…`) |
+| `OV_GW_TEST_MODEL` | A model name the key allows |
 
 ```bash
-PYTHONPATH=. python scripts/context_gateway_acceptance.py --protocol chat --require-cache
+PYTHONPATH=. python scripts/gateway_acceptance.py --protocol chat --require-cache
 ```
 
 | Flag | Default | Meaning |
@@ -103,7 +103,7 @@ conversation. Keep report files and credentials out of the repository.
 
 ## Local benchmark
 
-`scripts/context_gateway_benchmark.py` measures gateway overhead on one machine. It starts a
+`scripts/gateway_benchmark.py` measures gateway overhead on one machine. It starts a
 synthetic streaming upstream and the gateway in one process with temporary storage, and needs
 no OpenViking Server, provider or credentials. Recall and saving are off, so the numbers cover
 parsing, replay, transport and bookkeeping. The JSON report gives p50/p95 milliseconds for:
@@ -115,8 +115,8 @@ parsing, replay, transport and bookkeeping. The JSON report gives p50/p95 millis
   requests, straight to the synthetic upstream and through the gateway.
 
 ```bash
-PYTHONPATH=. python scripts/context_gateway_benchmark.py --concurrency 300
-PYTHONPATH=. python scripts/context_gateway_benchmark.py --concurrency 300 --profile --output bench.json
+PYTHONPATH=. python scripts/gateway_benchmark.py --concurrency 300
+PYTHONPATH=. python scripts/gateway_benchmark.py --concurrency 300 --profile --output bench.json
 ```
 
 | Flag | Default | Meaning |
@@ -125,6 +125,6 @@ PYTHONPATH=. python scripts/context_gateway_benchmark.py --concurrency 300 --pro
 | `--profile` | off | Instrument the warmed gateway burst and add a `profile` section: executor wait, work time and event-loop resume per storage call and request phase, plus the top cProfile entries |
 | `--output PATH` | none | Also write the report to a file |
 
-`--profile` relies on `scripts/context_gateway_profile.py` and slows the burst, so compare
+`--profile` relies on `scripts/gateway_profile.py` and slows the burst, so compare
 timings from runs without it. Compare results only between runs on the same machine and Python
 version.

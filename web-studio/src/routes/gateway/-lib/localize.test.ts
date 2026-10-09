@@ -1,8 +1,8 @@
 import i18next from 'i18next'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import en from '#/i18n/locales/en/context-gateway'
-import zh from '#/i18n/locales/zh-CN/context-gateway'
+import en from '#/i18n/locales/en/gateway'
+import zh from '#/i18n/locales/zh-CN/gateway'
 
 import { GatewayError } from './api'
 import {
@@ -27,16 +27,16 @@ beforeAll(async () => {
   const instance = i18next.createInstance()
   await instance.init({
     resources: {
-      en: { contextGateway: en },
-      'zh-CN': { contextGateway: zh },
+      en: { gateway: en },
+      'zh-CN': { gateway: zh },
     },
     lng: 'en',
-    ns: ['contextGateway'],
-    defaultNS: 'contextGateway',
+    ns: ['gateway'],
+    defaultNS: 'gateway',
     interpolation: { escapeValue: false },
   })
-  t = instance.getFixedT('en', 'contextGateway')
-  zhT = instance.getFixedT('zh-CN', 'contextGateway')
+  t = instance.getFixedT('en', 'gateway')
+  zhT = instance.getFixedT('zh-CN', 'gateway')
 })
 
 describe('enum labels', () => {
@@ -134,9 +134,9 @@ describe('gatewayErrorMessage', () => {
     expect(
       gatewayErrorMessage(
         t,
-        new GatewayError('Context Gateway is not enabled', 503),
+        new GatewayError('OpenViking Gateway is not enabled', 503),
       ),
-    ).toBe('The Context Gateway is turned off on this server.')
+    ).toBe('The OpenViking Gateway is turned off on this server.')
     expect(gatewayErrorMessage(t, new Error('socket hang up'))).toBe(
       'socket hang up',
     )

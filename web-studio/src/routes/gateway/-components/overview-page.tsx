@@ -58,7 +58,7 @@ function hitRate(stats: CacheStats, locale?: string): string {
 }
 
 function MetricRow({ data }: { data: Overview }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const { first_call: firstCall, continuation } = data.cache
   const icon = 'size-4'
@@ -133,7 +133,7 @@ function MetricRow({ data }: { data: Overview }) {
 
 /** Gateway health, usage and recent requests, with a setup checklist until the first request. */
 export function OverviewPage() {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const { scope, invalidate } = useGateway()
   const overview = useOverview()

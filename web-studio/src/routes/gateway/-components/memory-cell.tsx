@@ -49,7 +49,7 @@ export function MemoryCell({
   record: LogRecord
   hideEmpty?: boolean
 }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const recalled = record.recall_count ?? 0
   const replayed = record.replay_hits ?? 0

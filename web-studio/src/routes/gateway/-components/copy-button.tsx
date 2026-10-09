@@ -26,7 +26,7 @@ export function CopyButton({
   size = 'icon-xs',
   className,
 }: CopyButtonProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const [copied, setCopied] = React.useState(false)
   const name = label ?? t('actions.copy')
 

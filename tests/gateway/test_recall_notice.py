@@ -9,14 +9,14 @@ from conftest import replay_records
 from test_app import enable_tools
 from test_native_tools import native_events, native_response, request_body, visible_response
 
-from context_gateway.blocks import gateway_note
-from context_gateway.capture import capture_messages
-from context_gateway.client import VikingError
-from context_gateway.models import Policy
-from context_gateway.notices import RECALL_NOTICE, recall_notice
-from context_gateway.protocols import SSEDecoder
-from context_gateway.tool_protocols import ResponseCapture, tool_protocol
-from context_gateway.tool_protocols.common import merge_delta, sse
+from openviking_gateway.blocks import gateway_note
+from openviking_gateway.capture import capture_messages
+from openviking_gateway.client import VikingError
+from openviking_gateway.models import Policy
+from openviking_gateway.notices import RECALL_NOTICE, recall_notice
+from openviking_gateway.protocols import SSEDecoder
+from openviking_gateway.tool_protocols import ResponseCapture, tool_protocol
+from openviking_gateway.tool_protocols.common import merge_delta, sse
 
 PATHS = {"chat": "/v1/chat/completions", "anthropic": "/v1/messages", "responses": "/v1/responses"}
 # What the test gateway's search returns: one memory without a category.
@@ -234,7 +234,7 @@ def test_capture_drops_recall_lines_from_assistant_text():
 def test_gateway_note_says_what_the_user_sees():
     off = gateway_note(Policy(capture=False), [])
     on = gateway_note(Policy(capture=False, show_recall=True), [])
-    assert off.startswith("The OpenViking Context Gateway") and "summary" not in off
+    assert off.startswith("The OpenViking Gateway") and "summary" not in off
     assert on == off + (
         " The user sees a one-line summary of what was added (counts and names), "
         "not the added text."

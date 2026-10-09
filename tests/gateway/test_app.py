@@ -7,8 +7,8 @@ import pytest
 from aiohttp import web
 from conftest import MCP_TOOLS
 
-from context_gateway.protocols import normalize
-from context_gateway.tool_loop import REFUSED
+from openviking_gateway.protocols import normalize
+from openviking_gateway.tool_loop import REFUSED
 
 
 @pytest.mark.parametrize(
@@ -386,15 +386,15 @@ async def test_hidden_tools_mixed_replay_and_usage(running_gateway, streaming, m
     response = await client.post("/v1/chat/completions", headers=headers, json=body)
     assert response.status_code == 200, response.text
     assert "openviking_find" not in response.text
-    from context_gateway.storage import digest
+    from openviking_gateway.storage import digest
 
     sid = digest("tool-session")
     stored = await app.state.store.state.read(digest("tenant\0alice\0chat"), [sid])
     assert stored[sid].value["usage"]["input_tokens"] == 100
     assert len(calls) == 1 and len(model_requests) == (1 if mixed else 2)
     if streaming:
-        from context_gateway.protocols import SSEDecoder
-        from context_gateway.tool_protocols.common import merge_delta
+        from openviking_gateway.protocols import SSEDecoder
+        from openviking_gateway.tool_protocols.common import merge_delta
 
         visible = {"role": "assistant", "content": ""}
         events = [SSEDecoder.data(f) for f in SSEDecoder().feed(response.content)]
@@ -697,14 +697,14 @@ async def test_attachment_import_and_signed_upload_proxy(running_gateway, name):
     assert "viking://resources/imported" in model_requests[1]["messages"][-1]["content"]
     # The token is the sole upload authorization, and the destination is fixed.
     response = await client.post(
-        "/context-gateway/uploads?token=signed-once&url=http://attacker",
+        "/gateway/uploads?token=signed-once&url=http://attacker",
         files={"file": ("notes.txt", b"upload")},
         headers={"Authorization": "Bearer not-forwarded"},
     )
     assert response.status_code == 200, response.text
     assert uploads[-1] == ("file", "notes.txt", b"upload")
     assert (
-        await client.post("/context-gateway/uploads", files={"file": ("x.txt", b"x")})
+        await client.post("/gateway/uploads", files={"file": ("x.txt", b"x")})
     ).status_code == 400
 
 
@@ -749,7 +749,7 @@ async def test_shell_upload_instructions_use_public_proxy(running_gateway):
                     )
                 )
             result = payload["messages"][-1]["content"]
-            assert "https://gateway.example/context-gateway/uploads?token=opaque%2Btoken" in result
+            assert "https://gateway.example/gateway/uploads?token=opaque%2Btoken" in result
             assert "private-ov" not in result and "user-key" not in result
             return web.json_response(
                 completion(

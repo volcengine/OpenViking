@@ -61,7 +61,7 @@ it('scopes data by server, account and a hash of the admin key', () => {
   expect(scope.slice(0, 2)).toEqual(['https://ov.example.com', 'acme'])
   expect(scope[2]).not.toContain('admin-key')
   expect(gatewayQueryKey(scope, 'logs', 50)).toEqual([
-    'context-gateway',
+    'gateway',
     scope,
     'logs',
     50,

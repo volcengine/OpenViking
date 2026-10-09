@@ -16,10 +16,7 @@ import { routeTree } from '#/routeTree.gen'
 
 import { GatewayError } from './-lib/api'
 import type * as Api from './-lib/api'
-import {
-  ContextGatewayLayout,
-  gatewayTabFor,
-} from './-components/gateway-layout'
+import { GatewayLayout, gatewayTabFor } from './-components/gateway-layout'
 
 const state = vi.hoisted(() => ({
   role: 'admin',
@@ -56,17 +53,14 @@ vi.mock('./-lib/api', async (importOriginal) => ({
 
 describe('routes', () => {
   it.each([
-    ['/context-gateway', '/context-gateway/'],
-    ['/context-gateway/upstreams', '/context-gateway/upstreams/'],
-    [
-      '/context-gateway/upstreams/new',
-      '/context-gateway/upstreams/$upstreamId',
-    ],
-    ['/context-gateway/profiles', '/context-gateway/profiles/'],
-    ['/context-gateway/profiles/p1', '/context-gateway/profiles/$profileId'],
-    ['/context-gateway/keys', '/context-gateway/keys'],
-    ['/context-gateway/requests', '/context-gateway/requests'],
-    ['/context-gateway/connect', '/context-gateway/connect'],
+    ['/gateway', '/gateway/'],
+    ['/gateway/upstreams', '/gateway/upstreams/'],
+    ['/gateway/upstreams/new', '/gateway/upstreams/$upstreamId'],
+    ['/gateway/profiles', '/gateway/profiles/'],
+    ['/gateway/profiles/p1', '/gateway/profiles/$profileId'],
+    ['/gateway/keys', '/gateway/keys'],
+    ['/gateway/requests', '/gateway/requests'],
+    ['/gateway/connect', '/gateway/connect'],
   ])('matches %s', (path, routeId) => {
     const router = createRouter({
       routeTree,
@@ -76,12 +70,12 @@ describe('routes', () => {
   })
 
   it.each([
-    ['/context-gateway', 'overview'],
-    ['/context-gateway/', 'overview'],
-    ['/context-gateway/upstreams/new', 'upstreams'],
-    ['/context-gateway/profiles/p1', 'profiles'],
-    ['/context-gateway/requests', 'requests'],
-    ['/context-gateway/unknown', 'overview'],
+    ['/gateway', 'overview'],
+    ['/gateway/', 'overview'],
+    ['/gateway/upstreams/new', 'upstreams'],
+    ['/gateway/profiles/p1', 'profiles'],
+    ['/gateway/requests', 'requests'],
+    ['/gateway/unknown', 'overview'],
   ])('puts %s under the %s tab', (path, tab) => {
     expect(gatewayTabFor(path)).toBe(tab)
   })
@@ -103,12 +97,12 @@ describe('layout gates', () => {
       routeTree: root.addChildren([
         createRoute({
           getParentRoute: () => root,
-          path: '/context-gateway',
-          component: ContextGatewayLayout,
+          path: '/gateway',
+          component: GatewayLayout,
         }),
         createRoute({ getParentRoute: () => root, path: '/settings' }),
       ]),
-      history: createMemoryHistory({ initialEntries: ['/context-gateway'] }),
+      history: createMemoryHistory({ initialEntries: ['/gateway'] }),
     })
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -130,7 +124,7 @@ describe('layout gates', () => {
 
   it('explains how to turn the gateway on', async () => {
     api.getConnectionInfo.mockRejectedValue(
-      new GatewayError('Context Gateway is not enabled', 503),
+      new GatewayError('OpenViking Gateway is not enabled', 503),
     )
     renderLayout()
     expect(await screen.findByText('unavailable.notEnabled.title')).toBeTruthy()

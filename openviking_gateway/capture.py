@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 RECOVERY_SECONDS = 300
 MAX_PREVIOUS = 5
-SOURCE = "context-gateway:"
+SOURCE = "gateway:"
 
 
 def new_capture(reason="", old=None):
     return {
-        "ov_session": "context-gateway-" + uuid.uuid4().hex,
+        "ov_session": "gateway-" + uuid.uuid4().hex,
         "delivered": "",
         "pending": [],
         "retained": [],

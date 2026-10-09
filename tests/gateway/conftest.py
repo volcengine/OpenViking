@@ -11,11 +11,11 @@ import pytest_asyncio
 from aiohttp import web
 from cryptography.fernet import Fernet
 
-from context_gateway.app import create_app
-from context_gateway.config import ContextGatewayConfig
-from context_gateway.kernel import MemoryKernel
-from context_gateway.models import Policy
-from context_gateway.storage import SQLiteKernelStore
+from openviking_gateway.app import create_app
+from openviking_gateway.config import OpenVikingGatewayConfig
+from openviking_gateway.kernel import MemoryKernel
+from openviking_gateway.models import Policy
+from openviking_gateway.storage import SQLiteKernelStore
 
 
 def mcp_tool(name, properties, required=()):
@@ -163,7 +163,7 @@ async def replay_records(store, request, kind):
 
 
 async def update_capture(store, request, **changes):
-    from context_gateway.capture import ready_at
+    from openviking_gateway.capture import ready_at
 
     old = await store.capture.get(request.scope, request.session)
     value = {**old.value, **changes}
@@ -172,7 +172,7 @@ async def update_capture(store, request, **changes):
 
 
 async def make_due(store):
-    from context_gateway.capture import ready_at
+    from openviking_gateway.capture import ready_at
 
     with store.connect() as c:
         keys = list(c.execute("SELECT scope,session FROM capture"))
@@ -318,9 +318,9 @@ async def running_gateway(tmp_path, monkeypatch):
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
-    monkeypatch.setenv("OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    monkeypatch.setenv("OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN", "admin-" + "x" * 32)
-    config = ContextGatewayConfig(enabled=True, storage_path=str(tmp_path), openviking_url=base)
+    monkeypatch.setenv("OPENVIKING_GATEWAY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("OPENVIKING_GATEWAY_ADMIN_TOKEN", "admin-" + "x" * 32)
+    config = OpenVikingGatewayConfig(enabled=True, storage_path=str(tmp_path), openviking_url=base)
     app = create_app(config)
     app.state.test_backend = override
     async with app.router.lifespan_context(app):

@@ -56,7 +56,7 @@ type RecentRequestsProps = {
 
 /** The newest model requests in a compact table, with a link to all. */
 export function RecentRequests({ logs, error }: RecentRequestsProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
 
   let body: React.ReactNode
@@ -155,7 +155,7 @@ export function RecentRequests({ logs, error }: RecentRequestsProps) {
             size="sm"
             variant="ghost"
             nativeButton={false}
-            render={<Link to="/context-gateway/requests" />}
+            render={<Link to="/gateway/requests" />}
           >
             {t('actions.viewAll')}
             <ArrowRightIcon />

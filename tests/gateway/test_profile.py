@@ -5,9 +5,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from conftest import FakeViking
 
-from context_gateway.client import VikingError
-from context_gateway.models import Policy
-from context_gateway.profile import build_profile, elide_profile, estimate_tokens
+from openviking_gateway.client import VikingError
+from openviking_gateway.models import Policy
+from openviking_gateway.profile import build_profile, elide_profile, estimate_tokens
 
 
 def tools(*names):

@@ -59,15 +59,15 @@ export function gatewayScope(
   return [baseUrl, accountId, adminApiKey ? hashSecret(adminApiKey) : 'none']
 }
 
-/** Query key `['context-gateway', scope, resource, ...params]`. */
+/** Query key `['gateway', scope, resource, ...params]`. */
 export function gatewayQueryKey(
   scope: GatewayScope,
   resource?: GatewayResource,
   ...params: unknown[]
 ) {
   return resource
-    ? (['context-gateway', scope, resource, ...params] as const)
-    : (['context-gateway', scope] as const)
+    ? (['gateway', scope, resource, ...params] as const)
+    : (['gateway', scope] as const)
 }
 
 /**

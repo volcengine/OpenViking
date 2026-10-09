@@ -192,7 +192,7 @@ class ToolProtocol(ABC):
 
     def __init__(self, body: dict):
         self.body = body
-        self.identifier = self.id_prefix + "ovcg-" + uuid.uuid4().hex
+        self.identifier = self.id_prefix + "ovgw-" + uuid.uuid4().hex
         self.visible: list[dict] = []
         self.started = False
         # Text the reply starts with, shown before any upstream content.

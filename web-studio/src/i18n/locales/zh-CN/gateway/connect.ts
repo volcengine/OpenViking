@@ -11,14 +11,14 @@ const connect = {
     loopback: {
       title: '只有网关所在的机器能使用这个地址',
       description:
-        '其他机器上的客户端连不上它。请在 `ov.conf` 中把 `context_gateway.public_url` 设为它们能访问的地址，然后重启网关。',
+        '其他机器上的客户端连不上它。请在 `ov.conf` 中把 `gateway.public_url` 设为它们能访问的地址，然后重启网关。',
     },
     notPublic: {
       title: '客户端可能连不上这个地址',
       description:
-        '这是 OpenViking 访问网关用的地址。请在 `ov.conf` 中把 `context_gateway.public_url` 设为客户端应该使用的地址，然后重启网关。',
+        '这是 OpenViking 访问网关用的地址。请在 `ov.conf` 中把 `gateway.public_url` 设为客户端应该使用的地址，然后重启网关。',
     },
-    keys: '客户端用网关密钥（`ovcg_…`）认证，代替服务商的 API Key。',
+    keys: '客户端用网关密钥（`ovgw_…`）认证，代替服务商的 API Key。',
     manageKeys: '管理密钥',
   },
   guide: {

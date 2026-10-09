@@ -79,7 +79,7 @@ export function KeysSecretDialog({
   onDone,
   onClosed,
 }: KeysSecretDialogProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const keyUpstreams = issued
     ? upstreams.filter((upstream) => issued.upstream_ids.includes(upstream.id))
     : []
@@ -205,7 +205,7 @@ export function KeysSecretDialog({
                   nativeButton={false}
                   render={
                     <Link
-                      to="/context-gateway/connect"
+                      to="/gateway/connect"
                       target="_blank"
                       rel="noreferrer"
                     />

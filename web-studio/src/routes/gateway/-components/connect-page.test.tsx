@@ -110,23 +110,23 @@ const UPSTREAMS = [
   }),
 ]
 
-function renderPage(path = '/context-gateway/connect') {
+function renderPage(path = '/gateway/connect') {
   const root = createRootRoute({ component: Outlet })
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/connect',
+        path: '/gateway/connect',
         validateSearch: parseConnectSearch,
         component: ConnectPage,
       }),
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/keys',
+        path: '/gateway/keys',
       }),
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/upstreams/$upstreamId',
+        path: '/gateway/upstreams/$upstreamId',
       }),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
@@ -191,7 +191,7 @@ describe('ConnectPage', () => {
     expect(await screen.findByText('https://gw.example.com')).toBeTruthy()
     expect(screen.getByText('https://gw.example.com/v1')).toBeTruthy()
     expect(screen.queryByText(/public_url/)).toBeNull()
-    expect(linkTo('Manage keys')).toBe('/context-gateway/keys')
+    expect(linkTo('Manage keys')).toBe('/gateway/keys')
     expect(linkTo('Full guide')).toBe(gatewayDocsUrl('guide', 'en'))
   })
 
@@ -210,7 +210,7 @@ describe('ConnectPage', () => {
     api.getConnectionInfo.mockResolvedValue(info)
     renderPage()
     expect(await screen.findByText(title)).toBeTruthy()
-    expect(screen.getAllByText('context_gateway.public_url')).toHaveLength(1)
+    expect(screen.getAllByText('gateway.public_url')).toHaveLength(1)
   })
 
   it('starts with Claude Code and warns when no enabled upstream speaks its protocol', async () => {
@@ -228,7 +228,7 @@ describe('ConnectPage', () => {
     expect(
       await screen.findByText('Add an upstream for Anthropic Messages first'),
     ).toBeTruthy()
-    expect(linkTo('Add upstream')).toBe('/context-gateway/upstreams/new')
+    expect(linkTo('Add upstream')).toBe('/gateway/upstreams/new')
     expect(
       clientNav()
         .getByRole('link', { name: /Claude Code/ })
@@ -240,7 +240,7 @@ describe('ConnectPage', () => {
   })
 
   it('opens the client named in the URL', async () => {
-    renderPage('/context-gateway/connect?client=codex')
+    renderPage('/gateway/connect?client=codex')
     expect(
       await screen.findByRole('heading', { name: 'Codex CLI' }),
     ).toBeTruthy()
@@ -257,7 +257,7 @@ describe('ConnectPage', () => {
   })
 
   it('falls back to Claude Code for an unknown client', async () => {
-    renderPage('/context-gateway/connect?client=cursor')
+    renderPage('/gateway/connect?client=cursor')
     expect(
       await screen.findByRole('heading', { name: 'Claude Code' }),
     ).toBeTruthy()
@@ -277,9 +277,7 @@ describe('ConnectPage', () => {
   })
 
   it('switches the snippet and upstream check with the picked protocol', async () => {
-    const router = renderPage(
-      '/context-gateway/connect?client=pi&protocol=anthropic',
-    )
+    const router = renderPage('/gateway/connect?client=pi&protocol=anthropic')
     expect(await screen.findByRole('heading', { name: 'pi' })).toBeTruthy()
     expect(
       await screen.findByText('Add an upstream for Anthropic Messages first'),
@@ -307,7 +305,7 @@ describe('ConnectPage', () => {
 
   it('starts a per-protocol client on a protocol an upstream serves', async () => {
     api.listUpstreams.mockResolvedValue([UPSTREAMS[1]])
-    renderPage('/context-gateway/connect?client=dsh')
+    renderPage('/gateway/connect?client=dsh')
     expect(
       await screen.findByText('Available upstreams: Team Responses'),
     ).toBeTruthy()
@@ -331,7 +329,7 @@ describe('ConnectPage', () => {
         clientNav().getAllByRole('link')[CLIENT_IDS.indexOf(client)],
       )
       await screen.findByRole('heading', {
-        name: i18n.t(`contextGateway:connect.clients.${client}.name`),
+        name: i18n.t(`gateway:connect.clients.${client}.name`),
       })
       expect(document.body.textContent, client).not.toMatch(
         /\b(connect|enums|states)\.[\w.-]+/,

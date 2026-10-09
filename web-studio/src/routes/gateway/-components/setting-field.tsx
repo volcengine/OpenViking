@@ -37,7 +37,7 @@ export function SettingField({
   className,
   children,
 }: SettingFieldProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const hasDefault = Boolean(defaultValue)
   return (
     <Field data-invalid={Boolean(error)} className={cn('gap-2', className)}>

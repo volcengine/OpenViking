@@ -73,7 +73,7 @@ function SectionNav({
   settings: ProfileSettings
   errors: ValidationErrors
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const invalid = sectionsWithErrors(errors)
   return (
     <nav aria-label={t('profiles.editor.sections')} className="hidden lg:block">
@@ -134,7 +134,7 @@ function ProfileEditorForm({
   sourceMissing,
   usedBy,
 }: ProfileEditorFormProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const navigate = useNavigate()
   const { connection, invalidate } = useGateway()
   const isNew = profileId === NEW_ID
@@ -171,7 +171,7 @@ function ProfileEditorForm({
     onSuccess: async (_saved, settings) => {
       toast.success(t('profiles.toast.saved', { name: settings.name }))
       await invalidate('profiles')
-      void navigate({ to: '/context-gateway/profiles' })
+      void navigate({ to: '/gateway/profiles' })
     },
     onError: (error) => toast.error(gatewayErrorMessage(t, error)),
   })
@@ -213,10 +213,7 @@ function ProfileEditorForm({
     <div className="flex w-full min-w-0 flex-col gap-5">
       <SectionHeader
         back={
-          <BackLink
-            to="/context-gateway/profiles"
-            label={t('profiles.editor.back')}
-          />
+          <BackLink to="/gateway/profiles" label={t('profiles.editor.back')} />
         }
         title={isNew || !source ? t('profiles.editor.newTitle') : source.name}
         description={description}
@@ -244,7 +241,7 @@ function ProfileEditorForm({
                 <DropdownMenuItem
                   onClick={() =>
                     void navigate({
-                      to: '/context-gateway/profiles/$profileId',
+                      to: '/gateway/profiles/$profileId',
                       params: { profileId: NEW_ID },
                       search: { from: profileId },
                     })
@@ -304,7 +301,7 @@ function ProfileEditorForm({
         <EditorFooter
           status={status}
           invalid={!valid && !needsNameOnly}
-          cancelTo="/context-gateway/profiles"
+          cancelTo="/gateway/profiles"
           saveLabel={t(isNew ? 'profiles.editor.create' : 'actions.save')}
           saving={save.isPending}
           disabled={!canSave}
@@ -326,17 +323,14 @@ type ProfileEditorProps = {
  * renders the form, or a loading, error or not-found state.
  */
 export function ProfileEditor({ profileId, from }: ProfileEditorProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const isNew = profileId === NEW_ID
   const sourceId = isNew ? from : profileId
   const profiles = useProfiles({ enabled: Boolean(sourceId) })
   const keys = useKeys({ enabled: !isNew })
 
   const backLink = (
-    <BackLink
-      to="/context-gateway/profiles"
-      label={t('profiles.editor.back')}
-    />
+    <BackLink to="/gateway/profiles" label={t('profiles.editor.back')} />
   )
 
   if (sourceId && !profiles.data) {
@@ -377,7 +371,7 @@ export function ProfileEditor({ profileId, from }: ProfileEditorProps) {
                 variant="outline"
                 size="sm"
                 nativeButton={false}
-                render={<Link to="/context-gateway/profiles" />}
+                render={<Link to="/gateway/profiles" />}
               >
                 <ArrowLeftIcon />
                 {t('profiles.editor.back')}
@@ -400,7 +394,7 @@ export function ProfileEditor({ profileId, from }: ProfileEditorProps) {
   )
 }
 
-const route = getRouteApi('/context-gateway/profiles/$profileId')
+const route = getRouteApi('/gateway/profiles/$profileId')
 
 /** Create (`$profileId` = `new`, `?from=<id>` duplicates) or edit a context profile. */
 export function ProfileEditorPage() {

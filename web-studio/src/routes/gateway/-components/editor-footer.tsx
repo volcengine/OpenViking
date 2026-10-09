@@ -30,7 +30,7 @@ export function EditorFooter({
   saving,
   disabled,
 }: EditorFooterProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center justify-end gap-3 border-t bg-background/95 px-4 py-3 backdrop-blur md:-mx-6 md:px-6">
       {status ? (

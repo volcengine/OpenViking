@@ -269,8 +269,8 @@ class ToolExecutor:
             }
         if token:
             if not self.public_url:
-                raise ValueError("Set context_gateway.public_url for client uploads")
-            url = self.public_url + "/context-gateway/uploads?token=" + quote(token, safe="")
+                raise ValueError("Set gateway.public_url for client uploads")
+            url = self.public_url + "/gateway/uploads?token=" + quote(token, safe="")
             for block in value.get("content", []):
                 if block.get("type") == "text":
                     block["text"] = UPLOAD_URL.sub(lambda _: url, block["text"])

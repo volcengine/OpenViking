@@ -35,7 +35,7 @@ import { LoadingState } from './empty-state'
 import { Notice } from './notice'
 import { SectionHeader } from './section-header'
 
-const route = getRouteApi('/context-gateway/connect')
+const route = getRouteApi('/gateway/connect')
 
 /** Clients known to send a session header, shown next to it. */
 const HEADER_SENDERS: Record<string, string> = {
@@ -52,7 +52,7 @@ const PLUGIN_HEADER_EXAMPLE = 'X-OpenViking-Plugin: <plugin-name>'
  * `?protocol=` the protocol for clients set up per protocol).
  */
 export function ConnectPage() {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const { client = CLIENT_IDS[0], protocol } = route.useSearch()
   const info = useConnectionInfo()
   const upstreams = useUpstreams()
@@ -102,7 +102,7 @@ export function ConnectPage() {
 }
 
 function AddressCard({ info }: { info: ConnectionInfo }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const base = info.base_url.replace(/\/+$/, '')
   const warning = isLoopbackUrl(base)
     ? 'loopback'
@@ -146,7 +146,7 @@ function AddressCard({ info }: { info: ConnectionInfo }) {
             variant="outline"
             size="sm"
             nativeButton={false}
-            render={<Link to="/context-gateway/keys" />}
+            render={<Link to="/gateway/keys" />}
           >
             {t('connect.address.manageKeys')}
           </Button>
@@ -157,7 +157,7 @@ function AddressCard({ info }: { info: ConnectionInfo }) {
 }
 
 function AddressRow({ label, value }: { label: string; value: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <div className="grid gap-1 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] sm:items-center sm:gap-3">
       <dt className="text-sm text-muted-foreground">{label}</dt>
@@ -206,7 +206,7 @@ function ReferenceCard({
 }
 
 function IdentityCard() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <ReferenceCard
       icon={<MessagesSquareIcon />}
@@ -233,7 +233,7 @@ function IdentityCard() {
 }
 
 function PassthroughCard({ upstreams }: { upstreams?: Upstream[] }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const names = upstreams
     ?.filter((upstream) => upstream.auth_mode === 'passthrough')
     .map((upstream) => upstream.name)
@@ -261,7 +261,7 @@ function PassthroughCard({ upstreams }: { upstreams?: Upstream[] }) {
 }
 
 function PluginCard() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <ReferenceCard
       icon={<PuzzleIcon />}

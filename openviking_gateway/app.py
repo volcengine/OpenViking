@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from .capture import CaptureWorker, reset_capture
 from .client import VikingClient, VikingError
-from .config import ContextGatewayConfig
+from .config import OpenVikingGatewayConfig
 from .kernel import MemoryKernel
 from .models import CaptureReset, KeyRequest, Policy, Upstream
 from .proxy import ProxyRequest, filtered_headers, upstream_headers, upstream_url
@@ -114,7 +114,7 @@ def overview_summary(logs):
     }
 
 
-def create_app(config: ContextGatewayConfig | None = None):
+def create_app(config: OpenVikingGatewayConfig | None = None):
     if config is None:
         from .cli import load_config
 
@@ -144,7 +144,7 @@ def create_app(config: ContextGatewayConfig | None = None):
                 "localhost",
             }:
                 raise ValueError(
-                    "Context Gateway must bind to loopback when OpenViking uses dev authentication"
+                    "OpenViking Gateway must bind to loopback when OpenViking uses dev authentication"
                 )
             task = asyncio.create_task(maintenance(app))
             try:
@@ -157,7 +157,7 @@ def create_app(config: ContextGatewayConfig | None = None):
                 management.close()
 
     app = FastAPI(
-        title="OpenViking Context Gateway",
+        title="OpenViking Gateway",
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
@@ -190,7 +190,7 @@ def create_app(config: ContextGatewayConfig | None = None):
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Context Gateway maintenance failed")
+                logger.exception("OpenViking Gateway maintenance failed")
                 await asyncio.sleep(1)
 
     @app.exception_handler(VikingError)
@@ -199,7 +199,7 @@ def create_app(config: ContextGatewayConfig | None = None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "service": "context-gateway", "openviking": app.state.health}
+        return {"status": "ok", "service": "openviking-gateway", "openviking": app.state.health}
 
     async def authenticate(request):
         if app.state.health.get("auth_mode") == "dev" and config.host not in {
@@ -215,7 +215,7 @@ def create_app(config: ContextGatewayConfig | None = None):
             raise HTTPException(403, "Claude subscription OAuth credentials are not supported")
         credential = await management.authenticate(key)
         if not credential:
-            raise HTTPException(401, "Invalid or revoked Context Gateway key")
+            raise HTTPException(401, "Invalid or revoked OpenViking Gateway key")
         return credential
 
     def admin_account(request):
@@ -366,7 +366,7 @@ def create_app(config: ContextGatewayConfig | None = None):
         for identifier in value.upstream_ids:
             if not await management.get(account, "upstreams", identifier):
                 raise HTTPException(400, "Unknown upstream")
-        secret = "ovcg_" + secrets.token_urlsafe(32)
+        secret = "ovgw_" + secrets.token_urlsafe(32)
         stored = {
             **value.model_dump(),
             "user_id": identity["user_id"],
@@ -414,7 +414,7 @@ def create_app(config: ContextGatewayConfig | None = None):
         return {
             "object": "list",
             "data": [
-                {"id": name, "object": "model", "owned_by": "context-gateway"} for name in names
+                {"id": name, "object": "model", "owned_by": "openviking-gateway"} for name in names
             ],
         }
 
@@ -425,7 +425,7 @@ def create_app(config: ContextGatewayConfig | None = None):
             Response(status_code=426, headers={"Upgrade": "HTTP/1.1"})
         )
 
-    @app.post("/context-gateway/uploads")
+    @app.post("/gateway/uploads")
     async def proxy_upload(request: Request):
         token = request.query_params.get("token", "")
         if not token or len(token) > 16384:

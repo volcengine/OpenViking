@@ -13,17 +13,17 @@ from test_app import completion, enable_tools
 from test_compaction import Summarizer, answered
 from test_native_tools import native_response, request_body, visible_response, wire_response
 
-from context_gateway.blocks import block, gateway_note, history_hint, token_estimate
-from context_gateway.capture import CapturePipeline
-from context_gateway.capture_store import Document
-from context_gateway.compaction import active_cut
-from context_gateway.models import Policy
-from context_gateway.protocols import SSEDecoder, text_content
-from context_gateway.records import RecordKind as K
-from context_gateway.tool_catalog import select_tools
-from context_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
-from context_gateway.tool_protocols.common import sse
-from context_gateway.windows import (
+from openviking_gateway.blocks import block, gateway_note, history_hint, token_estimate
+from openviking_gateway.capture import CapturePipeline
+from openviking_gateway.capture_store import Document
+from openviking_gateway.compaction import active_cut
+from openviking_gateway.models import Policy
+from openviking_gateway.protocols import SSEDecoder, text_content
+from openviking_gateway.records import RecordKind as K
+from openviking_gateway.tool_catalog import select_tools
+from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain, tool_protocol
+from openviking_gateway.tool_protocols.common import sse
+from openviking_gateway.windows import (
     ALONE,
     NATIVE_TOOLS,
     NEW_CONTEXT,

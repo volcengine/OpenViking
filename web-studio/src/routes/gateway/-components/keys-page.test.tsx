@@ -116,7 +116,7 @@ const laptop: GatewayKey = {
   upstream_ids: ['u1', 'u2'],
   models: [],
   user_id: 'alice',
-  prefix: 'ovcg_Ab3dE9x',
+  prefix: 'ovgw_Ab3dE9x',
   created_at: 1_700_000_000,
 }
 const ci: GatewayKey = {
@@ -127,7 +127,7 @@ const ci: GatewayKey = {
   upstream_ids: ['u2'],
   models: ['deepseek-chat'],
   user_id: 'bob',
-  prefix: 'ovcg_Zz9yX8w',
+  prefix: 'ovgw_Zz9yX8w',
   created_at: 1_600_000_000,
 }
 
@@ -166,13 +166,13 @@ describe('KeysPage', () => {
     const rows = await screen.findAllByRole('row')
     // Header row, then the newest key.
     expect(within(rows[1]).getByText('Alice laptop')).toBeTruthy()
-    expect(within(rows[1]).getByText('ovcg_Ab3dE9x…')).toBeTruthy()
+    expect(within(rows[1]).getByText('ovgw_Ab3dE9x…')).toBeTruthy()
     expect(within(rows[1]).getByText('alice')).toBeTruthy()
     expect(
       within(rows[1])
         .getByRole('link', { name: 'Coding' })
         .getAttribute('href'),
-    ).toBe('/context-gateway/profiles/p1')
+    ).toBe('/gateway/profiles/p1')
     expect(within(rows[1]).getByText('Claude')).toBeTruthy()
     expect(within(rows[1]).getByText('DeepSeek')).toBeTruthy()
     expect(within(rows[1]).getByText('states.any')).toBeTruthy()
@@ -228,7 +228,7 @@ describe('KeysPage', () => {
       screen
         .getByRole('link', { name: /keys.prerequisites.addUpstream/ })
         .getAttribute('href'),
-    ).toBe('/context-gateway/upstreams/new')
+    ).toBe('/gateway/upstreams/new')
     expect(
       screen.queryByRole('link', { name: /keys.prerequisites.createProfile/ }),
     ).toBeNull()
@@ -243,7 +243,7 @@ describe('KeysPage', () => {
       id: 'k3',
       name: 'Carol',
       upstream_ids: ['u1'],
-      key: 'ovcg_secretSecretSecret',
+      key: 'ovgw_secretSecretSecret',
     }
     api.issueKey.mockResolvedValue(issued)
     renderPage()
@@ -272,12 +272,12 @@ describe('KeysPage', () => {
       }),
     )
     expect(await screen.findByText('keys.secret.title')).toBeTruthy()
-    expect(screen.getByText('ovcg_secretSecretSecret')).toBeTruthy()
+    expect(screen.getByText('ovgw_secretSecretSecret')).toBeTruthy()
     expect(screen.queryByText('keys.form.title')).toBeNull()
     // Claude Code is the first client this key's upstreams can serve.
     const snippet = screen.getByText(/ANTHROPIC_BASE_URL/)
     expect(snippet.textContent).toContain(BASE_URL)
-    expect(snippet.textContent).toContain('ovcg_secretSecretSecret')
+    expect(snippet.textContent).toContain('ovgw_secretSecretSecret')
 
     fireEvent.click(screen.getByRole('button', { name: 'keys.secret.done' }))
     await waitFor(() =>

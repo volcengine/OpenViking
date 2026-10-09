@@ -57,7 +57,7 @@ from openviking.server.routers import (
     watches_router,
     webdav_router,
 )
-from openviking.server.routers.context_gateway import router as context_gateway_router
+from openviking.server.routers.gateway import router as gateway_router
 from openviking.server.timing_middleware import RequestTimingMiddleware
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
@@ -596,7 +596,7 @@ def create_app(
     app.include_router(system_router)
     app.include_router(acl_router)
     app.include_router(admin_router)
-    app.include_router(context_gateway_router)
+    app.include_router(gateway_router)
     app.include_router(agent_evolution_router)
     app.include_router(compile_router)
     app.include_router(resources_router)

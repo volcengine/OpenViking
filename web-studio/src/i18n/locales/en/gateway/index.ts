@@ -7,7 +7,7 @@ import profiles from './profiles'
 import requests from './requests'
 import upstreams from './upstreams'
 
-const contextGateway = {
+const gateway = {
   ...common,
   enums,
   overview,
@@ -18,4 +18,4 @@ const contextGateway = {
   connect,
 }
 
-export default contextGateway
+export default gateway

@@ -16,7 +16,7 @@ from typing import Any
 import orjson
 
 NORMALIZATION_VERSION = "v1"
-_RULES = json.loads(files("context_gateway").joinpath("client-rules.json").read_text())
+_RULES = json.loads(files("openviking_gateway").joinpath("client-rules.json").read_text())
 PLUGIN_TAGS = tuple(_RULES["plugin_tags"])
 NOISE_TAGS = tuple(_RULES["noise_tags"])
 AUXILIARY_PATTERNS = tuple(_RULES["auxiliary_patterns"])

@@ -1,13 +1,13 @@
 const common = {
-  title: '上下文网关',
+  title: 'OpenViking 网关',
   description:
     '让任何使用 API Key 的模型客户端都能用上 OpenViking 记忆。把客户端指向网关后，网关会为每条新消息补充相关记忆，并把对话保存回 OpenViking。',
   beta: {
     label: 'Beta',
-    hint: '测试版：上下文网关仍在完善，后续版本可能调整设置和接口。',
+    hint: '测试版：OpenViking 网关仍在完善，后续版本可能调整设置和接口。',
   },
   tabs: {
-    label: '上下文网关分区',
+    label: 'OpenViking 网关分区',
     overview: '概览',
     upstreams: '上游',
     profiles: '上下文配置',
@@ -48,14 +48,14 @@ const common = {
   access: {
     title: '需要账号管理员权限',
     description:
-      '管理上下文网关需要本账号的账号管理员密钥或 Root 密钥。请先在连接设置中填写。',
+      '管理 OpenViking 网关需要本账号的账号管理员密钥或 Root 密钥。请先在连接设置中填写。',
     action: '打开连接设置',
   },
   unavailable: {
     notEnabled: {
-      title: '上下文网关未开启',
+      title: 'OpenViking 网关未开启',
       description:
-        '这台 OpenViking 服务器没有开启上下文网关。请在 ov.conf 中开启它，重启 OpenViking，再启动网关。',
+        '这台服务器没有开启 OpenViking 网关。请在 ov.conf 中开启它，重启 OpenViking，再启动网关。',
     },
     tokenMissing: {
       title: '缺少管理令牌',
@@ -68,9 +68,9 @@ const common = {
         'OpenViking 和网关启动时用的管理令牌不同，所以网关拒绝了 OpenViking 的请求。请把下面的环境变量设成同一个值，然后重启两者。',
     },
     unsupported: {
-      title: '这台 OpenViking 服务器无法管理上下文网关',
+      title: '这台 OpenViking 服务器无法管理 OpenViking 网关',
       description:
-        'Studio 连接的 OpenViking 服务器不支持上下文网关。请升级 OpenViking Server 并重启，然后重试。',
+        'Studio 连接的 OpenViking 服务器不支持 OpenViking 网关。请升级 OpenViking Server 并重启，然后重试。',
     },
     devMode: {
       title: 'OpenViking 运行在开发模式',
@@ -80,10 +80,10 @@ const common = {
     unreachable: {
       title: 'OpenViking 连不上网关',
       description:
-        '网关没有运行，或者 ov.conf 里的 context_gateway.url 指向了错误的地址。请启动网关，并确认 OpenViking 能访问这个地址。',
+        '网关没有运行，或者 ov.conf 里的 gateway.url 指向了错误的地址。请启动网关，并确认 OpenViking 能访问这个地址。',
     },
     failed: {
-      title: '无法加载上下文网关',
+      title: '无法加载 OpenViking 网关',
     },
     fixLabel: '需要修改的配置',
     terminal: '终端',
@@ -92,12 +92,12 @@ const common = {
   },
   errors: {
     reasons: {
-      not_enabled: '这台服务器没有开启上下文网关。',
+      not_enabled: '这台服务器没有开启 OpenViking 网关。',
       token_missing: '没有设置管理令牌，OpenViking 无法管理网关。',
       token_mismatch:
         '网关拒绝了 OpenViking 的管理令牌，两者必须使用同一个令牌。',
-      unreachable: 'OpenViking 连不上上下文网关。',
-      unsupported: '这台 OpenViking 服务器不支持上下文网关。',
+      unreachable: 'OpenViking 连不上网关。',
+      unsupported: '这台 OpenViking 服务器不支持 OpenViking 网关。',
       conflict: '这项修改与现有配置冲突。',
       invalid: '网关拒绝了这些设置，请检查填写的值后重试。',
       forbidden: '没有执行此操作的权限。',

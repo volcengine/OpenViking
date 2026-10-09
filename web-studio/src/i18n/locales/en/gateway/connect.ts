@@ -11,14 +11,14 @@ const connect = {
     loopback: {
       title: "Only the gateway's own machine can use this address",
       description:
-        "Clients on other machines can't reach it. Set `context_gateway.public_url` in `ov.conf` to an address they can reach, then restart the gateway.",
+        "Clients on other machines can't reach it. Set `gateway.public_url` in `ov.conf` to an address they can reach, then restart the gateway.",
     },
     notPublic: {
       title: 'Clients may not be able to reach this address',
       description:
-        'This is the address OpenViking uses to reach the gateway. Set `context_gateway.public_url` in `ov.conf` to the address clients should use, then restart the gateway.',
+        'This is the address OpenViking uses to reach the gateway. Set `gateway.public_url` in `ov.conf` to the address clients should use, then restart the gateway.',
     },
-    keys: 'Clients authenticate with a gateway key (`ovcg_…`) in place of a provider API key.',
+    keys: 'Clients authenticate with a gateway key (`ovgw_…`) in place of a provider API key.',
     manageKeys: 'Manage keys',
   },
   guide: {

@@ -153,13 +153,13 @@ const LOGS: LogRecord[] = [
 
 /** Pages the overview links to; links only get an href for known routes. */
 const LINK_TARGETS = [
-  '/context-gateway/upstreams',
-  '/context-gateway/upstreams/$upstreamId',
-  '/context-gateway/profiles',
-  '/context-gateway/profiles/$profileId',
-  '/context-gateway/keys',
-  '/context-gateway/requests',
-  '/context-gateway/connect',
+  '/gateway/upstreams',
+  '/gateway/upstreams/$upstreamId',
+  '/gateway/profiles',
+  '/gateway/profiles/$profileId',
+  '/gateway/keys',
+  '/gateway/requests',
+  '/gateway/connect',
 ]
 
 /** Href of a button-styled link (Base UI gives those the button role). */
@@ -173,14 +173,14 @@ function renderOverview() {
     routeTree: root.addChildren([
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway',
+        path: '/gateway',
         component: OverviewPage,
       }),
       ...LINK_TARGETS.map((path) =>
         createRoute({ getParentRoute: () => root, path }),
       ),
     ]),
-    history: createMemoryHistory({ initialEntries: ['/context-gateway'] }),
+    history: createMemoryHistory({ initialEntries: ['/gateway'] }),
   })
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -224,8 +224,8 @@ describe('OverviewPage', () => {
 
     expect(await screen.findByText('Get started')).toBeTruthy()
     expect(await screen.findByText('0 of 4 done')).toBeTruthy()
-    expect(hrefOf('Add upstream')).toBe('/context-gateway/upstreams/new')
-    expect(hrefOf('Customize')).toBe('/context-gateway/profiles/new')
+    expect(hrefOf('Add upstream')).toBe('/gateway/upstreams/new')
+    expect(hrefOf('Customize')).toBe('/gateway/profiles/new')
     expect(
       screen.getByText('Add an upstream and a context profile first.'),
     ).toBeTruthy()
@@ -312,8 +312,8 @@ describe('OverviewPage', () => {
       .getAllByText('Show in Requests')
       .map((node) => node.closest('a')?.getAttribute('href'))
     expect(issueLinks).toEqual([
-      '/context-gateway/requests?filter=issues',
-      '/context-gateway/requests?filter=issues',
+      '/gateway/requests?filter=issues',
+      '/gateway/requests?filter=issues',
     ])
 
     const reasons = screen
@@ -336,7 +336,7 @@ describe('OverviewPage', () => {
     expect(screen.queryByText('Memory sync')).toBeNull()
     expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.getByText('502')).toBeTruthy()
-    expect(hrefOf('View all')).toBe('/context-gateway/requests')
+    expect(hrefOf('View all')).toBe('/gateway/requests')
     expect(
       screen.getByText(
         'Figures cover the latest 10,000 entries of the request log. Entries are kept for 7 days.',

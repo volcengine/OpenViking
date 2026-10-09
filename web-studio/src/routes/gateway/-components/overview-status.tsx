@@ -21,16 +21,14 @@ import { EmptyValue, HealthBadge, ToneBadge } from './status-badges'
 
 /** Link to the request log filtered to problems. */
 function IssuesLink({ className }: { className?: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <Button
       size="sm"
       variant="ghost"
       className={className}
       nativeButton={false}
-      render={
-        <Link to="/context-gateway/requests" search={{ filter: 'issues' }} />
-      }
+      render={<Link to="/gateway/requests" search={{ filter: 'issues' }} />}
     >
       {t('overview.showIssues')}
       <ArrowRightIcon />
@@ -40,7 +38,7 @@ function IssuesLink({ className }: { className?: string }) {
 
 /** Conversations whose saving to OpenViking is retrying or paused. */
 function SavingStatus({ issues }: { issues: Overview['capture_issues'] }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { retrying, paused } = issues
   return (
     <div className="grid gap-2 border-t pt-4">
@@ -78,7 +76,7 @@ export function OpenVikingCard({
   health: OpenVikingHealth
   captureIssues: Overview['capture_issues']
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { status, version, auth_mode: authMode, reason } = health
   return (
     <Card className="gap-4">
@@ -141,7 +139,7 @@ export function DegradedRequestsCard({
 }: {
   degradations: Overview['degradations']
 }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const entries = Object.entries(degradations)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a)

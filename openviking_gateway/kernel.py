@@ -113,7 +113,7 @@ class MemoryKernel:
             prepared = await self.prepare(body, protocol, *args)
             return prepared.body, prepared, prepared.metrics
         except Exception:
-            logger.exception("Context Gateway preparation failed")
+            logger.exception("OpenViking Gateway preparation failed")
             return self.degraded_body(body, protocol), None, {"degradation": "memory_store_failure"}
 
     async def sent_history(self, scope, messages, protocol):
@@ -326,7 +326,7 @@ class MemoryKernel:
                     "credential_id": credential["id"],
                     "vendor": {
                         "prompt_cache_key": body.get("prompt_cache_key")
-                        or "ovcg-" + digest(scope + sid)[:40],
+                        or "ovgw-" + digest(scope + sid)[:40],
                         "parameters": parameter_fingerprint(body),
                     },
                 },
@@ -762,7 +762,7 @@ class MemoryKernel:
             await self.compaction_failed(request, error.reason)
             return
         except Exception:
-            logger.exception("Context Gateway summary failed")
+            logger.exception("OpenViking Gateway summary failed")
             await self.compaction_failed(request, "summary_failed")
             return
         anchor = request.capture_chain[cut]

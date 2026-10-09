@@ -194,7 +194,7 @@ const builders: Record<
         `model = ${JSON.stringify(model)}`,
         '',
         '[model_providers.openviking]',
-        'name = "OpenViking Context Gateway"',
+        'name = "OpenViking Gateway"',
         `base_url = ${JSON.stringify(`${base}/v1`)}`,
         'wire_api = "responses"',
         `env_key = "${KEY_ENV}"`,
@@ -363,7 +363,6 @@ export function gatewayDocsUrl(
   language?: string,
 ): string {
   const locale = language?.startsWith('zh') ? 'zh' : 'en'
-  const slug =
-    page === 'guide' ? '15-context-gateway' : '22-context-gateway-operations'
+  const slug = page === 'guide' ? '15-gateway' : '22-gateway-operations'
   return `https://docs.openviking.ai/${locale}/guides/${slug}`
 }

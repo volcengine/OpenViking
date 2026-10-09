@@ -132,7 +132,7 @@ const key = (id: string, policyId: string): GatewayKey => ({
   upstream_ids: ['u1'],
   models: [],
   user_id: 'alice',
-  prefix: 'ovcg_abc',
+  prefix: 'ovgw_abc',
   created_at: 1_700_000_000,
 })
 
@@ -159,12 +159,12 @@ function renderAt(path: string) {
     routeTree: root.addChildren([
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/profiles',
+        path: '/gateway/profiles',
         component: ProfilesPage,
       }),
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/profiles/$profileId',
+        path: '/gateway/profiles/$profileId',
         validateSearch: parseProfileEditorSearch,
         component: EditorRoute,
       }),
@@ -215,7 +215,7 @@ describe('profile list', () => {
     screen.getByRole('link', { name }).closest<HTMLElement>('[data-slot=card]')!
 
   it('summarizes each profile and its keys', async () => {
-    renderAt('/context-gateway/profiles')
+    renderAt('/gateway/profiles')
     await screen.findByRole('link', { name: 'Coding' })
 
     const codingCard = within(card('Coding'))
@@ -248,7 +248,7 @@ describe('profile list', () => {
         resolveTools = resolve
       }),
     )
-    renderAt('/context-gateway/profiles')
+    renderAt('/gateway/profiles')
     await screen.findByRole('link', { name: 'Coding' })
     const codingCard = within(card('Coding'))
     expect(codingCard.getByText('states.on')).toBeTruthy()
@@ -261,7 +261,7 @@ describe('profile list', () => {
 
   it('keeps profiles visible when tools fail to load and retries the catalog', async () => {
     api.listTools.mockRejectedValueOnce(new Error('Tools unavailable'))
-    renderAt('/context-gateway/profiles')
+    renderAt('/gateway/profiles')
     await screen.findByText('profiles.tools.loadFailed')
     expect(
       within(card('Coding')).queryByText(/profiles.summary.toolsEnabled/),
@@ -275,7 +275,7 @@ describe('profile list', () => {
   })
 
   it('blocks deleting a profile that keys use and deletes an unused one', async () => {
-    renderAt('/context-gateway/profiles')
+    renderAt('/gateway/profiles')
     await screen.findByText('profiles.usedBy {"count":2}')
 
     const blocked = within(card('Coding')).getByRole<HTMLButtonElement>(
@@ -301,7 +301,7 @@ describe('profile list', () => {
 
   it('creates a profile with the recommended settings in one click', async () => {
     api.listProfiles.mockResolvedValue([])
-    renderAt('/context-gateway/profiles')
+    renderAt('/gateway/profiles')
     fireEvent.click(
       await screen.findByText('profiles.actions.createRecommended'),
     )
@@ -317,16 +317,14 @@ describe('profile list', () => {
   })
 
   it('duplicates into a prefilled editor that saves a new profile', async () => {
-    const router = renderAt('/context-gateway/profiles')
+    const router = renderAt('/gateway/profiles')
     await screen.findByRole('link', { name: 'Coding' })
     fireEvent.click(
       within(card('Coding')).getByRole('button', { name: 'actions.duplicate' }),
     )
 
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe(
-        '/context-gateway/profiles/new',
-      ),
+      expect(router.state.location.pathname).toBe('/gateway/profiles/new'),
     )
     expect(router.state.location.search).toEqual({ from: 'p1' })
     const copyName = 'profiles.editor.copyName {"name":"Coding"}'
@@ -342,7 +340,7 @@ describe('profile list', () => {
 
 describe('profile editor', () => {
   it('sends known stored fields back unchanged when only the name changes', async () => {
-    const router = renderAt('/context-gateway/profiles/p1')
+    const router = renderAt('/gateway/profiles/p1')
     expect((await screen.findByDisplayValue('Coding')).id).toBe('profile-name')
     expect(saveButton().disabled).toBe(true)
 
@@ -357,12 +355,12 @@ describe('profile editor', () => {
       }),
     )
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe('/context-gateway/profiles'),
+      expect(router.state.location.pathname).toBe('/gateway/profiles'),
     )
   })
 
   it('hides settings of switched-off sections and switches long-conversation features on their own', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
 
     expect(
@@ -411,7 +409,7 @@ describe('profile editor', () => {
   })
 
   it('keeps reminder ratios in view while they conflict', async () => {
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     await screen.findByDisplayValue('Coding')
     fireEvent.change(
       screen.getByLabelText('profiles.longConversations.softRatio.label'),
@@ -432,7 +430,7 @@ describe('profile editor', () => {
   })
 
   it('shows limit errors inline and blocks saving', async () => {
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     await screen.findByDisplayValue('Coding')
     fireEvent.change(screen.getByLabelText('profiles.recall.maxTokens.label'), {
       target: { value: '10' },
@@ -445,7 +443,7 @@ describe('profile editor', () => {
   })
 
   it('configures opening context independently while recall is off', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     fireEvent.click(
       screen.getByRole('switch', { name: 'profiles.recall.profile.label' }),
@@ -466,7 +464,7 @@ describe('profile editor', () => {
   })
 
   it('keeps invalid settings in view when their section is off or advanced', async () => {
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     await screen.findByDisplayValue('Coding')
     expect(screen.queryByText('field.sectionInvalid')).toBeNull()
     fireEvent.change(screen.getByLabelText('profiles.recall.maxTokens.label'), {
@@ -483,7 +481,7 @@ describe('profile editor', () => {
     api.listProfiles.mockResolvedValue([
       { ...chat, recall: true, quotas: { legacy: 2 } } as Profile,
     ])
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     expect(
       screen.getByText('validation.unknownCategory {"name":"legacy"}'),
@@ -493,7 +491,7 @@ describe('profile editor', () => {
   })
 
   it('leaves write tools unchecked by default and saves only unchecked raw names', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     expect(sectionSwitch('tools').getAttribute('aria-checked')).toBe('false')
     expect(api.listTools).not.toHaveBeenCalled()
@@ -538,7 +536,7 @@ describe('profile editor', () => {
   })
 
   it('uses only explicit readOnlyHint annotations for badges', async () => {
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     await screen.findByRole('checkbox', { name: toolName('read') })
     const labelFor = (name: string) =>
       within(
@@ -559,7 +557,7 @@ describe('profile editor', () => {
   })
 
   it('preserves missing tool exclusions while re-enabling a listed tool', async () => {
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     const readTool = await screen.findByRole('checkbox', {
       name: toolName('read'),
     })
@@ -578,7 +576,7 @@ describe('profile editor', () => {
   })
 
   it('allows disabling every tool', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     fireEvent.click(sectionSwitch('tools'))
     await screen.findByRole('checkbox', { name: toolName('find') })
@@ -597,7 +595,7 @@ describe('profile editor', () => {
 
   it('explains the empty catalog and still lets a profile be saved', async () => {
     api.listTools.mockResolvedValue([])
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     fireEvent.click(sectionSwitch('tools'))
     expect(await screen.findByText('profiles.tools.empty')).toBeTruthy()
@@ -609,7 +607,7 @@ describe('profile editor', () => {
 
   it('shows a retry action when the tools request fails', async () => {
     api.listTools.mockRejectedValueOnce(new Error('Tools unavailable'))
-    renderAt('/context-gateway/profiles/p1')
+    renderAt('/gateway/profiles/p1')
     expect(await screen.findByText('profiles.tools.loadFailed')).toBeTruthy()
     expect(screen.queryByText('profiles.tools.empty')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'actions.retry' }))
@@ -620,7 +618,7 @@ describe('profile editor', () => {
   })
 
   it('shows tool calls by default and saves the switch', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     fireEvent.click(sectionSwitch('tools'))
     const showCalls = screen.getByRole('switch', {
@@ -639,7 +637,7 @@ describe('profile editor', () => {
   })
 
   it('hides the recall summary by default and saves the switch', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     const showRecall = screen.getByRole('switch', {
       name: 'profiles.recall.showRecall.label',
@@ -657,7 +655,7 @@ describe('profile editor', () => {
   })
 
   it('starts category limits from the searched sources', async () => {
-    renderAt('/context-gateway/profiles/p2')
+    renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     fireEvent.click(sectionSwitch('recall'))
     fireEvent.click(screen.getAllByText('field.advanced')[0])
@@ -683,7 +681,7 @@ describe('profile editor', () => {
   })
 
   it('creates a new profile once it has a name', async () => {
-    renderAt('/context-gateway/profiles/new')
+    renderAt('/gateway/profiles/new')
     await screen.findByText('profiles.editor.newTitle')
     expect(saveButton().disabled).toBe(true)
     expect(screen.getByText('profiles.editor.needsName')).toBeTruthy()
@@ -698,7 +696,7 @@ describe('profile editor', () => {
   })
 
   it('explains when the profile no longer exists', async () => {
-    renderAt('/context-gateway/profiles/gone')
+    renderAt('/gateway/profiles/gone')
     expect(
       await screen.findByText('profiles.editor.notFound.title'),
     ).toBeTruthy()

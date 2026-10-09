@@ -5,7 +5,7 @@
 # target for a TLS-terminating proxy (e.g. HTTPS via Caddy domain block).
 #
 # For new deployments, connect directly to the OV server on
-# OPENVIKING_SERVER_PORT (1933 by default). With the context-gateway Compose
+# OPENVIKING_SERVER_PORT (1933 by default). With the gateway Compose
 # profile, this is also the entrypoint for gateway clients: the gateway port
 # is not published and the block below routes its paths.
 # Web Studio is served by OV itself at /studio — no separate proxy needed.
@@ -14,10 +14,10 @@
 # Let's Encrypt certs):
 #
 #   {$OPENVIKING_PUBLIC_BASE_URL} {
-#       # Context Gateway paths; keep them in sync with the :1934 block below.
-#       @context_gateway path /v1/* /api/v3/* /api/compatible/v1/* /context-gateway/uploads
-#       handle @context_gateway {
-#           reverse_proxy context-gateway:1935 {
+#       # OpenViking Gateway paths; keep them in sync with the :1934 block below.
+#       @gateway path /v1/* /api/v3/* /api/compatible/v1/* /gateway/uploads
+#       handle @gateway {
+#           reverse_proxy gateway:1935 {
 #               flush_interval -1
 #           }
 #       }
@@ -32,9 +32,9 @@
 # OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com in .env.
 
 :1934 {
-	@context_gateway path /v1/* /api/v3/* /api/compatible/v1/* /context-gateway/uploads
-	handle @context_gateway {
-		reverse_proxy context-gateway:1935 {
+	@gateway path /v1/* /api/v3/* /api/compatible/v1/* /gateway/uploads
+	handle @gateway {
+		reverse_proxy gateway:1935 {
 			flush_interval -1
 		}
 	}

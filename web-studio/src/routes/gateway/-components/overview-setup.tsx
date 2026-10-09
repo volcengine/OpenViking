@@ -21,7 +21,7 @@ import { RecommendedProfileButton } from './recommended-profile-button'
 type StepState = 'done' | 'current' | 'todo'
 
 function StepMarker({ number, state }: { number: number; state: StepState }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   if (state === 'done') {
     return (
       <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
@@ -91,7 +91,7 @@ function SetupStep({
  * key, connect a client. A step is done once its list is non-empty.
  */
 export function OverviewSetup() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const upstreams = useUpstreams()
   const profiles = useProfiles()
   const keys = useKeys()
@@ -109,10 +109,7 @@ export function OverviewSetup() {
   const [upstreamCount = 0, profileCount = 0, keyCount = 0] = counts
 
   const viewButton = (
-    to:
-      | '/context-gateway/upstreams'
-      | '/context-gateway/profiles'
-      | '/context-gateway/keys',
+    to: '/gateway/upstreams' | '/gateway/profiles' | '/gateway/keys',
   ) => (
     <Button
       size="sm"
@@ -159,7 +156,7 @@ export function OverviewSetup() {
             }
           >
             {done[0] ? (
-              viewButton('/context-gateway/upstreams')
+              viewButton('/gateway/upstreams')
             ) : (
               <Button
                 size="sm"
@@ -167,7 +164,7 @@ export function OverviewSetup() {
                 nativeButton={false}
                 render={
                   <Link
-                    to="/context-gateway/upstreams/$upstreamId"
+                    to="/gateway/upstreams/$upstreamId"
                     params={{ upstreamId: NEW_ID }}
                   />
                 }
@@ -187,7 +184,7 @@ export function OverviewSetup() {
             }
           >
             {done[1] ? (
-              viewButton('/context-gateway/profiles')
+              viewButton('/gateway/profiles')
             ) : (
               <>
                 <RecommendedProfileButton
@@ -200,7 +197,7 @@ export function OverviewSetup() {
                   nativeButton={false}
                   render={
                     <Link
-                      to="/context-gateway/profiles/$profileId"
+                      to="/gateway/profiles/$profileId"
                       params={{ profileId: NEW_ID }}
                     />
                   }
@@ -230,13 +227,13 @@ export function OverviewSetup() {
             }
           >
             {done[2] ? (
-              viewButton('/context-gateway/keys')
+              viewButton('/gateway/keys')
             ) : (
               <Button
                 size="sm"
                 variant={variantOf(2)}
                 nativeButton={false}
-                render={<Link to="/context-gateway/keys" />}
+                render={<Link to="/gateway/keys" />}
               >
                 {t('overview.setup.key.action')}
               </Button>
@@ -252,7 +249,7 @@ export function OverviewSetup() {
               size="sm"
               variant={variantOf(3)}
               nativeButton={false}
-              render={<Link to="/context-gateway/connect" />}
+              render={<Link to="/gateway/connect" />}
             >
               {t('overview.setup.connect.action')}
             </Button>

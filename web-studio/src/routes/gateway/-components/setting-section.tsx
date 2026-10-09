@@ -61,7 +61,7 @@ export function SettingSection({
   advancedInvalid = false,
   children,
 }: SettingSectionProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   // Save checks every setting, so one that needs fixing must stay visible.
   const open = checked !== false || invalid

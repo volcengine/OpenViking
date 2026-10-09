@@ -90,7 +90,7 @@ export function ClientGuide({
   baseUrl,
   upstreams,
 }: ClientGuideProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <Card className="gap-0 py-0">
       <CardHeader className="border-b px-5 py-4">
@@ -112,7 +112,7 @@ export function ClientGuide({
             return (
               <Link
                 key={id}
-                to="/context-gateway/connect"
+                to="/gateway/connect"
                 search={{ client: id }}
                 replace
                 resetScroll={false}
@@ -157,7 +157,7 @@ function ClientPanel({
   baseUrl,
   upstreams,
 }: ClientGuideProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   // Without a valid pick, start from a protocol an upstream already serves.
   const picked =
     protocol && protocolChoices(client).includes(protocol)
@@ -271,7 +271,7 @@ function ProtocolRequirement({
   protocol,
   upstreams,
 }: Pick<ClientGuideProps, 'client' | 'upstreams'> & { protocol: Protocol }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const choices = protocolChoices(client)
   const protocols = activeProtocols(client, protocol)
   const serving = upstreams && servingUpstreams(client, upstreams, protocol)
@@ -321,7 +321,7 @@ function ProtocolRequirement({
               nativeButton={false}
               render={
                 <Link
-                  to="/context-gateway/upstreams/$upstreamId"
+                  to="/gateway/upstreams/$upstreamId"
                   params={{ upstreamId: NEW_ID }}
                 />
               }
@@ -357,7 +357,7 @@ function ProtocolPicker({
   protocol: Protocol
   upstreams?: Upstream[]
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <div
       role="group"
@@ -372,7 +372,7 @@ function ProtocolPicker({
         return (
           <Link
             key={choice}
-            to="/context-gateway/connect"
+            to="/gateway/connect"
             search={{ client, protocol: choice }}
             replace
             resetScroll={false}

@@ -55,12 +55,12 @@ describe('clientSnippets', () => {
   it('fills in a real key and model', () => {
     const snippets = clientSnippets('codex', {
       baseUrl: base,
-      key: 'ovcg_abc',
+      key: 'ovgw_abc',
       model: 'gpt-5',
     })
     const text = snippets.map((snippet) => snippet.code).join('\n')
     expect(text).toContain('model = "gpt-5"')
-    expect(text).toContain('export OPENVIKING_GATEWAY_KEY=ovcg_abc')
+    expect(text).toContain('export OPENVIKING_GATEWAY_KEY=ovgw_abc')
     expect(text).not.toContain('<')
   })
 
@@ -166,17 +166,17 @@ describe('clientSnippets', () => {
 })
 
 it('quotes shell values only when needed', () => {
-  expect(shellQuote('ovcg_Ab-3.x')).toBe('ovcg_Ab-3.x')
+  expect(shellQuote('ovgw_Ab-3.x')).toBe('ovgw_Ab-3.x')
   expect(shellQuote('<gateway-key>')).toBe("'<gateway-key>'")
   expect(shellQuote("it's")).toBe(`'it'"'"'s'`)
 })
 
 it('links the docs in the UI language', () => {
   expect(gatewayDocsUrl('guide', 'en')).toBe(
-    'https://docs.openviking.ai/en/guides/15-context-gateway',
+    'https://docs.openviking.ai/en/guides/15-gateway',
   )
   expect(gatewayDocsUrl('operations', 'zh-CN')).toBe(
-    'https://docs.openviking.ai/zh/guides/22-context-gateway-operations',
+    'https://docs.openviking.ai/zh/guides/22-gateway-operations',
   )
 })
 

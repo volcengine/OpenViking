@@ -8,14 +8,14 @@ import uuid
 import pytest
 from conftest import FakeViking
 
-from context_gateway.capture import CaptureWorker
-from context_gateway.capture_store import Document, LeaseLost
-from context_gateway.kernel import MemoryKernel
-from context_gateway.models import Policy
-from context_gateway.records import RecordKind as K
-from context_gateway.replay_store import INHERITED
-from context_gateway.storage import ManagementStore, digest
-from context_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.capture import CaptureWorker
+from openviking_gateway.capture_store import Document, LeaseLost
+from openviking_gateway.kernel import MemoryKernel
+from openviking_gateway.models import Policy
+from openviking_gateway.records import RecordKind as K
+from openviking_gateway.replay_store import INHERITED
+from openviking_gateway.storage import ManagementStore, digest
+from openviking_gateway.tool_protocols import ResponseCapture
 
 
 class KVReplay:
@@ -224,7 +224,7 @@ async def test_expired_lease_cannot_write_or_release_new_owner(setup_kernel):
 
 
 async def test_cache_coalesces_reads_and_reloads_after_invalidation():
-    from context_gateway.cache import TTLCache
+    from openviking_gateway.cache import TTLCache
 
     cache = TTLCache(ttl=2, capacity=16)
     count = 0

@@ -93,7 +93,7 @@ function Callout({
   happened?: string
   action?: string
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <Notice tone={tone} title={title}>
       <dl className="grid gap-x-4 gap-y-1.5 text-foreground sm:grid-cols-[8rem_minmax(0,1fr)]">
@@ -126,7 +126,7 @@ function hasTokens(record: LogRecord): boolean {
 }
 
 function TokenDetails({ record }: { record: LogRecord }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   if (!hasTokens(record)) return <Muted>{t('requests.details.noUsage')}</Muted>
   const total = tokenLine(
@@ -194,7 +194,7 @@ export function RequestDetails({
   keys,
   onResync,
 }: RequestDetailsProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const upstream = record.upstream_id
     ? upstreams?.get(record.upstream_id)

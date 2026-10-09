@@ -55,7 +55,7 @@ describe('gateway calls', () => {
     const [options] = request.mock.calls[0]
     expect(options).toMatchObject({
       method: 'PUT',
-      url: '/api/v1/admin/context-gateway/upstreams/a%2Fb',
+      url: '/api/v1/admin/gateway/upstreams/a%2Fb',
       body: input,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -70,7 +70,7 @@ describe('gateway calls', () => {
     ])
     expect(request.mock.calls[0][0]).toMatchObject({
       method: 'GET',
-      url: '/api/v1/admin/context-gateway/logs',
+      url: '/api/v1/admin/gateway/logs',
       query: { limit: 50 },
     })
     expect(request.mock.calls[0][0]).not.toHaveProperty('body')
@@ -89,7 +89,7 @@ describe('gateway calls', () => {
     await expect(listTools(connection)).resolves.toEqual(tools)
     expect(request.mock.calls[0][0]).toMatchObject({
       method: 'GET',
-      url: '/api/v1/admin/context-gateway/tools',
+      url: '/api/v1/admin/gateway/tools',
     })
     request.mockResolvedValue(ok([]))
     await expect(listTools(connection)).resolves.toEqual([])
@@ -114,9 +114,9 @@ describe('gateway calls', () => {
     expect(
       request.mock.calls.map(([options]) => [options.method, options.url]),
     ).toEqual([
-      ['POST', '/api/v1/admin/context-gateway/keys/key-1/capture/reset'],
-      ['POST', '/api/v1/admin/context-gateway/keys'],
-      ['DELETE', '/api/v1/admin/context-gateway/users/alice/data'],
+      ['POST', '/api/v1/admin/gateway/keys/key-1/capture/reset'],
+      ['POST', '/api/v1/admin/gateway/keys'],
+      ['DELETE', '/api/v1/admin/gateway/users/alice/data'],
     ])
   })
 })
@@ -163,11 +163,11 @@ describe('toGatewayError', () => {
         status: 'error',
         error: {
           code: 'UNAVAILABLE',
-          message: 'Context Gateway is not enabled',
+          message: 'OpenViking Gateway is not enabled',
         },
       },
       'not_enabled',
-      'Context Gateway is not enabled',
+      'OpenViking Gateway is not enabled',
     ],
     [
       'a missing management token',
@@ -176,11 +176,11 @@ describe('toGatewayError', () => {
         status: 'error',
         error: {
           code: 'UNAVAILABLE',
-          message: 'Context Gateway management token is not configured',
+          message: 'OpenViking Gateway management token is not configured',
         },
       },
       'token_missing',
-      'Context Gateway management token is not configured',
+      'OpenViking Gateway management token is not configured',
     ],
     [
       'an unreachable gateway',
@@ -189,12 +189,12 @@ describe('toGatewayError', () => {
         status: 'error',
         error: {
           code: 'UNAVAILABLE',
-          message: 'Context Gateway management service is unavailable',
+          message: 'OpenViking Gateway management service is unavailable',
           details: { original_http_status_code: 502 },
         },
       },
       'unreachable',
-      'Context Gateway management service is unavailable',
+      'OpenViking Gateway management service is unavailable',
     ],
     [
       'a management token that differs from the gateway',

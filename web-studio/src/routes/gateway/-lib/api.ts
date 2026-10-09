@@ -136,7 +136,7 @@ export type GatewayKey = {
   upstream_ids: string[]
   models: string[]
   user_id: string
-  /** First 12 characters of the secret, e.g. `ovcg_Ab3dE9x`. */
+  /** First 12 characters of the secret, e.g. `ovgw_Ab3dE9x`. */
   prefix: string
   /** Epoch seconds. */
   created_at: number
@@ -336,7 +336,7 @@ export class GatewayError extends Error {
 }
 
 const AVAILABILITY: Array<[RegExp, GatewayErrorReason]> = [
-  [/context gateway is not enabled/i, 'not_enabled'],
+  [/gateway is not enabled/i, 'not_enabled'],
   [/management token is not configured/i, 'token_missing'],
   // The gateway's answer when OpenViking sends a different management token.
   [/invalid gateway management credential/i, 'token_mismatch'],
@@ -396,7 +396,7 @@ export function toGatewayError(error: unknown): GatewayError {
   )
 }
 
-const BASE_PATH = '/api/v1/admin/context-gateway'
+const BASE_PATH = '/api/v1/admin/gateway'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
@@ -443,7 +443,7 @@ function send<T>(
 
 /**
  * Gateway address for clients; also the layout's availability probe. A 404
- * means the OpenViking server has no Context Gateway management at all.
+ * means the OpenViking server has no OpenViking Gateway management at all.
  */
 export async function getConnectionInfo(
   connection: AdminConnection,

@@ -2,8 +2,8 @@ import type { TFunction } from 'i18next'
 
 import { toGatewayError } from './api'
 
-/** `t` from `useTranslation('contextGateway')`. */
-export type Translate = TFunction<'contextGateway'>
+/** `t` from `useTranslation('gateway')`. */
+export type Translate = TFunction<'gateway'>
 
 /** Degradation reasons with a label, explanation and suggested action. */
 export const DEGRADATIONS = [

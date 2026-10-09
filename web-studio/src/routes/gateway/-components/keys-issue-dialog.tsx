@@ -51,7 +51,7 @@ import { ProtocolBadge, ToneBadge } from './status-badges'
 import { TagInput } from './tag-input'
 
 /** Prefix of gateway key secrets; such a key can't be bound to another key. */
-const GATEWAY_KEY_PREFIX = 'ovcg_'
+const GATEWAY_KEY_PREFIX = 'ovgw_'
 const MODEL_PREVIEW = 3
 
 type KeyField =
@@ -157,7 +157,7 @@ export function KeysIssueDialog({
   upstreams,
   onIssued,
 }: KeysIssueDialogProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, invalidate, role } = useGateway()
   // OpenViking may resolve a root key to another account than the one Studio
   // shows, so only an account admin picks the user; root pastes their key.
@@ -438,7 +438,7 @@ export function KeysIssueDialog({
                 <>
                   {t('keys.form.profile.empty')}{' '}
                   <Link
-                    to="/context-gateway/profiles/$profileId"
+                    to="/gateway/profiles/$profileId"
                     params={{ profileId: NEW_ID }}
                     className="font-medium text-foreground underline underline-offset-4"
                   >
@@ -511,7 +511,7 @@ export function KeysIssueDialog({
                 <>
                   {t('keys.form.upstreams.empty')}{' '}
                   <Link
-                    to="/context-gateway/upstreams/$upstreamId"
+                    to="/gateway/upstreams/$upstreamId"
                     params={{ upstreamId: NEW_ID }}
                     className="font-medium text-foreground underline underline-offset-4"
                   >
@@ -603,7 +603,7 @@ function ModeSwitch({
 
 /** A user's ID with a quiet role tag and, when they can't be picked, why. */
 function KeyUserLabel({ user }: { user: KeyUser }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <span className="flex min-w-0 items-baseline gap-2">
       <span className="truncate">{user.user_id}</span>
@@ -631,7 +631,7 @@ function UpstreamOption({
   disabled: boolean
   onCheckedChange: (checked: boolean) => void
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const models = servedModels(upstream)
   const shown = models.slice(0, MODEL_PREVIEW)
   return (

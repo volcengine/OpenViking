@@ -18,7 +18,7 @@ from openviking.server.auth import (
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.utils.config import get_openviking_config
 
-router = APIRouter(prefix="/api/v1/admin/context-gateway", tags=["context-gateway"])
+router = APIRouter(prefix="/api/v1/admin/gateway", tags=["gateway"])
 
 # Roles a gateway key may act as; root is never an account user.
 KEY_USER_ROLES = {"user", "admin"}
@@ -55,15 +55,15 @@ async def bind_selected_user(request: Request, ctx: RequestContext, body: bytes)
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 @require_auth_root_or_admin
-async def proxy_context_gateway(
+async def proxy_gateway(
     path: str, request: Request, ctx: RequestContext = Depends(get_request_context)
 ):
-    config = get_openviking_config().context_gateway
+    config = get_openviking_config().gateway
     if not config.enabled:
-        raise HTTPException(503, "Context Gateway is not enabled")
+        raise HTTPException(503, "OpenViking Gateway is not enabled")
     token = os.environ.get(config.admin_token_env, "")
     if len(token) < 32:
-        raise HTTPException(503, "Context Gateway management token is not configured")
+        raise HTTPException(503, "OpenViking Gateway management token is not configured")
     # Only fixed management resources. No caller-supplied destination or identity.
     if (
         path.split("/", 1)[0]
@@ -89,7 +89,7 @@ async def proxy_context_gateway(
                 headers=headers,
             )
     except httpx.HTTPError:
-        raise HTTPException(502, "Context Gateway management service is unavailable")
+        raise HTTPException(502, "OpenViking Gateway management service is unavailable")
     return Response(
         upstream.content,
         status_code=upstream.status_code,

@@ -145,7 +145,7 @@ describe('validateKeyRequest', () => {
 
   it('rejects a gateway key pasted as the OpenViking key', () => {
     expect(
-      validateKeyRequest({ ...settings, openviking_key: 'ovcg_abc' }),
+      validateKeyRequest({ ...settings, openviking_key: 'ovgw_abc' }),
     ).toEqual({ openviking_key: 'keys.form.openvikingKey.gatewayKey' })
   })
 })
@@ -451,9 +451,9 @@ describe('KeysIssueDialog', () => {
       upstream_ids: ['u2'],
       models: ['gpt-5'],
       user_id: 'alice',
-      prefix: 'ovcg_Ab3dE9x',
+      prefix: 'ovgw_Ab3dE9x',
       created_at: 1_700_000_000,
-      key: 'ovcg_secret',
+      key: 'ovgw_secret',
     }
     api.issueKey.mockResolvedValue(issued)
     const { onIssued } = renderIssueDialog([deepseek, openai])
@@ -520,9 +520,9 @@ describe('KeysSecretDialog', () => {
     upstream_ids: ['u1'],
     models: [],
     user_id: 'alice',
-    prefix: 'ovcg_Ab3dE9x',
+    prefix: 'ovgw_Ab3dE9x',
     created_at: 1_700_000_000,
-    key: 'ovcg_theSecret',
+    key: 'ovgw_theSecret',
   }
 
   function renderSecret(upstreams = [deepseek]) {
@@ -560,7 +560,7 @@ describe('KeysSecretDialog', () => {
     // Only a Chat Completions upstream: the chat client tab is selected.
     const snippet = screen.getByText(/chat\.completions\.create/)
     expect(snippet.textContent).toContain('https://gw.example.com/v1')
-    expect(snippet.textContent).toContain('ovcg_theSecret')
+    expect(snippet.textContent).toContain('ovgw_theSecret')
     expect(snippet.textContent).toContain('deepseek-chat')
     expect(screen.queryByText('keys.secret.noProtocol')).toBeNull()
   })

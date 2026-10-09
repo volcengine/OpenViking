@@ -25,7 +25,7 @@ OPENING = re.compile(
     r'<openviking-context source="gateway-session-start">.*?</openviking-context>', re.S
 )
 HEADER = (
-    "The OpenViking Context Gateway replaced the earlier part of this conversation with the "
+    "The OpenViking Gateway replaced the earlier part of this conversation with the "
     "summary below. The user did not write it, and the client does not show it."
 )
 INSTRUCTION = (
@@ -37,7 +37,7 @@ INSTRUCTION = (
     "- errors met and how they were corrected;\n"
     "- open items and next steps;\n"
     "- key facts from the latest tool results.\n"
-    "If an earlier summary from the OpenViking Context Gateway appears above, fold its content "
+    "If an earlier summary from the OpenViking Gateway appears above, fold its content "
     "into this one. Leave out the gateway's opening notes; the gateway adds them again. Write "
     "plain text, do not call tools, and stay under {tokens} tokens."
 )

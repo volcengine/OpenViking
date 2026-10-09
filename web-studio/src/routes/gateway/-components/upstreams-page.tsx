@@ -75,7 +75,7 @@ type ToggleVariables = { upstream: Upstream; enabled: boolean }
  * Returns `toggle` and the ids whose save is still running.
  */
 function useToggleUpstream() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, scope } = useGateway()
   const queryClient = useQueryClient()
   const queryKey = gatewayQueryKey(scope, 'upstreams')
@@ -117,7 +117,7 @@ function useToggleUpstream() {
 
 /** Model providers the gateway forwards requests to. */
 export function UpstreamsPage() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const upstreams = useUpstreams()
   const keys = useKeys()
   const { toggle, pending: toggling } = useToggleUpstream()
@@ -136,7 +136,7 @@ export function UpstreamsPage() {
       nativeButton={false}
       render={
         <Link
-          to="/context-gateway/upstreams/$upstreamId"
+          to="/gateway/upstreams/$upstreamId"
           params={{ upstreamId: NEW_ID }}
         />
       }
@@ -269,10 +269,10 @@ function UpstreamRow({
   onToggle,
   onDelete,
 }: UpstreamRowProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const editLink = (
     <Link
-      to="/context-gateway/upstreams/$upstreamId"
+      to="/gateway/upstreams/$upstreamId"
       params={{ upstreamId: upstream.id }}
     />
   )
@@ -282,7 +282,7 @@ function UpstreamRow({
         {/* Names wrap to two lines; the host shows in full unless very long. */}
         <div className="grid max-w-56 min-w-24 gap-0.5 md:min-w-40">
           <Link
-            to="/context-gateway/upstreams/$upstreamId"
+            to="/gateway/upstreams/$upstreamId"
             params={{ upstreamId: upstream.id }}
             className="line-clamp-2 font-medium break-words hover:underline"
             title={upstream.name}
@@ -404,7 +404,7 @@ function UpstreamRow({
 
 /** Up to three model chips, "+N" for the rest, or "Any model"; alias count after. */
 function ModelsSummary({ upstream }: { upstream: Upstream }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { models, aliases } = upstream
   const shown = models.slice(0, VISIBLE_MODELS)
   const hidden = models.slice(VISIBLE_MODELS)
@@ -452,7 +452,7 @@ function ModelsSummary({ upstream }: { upstream: Upstream }) {
 
 /** Who provides the provider key, with warnings that block every request. */
 function CredentialsSummary({ upstream }: { upstream: Upstream }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const keyMissing = upstream.auth_mode === 'managed' && !upstream.has_api_key
   const blocked = upstream.coding_plan && !upstream.allow_coding_plan
   return (

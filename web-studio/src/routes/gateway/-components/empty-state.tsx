@@ -51,7 +51,7 @@ export function EmptyState({
 
 /** Centered spinner with "Loading…", the same size as the other states. */
 export function LoadingState({ className }: { className?: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <div
       className={cn(
@@ -83,7 +83,7 @@ export function ErrorState({
   retrying = false,
   className,
 }: ErrorStateProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <EmptyState
       className={className}

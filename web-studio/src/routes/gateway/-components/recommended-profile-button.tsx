@@ -21,7 +21,7 @@ export function RecommendedProfileButton({
   variant = 'default',
   disabled = false,
 }: RecommendedProfileButtonProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { connection, invalidate } = useGateway()
   const create = useMutation({
     mutationFn: () =>

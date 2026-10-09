@@ -47,7 +47,7 @@ export function ConfirmDialog({
   destructive = true,
   onConfirm,
 }: ConfirmDialogProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const [pending, setPending] = React.useState(false)
   const [shown, setShown] = React.useState({ title, description })
   if (open && (shown.title !== title || shown.description !== description)) {

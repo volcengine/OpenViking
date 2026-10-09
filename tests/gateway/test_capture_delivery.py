@@ -6,15 +6,15 @@ import pytest
 from conftest import MCP_TOOLS, make_due, mcp_tool, update_capture
 from test_review_regressions import history, prepare, worker_for
 
-from context_gateway.blocks import history_hint
-from context_gateway.capture import (
+from openviking_gateway.blocks import history_hint
+from openviking_gateway.capture import (
     CapturePipeline,
     lineage,
     new_capture,
     reset_capture,
 )
-from context_gateway.tool_catalog import select_tools
-from context_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.tool_catalog import select_tools
+from openviking_gateway.tool_protocols import ResponseCapture
 
 PROTOCOLS = ["chat", "anthropic", "responses"]
 TURN = ["Question 0", "Answer 0", "Fix the build"]

@@ -55,7 +55,7 @@ function sameRecord(a: object, b: object): boolean {
  * out of the value; when a name repeats, the last row wins and is flagged.
  */
 export function KeyValueEditor(props: KeyValueEditorProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const { storedKeys = [], maskValues } = props
   const [rows, setRows] = React.useState(() => toRows(props.value))
   const [synced, setSynced] = React.useState<object>(props.value)

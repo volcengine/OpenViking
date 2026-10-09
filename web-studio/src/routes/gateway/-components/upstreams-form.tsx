@@ -192,7 +192,7 @@ export function UpstreamForm({
   onBlur,
   error,
 }: UpstreamFormProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const preview = endpointPreview(draft)
   const defaultUrl = defaultBaseUrl(draft.vendor, draft.protocol)
   const keyStored = Boolean(stored?.has_api_key)

@@ -6,21 +6,21 @@ import os
 from importlib.util import find_spec
 from pathlib import Path
 
-from .config import ContextGatewayConfig
+from .config import OpenVikingGatewayConfig
 
 
 def load_config():
     path = Path(os.environ.get("OPENVIKING_CONFIG_FILE", "~/.openviking/ov.conf")).expanduser()
     raw = json.loads(path.read_text()) if path.exists() else {}
-    config = ContextGatewayConfig.model_validate(raw.get("context_gateway", {}))
+    config = OpenVikingGatewayConfig.model_validate(raw.get("gateway", {}))
     if not config.enabled:
-        raise ValueError("Set context_gateway.enabled=true in ov.conf")
+        raise ValueError("Set gateway.enabled=true in ov.conf")
     return config
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OpenViking Context Gateway (separate from VikingBot Gateway)"
+        description="OpenViking Gateway (separate from VikingBot Gateway)"
     )
     parser.add_argument("--config", help="Path to ov.conf")
     args = parser.parse_args()
@@ -33,15 +33,15 @@ def main():
     ]
     if missing:
         raise SystemExit(
-            "Missing Context Gateway dependencies: "
+            "Missing OpenViking Gateway dependencies: "
             + ", ".join(missing)
-            + ". Install with: pip install 'openviking[context-gateway]'"
+            + ". Install with: pip install 'openviking[gateway]'"
         )
     config = load_config()
     import uvicorn
 
     uvicorn.run(
-        "context_gateway.app:create_app",
+        "openviking_gateway.app:create_app",
         factory=True,
         host=config.host,
         port=config.port,

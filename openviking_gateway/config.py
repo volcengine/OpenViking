@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class ContextGatewayConfig(BaseModel):
+class OpenVikingGatewayConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
@@ -19,9 +19,9 @@ class ContextGatewayConfig(BaseModel):
     url: str = "http://127.0.0.1:1935"
     openviking_url: str = "http://127.0.0.1:1933"
     public_url: str = ""
-    storage_path: str = "~/.openviking/context-gateway"
-    encryption_key_env: str = "OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY"
-    admin_token_env: str = "OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN"
+    storage_path: str = "~/.openviking/gateway"
+    encryption_key_env: str = "OPENVIKING_GATEWAY_ENCRYPTION_KEY"
+    admin_token_env: str = "OPENVIKING_GATEWAY_ADMIN_TOKEN"
     min_server_version: str = "0.4.16"
     session_ttl_days: int = Field(default=30, ge=1)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)

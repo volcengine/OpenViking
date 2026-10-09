@@ -87,7 +87,7 @@ const HEALTH_TONES: Record<string, Tone> = {
 
 /** OpenViking connection state from the overview: Connected / Degraded / Starting. */
 export function HealthBadge({ status }: { status: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <ToneBadge tone={HEALTH_TONES[status] ?? 'neutral'} dot>
       {healthLabel(t, status)}
@@ -120,7 +120,7 @@ export function CaptureStatusBadge({
   status?: string
   reason?: string
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   if (!status) return <EmptyValue />
   return (
     <ToneBadge
@@ -140,7 +140,7 @@ const KIND_TONES: Record<string, Tone> = {
 
 /** Request type: new message, tool step, housekeeping, memory sync… */
 export function KindBadge({ kind }: { kind?: string }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   if (!kind) return <EmptyValue />
   return (
     <ToneBadge tone={KIND_TONES[kind] ?? 'neutral'}>
@@ -170,7 +170,7 @@ export function ProtocolBadge({
   protocol: string
   className?: string
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <Badge
       variant="outline"
@@ -192,7 +192,7 @@ export function IssueBadge({
   degradation: string
   iconOnly?: boolean
 }) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const info = degradationInfo(t, degradation)
   return (
     <ToneBadge tone="warning" title={info.explanation}>

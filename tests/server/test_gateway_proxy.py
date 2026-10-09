@@ -10,10 +10,10 @@ from fastapi import FastAPI
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers import context_gateway
+from openviking.server.routers import gateway
 from openviking_cli.session.user_id import UserIdentifier
 
-TOKEN_ENV = "TEST_CONTEXT_GATEWAY_ADMIN_TOKEN"
+TOKEN_ENV = "TEST_GATEWAY_ADMIN_TOKEN"
 USERS = {
     "a": [
         {"user_id": "alice", "role": "user", "api_key": "alice-key"},
@@ -29,7 +29,7 @@ SETTINGS = {"name": "Laptop", "policy_id": "p", "upstream_ids": ["u"], "models":
 @pytest.fixture
 def app():
     app = FastAPI()
-    app.include_router(context_gateway.router)
+    app.include_router(gateway.router)
     app.state.api_key_manager = SimpleNamespace(
         refresh_account_users_from_store=AsyncMock(),
         get_users=lambda account_id, **kwargs: USERS[account_id],
@@ -45,23 +45,23 @@ def forwarded(monkeypatch):
     """Requests that reached the gateway's management API."""
     calls = []
 
-    def gateway(request):
+    def management_api(request):
         calls.append(request)
-        return httpx.Response(200, json={"id": "k", "key": "ovcg_secret"})
+        return httpx.Response(200, json={"id": "k", "key": "ovgw_secret"})
 
     monkeypatch.setenv(TOKEN_ENV, "t" * 32)
     config = SimpleNamespace(enabled=True, admin_token_env=TOKEN_ENV, url="http://gateway")
     monkeypatch.setattr(
-        context_gateway,
+        gateway,
         "get_openviking_config",
-        lambda: SimpleNamespace(context_gateway=config),
+        lambda: SimpleNamespace(gateway=config),
     )
     monkeypatch.setattr(
-        context_gateway,
+        gateway,
         "httpx",
         SimpleNamespace(
             AsyncClient=lambda **kwargs: httpx.AsyncClient(
-                transport=httpx.MockTransport(gateway), **kwargs
+                transport=httpx.MockTransport(management_api), **kwargs
             ),
             HTTPError=httpx.HTTPError,
         ),
@@ -73,7 +73,7 @@ async def send(app, method, path, **kwargs):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        return await client.request(method, "/api/v1/admin/context-gateway/" + path, **kwargs)
+        return await client.request(method, "/api/v1/admin/gateway/" + path, **kwargs)
 
 
 @pytest.mark.parametrize("user_id,key", [("alice", "alice-key"), ("boss", "boss-key")])

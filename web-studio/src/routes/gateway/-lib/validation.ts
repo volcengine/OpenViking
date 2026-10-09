@@ -1,5 +1,5 @@
 /**
- * A validation problem as an i18n key under `contextGateway` plus its
+ * A validation problem as an i18n key under `gateway` plus its
  * interpolation values: render it with `t(issue.key, issue.values)`.
  */
 export type FieldIssue = {

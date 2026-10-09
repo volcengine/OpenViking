@@ -37,10 +37,8 @@ type SetupReason = Extract<
 >
 
 const CONFIG_FILE = 'ov.conf'
-const START_COMMAND =
-  'openviking-context-gateway --config ~/.openviking/ov.conf'
-const TOKEN_VARIABLE =
-  'OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN=<management-token>'
+const START_COMMAND = 'openviking-gateway --config ~/.openviking/ov.conf'
+const TOKEN_VARIABLE = 'OPENVIKING_GATEWAY_ADMIN_TOKEN=<management-token>'
 
 /** Where a fix goes: a key in ov.conf, a shell command or an environment variable. */
 type FixTarget = 'ovConf' | 'terminal' | 'environment'
@@ -58,7 +56,7 @@ const SETUP: Record<
     fixes: [
       {
         target: 'ovConf',
-        code: JSON.stringify({ context_gateway: { enabled: true } }, null, 2),
+        code: JSON.stringify({ gateway: { enabled: true } }, null, 2),
       },
       { target: 'terminal', code: START_COMMAND },
     ],
@@ -81,7 +79,7 @@ const SETUP: Record<
       {
         target: 'ovConf',
         code: JSON.stringify(
-          { context_gateway: { url: 'http://127.0.0.1:1935' } },
+          { gateway: { url: 'http://127.0.0.1:1935' } },
           null,
           2,
         ),
@@ -94,7 +92,7 @@ const SETUP: Record<
     fixes: [
       {
         target: 'terminal',
-        code: 'pip install --upgrade "openviking[context-gateway]"',
+        code: 'pip install --upgrade "openviking[gateway]"',
       },
     ],
   },
@@ -114,7 +112,7 @@ function SetupCard({
   fixes: Fix[]
   actions?: React.ReactNode
 }) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   return (
     <Card className="mx-auto w-full max-w-2xl">
       <CardHeader className="gap-3">
@@ -167,7 +165,7 @@ function SetupCard({
  * mode: every key acts as root there, which the gateway refuses.
  */
 export function GatewayDevMode() {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   return (
     <SetupCard
       icon={<CodeIcon />}
@@ -213,7 +211,7 @@ export function GatewayUnavailable({
   onRetry,
   retrying = false,
 }: GatewayUnavailableProps) {
-  const { t } = useTranslation('contextGateway')
+  const { t } = useTranslation('gateway')
   const retry = (
     <Button
       type="button"

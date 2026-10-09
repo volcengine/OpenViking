@@ -1,6 +1,6 @@
 # Real client request fixtures
 
-Recorded on 2026-10-02 against a local Context Gateway forwarding to the live
+Recorded on 2026-10-02 against a local OpenViking Gateway forwarding to the live
 Ark `deepseek-v4-1-flash-260910` model. Each file contains the last two requests
 from a successful synthetic deployment-cluster question and resumed follow-up.
 

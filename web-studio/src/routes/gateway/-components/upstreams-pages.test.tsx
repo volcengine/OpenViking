@@ -114,7 +114,7 @@ function gatewayKey(id: string, upstreamIds: string[]): GatewayKey {
     upstream_ids: upstreamIds,
     models: [],
     user_id: 'alice',
-    prefix: 'ovcg_abc',
+    prefix: 'ovgw_abc',
     created_at: 1_700_000_000,
   }
 }
@@ -142,12 +142,12 @@ function renderAt(path: string) {
     routeTree: root.addChildren([
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/upstreams',
+        path: '/gateway/upstreams',
         component: UpstreamsPage,
       }),
       createRoute({
         getParentRoute: () => root,
-        path: '/context-gateway/upstreams/$upstreamId',
+        path: '/gateway/upstreams/$upstreamId',
         component: EditorRoute,
       }),
     ]),
@@ -217,7 +217,7 @@ afterEach(cleanup)
 
 describe('UpstreamsPage', () => {
   it('summarizes each upstream', async () => {
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     await screen.findByText('OpenAI')
 
     const first = rowOf('OpenAI')
@@ -245,7 +245,7 @@ describe('UpstreamsPage', () => {
 
   it('explains an empty account', async () => {
     api.listUpstreams.mockResolvedValue([])
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     expect(await screen.findByText('upstreams.empty.title')).toBeTruthy()
     expect(screen.getAllByText('upstreams.add').length).toBe(2)
   })
@@ -257,7 +257,7 @@ describe('UpstreamsPage', () => {
         reject = fail
       }),
     )
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     const toggle = await screen.findByRole('switch', {
       name: 'upstreams.toggle.disable OpenAI',
     })
@@ -290,7 +290,7 @@ describe('UpstreamsPage', () => {
           saves.push(fail)
         }),
     )
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     const first = await screen.findByRole('switch', {
       name: 'upstreams.toggle.disable OpenAI',
     })
@@ -313,7 +313,7 @@ describe('UpstreamsPage', () => {
 
   it('shows the test result in the row and blocks tests without a stored key', async () => {
     api.testUpstream.mockResolvedValue({ ok: true, status: 200 })
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     await screen.findByText('OpenAI')
 
     fireEvent.click(
@@ -334,7 +334,7 @@ describe('UpstreamsPage', () => {
 
   it('deletes an unused upstream after confirmation', async () => {
     api.deleteUpstream.mockResolvedValue({ deleted: true })
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     await screen.findByText('Ark')
 
     fireEvent.click(rowOf('Ark').getByRole('button', { name: 'actions.more' }))
@@ -348,7 +348,7 @@ describe('UpstreamsPage', () => {
   })
 
   it('blocks deleting an upstream that keys use', async () => {
-    renderAt('/context-gateway/upstreams')
+    renderAt('/gateway/upstreams')
     await screen.findByText('OpenAI')
     await waitFor(() =>
       expect(rowOf('OpenAI').getByText('upstreams.usedBy')).toBeTruthy(),
@@ -367,7 +367,7 @@ describe('UpstreamsPage', () => {
 
 describe('UpstreamEditor', () => {
   it('keeps stored secrets and previews the endpoint while editing', async () => {
-    const router = renderAt('/context-gateway/upstreams/u1')
+    const router = renderAt('/gateway/upstreams/u1')
     const name = await screen.findByLabelText('upstreams.form.name.label')
     expect((name as HTMLInputElement).value).toBe('OpenAI')
     expect(screen.getByText('upstreams.form.apiKey.stored')).toBeTruthy()
@@ -406,12 +406,12 @@ describe('UpstreamEditor', () => {
     })
     expect(toast.success).toHaveBeenCalledWith('upstreams.toast.saved OpenAI')
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe('/context-gateway/upstreams'),
+      expect(router.state.location.pathname).toBe('/gateway/upstreams'),
     )
   })
 
   it('blocks deleting while keys use the upstream', async () => {
-    renderAt('/context-gateway/upstreams/u1')
+    renderAt('/gateway/upstreams/u1')
     await screen.findByLabelText('upstreams.form.name.label')
     await waitFor(() =>
       expect(screen.getByTitle('upstreams.delete.blocked')).toBeTruthy(),
@@ -423,7 +423,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('creates an upstream once the required fields are valid', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     expect(await screen.findByText('upstreams.editor.newTitle')).toBeTruthy()
     const create = screen.getByRole('button', {
       name: 'upstreams.editor.create',
@@ -460,7 +460,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('shows settings that depend on the provider, key mode and plan', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
     expect(screen.queryByText('upstreams.form.cacheMinTokens.label')).toBeNull()
     expect(screen.queryByText('upstreams.form.codingPlan.warning')).toBeNull()
@@ -481,7 +481,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('offers only the protocols the chosen provider supports', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
     expect(protocolRadio('chat').getAttribute('aria-checked')).toBe('true')
     expect(screen.queryByText('upstreams.form.protocol.unsupported')).toBeNull()
@@ -506,7 +506,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('keeps a supported protocol and replaces an unsupported one', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
     fireEvent.click(screen.getByText('enums.protocol.anthropic'))
     await waitFor(() =>
@@ -533,7 +533,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('preselects reasoning restore by provider and saves only a deviation', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
     const toggle = () =>
       screen.getByRole('switch', {
@@ -568,7 +568,7 @@ describe('UpstreamEditor', () => {
   })
 
   it("fills in the provider's default base URL for each protocol", async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
     expect(baseUrlInput().value).toBe('')
 
@@ -596,7 +596,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('flags a base URL cleared by a provider switch only once visited', async () => {
-    renderAt('/context-gateway/upstreams/new')
+    renderAt('/gateway/upstreams/new')
     await screen.findByText('upstreams.editor.newTitle')
 
     await chooseVendor('openai')
@@ -616,7 +616,7 @@ describe('UpstreamEditor', () => {
     api.listUpstreams.mockResolvedValue([
       { ...openai, base_url: 'https://proxy.example.com/v1' },
     ])
-    renderAt('/context-gateway/upstreams/u1')
+    renderAt('/gateway/upstreams/u1')
     await screen.findByLabelText('upstreams.form.name.label')
     expect(baseUrlInput().value).toBe('https://proxy.example.com/v1')
 
@@ -646,7 +646,7 @@ describe('UpstreamEditor', () => {
     api.listUpstreams.mockResolvedValue([
       { ...openai, id: 'u4', name: 'Mismatch', protocol: 'anthropic' },
     ])
-    renderAt('/context-gateway/upstreams/u4')
+    renderAt('/gateway/upstreams/u4')
     await screen.findByLabelText('upstreams.form.name.label')
 
     // Shown at once and left as stored, not switched behind the user's back.
@@ -666,7 +666,7 @@ describe('UpstreamEditor', () => {
   })
 
   it('reports an upstream that no longer exists', async () => {
-    renderAt('/context-gateway/upstreams/gone')
+    renderAt('/gateway/upstreams/gone')
     expect(
       await screen.findByText('upstreams.editor.notFound.title'),
     ).toBeTruthy()

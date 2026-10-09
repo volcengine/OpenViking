@@ -7,8 +7,8 @@ import pytest
 from aiohttp import web
 from test_app import enable_tools
 
-from context_gateway.protocols import SSEDecoder
-from context_gateway.tool_protocols.common import sse
+from openviking_gateway.protocols import SSEDecoder
+from openviking_gateway.tool_protocols.common import sse
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
 
@@ -684,7 +684,7 @@ async def test_native_incompatible_mode_keeps_only_visible_history(
     header = {"x-openviking-session": "native-tools"}
     prepared = await kernel.prepare(body, protocol, header, credential, {"id": "u"}, policy)
     native = native_response(protocol, 1, owned=True)
-    from context_gateway.tool_protocols import hidden_chain
+    from openviking_gateway.tool_protocols import hidden_chain
 
     output = (
         native["output"][:-1]
@@ -761,8 +761,8 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
     import asyncio
     from types import SimpleNamespace
 
-    from context_gateway.tool_loop import HiddenToolLoop
-    from context_gateway.tool_protocols import ResponseCapture
+    from openviking_gateway.tool_loop import HiddenToolLoop
+    from openviking_gateway.tool_protocols import ResponseCapture
 
     value = native_response(protocol, 1, owned=True)
     events = native_events(protocol, value)
@@ -807,9 +807,9 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
 async def test_native_replay_survives_restart_edits_and_archive_boundary(
     setup_kernel, credential, policy, protocol
 ):
-    from context_gateway.compaction import apply_cut
-    from context_gateway.storage import SQLiteKernelStore
-    from context_gateway.tool_protocols import hidden_chain, replay_hidden
+    from openviking_gateway.compaction import apply_cut
+    from openviking_gateway.storage import SQLiteKernelStore
+    from openviking_gateway.tool_protocols import hidden_chain, replay_hidden
 
     kernel, store, _, encryption = setup_kernel
     policy.update(gateway_tools=True, recall=False)
@@ -862,8 +862,8 @@ async def test_native_replay_survives_restart_edits_and_archive_boundary(
 
 
 def test_custom_responses_tools_are_captured_as_complete_pairs():
-    from context_gateway.capture import capture_messages
-    from context_gateway.protocols import prefix_chain
+    from openviking_gateway.capture import capture_messages
+    from openviking_gateway.protocols import prefix_chain
 
     messages = [
         {"role": "user", "content": "check the directory"},
@@ -893,8 +893,8 @@ def test_custom_responses_tools_are_captured_as_complete_pairs():
 async def test_responses_notice_removal_follows_injection_replay_and_archive_cut(
     setup_kernel, credential, policy, archive
 ):
-    from context_gateway.protocols import text_content
-    from context_gateway.tool_protocols import hidden_chain
+    from openviking_gateway.protocols import text_content
+    from openviking_gateway.tool_protocols import hidden_chain
 
     kernel, store, viking, _ = setup_kernel
     policy.update(gateway_tools=True, capture=False)
@@ -956,8 +956,8 @@ async def test_hidden_round_with_no_visible_anchor_does_not_write_a_root_record(
 ):
     from types import SimpleNamespace
 
-    from context_gateway.tool_loop import HiddenToolLoop
-    from context_gateway.tool_protocols import ResponseCapture
+    from openviking_gateway.tool_loop import HiddenToolLoop
+    from openviking_gateway.tool_protocols import ResponseCapture
 
     kernel, store, _, _ = setup_kernel
     policy.update(gateway_tools=True, recall=False)
@@ -986,8 +986,8 @@ async def test_tool_loop_reply_reads_like_a_relayed_one(
     """Calls left for the client hand the turn off; only a final answer completes it."""
     from types import SimpleNamespace
 
-    from context_gateway.tool_loop import HiddenToolLoop
-    from context_gateway.tool_protocols import ResponseCapture
+    from openviking_gateway.tool_loop import HiddenToolLoop
+    from openviking_gateway.tool_protocols import ResponseCapture
 
     kernel, store, _, _ = setup_kernel
     policy.update(gateway_tools=True, recall=False)
@@ -1008,7 +1008,7 @@ async def test_tool_loop_reply_reads_like_a_relayed_one(
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 def test_native_file_attachments_preserve_bytes(protocol):
-    from context_gateway.tool_executor import attachment_bytes, attachments
+    from openviking_gateway.tool_executor import attachment_bytes, attachments
 
     part = (
         {"type": "input_file", "filename": "note.txt", "file_data": "aGVsbG8="}

@@ -48,7 +48,7 @@ import type { ResyncRequest } from './request-details'
 import { RequestRow, RequestsTableHeader } from './requests-row'
 import { SectionHeader } from './section-header'
 
-const route = getRouteApi('/context-gateway/requests')
+const route = getRouteApi('/gateway/requests')
 
 /** The gateway returns at most this many records; filtering is client-side. */
 const LOG_LIMIT = 1000
@@ -146,7 +146,7 @@ function rowKeys(records: LogRecord[]): string[] {
 
 /** Request log (`?filter=messages|tools|issues`). */
 export function RequestsPage() {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const navigate = useNavigate()
   const search = route.useSearch()
@@ -240,7 +240,7 @@ export function RequestsPage() {
     setPage(1)
     if (SEGMENT_KINDS[next]) setKind('all')
     void navigate({
-      to: '/context-gateway/requests',
+      to: '/gateway/requests',
       search: next === 'all' ? {} : { filter: next },
       replace: true,
     })
@@ -287,7 +287,7 @@ export function RequestsPage() {
           <Button
             size="sm"
             nativeButton={false}
-            render={<Link to="/context-gateway/connect" />}
+            render={<Link to="/gateway/connect" />}
           >
             <PlugIcon />
             {t('requests.empty.action')}
@@ -492,7 +492,7 @@ function RequestsFooter({
   total,
   onPageChange,
 }: RequestsFooterProps) {
-  const { t, i18n } = useTranslation('contextGateway')
+  const { t, i18n } = useTranslation('gateway')
   const locale = i18n.resolvedLanguage
   const start = Math.max(1, Math.min(page - 2, pageCount - 4))
   const pages = Array.from(
