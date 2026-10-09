@@ -366,7 +366,10 @@ async def test_managed_workspace_cannot_mount_server_credentials(tmp_path, escap
     credentials.mkdir()
     if escape == "symlink":
         workspace = root / "shared"
-        workspace.symlink_to(credentials, target_is_directory=True)
+        try:
+            workspace.symlink_to(credentials, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks are unavailable: {exc}")
     else:
         workspace = credentials
     manager = SandboxManager(config, root, tmp_path / "source")

@@ -1131,7 +1131,10 @@ async def test_add_resource_rejects_temp_file_id_symlink(
     real_file = tmp_path / "outside.md"
     real_file.write_text("# outside\n")
     symlink_path = upload_temp_dir / "linked.md"
-    symlink_path.symlink_to(real_file)
+    try:
+        symlink_path.symlink_to(real_file)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
 
     resp = await client.post(
         "/api/v1/resources",
