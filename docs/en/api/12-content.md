@@ -216,7 +216,7 @@ Write a file and automatically refresh related semantics and vectors.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` creates only a missing file and returns `409 Conflict` if it already exists |
+| mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
@@ -224,10 +224,11 @@ Write a file and automatically refresh related semantics and vectors.
 
 **Notes**
 
-- `replace` and `append` create a missing target file. `append` uses the supplied content as the initial file content in that case. `create` targets only a missing file and returns `409 Conflict` when the path already exists. Directories are always rejected.
-- Explicit `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
+- `replace`, `append`, and the `create` compatibility alias create a missing target file. `append` uses the supplied content as the initial file content in that case; `create` otherwise behaves exactly like `replace`. Directories are always rejected.
+- Creating a missing file with any mode only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
+- Once file content is committed, a later semantic/vector enqueue failure does not roll it back. The request returns an error; retry the same write to resubmit derived maintenance. Explicit writes always recommit their final bytes, so retries remain safe while the vector index lags the file.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
 - When non-empty `tags` are supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags`, or using `tags: []` with `tag_mode: "replace"`, preserves existing tags. Use `tag_mode: "clear"` to remove all existing tags; `clear` ignores any supplied tag values.
