@@ -720,6 +720,53 @@ async def test_incremental_inventory_projects_request_scalar_fields():
 
 
 @pytest.mark.asyncio
+async def test_incremental_inventory_by_uris_reads_exact_uri_groups_only():
+    first = "viking://resources/docs/a.py"
+    second = "viking://resources/docs/b.py"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("a-l2", first, level=2, md5="ma", abstract="A"),
+            _record("b-l2", second, level=2, md5="mb", abstract="B"),
+            _record("parent-l1", "viking://resources/docs", level=1),
+            _record("sibling-l2", "viking://resources/docs/c.py", level=2),
+        ]
+    )
+
+    records = await backend.get_incremental_inventory_by_uris(
+        [first, second],
+        ctx=_ctx(),
+        batch_size=1,
+        output_fields=["id", "uri", "level", "md5", "abstract"],
+    )
+
+    assert records == {
+        first: {
+            "a-l2": {
+                "id": "a-l2",
+                "uri": first,
+                "level": 2,
+                "md5": "ma",
+                "abstract": "A",
+            }
+        },
+        second: {
+            "b-l2": {
+                "id": "b-l2",
+                "uri": second,
+                "level": 2,
+                "md5": "mb",
+                "abstract": "B",
+            }
+        },
+    }
+    assert all(isinstance(filter, And) for filter in backend.scroll_filters)
+    assert all(
+        any(isinstance(condition, In) and condition.field == "uri" for condition in filter.conds)
+        for filter in backend.scroll_filters
+    )
+
+
+@pytest.mark.asyncio
 async def test_incremental_hydration_fetches_records_by_primary_key():
     root = "viking://resources/docs"
     first = _record("root-l0", root, level=0, abstract="root abstract")

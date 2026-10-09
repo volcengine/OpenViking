@@ -578,6 +578,43 @@ async def test_build_rnfv_snapshot_self_scope_reads_only_target_uri():
 
 
 @pytest.mark.asyncio
+async def test_build_rnfv_snapshot_uses_preloaded_file_vector_inventory():
+    from unittest.mock import AsyncMock
+
+    root = "viking://resources/x/a.py"
+    vikingdb = _FakeVikingDB({})
+    vikingdb.get_incremental_inventory_under_uri = AsyncMock(
+        side_effect=AssertionError("preloaded V must avoid a second file inventory read")
+    )
+    preloaded_inventory = {
+        "self-l2": {
+            "id": "self-l2",
+            "uri": root,
+            "level": 2,
+            "md5": "old",
+            "abstract": "existing abstract",
+        }
+    }
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=vikingdb,
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=make_inline_file_inventory(b"new"),
+        root_is_file=True,
+        target_preexisting=False,
+        vector_scope="self",
+        vector_inventory=preloaded_inventory,
+    )
+
+    assert snapshot.vectors.records_by_id["self-l2"].fields["abstract"] == "existing abstract"
+    vikingdb.get_incremental_inventory_under_uri.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_build_rnfv_snapshot_default_scope_reads_subtree():
     root = "viking://resources/x"
     vikingdb = _FakeVikingDB(

@@ -576,6 +576,7 @@ async def build_rnfv_snapshot(
     formal_snapshot: tuple[Dict[str, FormalEntry], bool] | None = None,
     artifact_inventory: ArtifactInventory | None = None,
     vector_scope: Literal["subtree", "self"] = "subtree",
+    vector_inventory: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> RNFVSnapshot:
     """Read the complete R/N/F/V inputs without deriving an executable plan.
 
@@ -609,7 +610,7 @@ async def build_rnfv_snapshot(
         asyncio.create_task(read_artifact()),
         asyncio.create_task(read_formal()),
     ]
-    if request.vectorize:
+    if request.vectorize and vector_inventory is None:
         tasks.append(
             asyncio.create_task(
                 _read_incremental_vector_inventory(
@@ -630,7 +631,13 @@ async def build_rnfv_snapshot(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     artifact, formal = results[:2]
-    inventory = results[2] if request.vectorize else {}
+    inventory = (
+        dict(vector_inventory)
+        if request.vectorize and vector_inventory is not None
+        else results[2]
+        if request.vectorize
+        else {}
+    )
     target_files, files_complete = formal
     base = target_uri.rstrip("/")
     prefix = base + "/"

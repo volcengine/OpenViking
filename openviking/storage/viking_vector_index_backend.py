@@ -2339,6 +2339,85 @@ class VikingVectorIndexBackend:
         assert last_error is not None
         raise last_error
 
+    async def get_incremental_inventory_by_uris(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+        output_fields: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Strictly read lightweight inventory for an exact, bounded URI set.
+
+        Unlike :meth:`get_incremental_inventory_under_uri`, this never uses a
+        path scope: every returned record must belong to one of ``uris``.  The
+        result remains keyed by the caller's URI spelling and then by record ID
+        so file-scoped RNFV snapshots can consume a pre-hydrated V subset
+        without one vector query per file.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
+        requested_by_canonical: Dict[str, str] = {}
+        for uri in uris:
+            requested_by_canonical.setdefault(resolve_uri(uri).uri, uri)
+        canonical_uris = list(requested_by_canonical)
+        if not canonical_uris:
+            return {}
+
+        projection = list(
+            dict.fromkeys(
+                [
+                    *INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+                    *(output_fields or []),
+                ]
+            )
+        )
+        records_by_uri: Dict[str, Dict[str, Dict[str, Any]]] = {uri: {} for uri in canonical_uris}
+        for start in range(0, len(canonical_uris), batch_size):
+            chunk = canonical_uris[start : start + batch_size]
+            scope = And(
+                [
+                    Eq("account_id", ctx.account_id),
+                    In("uri", chunk),
+                    In("level", [0, 1, 2]),
+                ]
+            )
+            what = f"Incremental inventory for {len(chunk)} exact URI(s)"
+            async for record in self._strict_scan(
+                ctx,
+                scope,
+                output_fields=projection,
+                batch_size=batch_size,
+                what=what,
+            ):
+                record_id = str(record.get("id") or "")
+                record_uri = str(record.get("uri") or "")
+                try:
+                    level = int(record.get("level"))
+                except (TypeError, ValueError):
+                    level = -1
+                if not record_id or record_uri not in records_by_uri or level not in {0, 1, 2}:
+                    raise RuntimeError(
+                        f"{what} returned an invalid record: id={record_id or '<missing>'} "
+                        f"uri={record_uri or '<missing>'} level={level}"
+                    )
+                if record_id in records_by_uri[record_uri]:
+                    raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
+                records_by_uri[record_uri][record_id] = {
+                    field: record[field] for field in projection if field in record
+                }
+                records_by_uri[record_uri][record_id].update(
+                    {
+                        "id": record_id,
+                        "uri": record_uri,
+                        "level": level,
+                        "md5": str(record.get("md5") or ""),
+                    }
+                )
+
+        return {requested_by_canonical[uri]: records for uri, records in records_by_uri.items()}
+
     async def hydrate_incremental_records(
         self,
         expected: Mapping[str, Mapping[str, Any]],

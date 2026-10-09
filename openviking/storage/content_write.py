@@ -38,12 +38,16 @@ from openviking.storage.abstract_overview import (
     prepare_abstract_overview_write,
 )
 from openviking.storage.acl import AclAction, AclSpec
-from openviking.storage.context_update_execution import commit_and_enqueue_plan
+from openviking.storage.context_update_execution import (
+    commit_and_enqueue_plan,
+    enqueue_direct_index_actions,
+)
 from openviking.storage.context_update_plan import (
     ContentTreeAction,
     ContentTreeOperation,
     ContextUpdatePlan,
     build_context_update_plan_from_snapshot,
+    execute_content_tree_actions,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.internal_names import is_storage_internal_name
@@ -65,9 +69,9 @@ from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
+from openviking.utils.summarizer import FileRefreshRequest, Summarizer
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
-    AlreadyExistsError,
     ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
@@ -125,6 +129,20 @@ class _LockedWriteTarget:
         return not self.preexisting
 
 
+@dataclass(frozen=True)
+class _PreparedBatchResource:
+    """One ordinary resource operation compiled before any batch F commit."""
+
+    uri: str
+    existed: bool
+    final_bytes: bytes
+    plan: ContextUpdatePlan
+    store: InlineBytesStore
+    artifact_ref: _InlineArtifactRef
+    target: AgfsResourceTarget
+    previous_abstract: str = ""
+
+
 def _queue_has_errors(queue_status: Optional[Dict[str, Any]], name: str) -> bool:
     if not isinstance(queue_status, dict):
         return False
@@ -145,14 +163,13 @@ class _BatchRefreshOutcome:
     embedding_requested: bool = False
 
     def statuses(self, *, wait: bool) -> tuple[str, str]:
-        if FreshnessAction.NOOP in self.semantic_actions:
-            semantic_status = "skipped"
-        elif self.semantic_actions:
-            semantic_status = (
-                "deferred"
-                if all(action is FreshnessAction.MARK_PENDING for action in self.semantic_actions)
-                else ("complete" if wait else "queued")
-            )
+        if self.semantic_actions:
+            if any(action is FreshnessAction.REFRESH_NOW for action in self.semantic_actions):
+                semantic_status = "complete" if wait else "queued"
+            elif any(action is FreshnessAction.MARK_PENDING for action in self.semantic_actions):
+                semantic_status = "deferred"
+            else:
+                semantic_status = "skipped"
         else:
             semantic_status = "complete" if self.memory_refreshed else "skipped"
 
@@ -292,6 +309,8 @@ class ContentWriteCoordinator:
         sidecar_directories: set[str] = set()
         pending: list[tuple[dict[str, Any], bool, str]] = []
         conflicts: list[dict[str, str]] = []
+        prepared_resources: dict[str, _PreparedBatchResource] = {}
+        committed_resource_plans: list[_PreparedBatchResource] = []
         write_error: Exception | None = None
         lock_released = False
         try:
@@ -303,9 +322,11 @@ class ContentWriteCoordinator:
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
 
                 requested_mode = operation["mode"]
-                write_mode = requested_mode
-                if write_mode == "upsert":
-                    write_mode = "replace" if exists else "create"
+                # Batch-write follows the same materialization contract as a
+                # single explicit write: create/replace/upsert all establish
+                # the requested final body, while append only needs the old
+                # body when it already exists.
+                write_mode = "append" if requested_mode == "append" and exists else "replace"
 
                 if is_abstract_overview_uri(uri):
                     if not exists:
@@ -315,10 +336,6 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
-                    if write_mode == "create" and exists:
-                        raise AlreadyExistsError(uri, "file")
-                    if write_mode in {"replace", "append"} and not exists:
-                        raise NotFoundError(uri, "file")
                     expected = operation.get("expected_sha256")
                     if expected is not None:
                         if not exists:
@@ -332,13 +349,18 @@ class ContentWriteCoordinator:
                         if skip_conflicts and write_mode == "replace" and current == desired:
                             unchanged.append(uri)
                             continue
-                except (AlreadyExistsError, NotFoundError, ConflictError) as exc:
+                except ConflictError as exc:
                     if not skip_conflicts:
                         raise
                     conflicts.append({"uri": uri, "code": exc.code, "message": str(exc)})
                     continue
                 pending.append((operation, exists, write_mode))
 
+            prepared_resources = await self._prepare_batch_resource_plans(
+                pending=pending,
+                ctx=ctx,
+                lease=lease,
+            )
             file_abstracts = await self._load_file_abstracts(
                 [
                     operation["uri"]
@@ -346,6 +368,7 @@ class ContentWriteCoordinator:
                     if existed
                     and context_type_for_uri(operation["uri"]) in {"resource", "skill"}
                     and not is_abstract_overview_uri(operation["uri"])
+                    and operation["uri"] not in prepared_resources
                 ],
                 ctx=ctx,
             )
@@ -353,13 +376,25 @@ class ContentWriteCoordinator:
             for operation, existed, write_mode in pending:
                 uri = operation["uri"]
                 try:
-                    final_content = await self._write_in_place(
-                        uri,
-                        operation["content"],
-                        mode=write_mode,
-                        ctx=ctx,
-                        lease_ref=lease,
-                    )
+                    prepared = prepared_resources.get(uri)
+                    if prepared is not None:
+                        await execute_content_tree_actions(
+                            prepared.plan.content_tree_actions,
+                            store=prepared.store,
+                            artifact_ref=prepared.artifact_ref,
+                            target=prepared.target,
+                        )
+                        final_content = prepared.final_bytes
+                        committed_resource_plans.append(prepared)
+                    else:
+                        final_content = await self._write_in_place(
+                            uri,
+                            operation["content"],
+                            mode=write_mode,
+                            ctx=ctx,
+                            lease_ref=lease,
+                            is_new_file=not existed,
+                        )
                     if context_type_for_uri(uri) in {
                         "resource",
                         "skill",
@@ -374,11 +409,12 @@ class ContentWriteCoordinator:
                         parent = VikingURI(uri).parent
                         if parent is not None:
                             sidecar_directories.add(parent.uri)
-                    else:
+                    elif prepared is None:
                         refresh_kinds[uri] = "modified"
                 else:
                     created.append(uri)
-                    refresh_kinds[uri] = "added"
+                    if prepared is None:
+                        refresh_kinds[uri] = "added"
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
@@ -388,7 +424,7 @@ class ContentWriteCoordinator:
         request_registered = False
         refresh_outcome: Optional[_BatchRefreshOutcome] = None
         try:
-            if refresh_kinds or sidecar_directories:
+            if refresh_kinds or sidecar_directories or committed_resource_plans:
                 if wait and telemetry_id:
                     get_request_wait_tracker().register_request(telemetry_id)
                     request_registered = True
@@ -397,30 +433,80 @@ class ContentWriteCoordinator:
                         await self._vectorize_semantic_directory(
                             directory_uri=directory_uri, ctx=ctx
                         )
-                    refresh_result = (
+                    planned_direct_actions = tuple(
+                        action
+                        for prepared in committed_resource_plans
+                        for action in prepared.plan.direct_index_actions
+                    )
+                    direct_index_requested = await enqueue_direct_index_actions(
+                        planned_direct_actions,
+                        ctx=ctx,
+                    )
+                    planned_refreshes = [
+                        FileRefreshRequest(
+                            file_uri=prepared.plan.file_refresh.file_uri,
+                            created=not prepared.existed,
+                            md5=prepared.plan.file_refresh.md5,
+                            abstract=prepared.previous_abstract,
+                        )
+                        for prepared in committed_resource_plans
+                        if prepared.plan.file_refresh is not None
+                    ]
+                    parent_result = (
+                        await Summarizer(vlm_processor=None).refresh_file_parents(
+                            changes=planned_refreshes,
+                            ctx=ctx,
+                            generation_trigger="content_write",
+                            force_refresh=wait,
+                        )
+                        if planned_refreshes
+                        else {"enqueued_count": 0, "parent_actions": {}}
+                    )
+                    legacy_refresh_result = (
                         await self._refresh_batch(
                             refresh_kinds=refresh_kinds,
                             ctx=ctx,
-                            wait=wait,
+                            # The batch coordinator owns the one request-wide
+                            # wait after both legacy special paths and RNFV
+                            # plans have enqueued their work.
+                            wait=False,
                             timeout=timeout,
                             telemetry_id=telemetry_id,
                             file_md5s=file_md5s,
                             file_abstracts=file_abstracts,
                         )
                         if refresh_kinds
-                        else (
-                            await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                            if wait
-                            else None
-                        )
+                        else None
                     )
-                    if isinstance(refresh_result, _BatchRefreshOutcome):
-                        refresh_outcome = refresh_result
-                        queue_status = refresh_result.queue_status
-                    else:
-                        # Preserve compatibility for tests/extensions replacing
-                        # the private refresh hook with its historical result.
-                        queue_status = refresh_result
+                    legacy_outcome = (
+                        legacy_refresh_result
+                        if isinstance(legacy_refresh_result, _BatchRefreshOutcome)
+                        else _BatchRefreshOutcome(queue_status=None)
+                    )
+                    legacy_queue_status = (
+                        legacy_refresh_result
+                        if isinstance(legacy_refresh_result, dict)
+                        else legacy_outcome.queue_status
+                    )
+                    queue_status = (
+                        await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                        if wait and request_registered
+                        else legacy_queue_status
+                    )
+                    if wait and queue_status is not None:
+                        self._raise_refresh_errors(queue_status)
+                    planned_actions = tuple(
+                        FreshnessAction(action)
+                        for action in parent_result["parent_actions"].values()
+                    )
+                    refresh_outcome = _BatchRefreshOutcome(
+                        queue_status=queue_status,
+                        semantic_actions=planned_actions + legacy_outcome.semantic_actions,
+                        memory_refreshed=legacy_outcome.memory_refreshed,
+                        embedding_requested=(
+                            direct_index_requested or legacy_outcome.embedding_requested
+                        ),
+                    )
                 except Exception as exc:
                     if write_error is not None:
                         logger.error(
@@ -434,8 +520,9 @@ class ContentWriteCoordinator:
                         cause = str(exc).strip() or type(exc).__name__
                         raise OpenVikingError(
                             "Content is already at the requested state, but semantic/index "
-                            f"refresh failed: {cause}. Re-run the same batch-write or ov compile "
-                            "command to rewrite the final state and retry the refresh.",
+                            f"refresh failed: {cause}. Re-run with the final body using "
+                            "replace/create/upsert or use ov compile to retry the refresh; "
+                            "do not blindly retry an already-successful append.",
                             code="REFRESH_FAILED",
                             details={
                                 "root_uri": normalized_root,
@@ -879,6 +966,133 @@ class ContentWriteCoordinator:
         if not wait:
             return "queued"
         return "failed" if _queue_has_errors(queue_status, queue_name) else "complete"
+
+    async def _prepare_batch_resource_plans(
+        self,
+        *,
+        pending: list[tuple[dict[str, Any], bool, str]],
+        ctx: RequestContext,
+        lease: Dict[str, Any],
+    ) -> dict[str, _PreparedBatchResource]:
+        """Compile file-scoped RNFV plans before the first batch F mutation.
+
+        The legacy fallback is intentionally limited to an absent vector store,
+        which is useful for lightweight callers and old test doubles.  Real
+        service batch writes always use the exact-URI hydration path below.
+        """
+        resource_pending = [
+            item
+            for item in pending
+            if context_type_for_uri(item[0]["uri"]) in {"resource", "skill"}
+            and not is_abstract_overview_uri(item[0]["uri"])
+        ]
+        if not resource_pending:
+            return {}
+
+        vector_store = self._vikingdb
+        if vector_store is None:
+            get_vector_store = getattr(self._viking_fs, "_get_vector_store", None)
+            vector_store = get_vector_store() if callable(get_vector_store) else None
+        if vector_store is None or not hasattr(vector_store, "get_incremental_inventory_by_uris"):
+            return {}
+
+        uris = [operation["uri"] for operation, _, _ in resource_pending]
+        requests = {
+            uri: RequestIntent.from_ingest_options(
+                target_uri=uri,
+                processing_mode=DEFAULT_PROCESSING_MODE,
+                ingest_options=None,
+            )
+            for uri in uris
+        }
+        projection = set()
+        for request in requests.values():
+            projection.update(request.required_vector_fields())
+            # File-scoped and vectors-only write planning may reuse a hydrated
+            # L2 abstract as an embedding source.
+            projection.add("abstract")
+        inventories = await vector_store.get_incremental_inventory_by_uris(
+            uris,
+            ctx=ctx,
+            output_fields=sorted(projection),
+        )
+
+        prepared: dict[str, _PreparedBatchResource] = {}
+        for operation, existed, write_mode in resource_pending:
+            uri = operation["uri"]
+            existing_raw: str | bytes | None = None
+            if write_mode == "append" and existed:
+                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
+            final_bytes = self._render_final_bytes(
+                uri,
+                operation["content"],
+                mode=write_mode,
+                existing_raw=existing_raw,
+                is_new_file=not existed,
+            )
+            store = InlineBytesStore(final_bytes)
+            artifact_ref = _InlineArtifactRef(uri)
+            inventory = make_inline_file_inventory(final_bytes)
+            target = AgfsResourceTarget(
+                viking_fs=self._viking_fs,
+                root_uri=uri,
+                ctx=ctx,
+                lease_ref=lease,
+            )
+            rnfv = await build_rnfv_snapshot(
+                viking_fs=self._viking_fs,
+                vikingdb=vector_store,
+                store=store,
+                artifact_ref=artifact_ref,
+                target_uri=uri,
+                ctx=ctx,
+                request_intent=requests[uri],
+                root_is_file=True,
+                target_preexisting=existed,
+                formal_snapshot=(
+                    ({"": FormalEntry(is_dir=False)}, True) if existed else ({}, True)
+                ),
+                artifact_inventory=inventory,
+                vector_scope="self",
+                vector_inventory=inventories.get(uri, {}),
+            )
+            _, plan = await build_context_update_plan_from_snapshot(
+                snapshot=rnfv,
+                store=store,
+                artifact_ref=artifact_ref,
+                target=target,
+                vikingdb=vector_store,
+                context_type=context_type_for_uri(uri),
+                is_code_repo=False,
+                account_id=ctx.account_id,
+                ctx=ctx,
+                root_preexisting=existed,
+                artifact_paths=inventory.artifact_paths,
+                root_is_file=True,
+            )
+            plan = self._ensure_explicit_write_content_action(
+                plan,
+                md5=inventory.entries[""].md5,
+            )
+            previous_abstract = next(
+                (
+                    str(record.fields.get("abstract") or "")
+                    for record in rnfv.vectors.records_by_id.values()
+                    if record.uri == uri and record.level == 2
+                ),
+                "",
+            )
+            prepared[uri] = _PreparedBatchResource(
+                uri=uri,
+                existed=existed,
+                final_bytes=final_bytes,
+                plan=plan,
+                store=store,
+                artifact_ref=artifact_ref,
+                target=target,
+                previous_abstract=previous_abstract,
+            )
+        return prepared
 
     async def _write_direct_with_refresh(
         self,
