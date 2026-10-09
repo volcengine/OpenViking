@@ -25,9 +25,13 @@ from openviking.session.memory.dataclass import (
     SkippedMemoryOperation,
     StoredLink,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    create_default_registry,
+)
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
+from openviking.session.memory.patch_merge_context_provider import candidate_id_for_uri
 from openviking.session.memory.streaming_memory_updater import (
     MemoryMergeGroupKey,
     MemoryMergePlanError,
@@ -3039,6 +3043,130 @@ async def test_patch_merge_rejects_json_that_remains_invalid_after_one_repair(mo
         )
 
     assert len(fake_vlm.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_case_merge_retries_when_first_corrected_plan_is_still_incomplete(monkeypatch):
+    uri = "viking://user/u/memories/cases/reusable_report.md"
+    identity = {
+        "goal": "prepare a reusable report",
+        "subject": "structured source data",
+        "action_pattern": "analyze source data and produce a report",
+        "success_boundary": "the report is complete and usable",
+        "context_constraints": ["source data is available"],
+    }
+    old_file = MemoryFile(
+        uri=uri,
+        content="old case",
+        memory_type="cases",
+        extra_fields={
+            "case_name": "reusable_report",
+            "case_identity": json.dumps(identity),
+            "task_signature": "prepare a reusable report",
+            "input": '{"variable_types":[]}',
+            "situation": "A report must be prepared from source data.",
+            "rubric": '{"criteria":[{"name":"usable","description":"report is usable","required":true,"weight":1.0}]}',
+            "evidence": "One prior session used this workflow.",
+            "case_status": "draft",
+            "source_count": 1,
+            "last_compacted_source_count": 0,
+            "last_compacted_version": 0,
+            "_case_source_ids": ["session:old"],
+            "_case_pending_sources": [],
+        },
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="cases",
+        uris=[uri],
+        memory_fields={
+            "case_name": "reusable_report",
+            "case_identity": json.dumps(identity),
+            "task_signature": "prepare a report from structured data",
+            "input": '{"variable_types":["source data"]}',
+            "situation": "A report is requested from structured source data.",
+            "rubric": '{"criteria":[{"name":"usable","description":"report is usable","required":true,"weight":1.0}]}',
+            "evidence": "A second session completed the same workflow.",
+        },
+        source=MemoryOperationSource(extraction_id="new", session_id="new"),
+    )
+    candidate_id = candidate_id_for_uri(uri)
+    comparison = {
+        "proposal_id": "new:0",
+        "candidate_id": candidate_id,
+        "goal": "MATCH",
+        "subject": "MATCH",
+        "action_pattern": "MATCH",
+        "success_boundary": "MATCH",
+        "context_constraints": "MATCH",
+    }
+    responses = iter(
+        [
+            {
+                "groups": [
+                    {
+                        "proposal_ids": ["new:0"],
+                        "canonical_proposal_id": "new:0",
+                        "field_operations": {},
+                    }
+                ],
+                "delete_proposal_ids": [],
+                "case_comparisons": [comparison],
+            },
+            {
+                "groups": [
+                    {
+                        "proposal_ids": ["new:0", candidate_id],
+                        "canonical_proposal_id": candidate_id,
+                        "field_operations": {},
+                    }
+                ],
+                "delete_proposal_ids": [],
+                "case_comparisons": [comparison],
+            },
+            {
+                "groups": [
+                    {
+                        "proposal_ids": ["new:0", candidate_id],
+                        "canonical_proposal_id": candidate_id,
+                        "generalized_case_identity": identity,
+                        "field_operations": {
+                            "task_signature": "prepare a reusable report from structured data",
+                            "input": '{"variable_types":["source data"]}',
+                            "situation": "A report is requested from structured source data.",
+                            "rubric": '{"criteria":[{"name":"usable","description":"report is usable","required":true,"weight":1.0}]}',
+                            "evidence": "Independent sessions completed the same workflow.",
+                        },
+                    }
+                ],
+                "delete_proposal_ids": [],
+                "case_comparisons": [comparison],
+            },
+        ]
+    )
+    fake_vlm = _install_fake_merge_vlm(
+        monkeypatch, responder=lambda messages: json.dumps(next(responses))
+    )
+    fs = InMemoryVikingFS({uri: MemoryFileUtils.write(old_file)})
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+
+    merged = await merge_one_memory_type_operations(
+        memory_type="cases",
+        operations=[operation],
+        messages=[],
+        ctx=_ctx(),
+        registry=create_default_registry(),
+    )
+
+    assert len(fake_vlm.calls) == 3
+    assert merged.upsert_operations[0].memory_fields["source_count"] == 2
+    assert merged.upsert_operations[0].memory_fields["task_signature"] == (
+        "prepare a reusable report from structured data"
+    )
+    assert "complete replacement fields" in fake_vlm.calls[2]["messages"][-1]["content"]
 
 
 @pytest.mark.asyncio

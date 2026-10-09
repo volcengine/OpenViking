@@ -25,6 +25,9 @@ from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import replay, tracer
 from openviking.telemetry.replay.models import EncodedValue, ReplayCodecError
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
 TRAJECTORY_MEMORY_TYPE = "trajectories"
@@ -204,7 +207,7 @@ class ExperienceEvidenceLoader:
                 ctx=ctx,
             )
         except Exception as error:
-            tracer.warning(f"Failed to search candidate experiences: {error}")
+            logger.warning(f"Failed to search candidate experiences: {error}")
             return []
 
         uris: list[str] = []

@@ -53,7 +53,7 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
                 if isinstance(fields, dict):
                     result.update(fields)
             except Exception as e:
-                tracer.warning(f"Failed to parse MEMORY_FIELDS JSON: {e}")
+                logger.warning(f"Failed to parse MEMORY_FIELDS JSON: {e}")
 
     # Remove the comment from content.  When MEMORY_FIELDS itself contains a
     # structured ``content`` field, prefer that value as the source of truth.

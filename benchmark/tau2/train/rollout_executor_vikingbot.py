@@ -1763,31 +1763,30 @@ def _configure_tools(
     data_split: str | None = None,
     case_lookup: dict[str, Any] | None = None,
 ) -> None:
-    # Tau2 rollout may keep generic VikingBot tools, but OpenViking access is
-    # restricted to automatic experience recall during prompt construction.
-    # No openviking_* tool should be callable by the agent.
+    # The agent sees only tau2 business tools plus the loader's own tools. Generic
+    # VikingBot tools (exec, web_search, message, ...) are not part of the tau2
+    # environment; read_file stays only where the required loader skill must be read.
     del keep_default_tools
     loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
     experience_recall_mode = normalize_tau2_experience_recall_mode(experience_recall_mode)
+    loader_tools = []
     for tool_name in list(agent.tools.tool_names):
-        if loader_mode == "none" or str(tool_name).startswith("openviking_") or (
-            loader_mode == "auto_experience"
-            and tool_name in {"search_experience", "read_experience", "load_relevant_experience"}
-        ):
-            agent.tools.unregister(tool_name)
+        if loader_mode in {"skill", "selector"} and tool_name == "read_file":
+            loader_tools.append(agent.tools.get(tool_name))
+        agent.tools.unregister(tool_name)
     if loader_mode == "skill":
-        agent.tools.register(
+        loader_tools.append(
             _make_search_experience_tool(
                 case_lookup=case_lookup,
                 experience_recall_mode=experience_recall_mode,
             )
         )
-        agent.tools.register(_make_read_experience_tool())
+        loader_tools.append(_make_read_experience_tool())
     elif loader_mode == "selector":
         # Single tool: recall and applicability filtering run outside the main context.
         # agent.model, not a None fallback: falling back would silently judge with the
         # provider's default model rather than the rollout's own.
-        agent.tools.register(_make_load_relevant_experience_tool(agent.provider, agent.model))
+        loader_tools.append(_make_load_relevant_experience_tool(agent.provider, agent.model))
     tool_lock = _AsyncRWLock()
     write_tool_names = _classify_write_tools(provider)
     for schema in provider.list_openai_tools():
@@ -1801,6 +1800,9 @@ def _configure_tools(
                 record_tool_timing=record_tool_timing,
             )
         )
+    # Keep business tools before loader tools.
+    for tool in loader_tools:
+        agent.tools.register(tool)
 
 
 def _classify_write_tools(provider: Any) -> set[str]:
@@ -2005,6 +2007,7 @@ async def _prepare_experience_loader_skill(
         sandbox_manager=sandbox_manager,
         eval=True,
         system_prompt_profile=system_prompt_profile,
+        config=getattr(agent, "config", None),
     )
     context_builder.latest_experience_loader_skill_content = skill_content
     return context_builder
