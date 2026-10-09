@@ -51,6 +51,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        max_retries: int = 2,
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -62,6 +63,7 @@ class OpenAIRerankClient(RerankBase):
             extra_headers: Optional extra headers for API requests
             timeout: HTTP request timeout in seconds. Defaults to 30. Increase for
                 local LLM servers that incur model cold-start latency on the first call.
+            max_retries: Maximum number of retries on ConnectionError.
         """
         super().__init__()
         self.api_key = api_key
@@ -69,6 +71,7 @@ class OpenAIRerankClient(RerankBase):
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.max_retries = max_retries
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
 
@@ -140,24 +143,26 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
-            try:
-                response = requests.post(
-                    url=self.api_base,
-                    headers=headers,
-                    json=req_body,
-                    timeout=self.timeout,
-                )
-            except requests.exceptions.ConnectionError as e:
-                logger.warning(
-                    f"[OpenAIRerankClient] Connection error on rerank attempt 1, retrying after 0.5s: {e}"
-                )
-                time.sleep(0.5)
-                response = requests.post(
-                    url=self.api_base,
-                    headers=headers,
-                    json=req_body,
-                    timeout=self.timeout,
-                )
+            response = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = requests.post(
+                        url=self.api_base,
+                        headers=headers,
+                        json=req_body,
+                        timeout=self.timeout,
+                    )
+                    break
+                except requests.exceptions.ConnectionError as e:
+                    if attempt < self.max_retries:
+                        logger.warning(
+                            f"[OpenAIRerankClient] Connection error on rerank attempt {attempt + 1}, retrying after 0.5s: {e}"
+                        )
+                        time.sleep(0.5)
+                    else:
+                        raise
+            if response is None:
+                return None
             response.raise_for_status()
             result = response.json()
 
@@ -216,4 +221,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            max_retries=getattr(config, "max_retries", 2),
         )

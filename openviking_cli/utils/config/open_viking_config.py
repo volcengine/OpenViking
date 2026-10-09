@@ -219,6 +219,14 @@ class OpenVikingConfig(BaseModel):
     )
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+    rerank_profiles: Dict[str, RerankConfig] = Field(
+        default_factory=dict,
+        description="Named rerank profiles (e.g. light, heavy)",
+    )
+    rerank_routing: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Rerank routing rules: operation/endpoint to profile name",
+    )
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,

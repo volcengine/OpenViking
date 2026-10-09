@@ -60,6 +60,12 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    max_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Maximum retry attempts on retryable network errors (e.g. ConnectionError)",
+    )
+
     log_payloads: bool = Field(
         default=False,
         description=(

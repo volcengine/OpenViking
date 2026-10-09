@@ -111,6 +111,8 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+    # Resolved rerank profile lane (e.g. 'light', 'heavy') for tiered retrieval routing
+    rerank_lane: Optional[str] = None
 
     @property
     def account_id(self) -> str:

@@ -8,7 +8,7 @@ import asyncio
 import math
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
@@ -56,23 +56,41 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        rerank_profiles: Optional[Dict[str, RerankConfig]] = None,
+        rerank_routing: Optional[Dict[str, str]] = None,
     ):
-        """Initialize retriever with rerank_config.
+        """Initialize retriever with rerank_config and optional rerank_profiles.
 
         Args:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
-            rerank_config: Rerank configuration (optional, will fallback to vector search only)
+            rerank_config: Legacy single rerank configuration
+            rerank_profiles: Optional dictionary of named rerank profiles (e.g. 'light', 'heavy')
+            rerank_routing: Optional routing rules mapping operations to profile names
         """
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.rerank_profiles = rerank_profiles or {}
+        self.rerank_routing = rerank_routing or {}
         self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
 
-        # Initialize rerank client — all providers go through unified dispatch
+        # Initialize profile-specific clients
+        self._rerank_clients: Dict[str, Any] = {}
+        for name, p_cfg in self.rerank_profiles.items():
+            if p_cfg and p_cfg.is_available():
+                client = RerankClient.from_config(p_cfg)
+                if client:
+                    self._rerank_clients[name] = client
+                    provider = p_cfg._effective_provider()
+                    logger.info(
+                        f"[HierarchicalRetriever] Rerank profile '{name}' enabled (provider={provider}), threshold={p_cfg.threshold}"
+                    )
+
+        # Initialize legacy rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
             self._rerank_client = RerankClient.from_config(rerank_config)
             provider = rerank_config._effective_provider()
@@ -81,9 +99,48 @@ class HierarchicalRetriever:
             )
         else:
             self._rerank_client = None
-            logger.info(
-                f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}"
+            if not self._rerank_clients:
+                logger.info(
+                    f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}"
+                )
+
+    def _resolve_lane(self, ctx: Optional[RequestContext]) -> Optional[str]:
+        """Resolve rerank lane from RequestContext or routing rules."""
+        if not self._rerank_clients:
+            return None
+        candidate_lane = getattr(ctx, "rerank_lane", None) if ctx else None
+        if candidate_lane and candidate_lane in self._rerank_clients:
+            return candidate_lane
+        # Fallback to default routing rule or first available profile
+        default_lane = self.rerank_routing.get("default")
+        if default_lane and default_lane in self._rerank_clients:
+            return default_lane
+        if "light" in self._rerank_clients:
+            return "light"
+        return next(iter(self._rerank_clients.keys()), None)
+
+    def _get_lane_resources(
+        self, lane: Optional[str]
+    ) -> Tuple[Optional[Any], Optional[RerankConfig], float, int]:
+        """Return (client, config, threshold, max_input_tokens) for the resolved lane."""
+        if lane and lane in self._rerank_clients:
+            client = self._rerank_clients[lane]
+            cfg = self.rerank_profiles[lane]
+            return client, cfg, cfg.threshold, cfg.max_input_tokens
+        if self._rerank_client:
+            return (
+                self._rerank_client,
+                self.rerank_config,
+                self.threshold,
+                self.rerank_max_input_tokens,
             )
+        if self._rerank_clients:
+            fallback = self._resolve_lane(None)
+            if fallback and fallback in self._rerank_clients:
+                client = self._rerank_clients[fallback]
+                cfg = self.rerank_profiles[fallback]
+                return client, cfg, cfg.threshold, cfg.max_input_tokens
+        return None, None, self.threshold, self.rerank_max_input_tokens
 
     async def retrieve(
         self,
@@ -113,12 +170,14 @@ class HierarchicalRetriever:
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
-        effective_threshold = self._resolve_threshold(score_threshold)
+        effective_lane = self._resolve_lane(ctx)
+        client, lane_cfg, lane_thresh, lane_max_tokens = self._get_lane_resources(effective_lane)
+        effective_threshold = self._resolve_threshold(score_threshold, lane_thresh)
         image_query = query.image_query
         if mode is None:
-            mode = RetrieverMode.THINKING if self._rerank_client else RetrieverMode.QUICK
+            mode = RetrieverMode.THINKING if client else RetrieverMode.QUICK
         use_rerank = (
-            mode == RetrieverMode.THINKING and self._rerank_client is not None and not image_query
+            mode == RetrieverMode.THINKING and client is not None and not image_query
         )
         decay_kwargs = {}
         if events_time_decay_protection is not None:
@@ -222,7 +281,14 @@ class HierarchicalRetriever:
                 query.query,
                 [str(candidate.get("abstract", "")) for candidate in candidates],
                 scores,
+                client=client,
+                max_input_tokens=lane_max_tokens,
+                lane=effective_lane,
             )
+            lane_label = effective_lane or "default"
+            telemetry.set("rerank.lane", lane_label)
+            telemetry.count(f"rerank.{lane_label}.calls", 1)
+            telemetry.count(f"rerank.{lane_label}.docs", len(candidates))
 
         # A low vector score can still rerank highly, so filter only after reranking.
         candidates = [
@@ -241,6 +307,7 @@ class HierarchicalRetriever:
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,
             rerank_used=rerank_used,
+            lane=effective_lane,
         )
 
         return QueryResult(
@@ -249,9 +316,14 @@ class HierarchicalRetriever:
             searched_directories=root_uris,
         )
 
-    def _resolve_threshold(self, threshold: Optional[float]) -> float:
-        resolved = threshold if threshold is not None else self.threshold
-        return resolved if resolved is not None else 0.0
+    def _resolve_threshold(
+        self, threshold: Optional[float], lane_threshold: Optional[float] = None
+    ) -> float:
+        if threshold is not None:
+            return threshold
+        if lane_threshold is not None:
+            return lane_threshold
+        return self.threshold if self.threshold is not None else 0.0
 
     @staticmethod
     def _finite_score(value: Any, default: float = 0.0) -> float:
@@ -272,11 +344,18 @@ class HierarchicalRetriever:
         query: str,
         documents: List[str],
         fallback_scores: List[float],
+        client: Optional[Any] = None,
+        max_input_tokens: Optional[int] = None,
+        lane: Optional[str] = None,
     ) -> List[float]:
         """Return rerank scores or fall back to vector scores."""
-        if not self._rerank_client or not documents:
+        rerank_client = client or self._rerank_client
+        if not rerank_client or not documents:
             return fallback_scores
 
+        input_token_limit = (
+            max_input_tokens if max_input_tokens is not None else self.rerank_max_input_tokens
+        )
         rerank_query = query
         rerank_documents = [
             (index, document) for index, document in enumerate(documents) if document.strip()
@@ -284,33 +363,45 @@ class HierarchicalRetriever:
         if not rerank_documents:
             return fallback_scores
 
-        if self.rerank_max_input_tokens > 0:
-            max_query_tokens = self.rerank_max_input_tokens * 3 // 4
+        if input_token_limit > 0:
+            max_query_tokens = input_token_limit * 3 // 4
             if estimate_text_tokens(query) > max_query_tokens:
                 rerank_query = truncate_text_to_token_budget(query, max_query_tokens)
-            document_tokens = self.rerank_max_input_tokens - estimate_text_tokens(rerank_query)
+            document_tokens = input_token_limit - estimate_text_tokens(rerank_query)
             rerank_documents = [
                 (index, truncate_text_to_token_budget(document, document_tokens))
                 for index, document in rerank_documents
             ]
 
+        lane_label = lane or "default"
         try:
             scores = await asyncio.to_thread(
-                self._rerank_client.rerank_batch,
+                rerank_client.rerank_batch,
                 rerank_query,
                 [document for _, document in rerank_documents],
             )
         except Exception as e:
             logger.warning(
-                "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
+                "[HierarchicalRetriever] Rerank failed (lane=%s), fallback to vector scores: %s",
+                lane_label,
+                e,
             )
             return fallback_scores
 
         if not scores or len(scores) != len(rerank_documents):
             logger.warning(
-                "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
+                "[HierarchicalRetriever] Invalid rerank result (lane=%s), fallback to vector scores",
+                lane_label,
             )
             return fallback_scores
+
+        model_name = getattr(rerank_client, "model_name", "unknown")
+        logger.info(
+            "[HierarchicalRetriever] Rerank completed (lane=%s, model=%s): %d docs",
+            lane_label,
+            model_name,
+            len(rerank_documents),
+        )
 
         normalized_scores = list(fallback_scores)
         for score, (index, _) in zip(scores, rerank_documents, strict=True):

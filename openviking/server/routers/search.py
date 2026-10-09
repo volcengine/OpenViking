@@ -3,6 +3,7 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import asyncio
+import dataclasses
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
@@ -141,6 +142,7 @@ class FindRequest(BaseModel):
     read_content: bool = False
     telemetry: TelemetryRequest = False
     events_time_decay_protection: Optional[str] = None
+    rerank_lane: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_time_decay(self) -> "FindRequest":
@@ -250,6 +252,7 @@ class SearchRequest(BaseModel):
     other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
     rewrite: Union[bool, Literal["auto"]] = False
     rewrite_max_bullets: int = Field(default=6, ge=1, le=20)
+    rerank_lane: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
@@ -372,6 +375,9 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
+    routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
+    lane = request.rerank_lane or _ctx.rerank_lane or routing.get("find", "heavy")
+    _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -434,6 +440,9 @@ async def _search_context(
     actual_limit: int,
 ):
     """Assemble an injection-ready context block for one request."""
+    routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
+    lane = request.rerank_lane or ctx.rerank_lane or routing.get("context", "light")
+    ctx = dataclasses.replace(ctx, rerank_lane=lane)
     params = AssembleParams(
         query=request.query,
         search_type=request.search_type,
@@ -500,6 +509,9 @@ async def search(
         )
     resolved_target_uri = _resolve_uri_or_uris(request.target_uri, _ctx)
     resolved_image_url = _resolve_image_url(request.image_url, _ctx)
+    routing = getattr(getattr(service, "_config", None), "rerank_routing", {})
+    lane = request.rerank_lane or _ctx.rerank_lane or routing.get("search", routing.get("default", "light"))
+    _ctx = dataclasses.replace(_ctx, rerank_lane=lane)
 
     async def _search():
         session = None
