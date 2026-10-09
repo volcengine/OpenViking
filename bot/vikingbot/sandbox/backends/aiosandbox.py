@@ -11,11 +11,12 @@ from loguru import logger
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.utils.session_paths import portable_path_component
 
 
 @register_backend("aiosandbox")
 class AioSandboxBackend(SandboxBackend):
-    """AIO Sandbox backend using agent-sandbox SDK."""
+    """AIO Sandbox client with non-shared remote directories bound to host workspaces."""
 
     def __init__(self, config: "SandboxConfig", session_key: SessionKey, workspace: Path):
         super().__init__()
@@ -24,6 +25,10 @@ class AioSandboxBackend(SandboxBackend):
         self._workspace = workspace
         self._client = None
         self._base_url = config.backends.aiosandbox.base_url
+        self._sandbox_cwd = "/home/gem"
+        if config.mode != "shared":
+            name = portable_path_component(str(workspace.resolve()))
+            self._sandbox_cwd = f"/home/gem/.workspaces/{name}"
 
     async def start(self) -> None:
         """Start the AIO Sandbox instance."""
@@ -34,6 +39,11 @@ class AioSandboxBackend(SandboxBackend):
 
             logger.info("[AioSandbox] Connecting to {}", self._base_url)
             self._client = AsyncSandbox(base_url=self._base_url)
+            if self.config.mode != "shared":
+                output = await self.execute(
+                    f"mkdir -p -- {shlex.quote(self.sandbox_cwd)}", working_dir="/home/gem"
+                )
+                self._ensure_command_succeeded(output, "AIO workspace creation")
             logger.info("[AioSandbox] Connected successfully")
         except ImportError:
             logger.error(
@@ -50,10 +60,15 @@ class AioSandboxBackend(SandboxBackend):
             raise SandboxNotStartedError()
 
         if command.strip() == "pwd":
-            return "/home/gem"
+            return kwargs.get("working_dir", self.sandbox_cwd)
 
         try:
-            result = await self._client.shell.exec_command(command=command, timeout=timeout)
+            result = await self._client.shell.exec_command(
+                command=command,
+                timeout=timeout,
+                exec_dir=kwargs.get("working_dir", self.sandbox_cwd),
+                strict=True,
+            )
 
             output_parts = []
             if hasattr(result, "data") and hasattr(result.data, "output") and result.data.output:
@@ -102,7 +117,7 @@ class AioSandboxBackend(SandboxBackend):
     @property
     def sandbox_cwd(self) -> str:
         """Get the current working directory inside the sandbox."""
-        return "/home/gem"
+        return self._sandbox_cwd
 
     def _sandbox_path(self, path: str) -> str:
         if path.startswith("/"):
@@ -166,7 +181,7 @@ class AioSandboxBackend(SandboxBackend):
         """Write binary content through the AIO Sandbox file API."""
         if not self._client:
             raise SandboxNotStartedError()
-        sandbox_path = path if path.startswith("/") else f"/home/gem/{path}"
+        sandbox_path = self._sandbox_path(path)
         encoded = base64.b64encode(content).decode("ascii")
         result = await self._client.file.write_file(
             file=sandbox_path,
@@ -181,7 +196,7 @@ class AioSandboxBackend(SandboxBackend):
             raise SandboxNotStartedError()
         if not path or path.startswith("/") or ".." in Path(path).parts:
             raise PermissionError("remove_tree requires a safe sandbox-relative path")
-        sandbox_path = f"/home/gem/{path}"
+        sandbox_path = self._sandbox_path(path)
         output = await self.execute(f"rm -rf -- {shlex.quote(sandbox_path)}")
         self._ensure_command_succeeded(output, "sandbox tree removal")
 
