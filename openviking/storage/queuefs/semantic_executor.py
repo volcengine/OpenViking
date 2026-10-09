@@ -32,6 +32,7 @@ from openviking.storage.abstract_overview import (
 from openviking.storage.context_update_plan import FileVectorSource, SemanticAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
+from openviking.storage.internal_names import is_hidden_entry_name
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
@@ -851,10 +852,12 @@ class SemanticTreeExecutor:
 
         for entry in entries:
             name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."] or name in _SKIP_FILENAMES:
+            if not name or name in [".", ".."] or name in _SKIP_FILENAMES:
                 continue
 
             item_uri = VikingURI(uri).join(name).uri
+            if is_hidden_entry_name(name, item_uri):
+                continue
             if entry.get("isDir", False):
                 children_dirs.append(item_uri)
             else:
@@ -881,9 +884,11 @@ class SemanticTreeExecutor:
             if not remainder:
                 continue
             head, separator, _ = remainder.partition("/")
-            if not head or head.startswith(".") or head in _SKIP_FILENAMES:
+            if not head or head in _SKIP_FILENAMES:
                 continue
             child_uri = VikingURI(current).join(head).uri
+            if is_hidden_entry_name(head, child_uri):
+                continue
             if separator:
                 child_dirs.add(child_uri)
             else:

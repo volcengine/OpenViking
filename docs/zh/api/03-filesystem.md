@@ -38,6 +38,8 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 `tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
+隐藏条目：目录始终会列出。在资源树（`viking://resources`、`viking://user/{user_id}/resources` 和 `viking://user/{user_id}/peers/{peer_id}/resources`）下，只有 OpenViking 元数据文件（`.abstract.md`、`.overview.md`、`.relations.json`、`.watch_tasks.json` 等）和存储层内部文件（`.path.ovlock`、`.redirect.json` 等）会被隐藏；`.gitlab-ci.yml`、`.gitignore` 等用户 dot 文件会像普通文件一样被列出、生成摘要并建立索引。其他命名空间下所有 dot 文件都会被隐藏。`show_all_hidden=true` 会同时列出隐藏文件。`tree` 和 `glob` 遵循相同规则。
+
 **条目结构**
 
 ```python

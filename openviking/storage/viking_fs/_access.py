@@ -33,7 +33,11 @@ from openviking.storage.acl import (
     normalize_acl_level,
     normalize_acl_principal,
 )
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import (
+    is_hidden_entry_name,
+    is_storage_internal_name,
+    may_list_user_dotfiles,
+)
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -583,7 +587,7 @@ class _AccessMixin:
         while True:
             raw_entries = await self._async_agfs.tree_directory(
                 path,
-                show_hidden=show_all_hidden,
+                show_hidden=show_all_hidden or may_list_user_dotfiles(uri),
                 node_limit=raw_limit,
                 level_limit=level_limit,
                 offset=raw_offset,
@@ -611,6 +615,14 @@ class _AccessMixin:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
+                info = entry.get("info", {})
+                name = info.get("name") or entry["path"].rstrip("/").rsplit("/", 1)[-1]
+                if (
+                    not show_all_hidden
+                    and not info.get("isDir", False)
+                    and is_hidden_entry_name(name, entry_uri)
+                ):
+                    continue
                 candidates.append((entry, entry_uri))
                 remaining_limit = None if node_limit is None else node_limit - yielded
                 if (

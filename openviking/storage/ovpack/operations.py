@@ -17,6 +17,7 @@ from openviking.core.namespace import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.internal_names import is_hidden_entry_name
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_NAME,
     OVPACK_BACKUP_TYPE,
@@ -207,7 +208,7 @@ async def _enqueue_direct_vectorization(
             dir_uris.add(entry_uri)
             continue
         name = entry.get("name", "") or leaf_name(rel_path)
-        if name.startswith("."):
+        if is_hidden_entry_name(name, entry_uri):
             continue
         parent = VikingURI(entry_uri).parent
         if parent:
