@@ -22,6 +22,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.parse.parsers.text_encoding import normalize_text_bytes
 from openviking.utils.content_hash import content_md5
+from openviking.utils.path_safety import sanitize_relative_viking_path
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -131,6 +132,8 @@ async def upload_directory(
     max_file_size: int = 10 * 1024 * 1024,
     include: Optional[str] = None,
     exclude: Optional[str] = None,
+    skip_unsafe_paths: bool = False,
+    skipped_path_warnings: Optional[List[str]] = None,
 ) -> Tuple[int, List[str]]:
     """Upload a directory into a parse output store, returning (count, warnings).
 
@@ -218,6 +221,17 @@ async def upload_directory(
             # Artifact-relative path under the resource root; the store resolves it
             # to a local/agfs location.
             target = f"{base}/{rel_path_str}" if base else rel_path_str
+            if skip_unsafe_paths:
+                try:
+                    sanitize_relative_viking_path(target)
+                except ValueError as exc:
+                    warning = (
+                        f"Skipped file with unsafe artifact path {rel_path_str!r}: {exc}"
+                    )
+                    logger.warning(warning)
+                    if skipped_path_warnings is not None:
+                        skipped_path_warnings.append(warning)
+                    continue
             files_to_upload.append((file_path, target))
             if "/" in target:
                 parent_dirs.add(target.rsplit("/", 1)[0])

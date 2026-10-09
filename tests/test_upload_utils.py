@@ -405,6 +405,30 @@ class TestSanitizeRelPath:
 
 class TestUploadDirectoryEdgeCases:
     @pytest.mark.asyncio
+    async def test_skips_unsafe_path_when_requested(self, tmp_path: Path) -> None:
+        (tmp_path / "ok.py").write_text("print(1)", encoding="utf-8")
+        (tmp_path / "%2F.txt").write_text("fixture", encoding="utf-8")
+        store = _RecordingStore()
+        skipped_warnings: List[str] = []
+
+        count, failures = await upload_directory(
+            tmp_path,
+            "repository",
+            store=store,
+            artifact_ref=object(),
+            skip_unsafe_paths=True,
+            skipped_path_warnings=skipped_warnings,
+        )
+
+        assert count == 1
+        assert failures == []
+        assert "repository/ok.py" in store.writes
+        assert all("%2F.txt" not in path for path in store.writes)
+        assert len(skipped_warnings) == 1
+        assert "%2F.txt" in skipped_warnings[0]
+        assert "Unsafe relative path rejected" in skipped_warnings[0]
+
+    @pytest.mark.asyncio
     async def test_writes_content_md5_manifest(self, tmp_dir: Path) -> None:
         import hashlib
         import json
