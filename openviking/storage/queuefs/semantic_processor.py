@@ -16,6 +16,7 @@ from openviking.observability.context import (
 )
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
+    discover_markdown_uris,
     rewrite_image_uris,
 )
 from openviking.parse.parsers.constants import (
@@ -1187,8 +1188,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if root_prefix != target_prefix:
             try:
-                glob_result = await viking_fs.glob("**/*.md", uri=target_prefix, ctx=ctx)
-                target_md_uris = glob_result.get("matches", [])
+                target_md_uris = await discover_markdown_uris(viking_fs, target_prefix, ctx)
             except Exception:
                 target_md_uris = []
 
