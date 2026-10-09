@@ -59,6 +59,9 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
+    Every key remains one URI path segment. Encoded slash and backslash
+    separators use adapter-level escape tokens because OpenViking rejects
+    ``%2F`` and ``%5C`` within a URI segment.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -365,10 +368,10 @@ class OpenVikingStore(BaseStore):
             pass
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"
+        return _record_uri(self._data_prefix_uri(namespace), key, ".json")
 
     def _index_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._index_prefix_uri(namespace)}/{_segment(key)}.md"
+        return _record_uri(self._index_prefix_uri(namespace), key, ".md")
 
     def _data_prefix_uri(self, namespace: tuple[str, ...]) -> str:
         return _join_uri(self.root_uri, "data", *namespace)
@@ -443,6 +446,20 @@ def _join_uri(root: str, *segments: str) -> str:
     return root.rstrip("/") if not suffix else f"{root.rstrip('/')}/{suffix}"
 
 
+def _record_uri(prefix: str, key: str, suffix: str) -> str:
+    return f"{prefix}/{_encode_key_segment(key)}{suffix}"
+
+
+def _encode_key_segment(key: str) -> str:
+    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
+    # available as an unambiguous adapter escape marker.
+    return _segment(key).replace("%2F", "!s").replace("%5C", "!b")
+
+
+def _decode_key_segment(segment: str) -> str:
+    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
+
+
 def _parse_canonicalized_record_uri(
     *,
     root_uri: str,
@@ -488,7 +505,7 @@ def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
     if not parts or not parts[-1]:
         return None
     namespace = tuple(unquote(part) for part in parts[:-1])
-    key = unquote(parts[-1])
+    key = _decode_key_segment(parts[-1])
     return namespace, key
 
 
