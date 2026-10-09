@@ -19,18 +19,15 @@ Note: Do not kill the opencode process.
 
 ## Scripts
 
-### `list_sessions.py` 
-Listing all OpenCode sessions
+### `list_sessions.py`
+
+List all OpenCode sessions updated in the past day, including their status and new messages.
 
 Example:
+
+```bash
 uv run python skills/opencode/list_sessions.py
-
-
-### `list_messages_of_session.py`
-Listing latest OpenCode messages by session_id 
-
-Example:
-uv run python skills/opencode/list_sessions.py {session_id}
+```
 
 ## Session Status Types
 
