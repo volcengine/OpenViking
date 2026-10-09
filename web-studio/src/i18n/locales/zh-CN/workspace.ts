@@ -750,6 +750,7 @@ const workspace = {
     pageTitle: '设置',
     tabs: { connection: '连接设置', models: '模型设置' },
     models: {
+      invalidJsonObject: '请输入有效的 JSON 对象',
       copyModelId: '复制模型 ID',
       copied: '模型 ID 已复制',
       copyFailed: '复制失败',

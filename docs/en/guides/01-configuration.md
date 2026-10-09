@@ -87,7 +87,6 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
-| Account | `rerank` | Dynamic | ROOT-only. Supports VikingDB, Cohere, OpenAI-compatible, LiteLLM and Jev. An absent section uses Cluster startup defaults; set it to `null` to restore them. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 

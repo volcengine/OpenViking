@@ -18,14 +18,45 @@ from openviking_cli.utils.config.vlm_config import VLMCredential
 MODEL_KINDS = ("vlm", "embedding", "query_planner", "rerank")
 
 
-def _binding_values(binding, parent, embedding: bool) -> dict:
-    if not embedding:
-        return binding.model_dump(exclude_none=True)
-    return {
-        key: value
-        for key in EmbeddingCredential.model_fields
-        if (value := getattr(binding, key, None) or getattr(parent, key, None)) is not None
-    }
+def _binding_values(binding, parent, embedding: bool, original: dict, index: int) -> dict:
+    values = (
+        {
+            key: value
+            for key in EmbeddingCredential.model_fields
+            if (value := getattr(binding, key, None) or getattr(parent, key, None)) is not None
+        }
+        if embedding
+        else binding.model_dump(exclude_none=True)
+    )
+    explicit = original.get("credentials") or []
+    if explicit:
+        source = explicit[index] if index < len(explicit) else {}
+    else:
+        # Legacy backups are normalized into a second credential by VLMConfig.
+        if index == 1:
+            original = original.get("backup") or {}
+        source = {}
+    original = dict(original)
+    if original.get("provider") is None:
+        original["provider"] = original.get("backend") or original.get("default_provider")
+    provider = values.get("provider")
+    provider_config = next(
+        (
+            config
+            for name, config in (original.get("providers") or {}).items()
+            if os.path.expandvars(name).strip().lower() == provider
+        ),
+        {},
+    )
+    for key, value in values.items():
+        # Follow the source of this field only. Matching expanded values globally
+        # loses identity when independent environment references have equal values.
+        fallbacks = (provider_config, original) if not explicit or key == "api_key" else (original,)
+        for node in (source, *fallbacks):
+            if key in node and json.loads(os.path.expandvars(json.dumps(node[key]))) == value:
+                values[key] = node[key]
+                break
+    return values
 
 
 def _revision(data: bytes) -> str:
@@ -71,6 +102,10 @@ def read_model_file() -> dict:
         original = raw.get("vlm" if inherited else kind) or {}
         # Display literal environment references; never replace them with resolved secrets.
         value = _merge(value, original)
+        if kind in ("vlm", "query_planner"):
+            # VLM normalization synthesizes provider maps from parent fields.
+            # Return only the literal map to avoid exposing expanded secrets.
+            value["providers"] = original.get("providers") or {}
         sections = [(value, original, model)]
         if kind == "embedding":
             sections = [
@@ -81,19 +116,10 @@ def read_model_file() -> dict:
         if kind != "rerank":
             for section, original_section, section_model in sections:
                 bindings = section_model.credentials or [section_model]
-                originals = original_section.get("credentials") or [original_section]
                 section["credentials"] = [
-                    {
-                        key: (originals[index] if index < len(originals) else {}).get(
-                            key,
-                            original_section.get(key, field)
-                            if len(bindings) == 1 or original_section.get("credentials")
-                            else field,
-                        )
-                        for key, field in _binding_values(
-                            binding, section_model, kind == "embedding"
-                        ).items()
-                    }
+                    _binding_values(
+                        binding, section_model, kind == "embedding", original_section, index
+                    )
                     for index, binding in enumerate(bindings)
                 ]
         models[kind] = {
@@ -108,30 +134,9 @@ def read_model_file() -> dict:
         else getattr(config, kind) != getattr(active, kind)
         for kind in MODEL_KINDS
     )
-    # Legacy provider objects and headers may also contain environment references.
-    references = {}
-
-    def collect(node):
-        if isinstance(node, dict):
-            for child in node.values():
-                collect(child)
-        elif isinstance(node, list):
-            for child in node:
-                collect(child)
-        elif isinstance(node, str) and os.path.expandvars(node) != node:
-            references[os.path.expandvars(node)] = node
-
-    def restore(node):
-        if isinstance(node, dict):
-            return {key: restore(child) for key, child in node.items()}
-        if isinstance(node, list):
-            return [restore(child) for child in node]
-        return references.get(node, node) if isinstance(node, str) else node
-
-    collect(raw)
     return {
         "settings": {kind: raw[kind] for kind in MODEL_KINDS if kind in raw},
-        "models": restore(models),
+        "models": models,
         "revision": _revision(data),
         "file_path": str(path),
         "writable": bool(path.stat().st_mode & 0o222)
@@ -176,6 +181,8 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
         if provider:
             defaults["provider"] = provider
     defaults.update({key: value for key, value in result.items() if key in fields})
+    if embedding and defaults.get("provider") is None and result.get("backend") is not None:
+        defaults["provider"] = result["backend"]
     # Materialize inherited bindings before removing legacy fallbacks. Explicit
     # null/empty values must mean clearing, not re-inheriting obsolete secrets.
     result["credentials"] = [

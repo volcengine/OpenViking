@@ -86,7 +86,6 @@ OpenViking 的配置分为两个层级：
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
-| Account | `rerank` | 动态配置 | 仅 ROOT 可读写；支持 VikingDB、Cohere、OpenAI 兼容、LiteLLM 和 Jev。未配置时使用 Cluster 启动配置，设为 `null` 恢复默认。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
 Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。

@@ -782,6 +782,7 @@ const workspace = {
     pageTitle: 'Settings',
     tabs: { connection: 'Connection', models: 'Models' },
     models: {
+      invalidJsonObject: 'Enter a valid JSON object',
       copyModelId: 'Copy model ID',
       copied: 'Model ID copied',
       copyFailed: 'Copy failed',

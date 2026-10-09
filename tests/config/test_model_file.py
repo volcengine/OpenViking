@@ -209,3 +209,62 @@ def test_keyless_embedding_does_not_inherit_legacy_key(model_file):
     current = read_model_file()["models"]["embedding"]["config"]["dense"]["credentials"][0]
     assert not current.get("api_key")
     assert current["api_base"] == "http://localhost:8000/v1"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_equal_environment_values_keep_each_binding_source(model_file, monkeypatch, explicit):
+    path, raw = model_file
+    monkeypatch.setenv("STUDIO_PRIMARY_KEY", "same-key")
+    monkeypatch.setenv("STUDIO_BACKUP_KEY", "same-key")
+    monkeypatch.setenv("STUDIO_HEADER_A", "same-header")
+    monkeypatch.setenv("STUDIO_HEADER_B", "same-header")
+    primary = {
+        "api_key": "${STUDIO_PRIMARY_KEY}",
+        "extra_headers": {"A": "${STUDIO_HEADER_A}", "B": "${STUDIO_HEADER_B}"},
+    }
+    backup = {"api_key": "${STUDIO_BACKUP_KEY}"}
+    raw["vlm"] = {"model": "gpt-4o", "provider": "openai"}
+    if explicit:
+        raw["vlm"]["credentials"] = [
+            {"provider": "openai", **primary},
+            {"provider": "openai", **backup},
+        ]
+    else:
+        raw["vlm"]["providers"] = {"openai": primary}
+        raw["vlm"]["backup"] = {
+            "model": "gpt-4o-mini",
+            "provider": "openai",
+            "providers": {"openai": backup},
+        }
+    # A literal equal value elsewhere must not become an environment reference.
+    raw["vlm"]["reasoning_effort"] = "same-header"
+    path.write_text(json.dumps(raw))
+    result = read_model_file()
+    bindings = result["models"]["vlm"]["config"]["credentials"]
+    assert bindings[0]["api_key"] == "${STUDIO_PRIMARY_KEY}"
+    assert bindings[1]["api_key"] == "${STUDIO_BACKUP_KEY}"
+    assert bindings[0]["extra_headers"] == primary["extra_headers"]
+    assert bindings[0]["reasoning_effort"] == "same-header"
+    save_model_file({"vlm": result["models"]["vlm"]["config"]}, result["revision"])
+    stored = json.loads(path.read_text())["vlm"]["credentials"]
+    assert stored[0]["api_key"] == "${STUDIO_PRIMARY_KEY}"
+    assert stored[1]["api_key"] == "${STUDIO_BACKUP_KEY}"
+    assert stored[0]["extra_headers"] == primary["extra_headers"]
+
+
+@pytest.mark.parametrize("null_provider", [False, True])
+def test_partial_embedding_credentials_preserve_legacy_backend(model_file, null_provider):
+    path, raw = model_file
+    dense = raw["embedding"]["dense"]
+    dense["backend"] = dense.pop("provider")
+    if null_provider:
+        dense["provider"] = None
+    path.write_text(json.dumps(raw))
+    result = read_model_file()
+    save_model_file(
+        {"embedding": {"dense": {"credentials": [{"api_key": "rotated"}]}}},
+        result["revision"],
+    )
+    current = read_model_file()["models"]["embedding"]["config"]["dense"]
+    assert current["credentials"][0]["provider"] == "openai"
+    assert current["credentials"][0]["api_key"] == "rotated"

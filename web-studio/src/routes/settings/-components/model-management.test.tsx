@@ -445,3 +445,56 @@ it('retains the draft after backend validation failure', async () => {
   expect(section('vlmType').getByText('models.unsaved')).toBeTruthy()
   expect(screen.getByRole('alert').textContent).toContain('Validation failed')
 })
+
+it('blocks editing through View while a save is pending and closes the stale view on success', async () => {
+  mount()
+  let finishSave!: (value: object) => void
+  state.save.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishSave = resolve
+      }),
+  )
+  await screen.findByText('model-a')
+  await menuAction(section('vlmType'), 0, 'models.moveDown')
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.view' })[0],
+  )
+  const dialog = within(screen.getByRole('dialog'))
+  const edit = dialog.getByRole('button', { name: 'models.edit' })
+  expect(edit.hasAttribute('disabled')).toBe(true)
+  fireEvent.click(edit)
+  expect(
+    dialog.getByLabelText<HTMLInputElement>('models.fields.api_key').readOnly,
+  ).toBe(true)
+  expect(state.save).toHaveBeenCalledTimes(1)
+  finishSave({})
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(screen.queryByRole('button', { name: 'models.saveAll' })).toBeNull()
+})
+it('retains server diagnostics alongside the localized load failure', async () => {
+  mount()
+  state.get.mockRejectedValue(new Error('Startup file unavailable'))
+  await screen.findByText('model-a')
+  // Trigger a public refresh to fail after the initial successful read.
+  fireEvent.click(screen.getByRole('button', { name: 'models.reloadFile' }))
+  expect(await screen.findByText('Startup file unavailable')).toBeTruthy()
+  expect(screen.getByText('models.loadFailed')).toBeTruthy()
+})
+it('uses localized validation text for invalid JSON', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  const headers = screen.getByLabelText<HTMLTextAreaElement>(
+    'models.fields.extra_headers',
+  )
+  fireEvent.change(headers, { target: { value: '{invalid' } })
+  expect(headers.validationMessage).toBe('models.invalidJsonObject')
+  expect(headers.checkValidity()).toBe(false)
+  fireEvent.change(headers, { target: { value: '{"A":"B"}' } })
+  expect(headers.validationMessage).toBe('')
+})

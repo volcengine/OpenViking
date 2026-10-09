@@ -14,7 +14,9 @@ import {
 } from '#/components/ui/select'
 import { Field, FieldLabel } from '#/components/ui/field'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
-import type { ModelConfig, ModelKind } from '../-lib/model-management-api'
+import type { ModelConfig } from '../-lib/model-management-api'
+
+export type EditableModelKind = 'vlm' | 'embedding'
 
 const CUSTOM_OPENAI = '__custom_openai'
 
@@ -25,17 +27,8 @@ export type FieldSpec = {
   required?: boolean
   min?: number
 }
-export const providers: Record<ModelKind, string[]> = {
+export const providers: Record<EditableModelKind, string[]> = {
   vlm: [
-    'volcengine',
-    'openai',
-    'azure',
-    'kimi',
-    'glm',
-    'litellm',
-    'openai-codex',
-  ],
-  query_planner: [
     'volcengine',
     'openai',
     'azure',
@@ -59,22 +52,15 @@ export const providers: Record<ModelKind, string[]> = {
     'litellm',
     'local',
   ],
-  rerank: ['vikingdb', 'cohere', 'openai', 'litellm', 'jev'],
 }
-export function bindingFields(kind: ModelKind, provider: string): FieldSpec[] {
+export function bindingFields(
+  kind: EditableModelKind,
+  provider: string,
+): FieldSpec[] {
   const fields: FieldSpec[] = [
     { key: 'provider', options: providers[kind], required: true },
   ]
-  if (kind === 'rerank' && provider === 'vikingdb')
-    fields.push(
-      { key: 'model_name', required: true },
-      { key: 'model_version', required: true },
-    )
-  else
-    fields.push({
-      key: 'model',
-      required: kind === 'rerank' && provider === 'litellm',
-    })
+  fields.push({ key: 'model' })
   if (provider === 'vikingdb')
     fields.push(
       { key: 'ak', type: 'secret', required: true },
@@ -93,26 +79,15 @@ export function bindingFields(kind: ModelKind, provider: string): FieldSpec[] {
   if (provider !== 'vikingdb' && provider !== 'local')
     fields.push({
       key: 'api_base',
-      required:
-        provider === 'azure' || (kind === 'rerank' && provider === 'openai'),
+      required: provider === 'azure',
     })
   if (provider === 'azure') fields.push({ key: 'api_version' })
-  if (kind === 'rerank') {
-    if (provider === 'jev')
-      fields.push({ key: 'mode', options: ['noul', 'choice'] })
-    fields.push(
-      { key: 'threshold', type: 'number' },
-      { key: 'timeout', type: 'number', min: 0.001 },
-      { key: 'max_input_tokens', type: 'number', min: 0 },
-    )
-  }
   return fields
 }
-export function advancedFields(kind: ModelKind): FieldSpec[] {
+export function advancedFields(kind: EditableModelKind): FieldSpec[] {
   const common: FieldSpec[] = [{ key: 'extra_headers', type: 'json' }]
   if (kind === 'embedding') return common
-  if (kind === 'rerank')
-    return [...common, { key: 'log_payloads', type: 'toggle' }]
+  return [...common, { key: 'log_payloads', type: 'toggle' }]
   return [
     ...common,
     { key: 'extra_request_body', type: 'json' },
@@ -136,6 +111,7 @@ function JsonField({
   id: string
   required?: boolean
 }) {
+  const { t } = useTranslation('settings')
   const [text, setText] = React.useState(
     value === undefined || value === null ? '' : JSON.stringify(value, null, 2),
   )
@@ -160,7 +136,7 @@ function JsonField({
           input.setCustomValidity('')
           onChange(parsed)
         } catch {
-          input.setCustomValidity('Invalid JSON object')
+          input.setCustomValidity(t('models.invalidJsonObject'))
         }
       }}
     />
