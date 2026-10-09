@@ -350,6 +350,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "eager_prefetch": true,
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
+    "extraction_max_tokens": null,
     "session_skill_extraction_enabled": false,
     "link_enabled": false
   }
@@ -365,6 +366,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
 | `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
+| `extraction_max_tokens` | positive integer or `null` | `null` | Per-call output limit for memory extraction. `null` uses `vlm.max_tokens`, then the built-in 32,768-token extraction default. It does not affect other VLM calls. |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
 

@@ -349,6 +349,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "eager_prefetch": true,
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
+    "extraction_max_tokens": null,
     "session_skill_extraction_enabled": false,
     "link_enabled": false
   }
@@ -364,6 +365,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
 | `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
+| `extraction_max_tokens` | 正整数或 `null` | `null` | 单次记忆抽取的输出上限。`null` 先使用 `vlm.max_tokens`，未配置时再使用内置的 32,768 token 抽取默认值。该字段不影响其他 VLM 调用。 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
 

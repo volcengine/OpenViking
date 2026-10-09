@@ -1719,7 +1719,8 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
-    "custom_templates_dir": "/path/to/custom-memory"
+    "custom_templates_dir": "/path/to/custom-memory",
+    "extraction_max_tokens": 4096
   }
 }
 ```
@@ -1729,6 +1730,7 @@ openviking-server --config /path/to/ov.conf
 | `version` | 已废弃且会被忽略。OpenViking 始终使用 v3 记忆抽取链路；已有配置中保留该字段仍可正常加载，不会报错。 | `"v3"` |
 | `custom_templates_dir` | 自定义 memory schema 目录。后加载的同名 `memory_type` 会覆盖内置定义，新类型会追加；详见 [Prompt 指南](10-prompt-guide.md)。 | `""` |
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
+| `extraction_max_tokens` | 单次记忆抽取的输出上限。`null` 先使用 `vlm.max_tokens`，未配置时再使用内置的 32,768 token 抽取默认值。可使用较小值限制慢速本地模型的抽取时长，且不影响其他 VLM 调用。 | `null` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
 | `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见下文 |

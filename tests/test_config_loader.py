@@ -362,6 +362,18 @@ def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(mon
         OpenVikingConfig.from_dict({"memory": {"extraction_output_format": "yaml"}})
 
 
+def test_memory_extraction_max_tokens_is_optional_and_positive(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    default_config = OpenVikingConfig.from_dict({})
+    custom_config = OpenVikingConfig.from_dict({"memory": {"extraction_max_tokens": 2048}})
+
+    assert default_config.memory.extraction_max_tokens is None
+    assert custom_config.memory.extraction_max_tokens == 2048
+    with pytest.raises(ValueError):
+        OpenVikingConfig.from_dict({"memory": {"extraction_max_tokens": 0}})
+
+
 def test_memory_maintenance_review_tokens_defaults_and_validates(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

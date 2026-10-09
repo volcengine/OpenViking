@@ -1363,9 +1363,9 @@ class TestFinalOperationsHydration:
 
 
 class TestExtractionMaxOutputTokens:
-    """The extraction floor (32768) suits Doubao; vlm.max_tokens must override it."""
+    """Extraction-specific budgets override general VLM limits and defaults."""
 
-    def _loop(self, *, vlm_max_tokens, per_loop=None):
+    def _loop(self, *, vlm_max_tokens, extraction_max_tokens=None, per_loop=None):
         loop = ExtractLoop(
             vlm=Mock(model="test-model", max_tokens=vlm_max_tokens),
             viking_fs=Mock(),
@@ -1373,7 +1373,7 @@ class TestExtractionMaxOutputTokens:
             isolation_handler=Mock(),
             max_output_tokens=per_loop,
         )
-        loop._resolve_effective_max_output_tokens()
+        loop._resolve_effective_max_output_tokens(extraction_max_tokens)
         return loop
 
     def test_default_floor_used_when_unconfigured(self):
@@ -1384,6 +1384,40 @@ class TestExtractionMaxOutputTokens:
         loop = self._loop(vlm_max_tokens=16384)
         assert loop._effective_max_output_tokens == 16384
 
-    def test_per_loop_value_wins_over_config(self):
-        loop = self._loop(vlm_max_tokens=16384, per_loop=8192)
+    def test_extraction_config_overrides_vlm_max_tokens(self):
+        loop = self._loop(vlm_max_tokens=16384, extraction_max_tokens=2048)
+        assert loop._effective_max_output_tokens == 2048
+
+    def test_per_loop_value_wins_over_extraction_and_vlm_config(self):
+        loop = self._loop(
+            vlm_max_tokens=16384,
+            extraction_max_tokens=4096,
+            per_loop=8192,
+        )
         assert loop._effective_max_output_tokens == 8192
+
+    @pytest.mark.asyncio
+    async def test_extraction_config_limit_is_forwarded_to_vlm(self):
+        messages = [{"role": "user", "content": "extract"}]
+        vlm = Mock(model="test-model", max_tokens=16384)
+        vlm.get_completion_async = AsyncMock(return_value="")
+        loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=Mock(),
+            context_provider=Mock(),
+            isolation_handler=Mock(),
+        )
+        loop._tool_schemas = []
+        loop._output_protocol = Mock()
+        loop._output_protocol.describe_empty_response.return_value = None
+        loop._resolve_effective_max_output_tokens(2048)
+
+        await loop._call_llm(messages)
+
+        vlm.get_completion_async.assert_awaited_once_with(
+            messages=messages,
+            tools=None,
+            tool_choice=None,
+            thinking=False,
+            max_tokens=2048,
+        )

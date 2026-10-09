@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -83,6 +83,15 @@ class MemoryConfig(BaseModel):
             "to produce long-term memories. When disabled, sessions are archived "
             "but no memory extraction is performed. Useful for read-only or "
             "stateless deployments."
+        ),
+    )
+    extraction_max_tokens: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Per-call output token limit for memory extraction. None uses the "
+            "configured VLM max_tokens, or the built-in extraction default when "
+            "the VLM limit is unset. This setting does not affect other VLM calls."
         ),
     )
     extraction_output_format: Literal["json", "python"] = Field(

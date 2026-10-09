@@ -1729,7 +1729,8 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
-    "custom_templates_dir": "/path/to/custom-memory"
+    "custom_templates_dir": "/path/to/custom-memory",
+    "extraction_max_tokens": 4096
   }
 }
 ```
@@ -1739,6 +1740,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
 | `custom_templates_dir` | Custom memory schema directory. Later definitions replace the same `memory_type`; new types are added. See the [Prompt Guide](10-prompt-guide.md). | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
+| `extraction_max_tokens` | Per-call output limit for memory extraction. `null` uses `vlm.max_tokens`, then the built-in 32,768-token extraction default. Use a smaller value to bound slow local-model extraction without changing other VLM calls. | `null` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section below |
