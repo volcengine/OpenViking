@@ -136,11 +136,7 @@ class TaskFiles:
     async def get(self, path: str) -> Any:
         """Read an optional shard; transport/permission errors remain failures."""
         try:
-            return json.loads(
-                await self.sandbox.read_file_bytes(
-                    f"{ROOT}/{path}.json", max_bytes=16 * 1024 * 1024
-                )
-            )
+            return json.loads(await self.sandbox.read_file_bytes(f"{ROOT}/{path}.json"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 

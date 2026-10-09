@@ -70,11 +70,9 @@ async def load_old(runtime: Pipeline, path: str) -> str | None:
         uri = safe_join_viking_uri(runtime.target, path)
         try:
             entry = await runtime.client.stat(uri)
-            if entry.get("isDir") or int(entry.get("size") or 0) > 8 * 1024 * 1024:
-                raise ValueError("Selected old target must be a file of at most 8 MiB")
+            if entry.get("isDir"):
+                raise ValueError("Selected old target must be a file")
             payload = await runtime.client.download_bytes(uri)
-            if len(payload) > 8 * 1024 * 1024:
-                raise ValueError("Selected old file exceeds 8 MiB")
             runtime.old[path] = payload.decode("utf-8")
             runtime.metrics["history_body_reads"] += 1
         except OpenVikingError as exc:
@@ -106,8 +104,6 @@ def validate_files(runtime: Pipeline, response, group, records, old):
         value = apply_file(draft, current)
         if draft.content_sha256 and content_hash(value) != draft.content_sha256:
             raise ValueError("Artifact content hash mismatch")
-        if len(value.encode()) > 8 * 1024 * 1024:
-            raise ValueError("Assembled output exceeds 8 MiB")
         if draft.path.endswith(".json"):
             json.loads(value)
 

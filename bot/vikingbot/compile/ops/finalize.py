@@ -187,8 +187,6 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
     rendered = RenderedBundle()
     for path, payload in files.items():
         owners.setdefault(path, "runtime:navigation")
-        if len(payload) > 8 * 1024 * 1024:
-            raise ValueError("Final output including navigation/citations exceeds 8 MiB")
         uri = safe_join_viking_uri(runtime.target, path)
         old = runtime.old.get(path)
         revision = revisions.get(path)

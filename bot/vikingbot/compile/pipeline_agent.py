@@ -141,13 +141,10 @@ class EmitResult(Tool):
                 if len(kwargs) != 1 or self.sandbox is None:
                     raise ValueError("result_ref is an alternative to all inline result fields")
                 relative = validate_relative_file_path(kwargs["result_ref"])
-                raw = await self.sandbox.read_file_bytes(
-                    f"{self.root}/{relative}", max_bytes=8 * 1024 * 1024
-                )
+                raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
                 kwargs = json_repair.loads(raw.decode("utf-8"), stream_stable=True)
             result = self.schema.model_validate(kwargs)
             if isinstance(result, RecordResponse):
-                total_bytes = 0
                 for draft in result.records:
                     if draft.ready_content_ref is not None:
                         if self.sandbox is None or draft.ready_content is not None:
@@ -155,16 +152,10 @@ class EmitResult(Tool):
                                 "Ready file reference requires scratch access without inline text"
                             )
                         relative = validate_relative_file_path(draft.ready_content_ref)
-                        raw = await self.sandbox.read_file_bytes(
-                            f"{self.root}/{relative}", max_bytes=8 * 1024 * 1024
-                        )
-                        total_bytes += len(raw)
-                        if total_bytes > 16 * 1024 * 1024:
-                            raise ValueError("Ready artifacts exceed 16 MiB per submission")
+                        raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
                         draft.ready_content = raw.decode("utf-8")
                         draft.ready_content_ref = None
             if isinstance(result, FileResponse):
-                total_bytes = 0
                 for draft in result.files:
                     if draft.content_ref is not None:
                         if self.sandbox is None or draft.content is not None or draft.patches:
@@ -172,12 +163,7 @@ class EmitResult(Tool):
                                 "File reference requires scratch access without content/patches"
                             )
                         relative = validate_relative_file_path(draft.content_ref)
-                        raw = await self.sandbox.read_file_bytes(
-                            f"{self.root}/{relative}", max_bytes=8 * 1024 * 1024
-                        )
-                        total_bytes += len(raw)
-                        if total_bytes > 16 * 1024 * 1024:
-                            raise ValueError("Child artifacts exceed 16 MiB")
+                        raw = await self.sandbox.read_file_bytes(f"{self.root}/{relative}")
                         actual = content_hash(raw)
                         if draft.content_sha256 and draft.content_sha256 != actual:
                             raise ValueError("Scratch artifact hash mismatch")
