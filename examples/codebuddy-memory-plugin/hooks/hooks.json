@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/session-start.mjs",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

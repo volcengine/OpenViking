@@ -1,0 +1,131 @@
+/**
+ * Configuration for the CodeBuddy OpenViking memory plugin.
+ *
+ * Every knob is declared once in `shared/config-schema.mjs` and the whole
+ * configuration is assembled by `buildPluginConfig()`, which reads the layers
+ * in this order:
+ *
+ *   env (OPENVIKING_*) → workspace `.openviking/config*.json` and the machine
+ *   registry → ovcli.conf `plugin.codebuddy` → ovcli.conf `plugin` →
+ *   ov.conf's `codebuddy` section (legacy) → the schema's defaults
+ *
+ * What stays here is what only this harness knows: whether the plugin is
+ * enabled at all, the file `configPath` has always named, and the tri-state
+ * digest mode.
+ *
+ * Enable/disable:
+ *   - OPENVIKING_MEMORY_ENABLED env var (0/false/no = off, 1/true/yes = on)
+ *   - codebuddy.enabled field in ov.conf (false = off)
+ *   - Fallback: enabled when ov.conf or ovcli.conf exists, disabled otherwise
+ *
+ * Connection and credentials are not knobs and never come from a workspace
+ * file: OPENVIKING_URL / OPENVIKING_BASE_URL, OPENVIKING_API_KEY /
+ * OPENVIKING_BEARER_TOKEN, OPENVIKING_ACCOUNT, OPENVIKING_USER, then
+ * ovcli.conf, then ov.conf's server section.
+ *
+ * The harness id is `codebuddy` (see docs/HOST-CONTRACT.md §10 — the server's
+ * log-ingestion adapter is named `workbuddy`, which is a different naming
+ * space and must not be used here).
+ */
+
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
+
+import { buildPluginConfig } from "./shared/plugin-config.mjs";
+
+const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
+const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
+const MANIFEST_URL = new URL("../.codebuddy-plugin/plugin.json", import.meta.url);
+
+function envBool(name) {
+  const v = process.env[name];
+  if (v == null || v === "") return undefined;
+  const lower = v.trim().toLowerCase();
+  if (lower === "0" || lower === "false" || lower === "no") return false;
+  if (lower === "1" || lower === "true" || lower === "yes") return true;
+  return undefined;
+}
+
+/**
+ * Try to load and parse a JSON config file. Returns parsed object or null.
+ */
+function tryLoadJsonFile(envVar, defaultPath) {
+  const configPath = resolvePath(
+    (process.env[envVar] || defaultPath).replace(/^~/, homedir()),
+  );
+
+  let raw;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  try {
+    return { configPath, file: JSON.parse(raw) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Determine whether the plugin is enabled.
+ *
+ * Priority:
+ *   1. OPENVIKING_MEMORY_ENABLED env var
+ *   2. codebuddy.enabled in ov.conf
+ *   3. Whether ov.conf or ovcli.conf exists and is parseable
+ *
+ * When force-enabled via env var (=1) without config files, the caller must
+ * provide connection info via other env vars (OPENVIKING_URL, etc.).
+ */
+export function isPluginEnabled() {
+  const envEnabled = envBool("OPENVIKING_MEMORY_ENABLED");
+  if (envEnabled !== undefined) return envEnabled;
+
+  const ovConf = tryLoadJsonFile("OPENVIKING_CONFIG_FILE", DEFAULT_OV_CONF_PATH);
+  if (ovConf) {
+    const cb = ovConf.file.codebuddy || {};
+    if (cb.enabled === false) return false;
+    return true;
+  }
+
+  // No ov.conf — check if ovcli.conf exists (sufficient for connection info)
+  const cliConf = tryLoadJsonFile("OPENVIKING_CLI_CONFIG_FILE", DEFAULT_OVCLI_CONF_PATH);
+  if (cliConf) return true;
+
+  return false;
+}
+
+/**
+ * Load the full plugin configuration.
+ *
+ * `cwd` selects the workspace layer (`.openviking/config.json` and the
+ * registry entry for that directory). It defaults to this process's directory,
+ * which is all a hook knows at module load; a hook whose payload names the
+ * session's directory calls this again with it. Re-resolving that late is safe
+ * because a workspace file may not carry connection or credential keys, so
+ * baseUrl/apiKey cannot move — loggers and fetch helpers built from the first
+ * load stay valid.
+ *
+ * CodeBuddy note: the `SessionStart` payload carries no `cwd`, so callers there
+ * keep the `process.cwd()` default (see docs/HOST-CONTRACT.md §4).
+ */
+export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
+  const config = buildPluginConfig("codebuddy", {
+    cwd,
+    env,
+    manifestUrl: MANIFEST_URL,
+    logFile: "cb-hooks.log",
+    rootKeyFallback: true,
+  });
+
+  return {
+    ...config,
+    // `configPath` reports whichever file parsed, ov.conf first, and predates
+    // the pair of paths beside it.
+    configPath: config.ovPath || config.cliPath || null,
+    credentialPath: config.credentialPath || null,
+  };
+}
