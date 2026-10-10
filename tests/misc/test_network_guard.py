@@ -271,10 +271,11 @@ class TestEnsurePublicRemoteTarget:
         ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:
-        """Unresolvable host is allowed through (fail-open for DNS)."""
+    def test_rejects_when_dns_returns_empty(self, mock_resolve) -> None:
+        """Unresolvable host cannot be verified as public."""
         mock_resolve.return_value = set()
-        ensure_public_remote_target("http://new-host.example.com/path")  # should not raise
+        with pytest.raises(PermissionDeniedError, match="could not be resolved"):
+            ensure_public_remote_target("http://new-host.example.com/path")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
