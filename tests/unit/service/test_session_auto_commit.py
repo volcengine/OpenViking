@@ -837,3 +837,99 @@ async def test_scheduler_reuses_async_agfs_client_between_scans(monkeypatch):
     await scheduler._scan_once()
 
     assert created_clients == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_schedules_legacy_session_with_empty_last_message_at():
+    # Migrated/legacy sessions carry last_message_at == "" because only the
+    # append path ever writes the field; the idle backlog still deserves a
+    # commit, so an empty value must count as immediately due.
+    service = _FakeSessionService(
+        [_session_entry("session_legacy")],
+        {
+            "/local/acct_a/user/user_b/sessions/session_legacy/.meta.json": _meta()
+            | {"last_message_at": ""},
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    await scheduler._scan_once()
+
+    assert service.calls == [
+        ("session_legacy", "idle_timeout", "user_b"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_empty_last_message_at_session_without_content():
+    # Empty last_message_at only means "due" when there is still uncommitted
+    # content; an empty session must stay skipped.
+    service = _FakeSessionService(
+        [_session_entry("session_empty_legacy")],
+        {
+            "/local/acct_a/user/user_b/sessions/session_empty_legacy/.meta.json": _meta(
+                pending_tokens=0,
+                message_count=0,
+            )
+            | {"last_message_at": ""},
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    await scheduler._scan_once()
+
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_unparseable_last_message_at():
+    # Malformed timestamp strings (like the pinned [] case) must be skipped,
+    # not treated as legacy-due.
+    service = _FakeSessionService(
+        [_session_entry("session_bad_ts")],
+        {
+            "/local/acct_a/user/user_b/sessions/session_bad_ts/.meta.json": _meta()
+            | {"last_message_at": "not-a-timestamp"},
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    await scheduler._scan_once()
+
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_idle_commits_legacy_session_with_empty_last_message_at(monkeypatch):
+    # The service-side gate (re-checked before committing) must accept the
+    # same legacy sessions the scanner schedules.
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "idle_timeout_seconds": 60,
+                "keep_recent_count": 5,
+            },
+            pending_tokens=10,
+            message_count=8,
+            last_message_at="",
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="idle_timeout")
+
+    # Idle commits the full backlog and must not overwrite the stored keep pref.
+    assert session.commit_calls == [(0, False, True)]
+    assert session.save_calls == 0

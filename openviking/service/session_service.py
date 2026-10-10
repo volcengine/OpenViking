@@ -16,15 +16,12 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import read_user_memory_policy
 from openviking.service.session_auto_commit import (
-    compute_next_check_at,
-    get_idle_timeout_seconds,
     get_keep_recent_count,
     get_message_count_threshold,
     get_min_commit_interval_seconds,
     get_token_threshold,
-    has_idle_uncommitted_content,
     has_uncommitted_content,
-    is_next_check_due,
+    is_idle_due,
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -657,15 +654,9 @@ class SessionService:
         if reason == "idle_timeout":
             if not self._session_auto_commit_config.enabled:
                 return False
-            idle_timeout = get_idle_timeout_seconds(policy)
-            if idle_timeout is None or not has_idle_uncommitted_content(session.meta.to_dict()):
-                return False
             if self._within_min_commit_interval(session, policy):
                 return False
-            next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
-            if not next_check_at:
-                return False
-            return is_next_check_due(next_check_at, datetime.now()) is True
+            return is_idle_due(session.meta.to_dict(), datetime.now())
 
         return False
 
