@@ -254,7 +254,11 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # a None value deletes the item
 ```
+
+Following LangGraph's `BaseStore` contract, passing `None` as the value deletes the item and is
+equivalent to `delete()`. Deleting a key that does not exist is a no-op.
 
 ### LangGraph middleware
 
