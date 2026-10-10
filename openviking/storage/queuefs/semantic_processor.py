@@ -1654,6 +1654,7 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm: "VLMHandle",
     ) -> str:
         """Generate overview from a single prompt (small directories)."""
+        config = get_openviking_config()
 
         try:
             prompt = render_prompt(
@@ -1666,6 +1667,14 @@ class SemanticProcessor(DequeueHandlerBase):
                     "directory_coverage": directory_coverage,
                 },
             )
+
+            if len(prompt) > config.semantic.max_overview_prompt_chars:
+                logger.warning(
+                    f"Skipping oversized overview prompt for {dir_uri}: "
+                    f"{len(prompt)} chars exceeds "
+                    f"{config.semantic.max_overview_prompt_chars} char limit"
+                )
+                return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
 
             with bind_telemetry_stage("semantic_execute"):
                 overview = await vlm.get_completion_async(prompt)
@@ -1745,6 +1754,13 @@ class SemanticProcessor(DequeueHandlerBase):
             batch_prompts.append((batch_idx, prompt, batch_link_map))
 
         async def _run_batch(batch_idx: int, prompt: str, batch_link_map: Dict[str, str]) -> None:
+            if len(prompt) > semantic.max_overview_prompt_chars:
+                logger.warning(
+                    f"Skipping oversized overview batch {batch_idx + 1}/{len(batches)} "
+                    f"for {dir_uri}: {len(prompt)} chars exceeds "
+                    f"{semantic.max_overview_prompt_chars} char limit"
+                )
+                return
             try:
                 async with llm_sem:
                     with bind_telemetry_stage("semantic_execute"):
@@ -1783,6 +1799,13 @@ class SemanticProcessor(DequeueHandlerBase):
                     "directory_coverage": directory_coverage,
                 },
             )
+            if len(prompt) > semantic.max_overview_prompt_chars:
+                logger.warning(
+                    f"Skipping oversized overview merge prompt for {dir_uri}: "
+                    f"{len(prompt)} chars exceeds "
+                    f"{semantic.max_overview_prompt_chars} char limit"
+                )
+                return f"# {dir_name}\n\n[Directory overview is not generated]"
             with bind_telemetry_stage("semantic_execute"):
                 overview = await vlm.get_completion_async(prompt)
             overview = self._replace_link_references(overview, link_map)
