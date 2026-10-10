@@ -209,6 +209,8 @@ stdout 只承载宿主约定的结果，日志写 stderr 或共享日志文件�
 
 profile 与逐轮召回分别使用 `buildProfileBlock()` 和 `buildRecallBlock()` / `buildRecallBlockDetailed()`。宿主可提供压缩器、显示结果和统计信息，不能重写检索目标、排序、token 预算和服务端兼容回退。状态栏需要计数时，应消费共享结果和最终注入内容，不能再跑一次召回推算。
 
+共享 context/peer 降级缓存按解析后的完整服务端 URL（包括 base path）分开保存；召回与 doctor 都应接收同一份解析配置。旧全局缓存没有 URL 归属，原位保留，新的 URL 缓存首次重新探测。显式缓存路径及不含 URL 的低层调用保留原路径约定；同 URL 原地升级仍遵循六小时过期时间。
+
 会话启动时的 skill 清单（`<available-skills>`）也由 `buildProfileBlock()` 生成：调用方把解析好的插件配置作为第四个参数传入，由其中的 `skillCatalog` 和 `skillCatalogTokenBudget` 旋钮决定开关和预算。适配器不能自己请求 `GET /api/v1/skills`，也不能自己拼装 skill 列表。不传这个参数的宿主，得到的 profile 块里没有 skill 清单。
 
 自动召回必须携带正确会话身份和 peer，并遵守 input filter、bypass 和开关。空结果应保持为空，不把服务端的“无相关记忆”占位文本当成记忆注入。压缩失败可退回已有的未压缩结果；不得凭空补写摘要。压缩后的 `viking://` URI 必须仍可读取，原始用户问题、召回块与宿主包装也必须能在 capture 时区分，避免重复写入注入的旧记忆。

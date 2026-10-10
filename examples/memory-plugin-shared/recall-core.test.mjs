@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   buildRecallEndpointBody,
   buildRecallBlock,
   buildRecallBlockDetailed,
+  buildServerAssembledBlock,
   contextRequestTimeoutMs,
   estimateTokens,
   isContextFaceLegacy,
@@ -18,6 +19,18 @@ import {
 async function tempPath(name) {
   const dir = await mkdtemp(join(tmpdir(), "ov-recall-"));
   return join(dir, name);
+}
+
+async function withStateDir(fn) {
+  const previous = process.env.OPENVIKING_STATE_DIR;
+  const dir = await mkdtemp(join(tmpdir(), "ov-recall-state-"));
+  process.env.OPENVIKING_STATE_DIR = dir;
+  try {
+    return await fn(dir);
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_STATE_DIR;
+    else process.env.OPENVIKING_STATE_DIR = previous;
+  }
 }
 
 test("context requests preserve the configured recall width and server budget", () => {
@@ -253,6 +266,105 @@ test("unrelated request errors do not mark the server as legacy", async () => {
   await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
 
   assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+});
+
+test("recall capability downgrades belong to the full server URL and survive a return to it", async () => {
+  await withStateDir(async () => {
+    const cfgA = { baseUrl: "https://ov.example/old", recallPeerScope: "actor" };
+    const cfgB = { baseUrl: "https://ov.example/new", recallPeerScope: "actor" };
+    const options = { actorPeerId: "probe-peer" };
+    const oldRequests = [];
+    const oldServer = async (path, init) => {
+      const body = JSON.parse(init.body);
+      oldRequests.push({ path, peer_scope: body.peer_scope });
+      if (path.endsWith("/search")) return { ok: false, status: 400, error: "Extra inputs: mode" };
+      if (body.peer_scope) return { ok: false, status: 422, error: "unexpected keyword argument 'peer_scope'" };
+      return { ok: true, result: { rendered: "old compatibility recall" } };
+    };
+    await buildServerAssembledBlock(oldServer, cfgA, "hello", options);
+    assert.deepEqual(oldRequests.map(({ path }) => path), [
+      "/api/v1/search/search", "/api/v1/search/recall", "/api/v1/search/recall",
+    ]);
+    assert.deepEqual(oldRequests.map(({ peer_scope }) => peer_scope), ["actor", "actor", undefined]);
+
+    const readNewServer = async (contextAvailable) => {
+      const requests = [];
+      const block = await buildServerAssembledBlock(async (path, init) => {
+        const body = JSON.parse(init.body);
+        requests.push({ path, peer_scope: body.peer_scope });
+        if (path.endsWith("/search") && !contextAvailable) return { ok: false, status: 503 };
+        return { ok: true, result: { rendered: path.endsWith("/search") ? "new context" : "new actor recall" } };
+      }, cfgB, "hello", options);
+      return { block, requests };
+    };
+    const context = await readNewServer(true);
+    assert.match(context.block, /new context/);
+    assert.deepEqual(context.requests, [{ path: "/api/v1/search/search", peer_scope: "actor" }]);
+    const legacy = await readNewServer(false);
+    assert.match(legacy.block, /new actor recall/);
+    assert.deepEqual(legacy.requests, [
+      { path: "/api/v1/search/search", peer_scope: "actor" },
+      { path: "/api/v1/search/recall", peer_scope: "actor" },
+    ]);
+
+    oldRequests.length = 0;
+    assert.match(await buildServerAssembledBlock(oldServer, cfgA, "again", options), /old compatibility recall/);
+    assert.deepEqual(oldRequests, [{ path: "/api/v1/search/recall", peer_scope: undefined }]);
+  });
+});
+
+test("unbound old memo files do not downgrade a configured URL or lose their original bytes", async () => {
+  await withStateDir(async (dir) => {
+    const until = Date.now() + 60000;
+    const originalContext = `{ "legacyUntil": ${until} }\n`;
+    const originalPeer = `{ "legacyUntil": ${until}, "scope": "actor", "status": 422 }\n`;
+    await writeFile(join(dir, "context-face.json"), originalContext);
+    await writeFile(join(dir, "peer-scope.json"), originalPeer);
+    const cfg = { endpoint: "https://ov.example/new", recallPeerScope: "actor" };
+    const options = { actorPeerId: "probe-peer" };
+    const requests = [];
+    const fetchJSON = async (path, init) => {
+      requests.push({ path, peer_scope: JSON.parse(init.body).peer_scope });
+      return { ok: true, result: { rendered: "new context" } };
+    };
+    assert.match(await buildServerAssembledBlock(fetchJSON, cfg, "hello", options), /new context/);
+    assert.deepEqual(requests, [{ path: "/api/v1/search/search", peer_scope: "actor" }]);
+    requests.length = 0;
+    await buildServerAssembledBlock(async (path, init) => {
+      if (path.endsWith("/search")) return { ok: false, status: 503 };
+      return fetchJSON(path, init);
+    }, cfg, "legacy", options);
+    assert.deepEqual(requests, [{ path: "/api/v1/search/recall", peer_scope: "actor" }]);
+    assert.deepEqual(await readFile(join(dir, "context-face.json")), Buffer.from(originalContext));
+    assert.deepEqual(await readFile(join(dir, "peer-scope.json")), Buffer.from(originalPeer));
+  });
+});
+
+test("high-level recall preserves both explicit capability memo paths across URL changes", async () => {
+  await withStateDir(async (dir) => {
+    const legacyCachePath = join(dir, "custom-context.json");
+    const peerScopeMemoPath = join(dir, "custom-peer.json");
+    const options = { legacyCachePath, peerScopeMemoPath, actorPeerId: "probe-peer" };
+    const cfg = { baseUrl: "https://ov.example/old", recallPeerScope: "actor" };
+    await buildServerAssembledBlock(async (path, init) => {
+      if (path.endsWith("/search")) return { ok: false, status: 400, error: "Extra inputs: mode" };
+      if (JSON.parse(init.body).peer_scope) return { ok: false, status: 422, error: "unexpected keyword argument 'peer_scope'" };
+      return { ok: true, result: { rendered: "compatibility recall" } };
+    }, cfg, "hello", options);
+    assert.equal(await isContextFaceLegacy(legacyCachePath), true);
+    assert.equal((await readPeerScopeDowngrade(peerScopeMemoPath))?.scope, "actor");
+    const contextBytes = await readFile(legacyCachePath);
+    const peerBytes = await readFile(peerScopeMemoPath);
+
+    const requests = [];
+    await buildServerAssembledBlock(async (path, init) => {
+      requests.push({ path, peer_scope: JSON.parse(init.body).peer_scope });
+      return { ok: true, result: { rendered: "explicit compatibility recall" } };
+    }, { ...cfg, baseUrl: "https://ov.example/new" }, "again", options);
+    assert.deepEqual(requests, [{ path: "/api/v1/search/recall", peer_scope: undefined }]);
+    assert.deepEqual(await readFile(legacyCachePath), contextBytes);
+    assert.deepEqual(await readFile(peerScopeMemoPath), peerBytes);
+  });
 });
 
 test("buildRecallBlock falls back to find when neither context endpoint works", async () => {

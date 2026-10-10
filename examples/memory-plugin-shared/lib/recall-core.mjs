@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -416,6 +417,15 @@ function stateFile(name) {
   return override ? join(override, name) : join(homedir(), ".openviking", "state", name);
 }
 
+// Unbound old memos cannot be attributed to the currently configured server.
+// Keep low-level callers without a URL on their existing path contract.
+function capabilityMemoPath(name, cfg = {}) {
+  const baseUrl = cfg.baseUrl || cfg.endpoint;
+  if (!baseUrl) return stateFile(`${name}.json`);
+  const key = createHash("sha256").update(String(baseUrl)).digest("hex");
+  return stateFile(join("server-capabilities", key, `${name}.json`));
+}
+
 async function readJsonFile(path) {
   try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; }
 }
@@ -448,8 +458,8 @@ export async function markContextFaceLegacy(path = stateFile("context-face.json"
  * widens recall from the caller's own peer to the whole user root, so doctor
  * reads this file back and warns.
  */
-export function peerScopeMemoPath() {
-  return stateFile("peer-scope.json");
+export function peerScopeMemoPath(cfg = {}) {
+  return capabilityMemoPath("peer-scope", cfg);
 }
 
 export async function readPeerScopeDowngrade(path = peerScopeMemoPath(), now = Date.now()) {
@@ -508,7 +518,9 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 export async function fetchAssembledContext(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId || "";
   const log = options.log || (() => {});
-  if (await isContextFaceLegacy(options.legacyCachePath)) return null;
+  const legacyCachePath = options.legacyCachePath === undefined
+    ? capabilityMemoPath("context-face", cfg) : options.legacyCachePath;
+  if (await isContextFaceLegacy(legacyCachePath)) return null;
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
@@ -520,7 +532,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
   if (!res.ok) {
     const status = res.status || 0;
     if ((status === 400 || status === 422) && looksLikeUnknownField(res)) {
-      await markContextFaceLegacy(options.legacyCachePath);
+      await markContextFaceLegacy(legacyCachePath);
       log("recall_context_face_unsupported", { status });
     } else {
       log("recall_context_face_error", { status });
@@ -612,7 +624,11 @@ async function recallViaEndpoint(fetchJSON, cfg, query, options, log) {
   if (wantsLocalCompression(cfg, options)) {
     body.max_chars = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
   }
-  const res = await postRecall(fetchJSON, body, { actorPeerId: options.actorPeerId, log });
+  const res = await postRecall(fetchJSON, body, {
+    actorPeerId: options.actorPeerId, log,
+    peerScopeMemoPath: options.peerScopeMemoPath === undefined
+      ? peerScopeMemoPath(cfg) : options.peerScopeMemoPath,
+  });
   if (!res.ok) {
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;

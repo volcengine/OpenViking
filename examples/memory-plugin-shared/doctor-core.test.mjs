@@ -19,10 +19,12 @@ import {
   lintBaseUrl,
   lintServerConf,
   readyCheckState,
+  reportPeer,
   scanDebugLog,
   unknownOvcliKeys,
   WORKSPACE_PEER_HINT,
 } from "./lib/doctor-core.mjs";
+import { buildServerAssembledBlock } from "./lib/recall-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
 
@@ -62,6 +64,33 @@ test("lintBaseUrl catches the common url mistakes", () => {
   assert.ok(lintBaseUrl("https://ov.example.com/mcp").some((p) => /\/mcp/.test(p.message)));
   assert.ok(lintBaseUrl("http://0.0.0.0:1933").some((p) => /0\.0\.0\.0/.test(p.message)));
   assert.ok(lintBaseUrl("").some((p) => p.level === "fail"));
+});
+
+test("reportPeer warns only for the URL that produced a peer-scope downgrade", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-doctor-peer-"));
+  const previous = process.env.OPENVIKING_STATE_DIR;
+  process.env.OPENVIKING_STATE_DIR = dir;
+  try {
+    const cfgA = { baseUrl: "https://ov.example/old", recallPeerScope: "actor" };
+    const cfgB = { baseUrl: "https://ov.example/new", recallPeerScope: "actor" };
+    await buildServerAssembledBlock(async (path, init) => {
+      if (path.endsWith("/search")) return { ok: false, status: 400, error: "Extra inputs: mode" };
+      if (JSON.parse(init.body).peer_scope) return { ok: false, status: 422, error: "unexpected keyword argument 'peer_scope'" };
+      return { ok: true, result: { rendered: "old compatibility recall" } };
+    }, cfgA, "hello", { actorPeerId: "probe-peer" });
+    const warnings = (cfg) => {
+      const report = createReport();
+      reportPeer(report, cfg, { cwd: dir });
+      return report.problems().filter(({ title }) => /peer_scope/.test(title));
+    };
+    assert.equal(warnings(cfgA).length, 1);
+    assert.match(warnings(cfgA)[0].title, /actor.*HTTP 422/);
+    assert.deepEqual(warnings(cfgB), []);
+    assert.equal(warnings(cfgA).length, 1);
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_STATE_DIR;
+    else process.env.OPENVIKING_STATE_DIR = previous;
+  }
 });
 
 test("classifyFetchError maps node errors to hints", () => {
