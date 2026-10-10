@@ -75,6 +75,7 @@ import {
   embeddingModes,
   credentials,
   object,
+  isConfigFileObject,
 } from '../-lib/config-file-api'
 import type {
   ConfigFileDraft,
@@ -433,13 +434,7 @@ export function ServerConfigurationEditor() {
     },
   })
   const pending = mutation.isPending || preview.isPending
-  let invalidJson = false
-  try {
-    const parsed: unknown = JSON.parse(document?.content ?? '{}')
-    invalidJson = !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-  } catch {
-    invalidJson = true
-  }
+  const invalidJson = !isConfigFileObject(document?.content ?? '{}')
   function current(kind: EditableModelKind): ModelConfig {
     return document?.models[kind].config ?? {}
   }
@@ -526,6 +521,14 @@ export function ServerConfigurationEditor() {
           credentials: values,
         })
       else reorder(kind, mode, values)
+    }
+  }
+  function dismissConfirmation() {
+    if (pending) return
+    setConfirm(null)
+    if (!dirty) {
+      setDraft(null)
+      setBaseline(null)
     }
   }
   function confirmAction() {
@@ -939,8 +942,9 @@ export function ServerConfigurationEditor() {
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
                   fields={fields}
                   value={editor.value}
-                  readOnly={editor.readonly}
+                  readOnly={editor.readonly || pending}
                   onChange={(value) => {
+                    if (pending) return
                     if (value.provider !== editor.value.provider) {
                       for (const key of [
                         'api_key',
@@ -1013,12 +1017,14 @@ export function ServerConfigurationEditor() {
                               },
                             ]}
                             value={object(editor.value[mode])}
-                            onChange={(value) =>
+                            readOnly={pending}
+                            onChange={(value) => {
+                              if (pending) return
                               setEditor({
                                 ...editor,
                                 value: { ...editor.value, [mode]: value },
                               })
-                            }
+                            }}
                           />
                         </fieldset>
                       ))}
@@ -1034,8 +1040,10 @@ export function ServerConfigurationEditor() {
                         key={provider}
                         fields={advancedFields(editor.kind)}
                         value={editor.value}
-                        readOnly={editor.readonly}
-                        onChange={(value) => setEditor({ ...editor, value })}
+                        readOnly={editor.readonly || pending}
+                        onChange={(value) => {
+                          if (!pending) setEditor({ ...editor, value })
+                        }}
                       />
                     </div>
                   </details>
@@ -1077,13 +1085,7 @@ export function ServerConfigurationEditor() {
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(isOpen) => {
-          if (!isOpen && !pending) {
-            setConfirm(null)
-            if (!dirty) {
-              setDraft(null)
-              setBaseline(null)
-            }
-          }
+          if (!isOpen) dismissConfirmation()
         }}
       >
         <DialogContent>
@@ -1094,13 +1096,7 @@ export function ServerConfigurationEditor() {
             <Button
               variant="outline"
               disabled={pending}
-              onClick={() => {
-                setConfirm(null)
-                if (!dirty) {
-                  setDraft(null)
-                  setBaseline(null)
-                }
-              }}
+              onClick={dismissConfirmation}
             >
               {t('models.dismiss')}
             </Button>

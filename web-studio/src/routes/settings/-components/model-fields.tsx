@@ -247,7 +247,8 @@ export function ModelFields({
                   min={field.min}
                   step={field.type === 'number' ? 'any' : undefined}
                   type={
-                    field.type === 'number'
+                    field.type === 'number' &&
+                    !(typeof current === 'string' && current.startsWith('$'))
                       ? 'number'
                       : field.type === 'secret' && !visible[field.key]
                         ? 'password'
@@ -263,7 +264,8 @@ export function ModelFields({
                     change(
                       event.target.value === ''
                         ? null
-                        : field.type === 'number'
+                        : field.type === 'number' &&
+                            !event.target.value.startsWith('$')
                           ? Number(event.target.value)
                           : event.target.value,
                     )

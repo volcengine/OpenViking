@@ -109,3 +109,15 @@ it('uses ROOT credentials to preview a full draft without saving, then saves one
     content: loaded.content,
   })
 })
+
+it.each([
+  ['{"port":${PORT},"enabled":$ENABLED,"nested":${OBJECT}}', true],
+  [JSON.stringify({ port: '${PORT}', escaped: 'a"${KEY}' }), true],
+  ['{"port":${PORT}} trailing', false],
+  ['{"port":${PORT}', false],
+  ['[${PORT}]', false],
+  ['null', false],
+])('checks startup-file object syntax for %s', async (content, valid) => {
+  const { isConfigFileObject } = await import('./config-file-api')
+  expect(isConfigFileObject(content)).toBe(valid)
+})

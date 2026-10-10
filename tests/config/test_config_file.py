@@ -344,3 +344,82 @@ def test_startup_revision_tracks_non_model_changes_and_restoration(config_file, 
     assert read_config_file()["restart_required"]
     path.write_bytes(initial)
     assert not read_config_file()["restart_required"]
+
+
+def test_unquoted_environment_values_survive_form_and_file_saves(config_file, monkeypatch):
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_CONCURRENCY", "12")
+    monkeypatch.setenv("STUDIO_PORT", "1933")
+    monkeypatch.setenv("STUDIO_SERVER", '{"port":1933,"root_api_key":"server-secret"}')
+    raw["vlm"]["max_concurrent"] = "${STUDIO_CONCURRENCY}"
+    raw["server"] = {"port": "$STUDIO_PORT"}
+    text = json.dumps(raw).replace('"${STUDIO_CONCURRENCY}"', "${STUDIO_CONCURRENCY}")
+    text = text.replace('"$STUDIO_PORT"', "$STUDIO_PORT")
+    path.write_text(text)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", None)
+    OpenVikingConfigSingleton.initialize(config_path=str(path))
+    assert OpenVikingConfigSingleton.get_instance().vlm.max_concurrent == 12
+    loaded = read_config_file()
+    assert loaded["content"] == text
+    assert "resolved-secret" not in json.dumps(loaded)
+    assert not loaded["restart_required"]
+
+    # Form requests cross a JSON transport, which removes Python marker types.
+    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
+    model["timeout"] = 42
+    draft = preview_config_file(text, {"vlm": model})
+    assert '"max_concurrent": ${STUDIO_CONCURRENCY}' in draft["content"]
+    assert '"port": $STUDIO_PORT' in draft["content"]
+    assert "resolved-secret" not in draft["content"]
+    save_config_file({}, loaded["revision"], draft["content"])
+    assert path.read_text() == draft["content"]
+    reloaded = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert reloaded.vlm.max_concurrent == 12 and reloaded.vlm.timeout == 42
+
+    # An environment reference may also supply a complete non-model JSON value.
+    text = draft["content"].replace('"port": $STUDIO_PORT', '"port": 1934')
+    revision = read_config_file()["revision"]
+    save_config_file({}, revision, text)
+    assert path.read_text() == text
+    object_text = json.dumps({**raw, "server": "$STUDIO_SERVER"}).replace(
+        '"$STUDIO_SERVER"', "$STUDIO_SERVER"
+    )
+    projected = preview_config_file(object_text, {"vlm": {"timeout": 45}})
+    assert '"server": $STUDIO_SERVER' in projected["content"]
+    assert "server-secret" not in json.dumps(projected)
+
+
+def test_unset_or_invalid_environment_values_cannot_replace_the_file(config_file, monkeypatch):
+    path, raw = config_file
+    monkeypatch.delenv("STUDIO_UNSET", raising=False)
+    monkeypatch.setenv("STUDIO_INVALID", "invalid-json")
+    original = path.read_bytes()
+    revision = read_config_file()["revision"]
+    for reference in ("$STUDIO_UNSET", "${STUDIO_INVALID}"):
+        content = json.dumps({**raw, "server": reference}).replace(json.dumps(reference), reference)
+        with pytest.raises(ValueError, match="Invalid ov.conf"):
+            preview_config_file(content)
+        with pytest.raises(ValueError, match="Invalid ov.conf"):
+            save_config_file({}, revision, content)
+        assert path.read_bytes() == original
+
+
+def test_unquoted_credential_references_survive_transport_and_reordering(config_file, monkeypatch):
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_JSON_KEY", '"resolved-secret"')
+    raw["vlm"]["credentials"] = [
+        {"id": "first", "provider": "openai", "api_key": "${STUDIO_JSON_KEY}"},
+        {"id": "second", "provider": "openai", "api_key": "literal-key"},
+    ]
+    content = json.dumps(raw).replace('"${STUDIO_JSON_KEY}"', "${STUDIO_JSON_KEY}")
+    path.write_text(content)
+    loaded = read_config_file()
+    assert "resolved-secret" not in json.dumps(loaded)
+    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
+    model["credentials"].reverse()
+    draft = preview_config_file(content, {"vlm": model})
+    assert '"api_key": ${STUDIO_JSON_KEY}' in draft["content"]
+    save_config_file({}, loaded["revision"], draft["content"])
+    config = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert config.vlm.credentials[1].id == "first"
+    assert config.vlm.credentials[1].api_key == "resolved-secret"

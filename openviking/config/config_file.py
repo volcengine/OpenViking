@@ -4,9 +4,11 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 from openviking_cli.utils.config.embedding_config import EmbeddingCredential
 from openviking_cli.utils.config.open_viking_config import (
@@ -16,6 +18,32 @@ from openviking_cli.utils.config.open_viking_config import (
 from openviking_cli.utils.config.vlm_config import VLMCredential
 
 MODEL_KINDS = ("vlm", "embedding", "query_planner", "rerank")
+# Match complete JSON strings first so references inside them stay quoted.
+_JSON_TOKENS = re.compile(r'"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[\w]+)', re.ASCII)
+
+
+class _EnvironmentReference(str):
+    """An unquoted JSON value supplied by startup environment expansion."""
+
+
+def _dump(value, **kwargs) -> str:
+    references = {}
+
+    def encode(node):
+        if isinstance(node, _EnvironmentReference):
+            token = uuid4().hex
+            references[token] = str(node)
+            return token
+        if isinstance(node, dict):
+            return {key: encode(item) for key, item in node.items()}
+        if isinstance(node, list):
+            return [encode(item) for item in node]
+        return node
+
+    content = json.dumps(encode(value), **kwargs)
+    for token, reference in references.items():
+        content = content.replace(json.dumps(token), reference)
+    return content
 
 
 def _binding_values(binding, parent, embedding: bool, original: dict, index: int) -> dict:
@@ -53,7 +81,7 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
         # loses identity when independent environment references have equal values.
         fallbacks = (provider_config, original) if not explicit or key == "api_key" else (original,)
         for node in (source, *fallbacks):
-            if key in node and json.loads(os.path.expandvars(json.dumps(node[key]))) == value:
+            if key in node and json.loads(os.path.expandvars(_dump(node[key]))) == value:
                 values[key] = node[key]
                 break
     return values
@@ -67,7 +95,7 @@ def _validate(raw: dict) -> OpenVikingConfig:
     try:
         from openviking.server.config import ServerConfig
 
-        expanded = json.loads(os.path.expandvars(json.dumps(raw)))
+        expanded = json.loads(os.path.expandvars(_dump(raw)))
         server = expanded.get("server")
         ServerConfig.model_validate({} if server is None else server)
         return OpenVikingConfig.from_dict(expanded)
@@ -78,7 +106,26 @@ def _validate(raw: dict) -> OpenVikingConfig:
 
 def _parse(content: str) -> dict:
     try:
-        raw = json.loads(content.lstrip("\ufeff"))
+        references = {}
+
+        def quote_reference(match):
+            token = match.group()
+            if token.startswith('"'):
+                return token
+            placeholder = uuid4().hex
+            references[placeholder] = _EnvironmentReference(token)
+            return json.dumps(placeholder)
+
+        def decode(node):
+            if isinstance(node, str):
+                return references.get(node, node)
+            if isinstance(node, dict):
+                return {key: decode(value) for key, value in node.items()}
+            if isinstance(node, list):
+                return [decode(value) for value in node]
+            return node
+
+        raw = decode(json.loads(_JSON_TOKENS.sub(quote_reference, content.lstrip("\ufeff"))))
         if not isinstance(raw, dict):
             raise ValueError()
         return raw
@@ -146,7 +193,7 @@ def preview_config_file(content: str, settings: dict | None = None) -> dict:
     raw = _parse(content)
     if settings:
         _apply_model_changes(raw, settings)
-        content = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+        content = _dump(raw, ensure_ascii=False, indent=2) + "\n"
     config = _validate(raw)
     return {"content": content, "models": _model_view(raw, config)}
 
@@ -176,6 +223,8 @@ def read_config_file() -> dict:
 def _merge(old: dict, changes: dict) -> dict:
     result = dict(old)
     for key, value in changes.items():
+        if isinstance(result.get(key), _EnvironmentReference) and value == result[key]:
+            continue
         result[key] = (
             _merge(result[key], value)
             if isinstance(value, dict)
@@ -212,10 +261,23 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
         defaults["provider"] = result["backend"]
     # Materialize inherited bindings before removing legacy fallbacks. Explicit
     # null/empty values must mean clearing, not re-inheriting obsolete secrets.
-    result["credentials"] = [
-        {**{key: value for key, value in defaults.items() if key in fields}, **binding}
-        for binding in changes["credentials"]
-    ]
+    defaults = {key: value for key, value in defaults.items() if key in fields}
+    original_bindings = {
+        binding.get("id") or f"credential-{index}": binding
+        for index, binding in enumerate(old.get("credentials") or [])
+    }
+    result["credentials"] = []
+    for index, binding in enumerate(changes["credentials"]):
+        original = original_bindings.get(binding.get("id") or f"credential-{index}", {})
+        # JSON requests carry references as plain strings. Preserve their original
+        # quoting when the form keeps the same field, including after reordering.
+        binding = {
+            key: original[key]
+            if isinstance(original.get(key), _EnvironmentReference) and value == original[key]
+            else value
+            for key, value in binding.items()
+        }
+        result["credentials"].append(_merge(defaults, binding))
     for key in fields:
         result.pop(key, None)
     result.pop("backend", None)
@@ -287,7 +349,7 @@ def save_config_file(settings: dict, revision: str, content: str | None = None) 
             raise ValueError("ov.conf is read-only")
         if content is None:
             _apply_model_changes(raw, settings)
-            content = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+            content = _dump(raw, ensure_ascii=False, indent=2) + "\n"
         else:
             raw = _parse(content)
         _validate(raw)

@@ -647,3 +647,95 @@ it('keeps the form dialog and input when draft validation fails', async () => {
   ).toBe('rejected-model')
   expect(state.save).not.toHaveBeenCalled()
 })
+
+it.each(['vlmType', 'embeddingType'])(
+  'blocks all dialog inputs during draft validation for %s',
+  async (kind) => {
+    mount()
+    await screen.findByText('model-a')
+    let finishPreview!: (value: unknown) => void
+    const project = state.preview.getMockImplementation()!
+    state.preview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPreview = resolve
+        }),
+    )
+    fireEvent.click(
+      section(kind).getAllByRole('button', {
+        name: kind === 'vlmType' ? 'models.edit' : 'models.parameters',
+      })[0],
+    )
+    const dialog = screen.getByRole('dialog')
+    const field = within(dialog).getByLabelText<HTMLInputElement>(
+      kind === 'vlmType'
+        ? 'models.fields.model'
+        : 'models.fields.max_concurrent',
+    )
+    fireEvent.change(field, {
+      target: { value: kind === 'vlmType' ? 'submitted' : '20' },
+    })
+    await apply()
+    await waitFor(() => expect(field.readOnly).toBe(true))
+    for (const input of dialog.querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement
+    >('input:not([aria-hidden="true"]):not([type="hidden"]), textarea')) {
+      expect(input.readOnly || input.disabled, input.outerHTML).toBe(true)
+    }
+    // Even synthetic change events must not overwrite the in-flight snapshot.
+    fireEvent.change(field, {
+      target: { value: kind === 'vlmType' ? 'lost' : '30' },
+    })
+    const [text, changes] = state.preview.mock.calls[0]
+    await act(async () => {
+      finishPreview(await project(text, changes))
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+    const saved = JSON.parse(state.save.mock.calls[0][0])
+    if (kind === 'vlmType')
+      expect(saved.vlm.credentials[0].model).toBe('submitted')
+    else expect(saved.embedding.max_concurrent).toBe(20)
+  },
+)
+
+it('allows unquoted environment values in file drafts without resolving them in the browser', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  const text = content.replace('"port": 1933', '"port": ${STUDIO_PORT}')
+  fireEvent.change(screen.getByLabelText('models.fileContent'), {
+    target: { value: text },
+  })
+  expect(screen.queryByText('models.invalidJsonObject')).toBeNull()
+  expect(
+    screen
+      .getByRole('button', { name: 'models.formMode' })
+      .hasAttribute('disabled'),
+  ).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
+})
+
+it('shows and preserves environment references in numeric form fields', async () => {
+  const payload = structuredClone(data)
+  Object.assign(payload.models.embedding.config, {
+    max_concurrent: '${CONCURRENCY}',
+  })
+  mount(payload)
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('embeddingType').getByRole('button', { name: 'models.parameters' }),
+  )
+  const input = screen.getByLabelText<HTMLInputElement>(
+    'models.fields.max_concurrent',
+  )
+  expect(input.value).toBe('${CONCURRENCY}')
+  expect(input.type).toBe('text')
+  fireEvent.change(input, { target: { value: '${NEW_CONCURRENCY}' } })
+  await apply()
+  expect(state.preview.mock.calls[0][1].embedding.max_concurrent).toBe(
+    '${NEW_CONCURRENCY}',
+  )
+})

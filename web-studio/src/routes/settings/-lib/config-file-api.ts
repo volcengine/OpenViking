@@ -42,6 +42,24 @@ export const embeddingCredentialFields = [
   'extra_headers',
 ]
 
+export function isConfigFileObject(content: string): boolean {
+  try {
+    // Startup expands unquoted environment values before parsing JSON.
+    // Only check their syntax here; the server owns expansion and validation.
+    const parsed: unknown = JSON.parse(
+      content.replace(
+        /"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[a-zA-Z0-9_]+)/g,
+        (token) => (token.startsWith('"') ? token : JSON.stringify(token)),
+      ),
+    )
+    return (
+      parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    )
+  } catch {
+    return false
+  }
+}
+
 export function object(value: unknown): ModelConfig {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as ModelConfig)
