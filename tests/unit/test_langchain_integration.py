@@ -1243,6 +1243,56 @@ def test_langgraph_store_rejects_ttl_writes():
         store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
 
 
+@pytest.mark.parametrize("use_default", [False, True])
+@pytest.mark.parametrize(
+    ("field", "query", "expected_match"),
+    [
+        ("$", "solstice", True),
+        ("", "solstice", True),
+        ("items[0].text", "pulsar", True),
+        ("items[-1].text", "galaxy", True),
+        ("items[*].text", "galaxy", True),
+        ("nested[*].parts[*].text", "aurora", True),
+        ("metadata.*", "quasar", True),
+        ("{text,metadata.title}", "nebula", True),
+        ("text", "nebula", True),
+        ("metadata.title", "quasar", True),
+        ("absent", "solstice", False),
+        ("literal[0]", "nova", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_langgraph_store_indexes_selected_field_paths(
+    field, query, expected_match, use_default
+):
+    value = {
+        "text": "nebula",
+        "metadata": {"title": "quasar"},
+        "items": [{"text": "pulsar"}, {"text": "galaxy"}],
+        "nested": [{"parts": [{"text": "aurora"}]}],
+        "literal[0]": "nova",
+        "ignored": "solstice",
+    }
+    for mode in ("put", "aput", "batch", "abatch"):
+        client = InMemoryOpenVikingClient()
+        store = OpenVikingStore(client=client, index=[field] if use_default else None)
+        index = None if use_default else [field]
+        if mode == "put":
+            store.put(("documents",), "note", value, index=index)
+        elif mode == "aput":
+            await store.aput(("documents",), "note", value, index=index)
+        elif mode == "batch":
+            store.batch([PutOp(("documents",), "note", value, index=index)])
+        else:
+            await store.abatch([PutOp(("documents",), "note", value, index=index)])
+
+        assert store.get(("documents",), "note").value == value
+        expected_keys = ["note"] if expected_match else []
+        assert [item.key for item in store.search(("documents",), query=query)] == expected_keys
+        if field not in {"$", ""}:
+            assert store.search(("documents",), query="solstice") == []
+
+
 def test_langgraph_store_batch_rejects_ttl_writes():
     store = OpenVikingStore(client=InMemoryOpenVikingClient())
 
