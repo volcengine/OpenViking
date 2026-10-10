@@ -8,6 +8,8 @@
 //! The context is an immutable snapshot (`Arc<FsContextInner>`): fields are private and read-only,
 //! there are no setters, so no wrapper can mutate it mid-operation.
 
+#[cfg(feature = "cache")]
+use crate::cache::RequestStatCache;
 use std::sync::Arc;
 
 /// Immutable filesystem context snapshot. Currently carries `account_id` (the tenant)
@@ -34,6 +36,8 @@ pub struct FsContextInner {
     account_id: String,
     pathlock: Option<PathLockContext>,
     bypass_cache: bool,
+    #[cfg(feature = "cache")]
+    request_stat_cache: Option<Arc<RequestStatCache>>,
 }
 
 impl FsContextInner {
@@ -43,18 +47,19 @@ impl FsContextInner {
             account_id: account_id.into(),
             pathlock: None,
             bypass_cache: false,
+            #[cfg(feature = "cache")]
+            request_stat_cache: None,
         }
     }
 
     /// Construct a context with account_id and pathlock context.
-    pub fn with_pathlock(
-        account_id: impl Into<String>,
-        pathlock: PathLockContext,
-    ) -> Self {
+    pub fn with_pathlock(account_id: impl Into<String>, pathlock: PathLockContext) -> Self {
         Self {
             account_id: account_id.into(),
             pathlock: Some(pathlock),
             bypass_cache: false,
+            #[cfg(feature = "cache")]
+            request_stat_cache: None,
         }
     }
 
@@ -62,6 +67,19 @@ impl FsContextInner {
     pub fn with_bypass_cache(mut self, bypass_cache: bool) -> Self {
         self.bypass_cache = bypass_cache;
         self
+    }
+
+    /// Attach shared request-local stat state to this context snapshot.
+    #[cfg(feature = "cache")]
+    pub fn with_request_stat_cache(mut self, cache: Arc<RequestStatCache>) -> Self {
+        self.request_stat_cache = Some(cache);
+        self
+    }
+
+    /// Shared request-local stat state, if this operation participates in L0.
+    #[cfg(feature = "cache")]
+    pub fn request_stat_cache(&self) -> Option<&Arc<RequestStatCache>> {
+        self.request_stat_cache.as_ref()
     }
 
     /// Tenant identifier (account_id == tenant).
@@ -87,6 +105,8 @@ impl FsContextInner {
             account_id: self.account_id.clone(),
             pathlock: Some(pathlock),
             bypass_cache: self.bypass_cache,
+            #[cfg(feature = "cache")]
+            request_stat_cache: self.request_stat_cache.clone(),
         }
     }
 }
@@ -101,6 +121,12 @@ pub struct FsContextView {
 }
 
 impl FsContextView {
+    /// Request-local stat state from this context snapshot; clone to retain across IO.
+    #[cfg(feature = "cache")]
+    pub fn request_stat_cache(&self) -> Option<&Arc<RequestStatCache>> {
+        self.inner.as_ref().and_then(|c| c.request_stat_cache())
+    }
+
     /// Snapshot the current task-local context (empty view if unset).
     pub fn current() -> Self {
         Self {
