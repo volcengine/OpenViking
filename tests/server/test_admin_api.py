@@ -3513,14 +3513,20 @@ async def test_server_restart_requires_root_and_valid_revision(
     revision = read_config_file()["revision"]
     url = "/api/v1/admin/restart"
     for headers in [admin_headers, user_headers, {}]:
-        assert (await lightweight_admin_client.get(url, headers=headers)).status_code in (401, 403)
+        assert (
+            await lightweight_admin_client.get(
+                "/api/v1/admin/configuration?source=file", headers=headers
+            )
+        ).status_code in (401, 403)
         assert (
             await lightweight_admin_client.post(url, headers=headers, json={"revision": revision})
         ).status_code in (401, 403)
     stopped.assert_not_called()
     assert not controller.requested
-    status = await lightweight_admin_client.get(url, headers=root_headers())
-    assert status.json()["result"]["supported"]
+    status = await lightweight_admin_client.get(
+        "/api/v1/admin/configuration?source=file", headers=root_headers()
+    )
+    assert status.json()["result"]["restart"]["supported"]
     assert status.headers["cache-control"] == "no-store"
     stale = await lightweight_admin_client.post(
         url, headers=root_headers(), json={"revision": "stale"}
@@ -3556,15 +3562,19 @@ async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
     from openviking.server.restart import RestartController
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
+    path = tmp_path / "ov.conf"
+    path.write_text("{}")
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     url = "/api/v1/admin/restart"
-    status = await lightweight_admin_client.get(url, headers=root_headers())
-    assert not status.json()["result"]["supported"]
+    status = await lightweight_admin_client.get(
+        "/api/v1/admin/configuration?source=file", headers=root_headers()
+    )
+    assert not status.json()["result"]["restart"]["supported"]
     assert (
         await lightweight_admin_client.post(url, headers=root_headers(), json={"revision": "r"})
     ).status_code == 412
     stopped = Mock()
     lightweight_admin_app.state.restart_controller = RestartController(stopped)
-    path = tmp_path / "ov.conf"
     path.write_text('{"server":{"port":"invalid"}}')
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     response = await lightweight_admin_client.post(

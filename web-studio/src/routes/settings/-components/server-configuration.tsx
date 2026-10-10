@@ -405,7 +405,7 @@ export function ServerConfigurationEditor() {
   const queryKey = ['server-configuration', identityScopeKey]
   const query = useQuery({
     queryKey,
-    queryFn: api.get,
+    queryFn: () => api.get(),
     enabled: allowed,
     retry: false,
   })
@@ -422,28 +422,19 @@ export function ServerConfigurationEditor() {
   const [saved, setSaved] = React.useState(false)
   const restartAbort = React.useRef<AbortController | null>(null)
   React.useEffect(() => () => restartAbort.current?.abort(), [api])
-  const restartQuery = useQuery({
-    queryKey: ['server-restart', identityScopeKey],
-    queryFn: api.restartStatus,
-    enabled: allowed,
-    retry: false,
-  })
   const restartMutation = useMutation({
     mutationFn: async (revision: string) => {
       const controller = new AbortController()
       restartAbort.current = controller
       const accepted = await api.restart(revision)
-      await waitForServerRestart(
-        api.restartStatus,
+      return waitForServerRestart(
+        () => api.get(3000),
         accepted.instance_id,
         controller.signal,
       )
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey })
-      await queryClient.invalidateQueries({
-        queryKey: ['server-restart', identityScopeKey],
-      })
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKey, result)
       setSaved(false)
       toast.success(t('models.restarted'))
     },
@@ -703,21 +694,19 @@ export function ServerConfigurationEditor() {
               {t('models.restartFailed')}
             </p>
           )}
-          {restartQuery.data?.supported === false && (
+          {query.data?.restart?.supported === false && (
             <p className="text-sm text-muted-foreground">
               {t('models.restartUnsupported')}
             </p>
           )}
           {(query.data?.restart_required || saved) &&
-            restartQuery.data?.supported &&
+            query.data?.restart?.supported &&
             !dirty && (
               <Button
                 type="button"
                 variant="outline"
                 disabled={pending}
-                onClick={() =>
-                  query.data && restartMutation.mutate(query.data.revision)
-                }
+                onClick={() => restartMutation.mutate(query.data.revision)}
               >
                 {t('models.restartService')}
               </Button>
@@ -979,12 +968,12 @@ export function ServerConfigurationEditor() {
                       : 'models.saveAll',
                 )}
               </Button>
-              {restartQuery.data?.supported && (
+              {query.data?.restart?.supported && (
                 <Button
                   type="button"
                   size="sm"
                   disabled={
-                    pending || invalidJson || query.data?.writable === false
+                    pending || invalidJson || query.data.writable === false
                   }
                   onClick={() =>
                     document &&

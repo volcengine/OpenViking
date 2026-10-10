@@ -108,11 +108,10 @@ it('uses ROOT credentials to preview a full draft without saving, then saves one
     revision: 'file-revision',
     content: loaded.content,
   })
-  await api.restartStatus()
   await api.restart(loaded.revision)
   expect(requests[3].url).toBe('http://localhost:1933/api/v1/admin/restart')
-  expect(requests[4].method).toBe('post')
-  expect(JSON.parse(requests[4].data)).toEqual({ revision: 'file-revision' })
+  expect(requests[3].method).toBe('post')
+  expect(JSON.parse(requests[3].data)).toEqual({ revision: 'file-revision' })
   expect(
     requests
       .slice(3)
@@ -137,9 +136,13 @@ it('waits for a different instance and tolerates temporary connection failures',
   try {
     const status = vi
       .fn()
-      .mockResolvedValueOnce({ instance_id: 'old', restarting: false })
+      .mockResolvedValueOnce({
+        restart: { instance_id: 'old', restarting: false },
+      })
       .mockRejectedValueOnce(new Error('connection refused'))
-      .mockResolvedValueOnce({ instance_id: 'new', restarting: false })
+      .mockResolvedValueOnce({
+        restart: { instance_id: 'new', restarting: false },
+      })
     const wait = waitForServerRestart(
       status,
       'old',
@@ -158,7 +161,7 @@ it('does not report success when the original instance stays reachable', async (
   try {
     const status = vi
       .fn()
-      .mockResolvedValue({ instance_id: 'old', restarting: false })
+      .mockResolvedValue({ restart: { instance_id: 'old', restarting: false } })
     const result = waitForServerRestart(
       status,
       'old',

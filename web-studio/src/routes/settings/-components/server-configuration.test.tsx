@@ -21,7 +21,6 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
   preview: vi.fn(),
   restart: vi.fn(),
-  restartStatus: vi.fn(),
   copy: vi.fn(),
 }))
 vi.mock('#/components/code-editor', () => ({
@@ -52,7 +51,6 @@ vi.mock('../-lib/config-file-api', async (importOriginal) => ({
     save: state.save,
     preview: state.preview,
     restart: state.restart,
-    restartStatus: state.restartStatus,
   }),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
@@ -97,6 +95,7 @@ const data = {
   file_path: '/server/ov.conf',
   writable: true,
   restart_required: false,
+  restart: { supported: true, instance_id: 'new', restarting: false },
   revision: 'revision',
   settings: {},
   models: {
@@ -177,11 +176,6 @@ function mount(
     }
   })
   state.save.mockResolvedValue({ revision: 'saved-revision' })
-  state.restartStatus.mockResolvedValue({
-    supported: true,
-    instance_id: 'new',
-    restarting: false,
-  })
   state.restart.mockResolvedValue({
     supported: true,
     instance_id: 'old',

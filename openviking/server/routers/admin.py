@@ -832,6 +832,7 @@ async def get_cluster_configuration(
             "cluster": [key for key in MODEL_KINDS if (cluster or {}).get(key) is not None],
             "account": [key for key in MODEL_KINDS if (account or {}).get(key) is not None],
         }
+        result["restart"] = request.app.state.restart_controller.status()
         return Response(status="ok", result=result)
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
@@ -839,17 +840,6 @@ async def get_cluster_configuration(
 
 class RestartRequest(BaseModel):
     revision: str = Field(min_length=1)
-
-
-@router.get("/restart")
-@require_auth_root
-async def get_restart_status(
-    request: Request,
-    response: HTTPResponse,
-    ctx: RequestContext = Depends(get_request_context),
-):
-    response.headers["Cache-Control"] = "no-store"
-    return Response(status="ok", result=request.app.state.restart_controller.status())
 
 
 @router.post("/restart", status_code=202)

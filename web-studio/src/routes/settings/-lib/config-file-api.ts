@@ -24,6 +24,7 @@ export type ConfigFileConfiguration = ConfigFileDraft & {
   file_path?: string
   writable?: boolean
   restart_required?: boolean
+  restart?: RestartStatus
   overrides?: { cluster: string[]; account: string[] }
   settings: Partial<Record<ModelKind, ModelConfig>>
 }
@@ -33,7 +34,7 @@ export type RestartStatus = {
   restarting: boolean
 }
 export async function waitForServerRestart(
-  status: () => Promise<RestartStatus>,
+  load: () => Promise<ConfigFileConfiguration>,
   instanceId: string,
   signal: AbortSignal,
   timeoutMs = 120_000,
@@ -42,9 +43,14 @@ export async function waitForServerRestart(
   while (Date.now() < deadline) {
     signal.throwIfAborted()
     try {
-      const result = await status()
+      const result = await load()
       signal.throwIfAborted()
-      if (result.instance_id !== instanceId && !result.restarting) return
+      if (
+        result.restart &&
+        result.restart.instance_id !== instanceId &&
+        !result.restart.restarting
+      )
+        return result
     } catch (error) {
       signal.throwIfAborted()
       if (
@@ -135,10 +141,6 @@ export function createConfigFileApi(
   })
   const url = '/api/v1/admin/configuration'
   return {
-    restartStatus: () =>
-      getOvResult<RestartStatus>(
-        client.get({ url: '/api/v1/admin/restart', timeout: 3000 }),
-      ),
     restart: (revision: string) =>
       getOvResult<RestartStatus>(
         client.post({
@@ -147,7 +149,7 @@ export function createConfigFileApi(
           body: { revision },
         }),
       ),
-    get: async () => {
+    get: async (timeout = 0) => {
       const result = await getOvResult<
         Omit<ConfigFileConfiguration, 'models'> & {
           models?: Partial<ConfigFileConfiguration['models']>
@@ -155,6 +157,7 @@ export function createConfigFileApi(
       >(
         client.get({
           url,
+          timeout,
           query: { source: 'file', account_id: connection.accountId },
         }),
       )
