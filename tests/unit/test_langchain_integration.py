@@ -35,7 +35,7 @@ from langchain_openviking.history import (
 )
 from langchain_openviking.middleware import _message_signature
 from langchain_openviking.tools import _archive_grep_pattern, _resolve_resource_source
-from langgraph.store.base import PutOp
+from langgraph.store.base import PutOp, SearchOp
 from openviking_sdk.errors import InvalidArgumentError
 
 
@@ -1224,6 +1224,58 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert semantic[0].value["color"] == "azure"
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", [None, "doc"])
+@pytest.mark.parametrize(
+    "filter, expected",
+    [
+        ({"metadata": {"color": "blue"}}, ["alpha"]),
+        ({"metadata": {"nested": {"owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"nested": {"rank": {"$gte": 2}}}}, ["alpha"]),
+        ({"metadata": {"detail.region": "eu"}}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}, "memory"]}, ["alpha"]),
+        ({"tags": [{"role": "reviewer"}]}, []),
+        ({"metadata": {}}, ["alpha", "beta"]),
+        ({"metadata": {"color": "black"}}, []),
+        ({"metadata.nested.rank": {"gte": 2}}, ["alpha"]),
+        ({"metadata.nested": {"$eq": {"rank": 3, "owner": "ada"}}}, ["alpha"]),
+        ({"metadata": {"eq": "blue", "label": "blue"}}, ["scalar"]),
+        ({"metadata": {"$unknown": "blue"}}, ["scalar"]),
+        ({"tags": ["reviewer", "memory"]}, ["scalar"]),
+        ({"kind": "doc"}, ["alpha", "beta", "scalar"]),
+    ],
+)
+async def test_langgraph_store_structured_filters(filter, expected, query):
+    store = OpenVikingStore(client=InMemoryOpenVikingClient())
+    for key, value in {
+        "alpha": {
+            "kind": "doc",
+            "metadata": {
+                "color": "blue",
+                "nested": {"rank": 3, "owner": "ada"},
+                "detail.region": "eu",
+            },
+            "tags": [{"role": "reviewer", "active": True}, "memory"],
+        },
+        "beta": {
+            "kind": "doc",
+            "metadata": {"color": "red", "nested": {"rank": 1, "owner": "bob"}},
+            "tags": [{"role": "reader", "active": True}, "memory"],
+        },
+        "scalar": {"kind": "doc", "metadata": "blue", "tags": ["reviewer", "memory"]},
+    }.items():
+        store.put(("users", "ada"), key, value)
+
+    op = SearchOp(("users",), filter=filter, query=query)
+    results = [
+        store.search(("users",), filter=filter, query=query),
+        await store.asearch(("users",), filter=filter, query=query),
+        store.batch([op])[0],
+        (await store.abatch([op]))[0],
+    ]
+    assert all(sorted(item.key for item in items) == expected for items in results)
 
 
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
