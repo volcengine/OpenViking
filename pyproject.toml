@@ -214,7 +214,7 @@ ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
 openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
 openviking-server = "openviking_cli.server_bootstrap:main"  # also: `openviking-server ingest ...`
 openviking-gateway = "openviking_gateway.cli:main"
-vikingbot = "vikingbot.cli.commands:app"
+vikingbot = "openviking_cli.vikingbot_bootstrap:main"
 
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"
