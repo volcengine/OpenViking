@@ -29,7 +29,7 @@ except ImportError:
 
 from openviking.utils.model_retry import retry_async, retry_sync
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, extract_tool_call_provider_fields
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
@@ -239,7 +239,14 @@ class OpenAIVLM(VLMBase):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
-                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=args,
+                        provider_fields=extract_tool_call_provider_fields(tc),
+                    )
+                )
         return tool_calls
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:

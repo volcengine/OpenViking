@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, extract_tool_call_provider_fields
 
 logger = get_logger(__name__)
 
@@ -389,7 +389,14 @@ class LiteLLMVLMProvider(VLMBase):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
-                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=args,
+                        provider_fields=extract_tool_call_provider_fields(tc),
+                    )
+                )
         return tool_calls
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.providers.base import tool_call_to_message_dict
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.vlm.backends.litellm_vlm import (
@@ -149,6 +150,90 @@ async def test_vlm_adapter_routes_litellm_thinking_parameters(
         assert "extra_body" not in captured
     assert "thinking" not in captured
     assert "reasoning_effort" not in captured
+
+
+@pytest.mark.asyncio
+async def test_vlm_adapter_replays_gemini_tool_call_thought_signature(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+
+    captured = []
+
+    async def fake_acompletion(**kwargs):
+        captured.append(kwargs)
+        if len(captured) == 1:
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call-weather",
+                        function=SimpleNamespace(name="weather", arguments='{"city":"Singapore"}'),
+                        extra_content={"google": {"thought_signature": "signed-provider-state"}},
+                        provider_specific_fields={"thought_signature": "native-litellm-state"},
+                    )
+                ],
+            )
+            finish_reason = "tool_calls"
+        else:
+            message = SimpleNamespace(content="done", tool_calls=None)
+            finish_reason = "stop"
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason=finish_reason)],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "openviking.models.vlm.backends.litellm_vlm.acompletion",
+        fake_acompletion,
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "weather", "parameters": {"type": "object"}},
+        }
+    ]
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "gemini",
+            "model": "gemini/gemini-2.5-pro",
+            "api_key": "test-key",
+            "thinking": True,
+        }
+    )
+    provider = VLMProviderAdapter(vlm, default_model=vlm.model)
+
+    first_response = await provider.chat(
+        messages=[{"role": "user", "content": "Check the weather"}], tools=tools
+    )
+    assistant_message = {
+        "role": "assistant",
+        "content": " ",
+        "tool_calls": [tool_call_to_message_dict(first_response.tool_calls[0])],
+    }
+    second_response = await provider.chat(
+        messages=[
+            assistant_message,
+            {
+                "role": "tool",
+                "tool_call_id": "call-weather",
+                "name": "weather",
+                "content": "sunny",
+            },
+        ],
+        tools=tools,
+    )
+
+    replayed = captured[1]["messages"][0]["tool_calls"][0]
+    assert replayed["extra_content"] == {"google": {"thought_signature": "signed-provider-state"}}
+    assert replayed["provider_specific_fields"] == {"thought_signature": "native-litellm-state"}
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        captured[1]["messages"][0], model="gemini-2.5-pro"
+    )
+    assert gemini_parts[0]["thoughtSignature"] == "native-litellm-state"
+    assert second_response.content == "done"
 
 
 @pytest.mark.asyncio

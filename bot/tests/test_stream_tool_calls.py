@@ -3,17 +3,20 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.providers import base as provider_base
 from vikingbot.providers.base import (
+    ToolCallRequest,
     build_stream_response,
     merge_stream_tool_call_delta,
     parse_tool_arguments,
+    tool_call_to_message_dict,
 )
 
 
-def _tool_call(*, index=None, call_id=None, name=None, arguments=None):
+def _tool_call(*, index=None, call_id=None, name=None, arguments=None, **provider_fields):
     return SimpleNamespace(
         index=index,
         id=call_id,
         function=SimpleNamespace(name=name, arguments=arguments),
+        **provider_fields,
     )
 
 
@@ -118,3 +121,58 @@ def test_explicit_stream_tool_call_index_wins_over_chunk_local_order():
         ("call_first", "first"),
         ("call_second", "second"),
     ]
+
+
+def test_stream_tool_call_preserves_provider_fields_for_history_replay():
+    raw_tool_calls = {}
+    extra_content = {"google": {"thought_signature": "signed-state"}}
+    merge_stream_tool_call_delta(
+        raw_tool_calls,
+        _tool_call(
+            index=0,
+            call_id="call_weather",
+            name="weather",
+            arguments='{"city":"Singapore"}',
+            extra_content=extra_content,
+            provider_specific_fields={"thought_signature": "native-litellm-state"},
+            thought_signature="top-level-state",
+        ),
+    )
+
+    response = build_stream_response(
+        content="",
+        reasoning_content="",
+        raw_tool_calls=raw_tool_calls,
+        finish_reason="tool_calls",
+    )
+    message_tool_call = tool_call_to_message_dict(response.tool_calls[0])
+
+    assert message_tool_call == {
+        "id": "call_weather",
+        "type": "function",
+        "function": {
+            "name": "weather",
+            "arguments": '{"city": "Singapore"}',
+        },
+        "extra_content": {"google": {"thought_signature": "signed-state"}},
+        "provider_specific_fields": {"thought_signature": "native-litellm-state"},
+        "thought_signature": "top-level-state",
+    }
+    extra_content["google"]["thought_signature"] = "mutated-source"
+    message_tool_call["extra_content"]["google"]["thought_signature"] = "mutated-message"
+    assert response.tool_calls[0].provider_fields["extra_content"]["google"] == {
+        "thought_signature": "signed-state"
+    }
+
+
+def test_tool_call_history_keeps_unicode_arguments_readable():
+    message_tool_call = tool_call_to_message_dict(
+        ToolCallRequest(
+            id="call_city",
+            name="weather",
+            arguments={"city": "新加坡"},
+            tokens=0,
+        )
+    )
+
+    assert message_tool_call["function"]["arguments"] == '{"city": "新加坡"}'

@@ -2,6 +2,8 @@
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Literal
 
@@ -16,6 +18,7 @@ class ToolCallRequest:
     name: str
     arguments: dict[str, Any]
     tokens: int
+    provider_fields: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -48,6 +51,47 @@ def stream_delta_value(delta: Any, name: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def extract_tool_call_provider_fields(tool_call: Any) -> dict[str, Any]:
+    """Copy provider fields that must be replayed with an assistant tool call."""
+
+    def read(name: str) -> Any:
+        if isinstance(tool_call, Mapping):
+            return tool_call.get(name)
+        return getattr(tool_call, name, None)
+
+    provider_fields: dict[str, Any] = {}
+    function = read("function")
+    function_fields = (
+        function.get("provider_specific_fields")
+        if isinstance(function, Mapping)
+        else getattr(function, "provider_specific_fields", None)
+    )
+    if isinstance(function_fields, Mapping) and function_fields:
+        provider_fields["provider_specific_fields"] = deepcopy(dict(function_fields))
+    for name in ("extra_content", "provider_specific_fields"):
+        value = read(name)
+        if isinstance(value, Mapping) and value:
+            provider_fields[name] = deepcopy(dict(value))
+    for name in ("thought_signature", "thoughtSignature"):
+        signature = read(name)
+        if isinstance(signature, str) and signature:
+            provider_fields[name] = signature
+    return provider_fields
+
+
+def tool_call_to_message_dict(tool_call: ToolCallRequest) -> dict[str, Any]:
+    """Serialize a tool call for assistant history without dropping provider state."""
+    return {
+        **deepcopy(tool_call.provider_fields),
+        "id": tool_call.id,
+        "type": "function",
+        "function": {
+            "name": tool_call.name,
+            "arguments": json.dumps(tool_call.arguments, ensure_ascii=False),
+        },
+    }
+
+
 def merge_stream_tool_call_delta(
     raw_tool_calls: dict[int, dict[str, Any]],
     delta_tool_call: Any,
@@ -63,6 +107,9 @@ def merge_stream_tool_call_delta(
     tool_call_id = getattr(delta_tool_call, "id", None)
     if tool_call_id:
         entry["id"] = tool_call_id
+    provider_fields = extract_tool_call_provider_fields(delta_tool_call)
+    if provider_fields:
+        entry.setdefault("provider_fields", {}).update(provider_fields)
     function = getattr(delta_tool_call, "function", None)
     if function is None:
         return
@@ -119,6 +166,7 @@ def build_stream_response(
                 name=name,
                 arguments=arguments,
                 tokens=tokens,
+                provider_fields=deepcopy(raw_tool_call.get("provider_fields") or {}),
             )
         )
 

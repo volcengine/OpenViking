@@ -40,7 +40,7 @@ from vikingbot.openviking_mount.session_state import (
     parse_local_index,
     reset_openviking_state,
 )
-from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.base import LLMProvider, tool_call_to_message_dict
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.helpers import cal_str_tokens, ensure_non_empty_assistant_content
@@ -1642,18 +1642,8 @@ class AgentLoop:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
 
                 final_reasoning_content = response.reasoning_content
-                args_list = [tc.arguments for tc in response.tool_calls]
                 tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            # Unicode escapes inflate the history's character budget.
-                            "arguments": json.dumps(args, ensure_ascii=False),
-                        },
-                    }
-                    for tc, args in zip(response.tool_calls, args_list, strict=False)
+                    tool_call_to_message_dict(tool_call) for tool_call in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
                     messages,
