@@ -643,6 +643,8 @@ def _infer_health_state(status: Any) -> str:
             return "unhealthy"
         if state in {"degraded", "initializing", "starting", "pending"}:
             return state
+        if isinstance(status.get("is_healthy"), bool):
+            return "healthy" if status["is_healthy"] else "unhealthy"
     return "unknown"
 
 
@@ -651,7 +653,7 @@ def _safe_status_summary(status: Any) -> dict[str, Any]:
         return {"type": type(status).__name__}
 
     summary: dict[str, Any] = {}
-    for key in ("healthy", "ok", "status", "state", "state_detail"):
+    for key in ("healthy", "ok", "status", "state", "state_detail", "is_healthy"):
         if key in status:
             value = _safe_status_value(status[key])
             if value is not None:
