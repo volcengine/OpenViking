@@ -278,6 +278,7 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
     // Passing the OV session id is what turns on server-side query expansion
     // and the cross-turn dedup ledger for these thin harnesses.
     sessionId: options.sessionId || "",
+    excludeUris: cfg.recallExcludeUris,
     log,
   });
 }
