@@ -1546,6 +1546,57 @@ viking://user/{user_id}/sessions/{session_id}/
     +-- archive_002/
 ```
 
+### retry_archive()
+
+Re-enqueue Phase 2 for one archive that failed, or whose Phase 1 finished but no
+queued or running work owns it. HTTP only. The request must carry the SHA-256 of the
+archive's raw `messages.jsonl` bytes, so an audit cannot be replayed after the archive changes.
+
+The server refuses (`FAILED_PRECONDITION`) completed archives, hash mismatches, cancelled
+failures without `allow_cancelled_failure`, and archives whose `memory_diff.json` exists without
+durable long-term progress. It returns `skipped` while QueueFS or an active worker still owns
+the archive or session. Long-term memory steps already recorded in `completed_memory_steps`
+are not applied twice.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `archive_id` | string | Yes | - | `archive_NNN` |
+| `expected_messages_sha256` | string | Yes | - | Lowercase hex SHA-256 of `messages.jsonl` |
+| `allow_ownerless_ready` | boolean | No | `false` | Allow a Phase 1 ready archive with no owner |
+| `allow_cancelled_failure` | boolean | No | `false` | Allow an archive whose failure was a cancellation |
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/archives/{archive_id}/retry
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_003/retry \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d '{"expected_messages_sha256": "<sha256 of messages.jsonl>"}'
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "accepted",
+    "task_id": "0b6c...",
+    "archive_uri": "viking://user/default/sessions/session-id/history/archive_003",
+    "previous_task_id": "9f1e...",
+    "recovery_kind": "failed",
+    "completed_memory_steps": {}
+  }
+}
+```
+
+Track `task_id` with the task API. `status: "skipped"` carries `reason`
+(`already_covered`, `archive_owned`, or `session_busy`).
+
 ### memory_diff.json Structure
 
 When long-term memory extraction runs successfully, the commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and reviewing changes:

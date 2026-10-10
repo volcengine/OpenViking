@@ -657,6 +657,49 @@ class CommitRequest(BaseModel):
         return self
 
 
+class ArchiveRetryRequest(BaseModel):
+    """Hash-bound authorization for one audited archive recovery."""
+
+    expected_messages_sha256: str = Field(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 of the exact archived messages.jsonl bytes.",
+    )
+    allow_ownerless_ready: bool = Field(
+        default=False,
+        description=(
+            "Permit a Phase 1 ready archive with no QueueFS or active task owner. "
+            "Failed archives do not require this opt-in."
+        ),
+    )
+    allow_cancelled_failure: bool = Field(
+        default=False,
+        description=(
+            "Permit a failed archive whose recorded failure is cancellation. "
+            "This is an explicit post-review opt-in; hash, ownership, and "
+            "durable-receipt safety checks still apply."
+        ),
+    )
+
+
+@router.post("/{session_id}/archives/{archive_id}/retry")
+async def retry_session_archive(
+    session_id: str = Path(...),
+    archive_id: str = Path(..., pattern=r"^archive_[0-9]+$"),
+    body: ArchiveRetryRequest = Body(...),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    result = await get_service().sessions.retry_archive(
+        session_id,
+        archive_id,
+        _ctx,
+        expected_messages_sha256=body.expected_messages_sha256,
+        allow_ownerless_ready=body.allow_ownerless_ready,
+        allow_cancelled_failure=body.allow_cancelled_failure,
+    )
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),

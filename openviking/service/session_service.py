@@ -366,6 +366,25 @@ class SessionService:
         self._record_lifecycle_metric("delete", "ok")
         return True
 
+    async def retry_archive(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Submit one hash-bound, server-verified archive recovery."""
+        session = await self.get(session_id, ctx)
+        return await session.retry_archive(
+            archive_id,
+            expected_messages_sha256=expected_messages_sha256,
+            allow_ownerless_ready=allow_ownerless_ready,
+            allow_cancelled_failure=allow_cancelled_failure,
+        )
+
     async def commit(
         self,
         session_id: str,

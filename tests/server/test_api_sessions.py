@@ -1495,3 +1495,16 @@ def test_commit_working_memory_override_requires_boolean(invalid):
 
     with pytest.raises(ValidationError):
         sessions_router.CommitRequest.model_validate({"enable_working_memory": invalid})
+
+
+async def test_retry_archive_validates_request_and_missing_archive(client: httpx.AsyncClient):
+    session_id = (await client.post("/api/v1/sessions", json={})).json()["result"]["session_id"]
+    url = f"/api/v1/sessions/{session_id}/archives/archive_001/retry"
+
+    bad_hash = await client.post(url, json={"expected_messages_sha256": "not-a-digest"})
+    assert bad_hash.status_code == 400
+    assert bad_hash.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    missing = await client.post(url, json={"expected_messages_sha256": "0" * 64})
+    assert missing.status_code == 404
+    assert missing.json()["error"]["details"] == {"type": "archive", "resource": "archive_001"}

@@ -6,6 +6,7 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import re
@@ -68,6 +69,7 @@ from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     NotFoundError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -553,6 +555,17 @@ class Session:
         await self._rebuild_pending_tokens()
 
         self._loaded = True
+
+    @staticmethod
+    def _queue_payload(item: Any) -> Dict[str, Any]:
+        """Decode a QueueFS snapshot entry like ``SessionCommitProcessor`` does."""
+        payload = item.get("data", item) if isinstance(item, dict) else item
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                return {}
+        return payload if isinstance(payload, dict) else {}
 
     async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
@@ -1696,6 +1709,326 @@ class Session:
             error="session commit cancelled",
         )
 
+    async def _activate_archive_recovery(self, msg: "SessionCommitMsg") -> None:
+        """Verify recovery ownership and expose a failed archive to Phase 2."""
+        recovery = msg.recovery
+        if not recovery:
+            return
+        if recovery.get("version") != 1 or recovery.get("task_id") != msg.task_id:
+            raise FailedPreconditionError("Invalid recovery queue ownership metadata")
+        fs = self._viking_fs
+        session_path = fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            meta_uri = f"{msg.archive_uri}/.meta.json"
+            try:
+                meta_raw = await fs.read_file(meta_uri, ctx=self.ctx)
+            except Exception as exc:
+                if _is_storage_not_found(exc):
+                    raise FailedPreconditionError("Archive recovery metadata is missing") from exc
+                raise
+            try:
+                meta = json.loads(meta_raw)
+            except (TypeError, ValueError) as exc:
+                raise FailedPreconditionError("Archive recovery metadata is invalid") from exc
+            if not isinstance(meta, dict):
+                raise FailedPreconditionError("Archive recovery metadata is invalid")
+            persisted = meta.get("recovery")
+            if not isinstance(persisted, dict) or persisted.get("task_id") != msg.task_id:
+                raise FailedPreconditionError("Recovery task does not own this archive")
+            for field_name in ("kind", "previous_task_id", "messages_sha256"):
+                if persisted.get(field_name) != recovery.get(field_name):
+                    raise FailedPreconditionError(
+                        f"Recovery queue metadata does not match archive field {field_name}"
+                    )
+            raw_messages = await fs.read_file(f"{msg.archive_uri}/messages.jsonl", ctx=self.ctx)
+            actual_hash = hashlib.sha256(raw_messages.encode("utf-8")).hexdigest()
+            if actual_hash != recovery.get("messages_sha256"):
+                raise FailedPreconditionError("Archive messages changed after recovery enqueue")
+            if recovery.get("kind") != "failed":
+                return
+            failed_uri = f"{msg.archive_uri}/.failed.json"
+            try:
+                failed_raw = await fs.read_file(failed_uri, ctx=self.ctx)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                # Redelivery after a crash may observe that the first attempt
+                # already removed .failed.json.  Only continue when the
+                # immutable pre-recovery copy still proves which failure was
+                # activated; an unexplained missing marker is ambiguous.
+                backup_uri = f"{msg.archive_uri}/.failure-before-{msg.task_id}.json"
+                try:
+                    failed_raw = await fs.read_file(backup_uri, ctx=self.ctx)
+                except Exception as backup_exc:
+                    if _is_storage_not_found(backup_exc):
+                        raise FailedPreconditionError(
+                            "Archive failure marker disappeared without a recovery backup"
+                        ) from backup_exc
+                    raise
+                backup_hash = hashlib.sha256(failed_raw.encode("utf-8")).hexdigest()
+                if backup_hash != persisted.get("failed_sha256"):
+                    raise FailedPreconditionError(
+                        "Archive recovery failure backup changed after enqueue"
+                    )
+                return
+            failed_hash = hashlib.sha256(failed_raw.encode("utf-8")).hexdigest()
+            if failed_hash != persisted.get("failed_sha256"):
+                raise FailedPreconditionError(
+                    "Archive failure marker changed after recovery enqueue"
+                )
+            await fs.rm(failed_uri, ctx=self.ctx, lease_ref=lease)
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
+
+    async def retry_archive(
+        self,
+        archive_id: str,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Safely enqueue one audited failed or ownerless-ready Phase 2 archive.
+
+        A stale ``pending``/``running`` task record is not ownership.  Durable
+        QueueFS work (including active work in ``TaskWorkIndex``) is.  The
+        caller must also bind the request to the exact raw message bytes so a
+        dry-run inventory cannot be replayed after the archive changes.
+        """
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
+        from openviking.service.task_work_index import bind_task_context
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+        if not re.fullmatch(r"archive_[0-9]+", archive_id):
+            raise ValueError("Invalid archive ID")
+        expected_hash = str(expected_messages_sha256 or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise ValueError("expected_messages_sha256 must be a lowercase SHA-256 digest")
+
+        fs = self._viking_fs
+        session_path = fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            states = await self._archives.scan_states()
+            if archive_id in self._archives.covered_archive_ids(states):
+                return {
+                    "status": "skipped",
+                    "reason": "already_covered",
+                    "archive_id": archive_id,
+                }
+            state = next((item for item in states if item.archive_id == archive_id), None)
+            if state is None:
+                raise NotFoundError(archive_id, "archive")
+            if await fs.exists(f"{state.archive_uri}/.done", ctx=self.ctx):
+                raise FailedPreconditionError("Completed archives cannot be retried")
+
+            raw_messages = await fs.read_file(f"{state.archive_uri}/messages.jsonl", ctx=self.ctx)
+            actual_hash = hashlib.sha256(raw_messages.encode("utf-8")).hexdigest()
+            if actual_hash != expected_hash:
+                raise FailedPreconditionError("Archive messages changed after recovery audit")
+            archive_messages = await self._archives.read_messages(state.archive_uri)
+            if not archive_messages:
+                raise FailedPreconditionError("Archive has no messages")
+            archive_message_ids = {message.id for message in archive_messages}
+
+            meta = await self._archives.read_meta(state.archive_uri)
+            phase1 = meta.get("phase1")
+            if not isinstance(phase1, dict) or phase1.get("status") != "ready":
+                raise FailedPreconditionError("Archive Phase 1 is not ready")
+            queue_snapshot = phase1.get("queue_message")
+            if not isinstance(queue_snapshot, dict):
+                raise FailedPreconditionError("Archive Phase 1 queue message is missing")
+            original_msg = SessionCommitMsg.from_dict(queue_snapshot)
+            original_task_id = str(original_msg.task_id or "")
+            if not original_task_id:
+                raise FailedPreconditionError("Archive Phase 1 task ID is missing")
+
+            tracker = get_task_tracker()
+            queue = get_queue_manager().get_queue(QueueManager.SESSION_COMMIT)
+            queue_items = await queue.snapshot()
+            for item in queue_items:
+                payload = self._queue_payload(item)
+                if payload.get("archive_uri") == state.archive_uri:
+                    return {
+                        "status": "skipped",
+                        "reason": "archive_owned",
+                        "task_id": payload.get("task_id"),
+                        "archive_uri": state.archive_uri,
+                    }
+                if payload.get("session_uri") == self._session_uri:
+                    return {
+                        "status": "skipped",
+                        "reason": "session_busy",
+                        "task_id": payload.get("task_id"),
+                        "archive_uri": state.archive_uri,
+                    }
+
+            # Snapshot and live index checks deliberately ignore stale task
+            # status.  Only work that QueueFS or the active worker still owns
+            # can prevent recovery.
+            session_tasks = await tracker.list_tasks(
+                task_type="session_commit",
+                resource_id=self.session_id,
+                limit=tracker.MAX_TASKS,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            live_owner = next(
+                (task for task in session_tasks if tracker.has_work(task.task_id)), None
+            )
+            if live_owner is not None:
+                return {
+                    "status": "skipped",
+                    "reason": "session_busy",
+                    "task_id": live_owner.task_id,
+                    "archive_uri": state.archive_uri,
+                }
+            original_task = next(
+                (task for task in session_tasks if task.task_id == original_task_id), None
+            )
+            if original_task is None:
+                original_task = await tracker.get(
+                    original_task_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+            if (
+                original_task is not None
+                and original_task.status == TaskStatus.CANCELLED
+                and not allow_cancelled_failure
+            ):
+                raise FailedPreconditionError("Cancelled archives require explicit review")
+
+            if state.state == "failed":
+                failure = state.failed
+                cancelled_failure = (
+                    failure.get("stage") == "cancelled"
+                    or "cancel" in str(failure.get("error") or "").lower()
+                )
+                if cancelled_failure and not allow_cancelled_failure:
+                    raise FailedPreconditionError("Cancelled archives require explicit review")
+                recovery_kind = "failed"
+            elif state.state == "pending" and allow_ownerless_ready:
+                recovery_kind = "ownerless_ready"
+            elif state.state == "pending":
+                raise FailedPreconditionError(
+                    "Ownerless Phase 1 recovery requires allow_ownerless_ready=true"
+                )
+            else:
+                raise FailedPreconditionError("Archive is not recoverable")
+
+            completed_memory_steps: Dict[str, set[str]] = {}
+            self._archives.merge_completed_memory_steps(
+                completed_memory_steps, meta.get("completed_memory_steps")
+            )
+            recorded_ids = (
+                set().union(*completed_memory_steps.values()) if completed_memory_steps else set()
+            )
+            if not recorded_ids.issubset(archive_message_ids):
+                raise FailedPreconditionError(
+                    "Archive recovery progress references messages outside the raw archive"
+                )
+            memory_diff_exists = await fs.exists(
+                f"{state.archive_uri}/memory_diff.json", ctx=self.ctx
+            )
+            if memory_diff_exists and not completed_memory_steps.get("long_term"):
+                raise FailedPreconditionError(
+                    "Archive has memory_diff.json without durable long-term completion progress"
+                )
+
+            msg = SessionCommitMsg.from_dict(queue_snapshot)
+            new_task_id = str(uuid4())
+            msg.task_id = new_task_id
+            msg.session_id = self.session_id
+            msg.session_uri = self._session_uri
+            msg.archive_uri = state.archive_uri
+            msg.user = self.ctx.user.to_dict()
+            msg.recovery = {
+                "version": 1,
+                "kind": recovery_kind,
+                "task_id": new_task_id,
+                "previous_task_id": original_task_id,
+                "messages_sha256": actual_hash,
+            }
+
+            recovery_meta = dict(msg.recovery)
+            recovery_meta["created_at"] = get_current_timestamp()
+            if state.state == "failed":
+                failed_raw = await fs.read_file(f"{state.archive_uri}/.failed.json", ctx=self.ctx)
+                recovery_meta["failed_sha256"] = hashlib.sha256(
+                    failed_raw.encode("utf-8")
+                ).hexdigest()
+                await fs.write_file(
+                    f"{state.archive_uri}/.failure-before-{new_task_id}.json",
+                    failed_raw,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                )
+            if completed_memory_steps:
+                recovery_meta["completed_memory_steps"] = (
+                    self._archives.serialize_completed_memory_steps(completed_memory_steps)
+                )
+            meta_updates: Dict[str, Any] = {"recovery": recovery_meta}
+            await self._merge_archive_meta(state.archive_uri, meta_updates, lease_ref=lease)
+
+            if original_task is not None and original_task.status in (
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
+                TaskStatus.CANCELLING,
+            ):
+                await tracker.fail(
+                    original_task_id,
+                    f"Session commit queue work was missing; superseded by recovery task {new_task_id}",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    result={
+                        "archive_uri": state.archive_uri,
+                        "recovery_task_id": new_task_id,
+                    },
+                )
+
+            await tracker.create(
+                "session_commit",
+                resource_id=self.session_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                task_id=new_task_id,
+                meta={
+                    "archive_uri": state.archive_uri,
+                    "recovery_kind": recovery_kind,
+                    "previous_task_id": original_task_id,
+                },
+            )
+            try:
+                with bind_task_context(new_task_id, self.ctx.account_id, self.ctx.user.user_id):
+                    await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, msg.to_dict())
+            except Exception as exc:
+                await tracker.fail(
+                    new_task_id,
+                    str(exc),
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                raise
+            return {
+                "status": "accepted",
+                "task_id": new_task_id,
+                "archive_uri": state.archive_uri,
+                "previous_task_id": original_task_id,
+                "recovery_kind": recovery_kind,
+                "completed_memory_steps": self._archives.serialize_completed_memory_steps(
+                    completed_memory_steps
+                ),
+            }
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
+
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
@@ -1708,6 +2041,19 @@ class Session:
             user_id=self.ctx.user.user_id,
             task_id=msg.task_id,
         )
+        try:
+            await self._activate_archive_recovery(msg)
+        except FailedPreconditionError as exc:
+            # A deterministic recovery-ownership/hash failure must be consumed
+            # as a business failure. Leaving it unacknowledged would make
+            # QueueFS redeliver the same unsafe message forever.
+            await tracker.fail(
+                msg.task_id,
+                str(exc),
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return True
 
         try:
             await self._viking_fs.read_file(f"{msg.archive_uri}/.done", ctx=self.ctx)
