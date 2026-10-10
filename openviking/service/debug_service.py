@@ -312,9 +312,16 @@ class ObserverService:
             if self._vlm_resolver is None:
                 raise RuntimeError("Account VLM resolver is not initialized")
             vlm = await self._vlm_resolver.get_vlm(ctx.account_id)
+            rerank_instance = None
+            rerank_config = getattr(self._config, "rerank", None)
+            if rerank_config and rerank_config.is_available():
+                from openviking.models.rerank import RerankClient
+
+                rerank_instance = RerankClient.from_config(rerank_config)
             observer = ModelsObserver(
                 vlm_instance=vlm,
                 embedding_instance=self._embedding_provider.bind(ctx.account_id),
+                rerank_instance=rerank_instance,
             )
             status = observer.get_status_json() if format == "json" else observer.get_status_table()
             if format == "json":
