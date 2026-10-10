@@ -8,6 +8,8 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. Use REST (`/api/v1/watches`) or `ov task watch` for the full set of operations. MCP provides `list_watches` and `cancel_watch` for listing and removal.
 
+When Feishu reports that the watched wiki root has been deleted (`131005` during root resolution), the scheduler deactivates that watch and preserves the failure in `last_error`. The watch remains inactive after a restart. Permission errors, temporary failures, generic HTTP 404 responses, and missing child nodes do not deactivate the root watch. After restoring the source, use the update API or `ov task watch resume` to resume checks.
+
 #### 1. API Implementation Overview
 
 Locate a task by `task_id`, or use `to_uri` when exactly one accessible task matches. Multiple Connector Watches can share a target; URI lookup then returns `409 Conflict` and requires a `task_id`. If both keys are supplied, they must identify the same task or the request returns `400`.

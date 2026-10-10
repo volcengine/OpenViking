@@ -16,6 +16,7 @@ from openviking.connector.auth import (
     restore_feishu_request,
 )
 from openviking.connector.delegate import ConnectorDelegate
+from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -517,6 +518,8 @@ class WatchScheduler:
             execution_status = "failed"
             execution_error = str(e) or type(e).__name__
             execution_code = getattr(e, "code", None)
+            if FeishuAccessor.is_deleted_wiki_source_error(task.path, e):
+                should_deactivate = True
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} execution failed, "
                 f"error_type={type(e).__name__}"
