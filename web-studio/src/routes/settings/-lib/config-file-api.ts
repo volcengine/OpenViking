@@ -7,11 +7,10 @@ export type ModelConfig = Record<string, unknown>
 export type ModelChanges = Partial<Record<ModelKind, ModelConfig>>
 export type ModelEntry = {
   config: ModelConfig
-  environment_references?: string[]
-  resolved_providers?: Record<string, string>
 }
 export type ConfigFileDraft = {
   content: string
+  form_readonly?: boolean
   models: Record<ModelKind, ModelEntry>
 }
 export type ConfigFileConfiguration = ConfigFileDraft & {
@@ -78,10 +77,11 @@ export function isConfigFileObject(content: string): boolean {
     // Startup expands unquoted environment values before parsing JSON.
     // Only check their syntax here; the server owns expansion and validation.
     const parsed: unknown = JSON.parse(
-      content.replace(
-        /"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[a-zA-Z0-9_]+)/g,
-        (token) => (token.startsWith('"') ? token : JSON.stringify(token)),
-      ),
+      content
+        .trimStart()
+        .replace(/"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[a-zA-Z0-9_]+)/g, (token) =>
+          token.startsWith('"') ? token : JSON.stringify(token),
+        ),
     )
     return (
       parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)

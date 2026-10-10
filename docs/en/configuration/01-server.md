@@ -21,6 +21,8 @@ Studio's **Server configuration** page offers **Save and restart** for a single-
 
 Multi-worker or embedded ASGI applications report restart as unsupported; restart these through the deployment platform. Startup can still fail because of external dependencies even after schema validation. If the address, port or ROOT credential changes, update Studio's connection settings to reconnect. Account and cluster overrides continue to take precedence over file defaults.
 
+Configurations containing environment references are read-only in the Studio form. Use file mode to edit the original text; quoted/unquoted references, escapes and formatting are saved as submitted. Dollar literals (including `\u0024`) also use file mode to avoid introducing new references during form serialization.
+
 ## Configuration Structure
 
 This outline shows common top-level groups, not a runnable configuration. For a first deployment, start with the [minimal example](#minimal-example) and supply your models and credentials. Merge later snippets into the same `ov.conf`.

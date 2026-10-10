@@ -124,9 +124,8 @@ const data = {
   restart: { supported: true, instance_id: 'new', restarting: false },
   revision: 'revision',
   models: {
-    vlm: { config: language, resolved_providers: {} as Record<string, string> },
+    vlm: { config: language },
     embedding: {
-      resolved_providers: {} as Record<string, string>,
       config: {
         max_retries: 3,
         max_concurrent: 10,
@@ -663,59 +662,6 @@ it('uses localized validation text for invalid JSON', async () => {
   expect(headers.validationMessage).toBe('')
 })
 
-it.each(['vikingdb', 'ollama', 'openai'])(
-  'edits an environment-bound %s embedding provider without replacing its reference',
-  async (provider) => {
-    const payload = structuredClone(data)
-    const entry = payload.models.embedding
-    entry.resolved_providers = { '${EMBEDDING_PROVIDER}': provider }
-    const credential: ModelConfig = entry.config.dense.credentials[0]
-    credential.provider = '${EMBEDDING_PROVIDER}'
-    delete credential.api_key
-    if (provider === 'vikingdb') {
-      Object.assign(credential, {
-        ak: '${EMBEDDING_AK}',
-        sk: '${EMBEDDING_SK}',
-        region: 'cn-beijing',
-      })
-      delete credential.api_base
-    }
-    mount(payload)
-    await screen.findByText('model-a')
-    fireEvent.click(
-      section('embeddingType').getByRole('button', { name: 'models.edit' }),
-    )
-    const dialog = within(screen.getByRole('dialog'))
-    expect(
-      dialog.getByText(`\${EMBEDDING_PROVIDER} (${provider})`),
-    ).toBeTruthy()
-    if (provider === 'vikingdb') {
-      expect(
-        dialog.getByLabelText<HTMLInputElement>('models.fields.ak').value,
-      ).toBe('${EMBEDDING_AK}')
-      fireEvent.change(dialog.getByLabelText('models.fields.sk'), {
-        target: { value: '${ROTATED_SK}' },
-      })
-      expect(dialog.queryByLabelText('models.fields.api_key')).toBeNull()
-    } else {
-      const key = dialog.queryByLabelText<HTMLInputElement>(
-        'models.fields.api_key',
-      )
-      expect(key?.required ?? false).toBe(false)
-      fireEvent.change(dialog.getByLabelText('models.fields.api_base'), {
-        target: { value: 'http://localhost:11434/v1' },
-      })
-    }
-    expect(
-      screen.getByRole('dialog').querySelector('form')!.checkValidity(),
-    ).toBe(true)
-    await apply()
-    expect(
-      state.preview.mock.lastCall![1].embedding.dense.credentials[0].provider,
-    ).toBe('${EMBEDDING_PROVIDER}')
-  },
-)
-
 it('shares form edits and whole-file edits across modes, preserving all other sections', async () => {
   mount()
   await screen.findByText('model-a')
@@ -910,28 +856,6 @@ it('allows unquoted environment values in file drafts without resolving them in 
   await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
 })
 
-it('shows and preserves environment references in numeric form fields', async () => {
-  const payload = structuredClone(data)
-  Object.assign(payload.models.embedding.config, {
-    max_concurrent: '${CONCURRENCY}',
-  })
-  mount(payload)
-  await screen.findByText('model-a')
-  fireEvent.click(
-    section('embeddingType').getByRole('button', { name: 'models.parameters' }),
-  )
-  const input = screen.getByLabelText<HTMLInputElement>(
-    'models.fields.max_concurrent',
-  )
-  expect(input.value).toBe('${CONCURRENCY}')
-  expect(input.type).toBe('text')
-  fireEvent.change(input, { target: { value: '${NEW_CONCURRENCY}' } })
-  await apply()
-  expect(state.preview.mock.calls[0][1].embedding.max_concurrent).toBe(
-    '${NEW_CONCURRENCY}',
-  )
-})
-
 it.each([false, true])(
   'toggles the shared VLM thinking policy from %s without changing bindings',
   async (initial) => {
@@ -1056,26 +980,19 @@ it.each([false, true])(
   },
 )
 
-it('keeps environment objects read-only in the form and offers file editing', async () => {
-  const payload = {
-    ...structuredClone(data),
-    models: {
-      ...structuredClone(data.models),
-      vlm: {
-        ...structuredClone(data.models.vlm),
-        environment_references: ['$STUDIO_MODEL_OBJECT'],
-      },
-    },
-  }
+it('keeps the entire environment-bound form read-only and offers verbatim file editing', async () => {
+  const payload = { ...structuredClone(data), form_readonly: true }
   mount(payload)
-  await screen.findByText('$STUDIO_MODEL_OBJECT')
-  expect(section('vlmType').getByText('models.environmentObject')).toBeTruthy()
+  await screen.findAllByText('models.environmentObject')
   expect(section('vlmType').queryAllByRole('button')).toHaveLength(0)
-  expect(
-    section('embeddingType').getByRole('button', { name: 'models.edit' }),
-  ).toBeTruthy()
+  expect(section('embeddingType').queryAllByRole('button')).toHaveLength(0)
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
-  expect(await screen.findByLabelText('models.fileContent')).toBeTruthy()
+  const text = content.replace('"port": 1933', '"port": ${STUDIO_PORT}')
+  fireEvent.change(await screen.findByLabelText('models.fileContent'), {
+    target: { value: text },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
 })
 
 it('retains the configuration draft when switching settings tabs', async () => {

@@ -815,7 +815,7 @@ const workspace = {
       parameters: 'Model parameters',
       advanced: 'Advanced settings',
       environmentObject:
-        'This model configuration uses environment variables for objects or arrays. Use the file editor to change it while preserving these references.',
+        'This configuration contains environment references or dollar literals. The form is read-only; use the file editor to preserve the original text.',
       embeddingContract:
         'Model identity, dimensions and input type are fixed at account creation.',
       fields: {

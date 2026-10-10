@@ -8,9 +8,8 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
-from uuid import uuid4
 
-from openviking_cli.utils.config.embedding_config import EmbeddingCredential, EmbeddingModelConfig
+from openviking_cli.utils.config.embedding_config import EmbeddingCredential
 from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
@@ -18,32 +17,13 @@ from openviking_cli.utils.config.open_viking_config import (
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
 FORM_MODEL_KINDS = ("vlm", "embedding")
-# Match complete JSON strings first so references inside them stay quoted.
-_JSON_TOKENS = re.compile(r'"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[\w]+)', re.ASCII)
+# Conservatively reserve dollar-bearing files for the verbatim file editor.
+# Escaped dollars must also stay literal when startup expands the original text.
+_FORM_REFERENCE = re.compile(r"\$|\\u0024", re.IGNORECASE)
 
 
-class _EnvironmentReference(str):
-    """An unquoted JSON value supplied by startup environment expansion."""
-
-
-def _dump(value, **kwargs) -> str:
-    references = {}
-
-    def encode(node):
-        if isinstance(node, _EnvironmentReference):
-            token = uuid4().hex
-            references[token] = str(node)
-            return token
-        if isinstance(node, dict):
-            return {key: encode(item) for key, item in node.items()}
-        if isinstance(node, list):
-            return [encode(item) for item in node]
-        return node
-
-    content = json.dumps(encode(value), **kwargs)
-    for token, reference in references.items():
-        content = content.replace(json.dumps(token), reference)
-    return content
+def _form_readonly(content: str) -> bool:
+    return bool(_FORM_REFERENCE.search(content))
 
 
 def _provider_source(original: dict, provider: str | None) -> dict:
@@ -51,8 +31,7 @@ def _provider_source(original: dict, provider: str | None) -> dict:
         (
             config
             for name, config in (original.get("providers") or {}).items()
-            if os.path.expandvars(name).strip().lower()
-            == os.path.expandvars(provider or "").strip().lower()
+            if name.strip().lower() == (provider or "").strip().lower()
         ),
         {},
     )
@@ -69,35 +48,10 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
         else binding.model_dump(exclude_none=True)
     )
     explicit = original.get("credentials") or []
-    if explicit:
-        source = explicit[index] if index < len(explicit) else {}
-    else:
-        # Legacy backups are normalized into a second credential by VLMConfig.
-        if index == 1:
-            original = original.get("backup") or {}
-        source = {}
+    source = explicit[index] if index < len(explicit) else {}
     if not embedding and "model" not in source and (explicit or index == 0):
         # A synthesized primary binding must keep inheriting the shared model.
         values.pop("model", None)
-    original = dict(original)
-    if original.get("provider") is None:
-        original["provider"] = original.get("backend") or original.get("default_provider")
-    provider = values.get("provider")
-    provider_config = _provider_source(original, provider)
-    for key, value in values.items():
-        # Follow the source of this field only. Matching expanded values globally
-        # loses identity when independent environment references have equal values.
-        fallbacks = (provider_config, original) if not explicit or key == "api_key" else (original,)
-        for node in (source, *fallbacks):
-            if key not in node:
-                continue
-            expanded = json.loads(os.path.expandvars(_dump(node[key])))
-            matches = expanded == value
-            if key == "provider" and isinstance(expanded, str) and isinstance(value, str):
-                matches = expanded.strip().lower() == value.strip().lower()
-            if matches:
-                values[key] = node[key]
-                break
     return values
 
 
@@ -105,11 +59,11 @@ def _revision(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _validate(raw: dict, server_overrides: dict | None = None) -> OpenVikingConfig:
+def _validate(content: str, server_overrides: dict | None = None) -> OpenVikingConfig:
     try:
         from openviking.server.config import ServerConfig, validate_server_config
 
-        expanded = json.loads(os.path.expandvars(_dump(raw)))
+        expanded = json.loads(os.path.expandvars(content.lstrip("\ufeff")))
         server = expanded.get("server")
         server_config = ServerConfig.model_validate({} if server is None else server)
         # The CLI reapplies these arguments after loading ov.conf on every restart.
@@ -125,26 +79,7 @@ def _validate(raw: dict, server_overrides: dict | None = None) -> OpenVikingConf
 
 def _parse(content: str) -> dict:
     try:
-        references = {}
-
-        def quote_reference(match):
-            token = match.group()
-            if token.startswith('"'):
-                return token
-            placeholder = uuid4().hex
-            references[placeholder] = _EnvironmentReference(token)
-            return json.dumps(placeholder)
-
-        def decode(node):
-            if isinstance(node, str):
-                return references.get(node, node)
-            if isinstance(node, dict):
-                return {key: decode(value) for key, value in node.items()}
-            if isinstance(node, list):
-                return [decode(value) for value in node]
-            return node
-
-        raw = decode(json.loads(_JSON_TOKENS.sub(quote_reference, content.lstrip("\ufeff"))))
+        raw = json.loads(content.lstrip("\ufeff"))
         if not isinstance(raw, dict):
             raise ValueError()
         return raw
@@ -155,10 +90,11 @@ def _parse(content: str) -> dict:
 def _read(path: Path, server_overrides: dict | None = None):
     data = path.read_bytes()
     try:
-        raw = _parse(data.decode("utf-8-sig"))
+        content = data.decode("utf-8")
     except UnicodeError as exc:
         raise ValueError("ov.conf must contain UTF-8 JSON") from exc
-    return data, raw, _validate(raw, server_overrides)
+    config = _validate(content, server_overrides)
+    return data, content, config
 
 
 def _path() -> Path:
@@ -168,39 +104,22 @@ def _path() -> Path:
     return path
 
 
-def _structured_environment_references(node) -> list[str]:
-    if isinstance(node, _EnvironmentReference):
-        expanded = json.loads(os.path.expandvars(_dump(node)))
-        return [str(node)] if isinstance(expanded, (dict, list)) else []
-    values = node.values() if isinstance(node, dict) else node if isinstance(node, list) else []
-    return list(
-        dict.fromkeys(ref for value in values for ref in _structured_environment_references(value))
-    )
-
-
-def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
+def _model_view(content: str, config: OpenVikingConfig) -> dict:
+    if _form_readonly(content):
+        # Never project expanded credentials into the form response.
+        return {kind: {"config": {}} for kind in FORM_MODEL_KINDS}
+    raw = _parse(content)
     models = {}
     for kind in FORM_MODEL_KINDS:
         model = getattr(config, kind)
         value = model.model_dump(exclude_none=True)
         original = raw.get(kind) or {}
-        references = _structured_environment_references(original)
-        if references:
-            # An object/array reference has no literal fields to project. Keep it
-            # opaque rather than exposing or materializing environment secrets.
-            models[kind] = {
-                "config": {},
-                "environment_references": references,
-            }
-            continue
-        # Display literal environment references; never replace them with resolved secrets.
         value = _merge(value, original)
         if kind == "vlm":
             # VLM normalization synthesizes provider maps from parent fields.
-            # Return only the literal map to avoid exposing expanded secrets.
+            # Return only the explicit map to preserve legacy form bindings.
             value["providers"] = original.get("providers") or {}
         sections = [(value, original, model)]
-        resolved_providers = {}
         if kind == "embedding":
             sections = [
                 (value[mode], original.get(mode) or {}, getattr(model, mode))
@@ -221,14 +140,7 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
                 for index, binding in enumerate(section["credentials"]):
                     if not binding.get("id"):
                         binding["id"] = f"credential-{index}"
-            for binding, credential in zip(section["credentials"], bindings, strict=True):
-                provider = credential.provider or section_model.provider
-                if binding.get("provider") and provider:
-                    resolved_providers[binding["provider"]] = provider.strip().lower()
-        models[kind] = {
-            "config": value,
-            "resolved_providers": resolved_providers,
-        }
+        models[kind] = {"config": value}
     return models
 
 
@@ -236,22 +148,31 @@ def preview_config_file(
     content: str, settings: dict | None = None, server_overrides: dict | None = None
 ) -> dict:
     """Validate a draft and project its form fields without writing or publishing it."""
-    raw = _parse(content)
     if settings:
+        if _form_readonly(content):
+            raise ValueError("Configuration with environment references requires file editing")
+        raw = _parse(content)
         _apply_model_changes(raw, settings)
-        content = _dump(raw, ensure_ascii=False, indent=2) + "\n"
-    config = _validate(raw, server_overrides)
-    return {"content": content, "models": _model_view(raw, config)}
+        content = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+        if _form_readonly(content):
+            raise ValueError("Environment references must be entered through the file editor")
+    config = _validate(content, server_overrides)
+    return {
+        "content": content,
+        "models": _model_view(content, config),
+        "form_readonly": _form_readonly(content),
+    }
 
 
 def read_config_file(server_overrides: dict | None = None) -> dict:
     path = _path()
-    data, raw, config = _read(path, server_overrides)
+    data, content, config = _read(path, server_overrides)
     active = OpenVikingConfigSingleton.get_instance()
     startup_revision = OpenVikingConfigSingleton.get_config_file_revision()
     return {
-        "content": data.decode("utf-8-sig"),
-        "models": _model_view(raw, config),
+        "content": content,
+        "models": _model_view(content, config),
+        "form_readonly": _form_readonly(content),
         "revision": _revision(data),
         "file_path": str(path),
         "writable": bool(path.stat().st_mode & 0o222)
@@ -268,8 +189,6 @@ def read_config_file(server_overrides: dict | None = None) -> dict:
 def _merge(old: dict, changes: dict) -> dict:
     result = dict(old)
     for key, value in changes.items():
-        if isinstance(result.get(key), _EnvironmentReference) and value == result[key]:
-            continue
         result[key] = (
             _merge(result[key], value)
             if isinstance(value, dict)
@@ -278,24 +197,6 @@ def _merge(old: dict, changes: dict) -> dict:
             else value
         )
     return result
-
-
-def _restore_environment_references(original, value):
-    if isinstance(original, _EnvironmentReference) and value == original:
-        return original
-    if isinstance(original, dict) and isinstance(value, dict):
-        return {
-            key: _restore_environment_references(original.get(key), item)
-            for key, item in value.items()
-        }
-    if isinstance(original, list) and isinstance(value, list):
-        return [
-            _restore_environment_references(
-                original[index] if index < len(original) else None, item
-            )
-            for index, item in enumerate(value)
-        ]
-    return value
 
 
 def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
@@ -315,9 +216,7 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
         providers = result.get("providers") or {}
         provider = result.get("provider") or result.get("backend") or result.get("default_provider")
         if not provider and providers:
-            legacy = VLMConfig.model_validate(
-                json.loads(os.path.expandvars(_dump({**result, "credentials": []})))
-            )
+            legacy = VLMConfig.model_validate({**result, "credentials": []})
             _, provider = legacy.get_provider_config()
         defaults.update(_provider_source(result, provider))
         if provider:
@@ -328,21 +227,7 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     # Materialize inherited bindings before removing legacy fallbacks. Explicit
     # null/empty values must mean clearing, not re-inheriting obsolete secrets.
     defaults = {key: value for key, value in defaults.items() if key in fields}
-    original_bindings = {}
-    if old:
-        parent = (EmbeddingModelConfig if embedding else VLMConfig).model_validate(
-            json.loads(os.path.expandvars(_dump(old)))
-        )
-        for index, credential in enumerate(parent.credentials or [parent]):
-            original = _binding_values(credential, parent, embedding, old, index)
-            original_bindings[original.get("id") or f"credential-{index}"] = original
-    result["credentials"] = []
-    for index, binding in enumerate(changes["credentials"]):
-        original = original_bindings.get(binding.get("id") or f"credential-{index}", {})
-        # JSON requests carry references as plain strings. Preserve their original
-        # quoting when the form keeps the same field, including after reordering.
-        binding = _restore_environment_references(original, binding)
-        result["credentials"].append(_merge(defaults, binding))
+    result["credentials"] = [_merge(defaults, binding) for binding in changes["credentials"]]
     for key in fields:
         result.pop(key, None)
     result.pop("backend", None)
@@ -391,10 +276,6 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
         raise ValueError("Only model sections can be edited through the form")
     for kind, value in settings.items():
         if isinstance(value, dict):
-            if _structured_environment_references(raw.get(kind)):
-                raise ValueError(
-                    "Model objects supplied by environment references require file editing"
-                )
             raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
         else:
             raise ValueError("Model configuration must be an object")
@@ -419,8 +300,7 @@ def save_config_file(content: str, revision: str, server_overrides: dict | None 
         mode = stat.S_IMODE(path.stat().st_mode)
         if not mode & 0o222 or not os.access(path, os.W_OK):
             raise ValueError("ov.conf is read-only")
-        raw = _parse(content)
-        _validate(raw, server_overrides)
+        _validate(content, server_overrides)
         if path.read_bytes() != data:
             raise ValueError("ov.conf changed; reload before saving")
         output = content.encode("utf-8")

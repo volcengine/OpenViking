@@ -780,7 +780,7 @@ const workspace = {
       parameters: '模型参数',
       advanced: '高级配置',
       environmentObject:
-        '此模型配置通过环境变量提供对象或数组。请使用文件编辑器修改，以保留这些引用。',
+        '配置含环境变量引用或美元符号字面值，表单只读。请使用文件模式编辑，以保留原文。',
       embeddingContract:
         '模型身份、向量维度与输入类型为创建时配置，不能在此修改。',
       fields: {

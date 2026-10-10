@@ -539,11 +539,7 @@ export function ServerConfigurationEditor() {
     query.data?.overrides?.cluster.length ||
     query.data?.overrides?.account.length,
   )
-  const providerValue = String(editor?.value.provider || '')
-  const provider =
-    (editor &&
-      document?.models[editor.kind].resolved_providers?.[providerValue]) ||
-    providerValue
+  const provider = String(editor?.value.provider || '')
   const fields = editor?.settings
     ? editor.kind === 'embedding'
       ? policies
@@ -746,22 +742,14 @@ export function ServerConfigurationEditor() {
           </TabsContent>
           <TabsContent value="form" className="grid min-w-0 gap-8">
             {visibleModelKinds.map((kind) => {
-              const references = document?.models[kind].environment_references
-              if (references?.length)
+              if (document?.form_readonly)
                 return (
-                  <section
-                    key={kind}
-                    aria-label={t(titles[kind])}
-                    className="min-w-0 border-b pb-6 last:border-b-0"
-                  >
+                  <section key={kind} aria-label={t(titles[kind])}>
                     <h2 className="mb-4 text-base font-semibold">
                       {t(titles[kind])}
                     </h2>
                     <p className="text-sm text-muted-foreground">
                       {t('models.environmentObject')}
-                    </p>
-                    <p className="mt-2 break-all font-mono text-xs">
-                      {references.join(', ')}
                     </p>
                   </section>
                 )
@@ -990,7 +978,6 @@ export function ServerConfigurationEditor() {
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
                   fields={fields}
                   value={editor.value}
-                  resolvedProvider={provider}
                   inheritedModel={
                     editor.settings
                       ? undefined

@@ -21,7 +21,7 @@ def config_file(tmp_path, monkeypatch):
         "vlm": {
             "model": "gpt-4o",
             "provider": "openai",
-            "api_key": "${STUDIO_TEST_KEY}",
+            "api_key": "dummy-review-key",
             "temperature": 0.4,
         },
         "embedding": {
@@ -29,15 +29,14 @@ def config_file(tmp_path, monkeypatch):
                 "provider": "openai",
                 "model": "text-embedding-3-small",
                 "dimension": 1024,
-                "api_key": "${STUDIO_TEST_KEY}",
+                "api_key": "dummy-review-key",
                 "extra_body": {"routing": "keep"},
             }
         },
-        "rerank": {"provider": "jev", "api_key": "${STUDIO_TEST_KEY}", "model": "jev-latest"},
+        "rerank": {"provider": "jev", "api_key": "dummy-review-key", "model": "jev-latest"},
         "storage": {"workspace": str(tmp_path / "data")},
     }
     path.write_text(json.dumps(raw))
-    monkeypatch.setenv("STUDIO_TEST_KEY", "resolved-secret")
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     monkeypatch.setattr(
         OpenVikingConfigSingleton,
@@ -46,50 +45,8 @@ def config_file(tmp_path, monkeypatch):
     )
     from openviking.config.config_file import _validate
 
-    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", _validate(raw))
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", _validate(json.dumps(raw)))
     return path, raw
-
-
-def test_file_models_preserve_environment_references_and_save_without_publishing(
-    config_file, monkeypatch
-):
-    path, raw = config_file
-    raw["embedding"]["dense"].update(
-        provider="${STUDIO_EMBEDDING_PROVIDER}",
-        ak="${STUDIO_TEST_KEY}",
-        sk="${STUDIO_TEST_KEY}",
-        region="cn-beijing",
-    )
-    monkeypatch.setenv("STUDIO_EMBEDDING_PROVIDER", "vikingdb")
-    path.write_text(json.dumps(raw))
-    monkeypatch.setattr(
-        OpenVikingConfigSingleton,
-        "_config_file_revision",
-        hashlib.sha256(path.read_bytes()).hexdigest(),
-    )
-    result = read_config_file()
-    assert result["file_path"] == str(path)
-    assert result["writable"] and not result["restart_required"]
-    assert set(result["models"]) == {"vlm", "embedding"}
-    assert result["models"]["embedding"]["resolved_providers"] == {
-        "${STUDIO_EMBEDDING_PROVIDER}": "vikingdb"
-    }
-    assert "resolved-secret" not in json.dumps(result)
-    assert (
-        result["models"]["embedding"]["config"]["dense"]["credentials"][0]["api_key"]
-        == "${STUDIO_TEST_KEY}"
-    )
-    _save_form({"vlm": {"timeout": 42}}, result["revision"])
-    saved = json.loads(path.read_text())
-    assert saved["vlm"] == {**raw["vlm"], "timeout": 42}
-    assert saved["storage"] == raw["storage"]
-    assert saved["embedding"] == raw["embedding"]
-    backup = path.with_name(path.name + ".studio.bak")
-    assert json.loads(backup.read_text()) == raw
-    if sys.platform != "win32":
-        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
-    assert OpenVikingConfigSingleton.get_instance().vlm.timeout != 42
-    assert read_config_file()["restart_required"]
 
 
 def test_stale_revision_readonly_invalid_and_non_model_writes_leave_file_unchanged(config_file):
@@ -131,41 +88,13 @@ def test_programmatic_configuration_never_guesses_a_file(monkeypatch):
         read_config_file()
 
 
-@pytest.mark.parametrize("unquoted", [False, True])
-def test_legacy_backup_credentials_keep_distinct_keys(config_file, monkeypatch, unquoted):
-    path, raw = config_file
-    monkeypatch.setenv("STUDIO_BACKUP_KEY", '"backup-secret"' if unquoted else "backup-secret")
-    raw["vlm"]["backup"] = {
-        "api_key": "${STUDIO_BACKUP_KEY}",
-        "model": "gpt-4o-mini",
-        "provider": "openai",
-    }
-    content = json.dumps(raw)
-    if unquoted:
-        content = content.replace('"${STUDIO_BACKUP_KEY}"', "${STUDIO_BACKUP_KEY}")
-    path.write_text(content)
-    loaded = read_config_file()
-    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
-    bindings = model["credentials"]
-    assert bindings[0]["api_key"] == "${STUDIO_TEST_KEY}"
-    assert bindings[1]["api_key"] == "${STUDIO_BACKUP_KEY}"
-    model["timeout"] = 42
-    draft = preview_config_file(content, {"vlm": model})
-    save_config_file(draft["content"], loaded["revision"])
-    config = OpenVikingConfigSingleton._load_from_file(str(path))
-    assert config.vlm.timeout == 42
-    assert config.vlm.credentials[1].api_key == "backup-secret"
-    if unquoted:
-        assert '"api_key": ${STUDIO_BACKUP_KEY}' in path.read_text()
-
-
 def test_embedding_credentials_display_parent_fallbacks(config_file):
     path, raw = config_file
     raw["embedding"]["dense"]["credentials"] = [{"id": "primary", "provider": "openai"}]
     path.write_text(json.dumps(raw))
     binding = read_config_file()["models"]["embedding"]["config"]["dense"]["credentials"][0]
     assert binding["model"] == "text-embedding-3-small"
-    assert binding["api_key"] == "${STUDIO_TEST_KEY}"
+    assert binding["api_key"] == "dummy-review-key"
 
 
 @pytest.mark.parametrize("kind", ["vlm", "embedding"])
@@ -186,18 +115,18 @@ def test_cleared_legacy_binding_fields_do_not_return(config_file, kind):
     current_section = current if kind == "vlm" else current["dense"]
     assert not current_section["credentials"][0].get("api_base")
     assert not current_section["credentials"][0].get("extra_headers")
-    assert current_section["credentials"][0]["api_key"] == "${STUDIO_TEST_KEY}"
+    assert current_section["credentials"][0]["api_key"] == "dummy-review-key"
 
 
-def test_partial_credentials_preserve_inherited_fields_and_environment_references(config_file):
+def test_partial_credentials_preserve_inherited_fields(config_file):
     path, raw = config_file
-    raw["vlm"].update(api_base="${STUDIO_TEST_URL}", extra_headers={"X-Keep": "yes"})
+    raw["vlm"].update(api_base="https://example.com/v1", extra_headers={"X-Keep": "yes"})
     path.write_text(json.dumps(raw))
     result = read_config_file()
     _save_form({"vlm": {"credentials": [{"model": "gpt-4o-mini"}]}}, result["revision"])
     current = read_config_file()["models"]["vlm"]["config"]["credentials"][0]
-    assert current["api_base"] == "${STUDIO_TEST_URL}"
-    assert current["api_key"] == "${STUDIO_TEST_KEY}"
+    assert current["api_base"] == "https://example.com/v1"
+    assert current["api_key"] == "dummy-review-key"
     assert current["extra_headers"] == {"X-Keep": "yes"}
 
 
@@ -220,18 +149,16 @@ def test_first_vlm_connection_does_not_keep_an_empty_preferred_binding(config_fi
     assert config.vlm.is_available()
 
 
-@pytest.mark.parametrize("provider_name", ["openai", " OpenAI ", "${STUDIO_PROVIDER}"])
+@pytest.mark.parametrize("provider_name", ["openai", " OpenAI ", "OpenAI"])
 @pytest.mark.parametrize("existing", [False, True])
 def test_partial_credentials_use_the_effective_legacy_provider(
-    config_file, monkeypatch, provider_name, existing
+    config_file, provider_name, existing
 ):
     path, raw = config_file
-    monkeypatch.setenv("STUDIO_PROVIDER", "openai")
-    monkeypatch.setenv("STUDIO_TEST_URL", "https://legacy.example/v1")
     legacy = {
         "model": "gpt-4o",
         "providers": {
-            provider_name: {"api_key": "${STUDIO_TEST_KEY}", "api_base": "${STUDIO_TEST_URL}"},
+            provider_name: {"api_key": "dummy-review-key", "api_base": "https://example.com/v1"},
             "litellm": {"api_key": "backup-key"},
         },
     }
@@ -247,8 +174,8 @@ def test_partial_credentials_use_the_effective_legacy_provider(
     _save_form({"vlm": changes}, loaded["revision"])
     stored = json.loads(path.read_text())["vlm"]
     assert "providers" not in stored
-    assert stored["credentials"][0]["api_key"] == "${STUDIO_TEST_KEY}"
-    assert stored["credentials"][0]["api_base"] == "${STUDIO_TEST_URL}"
+    assert stored["credentials"][0]["api_key"] == "dummy-review-key"
+    assert stored["credentials"][0]["api_base"] == "https://example.com/v1"
     config = OpenVikingConfigSingleton._load_from_file(str(path))
     assert config.vlm.is_available()
     assert config.vlm.credentials[0].provider == "openai"
@@ -298,47 +225,6 @@ def test_keyless_embedding_does_not_inherit_legacy_key(config_file):
     assert current["api_base"] == "http://localhost:8000/v1"
 
 
-@pytest.mark.parametrize("explicit", [False, True])
-def test_equal_environment_values_keep_each_binding_source(config_file, monkeypatch, explicit):
-    path, raw = config_file
-    monkeypatch.setenv("STUDIO_PRIMARY_KEY", "same-key")
-    monkeypatch.setenv("STUDIO_BACKUP_KEY", "same-key")
-    monkeypatch.setenv("STUDIO_HEADER_A", "same-header")
-    monkeypatch.setenv("STUDIO_HEADER_B", "same-header")
-    primary = {
-        "api_key": "${STUDIO_PRIMARY_KEY}",
-        "extra_headers": {"A": "${STUDIO_HEADER_A}", "B": "${STUDIO_HEADER_B}"},
-    }
-    backup = {"api_key": "${STUDIO_BACKUP_KEY}"}
-    raw["vlm"] = {"model": "gpt-4o", "provider": "openai"}
-    if explicit:
-        raw["vlm"]["credentials"] = [
-            {"provider": "openai", **primary},
-            {"provider": "openai", **backup},
-        ]
-    else:
-        raw["vlm"]["providers"] = {"openai": primary}
-        raw["vlm"]["backup"] = {
-            "model": "gpt-4o-mini",
-            "provider": "openai",
-            "providers": {"openai": backup},
-        }
-    # A literal equal value elsewhere must not become an environment reference.
-    raw["vlm"]["reasoning_effort"] = "same-header"
-    path.write_text(json.dumps(raw))
-    result = read_config_file()
-    bindings = result["models"]["vlm"]["config"]["credentials"]
-    assert bindings[0]["api_key"] == "${STUDIO_PRIMARY_KEY}"
-    assert bindings[1]["api_key"] == "${STUDIO_BACKUP_KEY}"
-    assert bindings[0]["extra_headers"] == primary["extra_headers"]
-    assert bindings[0]["reasoning_effort"] == "same-header"
-    _save_form({"vlm": result["models"]["vlm"]["config"]}, result["revision"])
-    stored = json.loads(path.read_text())["vlm"]["credentials"]
-    assert stored[0]["api_key"] == "${STUDIO_PRIMARY_KEY}"
-    assert stored[1]["api_key"] == "${STUDIO_BACKUP_KEY}"
-    assert stored[0]["extra_headers"] == primary["extra_headers"]
-
-
 @pytest.mark.parametrize("null_provider", [False, True])
 def test_partial_embedding_credentials_preserve_legacy_backend(config_file, null_provider):
     path, raw = config_file
@@ -358,7 +244,7 @@ def test_partial_embedding_credentials_preserve_legacy_backend(config_file, null
 
 def test_full_file_draft_preserves_other_sections_and_does_not_publish(config_file):
     path, raw = config_file
-    raw["server"] = {"port": 1933, "root_api_key": "${STUDIO_TEST_KEY}"}
+    raw["server"] = {"port": 1933, "root_api_key": "dummy-review-key"}
     path.write_text(json.dumps(raw))
     before = path.read_bytes()
     revision = read_config_file()["revision"]
@@ -367,7 +253,7 @@ def test_full_file_draft_preserves_other_sections_and_does_not_publish(config_fi
     raw["query_planner"] = {
         "provider": "openai",
         "model": "planner",
-        "api_key": "${STUDIO_TEST_KEY}",
+        "api_key": "dummy-review-key",
     }
     text = json.dumps(raw, indent=4) + "\n"
     preview = preview_config_file(text, {"vlm": {"timeout": 48}})
@@ -435,139 +321,6 @@ def test_startup_revision_tracks_non_model_changes_and_restoration(config_file, 
     assert not read_config_file()["restart_required"]
 
 
-def test_unquoted_environment_values_survive_form_and_file_saves(config_file, monkeypatch):
-    path, raw = config_file
-    monkeypatch.setenv("STUDIO_CONCURRENCY", "12")
-    monkeypatch.setenv("STUDIO_PORT", "1933")
-    monkeypatch.setenv("STUDIO_SERVER", '{"port":1933,"root_api_key":"server-secret"}')
-    raw["vlm"]["max_concurrent"] = "${STUDIO_CONCURRENCY}"
-    raw["server"] = {"port": "$STUDIO_PORT"}
-    text = json.dumps(raw).replace('"${STUDIO_CONCURRENCY}"', "${STUDIO_CONCURRENCY}")
-    text = text.replace('"$STUDIO_PORT"', "$STUDIO_PORT")
-    path.write_text(text)
-    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", None)
-    OpenVikingConfigSingleton.initialize(config_path=str(path))
-    assert OpenVikingConfigSingleton.get_instance().vlm.max_concurrent == 12
-    loaded = read_config_file()
-    assert loaded["content"] == text
-    assert "resolved-secret" not in json.dumps(loaded)
-    assert not loaded["restart_required"]
-
-    # Form requests cross a JSON transport, which removes Python marker types.
-    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
-    model["timeout"] = 42
-    draft = preview_config_file(text, {"vlm": model})
-    assert '"max_concurrent": ${STUDIO_CONCURRENCY}' in draft["content"]
-    assert '"port": $STUDIO_PORT' in draft["content"]
-    assert "resolved-secret" not in draft["content"]
-    save_config_file(draft["content"], loaded["revision"])
-    assert path.read_text() == draft["content"]
-    reloaded = OpenVikingConfigSingleton._load_from_file(str(path))
-    assert reloaded.vlm.max_concurrent == 12 and reloaded.vlm.timeout == 42
-
-    # An environment reference may also supply a complete non-model JSON value.
-    text = draft["content"].replace('"port": $STUDIO_PORT', '"port": 1934')
-    revision = read_config_file()["revision"]
-    save_config_file(text, revision)
-    assert path.read_text() == text
-    object_text = json.dumps({**raw, "server": "$STUDIO_SERVER"}).replace(
-        '"$STUDIO_SERVER"', "$STUDIO_SERVER"
-    )
-    projected = preview_config_file(object_text, {"vlm": {"timeout": 45}})
-    assert '"server": $STUDIO_SERVER' in projected["content"]
-    assert "server-secret" not in json.dumps(projected)
-
-
-def test_unset_or_invalid_environment_values_cannot_replace_the_file(config_file, monkeypatch):
-    path, raw = config_file
-    monkeypatch.delenv("STUDIO_UNSET", raising=False)
-    monkeypatch.setenv("STUDIO_INVALID", "invalid-json")
-    original = path.read_bytes()
-    revision = read_config_file()["revision"]
-    for reference in ("$STUDIO_UNSET", "${STUDIO_INVALID}"):
-        content = json.dumps({**raw, "server": reference}).replace(json.dumps(reference), reference)
-        with pytest.raises(ValueError, match="Invalid ov.conf"):
-            preview_config_file(content)
-        with pytest.raises(ValueError, match="Invalid ov.conf"):
-            save_config_file(content, revision)
-        assert path.read_bytes() == original
-
-
-@pytest.mark.parametrize("kind", ["vlm", "embedding"])
-@pytest.mark.parametrize("explicit_ids", [False, True])
-def test_unquoted_credential_references_survive_transport_and_reordering(
-    config_file, monkeypatch, kind, explicit_ids
-):
-    path, raw = config_file
-    monkeypatch.setenv("STUDIO_JSON_KEY", '"resolved-secret"')
-    section = raw["vlm"] if kind == "vlm" else raw["embedding"]["dense"]
-    section["credentials"] = [
-        {"id": "first", "provider": "openai", "api_key": "${STUDIO_JSON_KEY}"},
-        {"id": "second", "provider": "openai", "api_key": "literal-key"},
-    ]
-    if not explicit_ids:
-        for credential in section["credentials"]:
-            credential.pop("id")
-    content = json.dumps(raw).replace('"${STUDIO_JSON_KEY}"', "${STUDIO_JSON_KEY}")
-    path.write_text(content)
-    loaded = read_config_file()
-    assert "resolved-secret" not in json.dumps(loaded)
-    model = json.loads(json.dumps(loaded["models"][kind]["config"]))
-    model_section = model if kind == "vlm" else model["dense"]
-    model_section["credentials"].reverse()
-    draft = preview_config_file(content, {kind: model})
-    assert '"api_key": ${STUDIO_JSON_KEY}' in draft["content"]
-    save_config_file(draft["content"], loaded["revision"])
-    config = OpenVikingConfigSingleton._load_from_file(str(path))
-    current = config.vlm if kind == "vlm" else config.embedding.dense
-    assert current.credentials[1].id == ("first" if explicit_ids else "credential-0")
-    assert current.credentials[1].api_key == "resolved-secret"
-
-
-@pytest.mark.parametrize("location", ["vlm", "dense", "credentials", "providers"])
-def test_environment_objects_remain_opaque_and_survive_file_edits(
-    config_file, monkeypatch, location
-):
-    path, raw = config_file
-    model = {"provider": "openai", "model": "gpt-4o", "api_key": "object-secret"}
-    reference = "$STUDIO_MODEL_OBJECT"
-    kind = "embedding" if location == "dense" else "vlm"
-    if location == "vlm":
-        supplied = model
-        raw["vlm"] = reference
-    elif location == "dense":
-        supplied = {**model, "dimension": 1024}
-        raw["embedding"]["dense"] = reference
-    elif location == "credentials":
-        supplied = [model]
-        raw["vlm"]["credentials"] = reference
-    else:
-        supplied = {"openai": {"api_key": "object-secret"}}
-        raw["vlm"].pop("api_key")
-        raw["vlm"]["providers"] = reference
-    monkeypatch.setenv("STUDIO_MODEL_OBJECT", json.dumps(supplied))
-    content = json.dumps(raw).replace(json.dumps(reference), reference)
-    path.write_text(content)
-    OpenVikingConfigSingleton.initialize(config_path=str(path))
-
-    loaded = read_config_file()
-    assert loaded["models"][kind]["environment_references"] == [reference]
-    assert loaded["models"][kind]["config"] == {}
-    assert "object-secret" not in json.dumps(loaded)
-    assert not loaded["restart_required"]
-    assert preview_config_file(content)["models"] == loaded["models"]
-    with pytest.raises(ValueError, match="require file editing"):
-        _save_form({kind: {"timeout": 42}}, loaded["revision"])
-    assert path.read_text() == content
-
-    draft = preview_config_file(content.replace('"jev-latest"', '"jev-new"'))
-    assert f'"{location}": {reference}' in draft["content"]
-    assert "object-secret" not in draft["content"]
-    save_config_file(draft["content"], loaded["revision"])
-    assert path.read_text() == draft["content"]
-    assert OpenVikingConfigSingleton._load_from_file(str(path)).rerank.model == "jev-new"
-
-
 @pytest.mark.parametrize("binding_model", [None, "explicit-model"])
 def test_shared_vlm_model_changes_preserve_inheritance_and_explicit_overrides(
     config_file, binding_model
@@ -584,78 +337,111 @@ def test_shared_vlm_model_changes_preserve_inheritance_and_explicit_overrides(
     config = OpenVikingConfigSingleton._load_from_file(str(path))
     assert config.vlm.model == "new-model"
     assert config.vlm.credentials[0].model == binding_model
-    assert config.vlm.credentials[0].api_key == "resolved-secret"
+    assert config.vlm.credentials[0].api_key == "dummy-review-key"
     assert json.loads(path.read_text())["embedding"] == raw["embedding"]
 
 
 @pytest.mark.parametrize(
-    "kind,field,nested",
+    "fragment,environment",
     [
-        ("vlm", "extra_headers", {"Authorization": "$STUDIO_NESTED_REFERENCE"}),
-        ("vlm", "extra_request_body", {"routing": {"values": ["$STUDIO_NESTED_REFERENCE"]}}),
-        ("embedding", "extra_headers", {"Authorization": "$STUDIO_NESTED_REFERENCE"}),
+        ('"api_key": "${STUDIO_TEST_KEY}"', {"STUDIO_TEST_KEY": "secret-from-env"}),
+        ('"api_key": $STUDIO_TEST_KEY', {"STUDIO_TEST_KEY": '"secret-from-env"'}),
+        ('"api_key": "dummy-key", "thinking": ${STUDIO_THINKING}', {"STUDIO_THINKING": "true"}),
+        (
+            '"credentials": $STUDIO_CREDENTIALS',
+            {"STUDIO_CREDENTIALS": '[{"provider":"openai","api_key":"secret-from-env"}]'},
+        ),
+        (r'"api_key": "\u0024STUDIO_TEST_KEY"', {"STUDIO_TEST_KEY": "secret-from-env"}),
     ],
 )
-def test_nested_unquoted_references_survive_form_transport_and_reordering(
-    config_file, monkeypatch, kind, field, nested
+def test_environment_files_are_form_readonly_and_saved_verbatim(
+    config_file, monkeypatch, fragment, environment
 ):
-    path, raw = config_file
-    monkeypatch.setenv("STUDIO_NESTED_REFERENCE", '"Bearer test-value"')
-    section = raw["vlm"] if kind == "vlm" else raw["embedding"]["dense"]
-    section["credentials"] = [
-        {"id": "first", "provider": "openai", field: nested},
-        {"id": "second", "provider": "openai", field: {"literal": "keep"}},
-    ]
-    content = json.dumps(raw).replace('"$STUDIO_NESTED_REFERENCE"', "$STUDIO_NESTED_REFERENCE")
+    path, _ = config_file
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    content = '{\n  "vlm": {"model": "gpt-4o", "provider": "openai", ' + fragment + "}\n}\n"
     path.write_text(content)
     loaded = read_config_file()
-    model = json.loads(json.dumps(loaded["models"][kind]["config"]))
-    projected_section = model if kind == "vlm" else model["dense"]
-    projected_section["credentials"].reverse()
-    changes = (
-        {**model, "timeout": 42}
-        if kind == "vlm"
-        else {"dense": {"credentials": projected_section["credentials"]}}
-    )
-    draft = preview_config_file(content, {kind: changes})
-    assert "$STUDIO_NESTED_REFERENCE" in draft["content"]
-    assert '"$STUDIO_NESTED_REFERENCE"' not in draft["content"]
-    save_config_file(draft["content"], loaded["revision"])
-    config = OpenVikingConfigSingleton._load_from_file(str(path))
-    current = config.vlm if kind == "vlm" else config.embedding.dense
-    assert current.credentials[1].id == "first"
-    expected = {"Authorization": "Bearer test-value"}
-    if field == "extra_request_body":
-        expected = {"routing": {"values": ["Bearer test-value"]}}
-    assert getattr(current.credentials[1], field) == expected
-    assert getattr(current.credentials[0], field) == {"literal": "keep"}
+    assert loaded["content"] == content
+    assert loaded["form_readonly"] is True
+    assert loaded["models"] == {kind: {"config": {}} for kind in ("vlm", "embedding")}
+    assert "secret-from-env" not in json.dumps(loaded)
+    with pytest.raises(ValueError, match="requires file editing"):
+        preview_config_file(content, {"vlm": {"temperature": 0.7}})
+    edited = content.replace('"gpt-4o"', '"gpt-4o-mini"')
+    preview = preview_config_file(edited)
+    assert preview["content"] == edited and preview["form_readonly"]
+    save_config_file(edited, loaded["revision"])
+    assert path.read_bytes() == edited.encode()
+    runtime = OpenVikingConfigSingleton._load_from_file(str(path))
+    if "\\u0024" in content:
+        assert runtime.vlm.credentials[0].api_key == "$STUDIO_TEST_KEY"
 
 
-@pytest.mark.parametrize("provider", ["OpenAI", " OpenAI "])
-@pytest.mark.parametrize("explicit", [False, True])
-def test_normalized_provider_references_survive_unrelated_form_edits(
-    config_file, monkeypatch, provider, explicit
-):
+def test_non_model_environment_reference_blocks_form_edits(config_file, monkeypatch):
     path, raw = config_file
-    monkeypatch.setenv("STUDIO_PROVIDER_REFERENCE", provider)
-    if explicit:
-        raw["vlm"]["credentials"] = [
-            {"provider": "${STUDIO_PROVIDER_REFERENCE}", "api_key": "${STUDIO_TEST_KEY}"}
-        ]
-    else:
-        raw["vlm"]["provider"] = "${STUDIO_PROVIDER_REFERENCE}"
-    path.write_text(json.dumps(raw))
+    monkeypatch.setenv("STUDIO_PORT", "1933")
+    content = json.dumps(raw)[:-1] + ', "server": {"port": $STUDIO_PORT}}'
+    path.write_text(content)
+    assert read_config_file()["form_readonly"]
+    with pytest.raises(ValueError, match="requires file editing"):
+        preview_config_file(content, {"vlm": {"timeout": 42}})
+
+
+def test_invalid_environment_file_cannot_replace_disk(config_file, monkeypatch):
+    path, _ = config_file
+    original = path.read_bytes()
+    revision = read_config_file()["revision"]
+    monkeypatch.setenv("STUDIO_PORT", "not-json")
+    with pytest.raises(ValueError):
+        save_config_file('{"server":{"port":$STUDIO_PORT}}', revision)
+    assert path.read_bytes() == original
+
+
+def test_form_cannot_introduce_environment_references(config_file):
+    path, _ = config_file
+    with pytest.raises(ValueError, match="file editor"):
+        preview_config_file(path.read_text(), {"vlm": {"api_key": "${NEW_KEY}"}})
+
+
+def test_file_mode_preserves_bom_and_formatting(config_file):
+    path, raw = config_file
+    content = "\ufeff" + json.dumps(raw, indent=4) + "\r\n"
+    path.write_bytes(content.encode())
     loaded = read_config_file()
-    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
-    assert model["credentials"][0]["provider"] == "${STUDIO_PROVIDER_REFERENCE}"
-    assert loaded["models"]["vlm"]["resolved_providers"]["${STUDIO_PROVIDER_REFERENCE}"] == "openai"
+    assert loaded["content"] == content
+    assert preview_config_file(content)["content"] == content
+    save_config_file(content, loaded["revision"])
+    assert path.read_bytes() == content.encode()
+
+
+def test_literal_form_save_preserves_other_sections_and_private_backup(config_file):
+    path, raw = config_file
+    loaded = read_config_file()
+    assert loaded["writable"] and not loaded["restart_required"]
+    assert not loaded["form_readonly"]
+    _save_form({"vlm": {"timeout": 42}}, loaded["revision"])
+    saved = json.loads(path.read_text())
+    assert saved == {**raw, "vlm": {**raw["vlm"], "timeout": 42}}
+    backup = path.with_name(path.name + ".studio.bak")
+    assert json.loads(backup.read_text()) == raw
+    if sys.platform != "win32":
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert OpenVikingConfigSingleton.get_instance().vlm.timeout != 42
+
+
+def test_literal_legacy_backup_bindings_remain_distinct(config_file):
+    path, raw = config_file
+    raw["vlm"]["backup"] = {"provider": "openai", "model": "gpt-4o-mini", "api_key": "backup-key"}
+    content = json.dumps(raw)
+    model = preview_config_file(content)["models"]["vlm"]["config"]
     model["timeout"] = 42
-    draft = preview_config_file(loaded["content"], {"vlm": model})
-    save_config_file(draft["content"], loaded["revision"])
-    assert json.loads(path.read_text())["vlm"]["credentials"][0]["provider"] == (
-        "${STUDIO_PROVIDER_REFERENCE}"
-    )
-    monkeypatch.setenv("STUDIO_PROVIDER_REFERENCE", "volcengine")
-    config = OpenVikingConfigSingleton._load_from_file(str(path))
-    assert config.vlm.credentials[0].provider == "volcengine"
-    assert config.vlm.timeout == 42
+    draft = preview_config_file(content, {"vlm": model})
+    from openviking.config.config_file import _validate
+
+    runtime = _validate(draft["content"])
+    assert [binding.api_key for binding in runtime.vlm.credentials] == [
+        "dummy-review-key",
+        "backup-key",
+    ]

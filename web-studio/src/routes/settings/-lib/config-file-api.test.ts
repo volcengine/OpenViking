@@ -1,6 +1,10 @@
 import axios from 'axios'
 import { afterEach, expect, it, vi } from 'vitest'
-import { createConfigFileApi, embeddingPatch } from './config-file-api'
+import {
+  createConfigFileApi,
+  embeddingPatch,
+  isConfigFileObject,
+} from './config-file-api'
 import type { InternalAxiosRequestConfig } from 'axios'
 
 afterEach(() => vi.restoreAllMocks())
@@ -124,7 +128,6 @@ it.each([
   ['[${PORT}]', false],
   ['null', false],
 ])('checks startup-file object syntax for %s', async (content, valid) => {
-  const { isConfigFileObject } = await import('./config-file-api')
   expect(isConfigFileObject(content)).toBe(valid)
 })
 it('waits for a different instance and tolerates temporary connection failures', async () => {
@@ -170,4 +173,10 @@ it('does not report success when the original instance stays reachable', async (
   } finally {
     vi.useRealTimers()
   }
+})
+
+it('accepts a verbatim file draft with a UTF-8 BOM', () => {
+  expect(isConfigFileObject('\ufeff{"server":{"port":${STUDIO_PORT}}}')).toBe(
+    true,
+  )
 })
