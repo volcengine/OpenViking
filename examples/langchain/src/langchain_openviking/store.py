@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         GetOp,
         Item,
         ListNamespacesOp,
+        MatchCondition,
         PutOp,
         SearchItem,
         SearchOp,
@@ -40,6 +41,7 @@ else:
             GetOp,
             Item,
             ListNamespacesOp,
+            MatchCondition,
             PutOp,
             SearchItem,
             SearchOp,
@@ -47,7 +49,7 @@ else:
     except ImportError:  # pragma: no cover - exercised by optional import path
         _LANGGRAPH_IMPORT_ERROR = missing_dependency("langgraph", "langgraph")
         BaseStore = object
-        GetOp = PutOp = SearchOp = ListNamespacesOp = object
+        GetOp = PutOp = SearchOp = ListNamespacesOp = MatchCondition = object
         Item = SearchItem = object
 
 logger = logging.getLogger(__name__)
@@ -126,11 +128,9 @@ class OpenVikingStore(BaseStore):
                     )
                 )
             elif isinstance(op, ListNamespacesOp):
-                prefix, suffix = self._match_conditions_to_prefix_suffix(op.match_conditions)
                 results.append(
-                    self.list_namespaces(
-                        prefix=prefix,
-                        suffix=suffix,
+                    self._list_namespaces(
+                        op.match_conditions,
                         max_depth=op.max_depth,
                         limit=op.limit,
                         offset=op.offset,
@@ -216,15 +216,38 @@ class OpenVikingStore(BaseStore):
         limit: int = 100,
         offset: int = 0,
     ) -> list[tuple[str, ...]]:
+        conditions = []
+        if prefix:
+            conditions.append(MatchCondition("prefix", prefix))
+        if suffix:
+            conditions.append(MatchCondition("suffix", suffix))
+        return self._list_namespaces(conditions, max_depth=max_depth, limit=limit, offset=offset)
+
+    def _list_namespaces(
+        self,
+        match_conditions: Iterable[Any] | None,
+        *,
+        max_depth: int | None,
+        limit: int,
+        offset: int,
+    ) -> list[tuple[str, ...]]:
+        conditions = tuple(match_conditions or ())
+        scan_prefix: tuple[str, ...] = ()
+        for condition in conditions:
+            if condition.match_type == "prefix":
+                path = tuple(condition.path)
+                literal_prefix = path[: path.index("*")] if "*" in path else path
+                if len(literal_prefix) > len(scan_prefix):
+                    scan_prefix = literal_prefix
+
         namespaces = set()
-        for uri in self._all_data_uris(prefix or ()):
+        # Wildcards match namespace labels, never physical URI path segments.
+        for uri in self._all_data_uris(scan_prefix):
             parsed = self._parse_data_uri(uri)
             if parsed is None:
                 continue
             namespace, _key = parsed
-            if prefix and not _tuple_matches_prefix(namespace, prefix):
-                continue
-            if suffix and not _tuple_matches_suffix(namespace, suffix):
+            if not all(_namespace_matches(namespace, condition) for condition in conditions):
                 continue
             if max_depth is not None and len(namespace) > max_depth:
                 namespace = namespace[:max_depth]
@@ -419,20 +442,6 @@ class OpenVikingStore(BaseStore):
             score=score,
         )
 
-    def _match_conditions_to_prefix_suffix(
-        self, conditions: Iterable[Any] | None
-    ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
-        prefix = None
-        suffix = None
-        for condition in conditions or []:
-            match_type = getattr(condition, "match_type", None)
-            path = tuple(getattr(condition, "path", ()) or ())
-            if match_type == "prefix":
-                prefix = path
-            elif match_type == "suffix":
-                suffix = path
-        return prefix, suffix
-
 
 def _segment(value: str) -> str:
     return quote(str(value), safe="")
@@ -595,9 +604,16 @@ def _safe_ordered_compare(actual: Any, target: Any, compare) -> bool:
         return False
 
 
-def _tuple_matches_prefix(value: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
-    return len(value) >= len(prefix) and value[: len(prefix)] == prefix
-
-
-def _tuple_matches_suffix(value: tuple[str, ...], suffix: tuple[str, ...]) -> bool:
-    return len(value) >= len(suffix) and value[-len(suffix) :] == suffix
+def _namespace_matches(value: tuple[str, ...], condition: Any) -> bool:
+    path = condition.path
+    if len(value) < len(path):
+        return False
+    if condition.match_type == "prefix":
+        selected = value[: len(path)]
+    elif condition.match_type == "suffix":
+        selected = value[-len(path) :] if path else ()
+    else:
+        raise ValueError(f"Unsupported match type: {condition.match_type}")
+    return all(
+        pattern == "*" or actual == pattern for actual, pattern in zip(selected, path, strict=False)
+    )
