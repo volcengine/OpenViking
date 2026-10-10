@@ -132,6 +132,7 @@ async def write_stored_links(
             file_links[link.to_uri]["backlinks"].append(link)
 
     updated_uris: List[str] = []
+    failures: List[Tuple[str, Exception]] = []
     for uri, link_groups in file_links.items():
         try:
             content = await viking_fs.read_file(uri, ctx=ctx)
@@ -156,7 +157,19 @@ async def write_stored_links(
             )
             updated_uris.append(uri)
         except Exception as e:
-            tracer.error(f"Failed to apply links to {uri}: {e}")
+            failures.append((uri, e))
+            logger.debug(f"Failed to apply links to {uri}: {e}")
+    if failures:
+        # Link writes are best-effort, but silent per-URI ERROR spam with no
+        # aggregated signal hides systemic lock contention (#5648).  Surface one
+        # countable warning; per-endpoint details stay at debug level above.
+        logger.warning(
+            "write_stored_links: failed to apply links for %d/%d endpoint(s) "
+            "(skipped, best-effort): %s",
+            len(failures),
+            len(file_links),
+            ", ".join(f"{uri}: {error}" for uri, error in failures),
+        )
     return updated_uris
 
 
@@ -1573,13 +1586,65 @@ class MemoryUpdater:
             if context_type_for_uri(uri) != "memory"
         }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
-        await write_stored_links(
+        updated_uris = await self._write_links_with_endpoint_locks(
             resolved_links,
+            skip,
             ctx,
             viking_fs,
-            skip_uris=skip,
-            lease_ref=lease_ref,
+            lease_ref,
         )
+        # Honor the write_stored_links return-value contract: only endpoints that
+        # were successfully rewritten count as link-only edits (mirrors the
+        # streaming path's add_edited handling).
+        for uri in dict.fromkeys(updated_uris):
+            result.add_edited(uri)
+
+    @staticmethod
+    async def _write_links_with_endpoint_locks(
+        resolved_links: List[StoredLink],
+        skip: set[str],
+        ctx: RequestContext,
+        viking_fs: Any,
+        lease_ref: Any = None,
+    ) -> List[str]:
+        """Write stored links with endpoint pathlocks pre-acquired up front.
+
+        Without a pre-acquired lease every write races an auto-pathlock whose
+        default timeout is 0ms, so concurrent commits fail the whole batch
+        immediately (#5648).  Mirrors the streaming updater: acquire exact locks
+        for all endpoints in one batch with the streaming apply timeout, pass the
+        lease to write_stored_links, and release it in ``finally``.
+
+        When the caller already holds a transaction lease (which covers link
+        endpoints per ``acquire_memory_operation_lease``), it stays authoritative
+        and no second lease is acquired — re-acquiring paths held by the caller's
+        own transaction would self-deadlock until the timeout.
+        """
+        from openviking.session.memory.streaming_memory_updater import (
+            _MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+            _link_endpoint_uri_set,
+            _uri_lock_paths,
+        )
+
+        endpoint_uris = _link_endpoint_uri_set(resolved_links) - set(skip or set())
+        lock_paths = _uri_lock_paths(endpoint_uris, viking_fs, ctx)
+        batch_lease = None
+        if not lease_ref and lock_paths:
+            batch_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                lock_paths,
+                timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+            )
+        try:
+            return await write_stored_links(
+                resolved_links,
+                ctx,
+                viking_fs,
+                skip_uris=skip,
+                lease_ref=batch_lease or lease_ref,
+            )
+        finally:
+            if batch_lease is not None:
+                await viking_fs._async_agfs.pathlock_release(batch_lease)
 
     async def _inherit_deleted_link_relations(
         self,
