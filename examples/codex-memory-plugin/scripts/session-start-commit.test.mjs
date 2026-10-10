@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { expectExit, readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { enqueue } from "./shared/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -207,6 +207,148 @@ test("startup injects the shared profile block with workspace peer routing", asy
   } finally {
     await rm(stateDir, { recursive: true, force: true });
     await rm(repo, { recursive: true, force: true });
+  }
+});
+
+for (const source of ["startup", "clear", "resume"]) {
+  test(`${source} leaves the current session's state untouched while another writer holds its lock`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-current-pin-lock-"));
+    const id = `locked-current-${source}`;
+    const path = join(stateDir, `${id}.json`);
+    const original = JSON.stringify({
+      codexSessionId: id,
+      ovSessionId: `cx-${id}`,
+      workspacePeerId: "previous-workspace",
+      peerPinVersion: 3,
+      transcriptPath: "previous-rollout.jsonl",
+      capturedTurnCount: 4,
+      captureFormatVersion: 2,
+      createdAt: Date.now() - 2_000,
+      lastUpdatedAt: Date.now() - 1_000,
+    });
+    try {
+      await writeFile(path, original);
+      const lock = join(stateDir, `${id}.lock`);
+      await mkdir(lock);
+      await writeFile(join(lock, "owner"), "another-active-writer");
+      await withMockOpenViking(profileHandler([]), async (baseUrl) => {
+        await runSessionStart({ session_id: id, source, cwd: stateDir }, {
+          ...baseEnv(baseUrl, stateDir),
+          OPENVIKING_NO_AUTO_INJECT: "1",
+          OPENVIKING_RESUME_ARCHIVE_INJECT: "0",
+        });
+      });
+      assert.equal(await readFile(path, "utf-8"), original,
+        "peer initialization must not save a state snapshot owned by another writer");
+      assert.equal(await readFile(join(lock, "owner"), "utf-8"), "another-active-writer");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("startup in a different workspace preserves an active capture's pin and cursor", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-current-capture-lock-"));
+  const newWorkspace = join(stateDir, "new-workspace");
+  const id = "current-capture";
+  const path = join(stateDir, `${id}.json`);
+  const transcript = join(stateDir, "rollout.jsonl");
+  const oldPeer = "previous-workspace";
+  const original = JSON.stringify({
+    codexSessionId: id,
+    ovSessionId: null,
+    workspacePeerId: oldPeer,
+    peerPinVersion: 3,
+    transcriptPath: transcript,
+    capturedTurnCount: 0,
+    captureFormatVersion: 2,
+    createdAt: Date.now(),
+    lastUpdatedAt: Date.now(),
+  });
+  const requests = [];
+  const captured = [];
+  let releaseHealth;
+  const healthReleased = new Promise((resolve) => { releaseHealth = resolve; });
+  let captureStarted;
+  const started = new Promise((resolve) => { captureStarted = resolve; });
+  let firstHealth = true;
+  let capture;
+  try {
+    await mkdir(join(newWorkspace, ".git"), { recursive: true });
+    await writeFile(join(newWorkspace, ".git", "config"),
+      '[remote "origin"]\n\turl = git@github.com:acme/new-workspace.git\n');
+    await writeFile(path, original);
+    await writeFile(transcript, [
+      { payload: { message: { role: "user", content: "remember this capture preference" } } },
+      { payload: { message: { role: "assistant", content: "Preference recorded." } } },
+    ].map((entry) => JSON.stringify(entry)).join("\n"));
+    const fallback = profileHandler(requests);
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health" && firstHealth) {
+        firstHealth = false;
+        captureStarted();
+        await healthReleased;
+        writeJson(res, { status: "ok", result: { healthy: true } });
+      } else if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        captured.push({ body: await readRequestBody(req), actorPeerId: req.headers["x-openviking-actor-peer"] });
+        writeJson(res, { status: "ok", result: { ok: true } });
+      } else if (req.method === "GET" && url.pathname === `/api/v1/sessions/cx-${id}`) {
+        writeJson(res, { status: "ok", result: { pending_tokens: 0 } });
+      } else {
+        await fallback(req, res);
+      }
+    }, async (baseUrl) => {
+      const env = {
+        ...baseEnv(baseUrl, stateDir),
+        OPENVIKING_WRITE_PATH_ASYNC: "0",
+        OPENVIKING_AUTO_CAPTURE: "1",
+        OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+        OPENVIKING_CAPTURE_TIMEOUT_MS: "10000",
+      };
+      const input = { session_id: id, transcript_path: transcript, cwd: newWorkspace };
+      capture = runHookScript(join(SCRIPT_DIR, "auto-capture.mjs"), { input, env });
+      try {
+        let readyTimer;
+        try {
+          await Promise.race([
+            started,
+            capture.then((result) => {
+              throw new Error(`capture exited before reaching health: ${result.code}; ${result.stderr.trim()}`);
+            }),
+            new Promise((_, reject) => {
+              readyTimer = setTimeout(() => reject(new Error("capture did not reach health within the fixture deadline")), 10_000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(readyTimer);
+        }
+        const { output } = await runSessionStart({ session_id: id, source: "startup", cwd: newWorkspace }, env);
+        assert.ok(output.hookSpecificOutput?.additionalContext, "busy peer pin must not disable profile injection");
+        assert.equal(await readFile(path, "utf-8"), original,
+          "startup must leave the active capture's complete state untouched");
+        releaseHealth();
+        expectExit(await capture);
+        const state = JSON.parse(await readFile(path, "utf-8"));
+        assert.equal(state.capturedTurnCount, 2);
+        assert.equal(state.workspacePeerId, oldPeer);
+        assert.equal(state.transcriptPath, transcript);
+        expectExit(await runHookScript(join(SCRIPT_DIR, "auto-capture.mjs"), { input, env }));
+        assert.equal(captured.flatMap((call) => call.body.messages).length, 2,
+          "the next capture must not replay the already persisted turns");
+        assert.ok(captured.every((call) => call.actorPeerId === oldPeer), "capture keeps its existing session pin");
+        const profileReads = requests.filter((request) => request.path === "/api/v1/content/read");
+        assert.ok(profileReads.length > 0 && profileReads.every((request) => request.actorPeerId && request.actorPeerId !== oldPeer),
+          "startup profile injection still uses the new workspace peer");
+      } finally {
+        releaseHealth();
+        await capture;
+      }
+    });
+  } finally {
+    releaseHealth();
+    if (capture) await capture;
+    await rm(stateDir, { recursive: true, force: true });
   }
 });
 

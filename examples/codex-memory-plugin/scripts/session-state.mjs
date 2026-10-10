@@ -14,7 +14,7 @@
  *     timestamp is in the name so a conditional removal always targets an
  *     immutable path and can never delete a marker written by a later exit.
  *   - `<safeId>.lock`  — an exclusive mkdir lock serializing the writers
- *     (Stop worker, PreCompact, SessionEnd worker, SessionStart sweep) that
+ *     (Stop worker, PreCompact, SessionEnd worker, SessionStart peer pin and sweep) that
  *     all persist the whole state object. A stale lock is taken over in place,
  *     by claiming the `owner` file inside it.
  *

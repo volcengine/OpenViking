@@ -340,11 +340,18 @@ runHookStage({
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (!bypassed && newSessionId !== "unknown") {
-    const state = await loadState(newSessionId);
-    await saveState({
-      ...state,
-      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
-    });
+    // Peer initialization is a whole-state write, just like capture. Load only
+    // after taking the lock so a pending worker's transcript cursor survives.
+    const outcome = await withSessionLock(newSessionId, async () => {
+      const state = await loadState(newSessionId);
+      await saveState({
+        ...state,
+        workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      });
+    }, { waitMs: 0 });
+    if (outcome.skipped) {
+      log("skip", { stage: "peer_pin", reason: "current session locked by another writer" });
+    }
   }
   log("start", {
     source,
