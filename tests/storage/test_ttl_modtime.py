@@ -40,6 +40,38 @@ def test_priority_and_projection():
     ]
 
 
+
+@pytest.mark.parametrize("root", [
+    ROOT,
+    "viking://user/default/peers/peer/memories/events",
+    "viking://user/default/sessions",
+])
+def test_policy_root_has_no_object_deadline(root):
+    cfg = TTLConfig.model_validate({"global": {"mode": "days", "ttl_days": 30}})
+    tags = indexed_tags(root, [], level=0)
+    assert tags == ["__ov_ttl_scope=container"]
+    row = {"uri": root, "level": 0, "created_at": NOW.isoformat(), "updated_at": NOW.isoformat()}
+    assert project_results([row], cfg) == [row]
+    assert "expires_at" not in row
+    assert "ttl_status" not in row
+
+
+@pytest.mark.asyncio
+async def test_session_parent_summary_is_not_a_session(indexed_fs):
+    fs, backend = indexed_fs
+    ctx = root_ctx()
+    root = "viking://user/default/sessions"
+    for uri in (root, root + "/one"):
+        await backend.upsert({
+            "id": uri, "uri": uri, "account_id": ctx.account_id, "level": 0,
+            "vector": [0.1, 0.2, 0.3, 0.4], "created_at": NOW.isoformat(),
+            "updated_at": NOW.isoformat(),
+        }, ctx=ctx)
+    cfg = TTLConfig.model_validate({"sessions": {"mode": "days", "ttl_days": 30}})
+    rows = await backend.filter(filter=query_filter(cfg, NOW), limit=10, ctx=ctx)
+    assert [row["uri"] for row in rows] == [root + "/one"]
+
+
 @pytest.mark.asyncio
 async def test_real_filter_before_top_k(indexed_fs):
     fs, backend = indexed_fs
