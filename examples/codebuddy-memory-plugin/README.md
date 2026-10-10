@@ -105,8 +105,8 @@ codebuddy --plugin-dir examples/codebuddy-memory-plugin
 `--plugin-dir` is session-scoped: nothing is written to any CodeBuddy
 configuration, and dropping the flag leaves no trace — except the plugin's own
 state under `~/.codebuddy/plugins/data/<id>-inline/`. For a persistent install,
-add the local marketplace under `examples/codebuddy-memory-plugin-marketplace`
-and install it into the user scope:
+add the marketplace at `examples/` (it declares `./codebuddy-memory-plugin`) and
+install it into the user scope:
 
 ```bash
 codebuddy plugin marketplace add examples
