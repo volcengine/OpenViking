@@ -727,7 +727,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `api_key` | str | API Key。自定义 `openai` `api_base` 通过请求头鉴权或无需 key 时可省略；`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
 | `api_base` | str | API 端点（可选） |
@@ -795,6 +795,24 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
     "extra_headers": {
       "HTTP-Referer": "https://your-site.com",
       "X-OpenRouter-Title": "Your App Name"
+    }
+  }
+}
+```
+
+自定义 `openai` 端点完全通过 `extra_headers` 鉴权时，可以省略 `api_key`。OpenAI SDK 要求非空值，因此 OpenViking 会向 SDK 提供 `no-key` 占位符。端点必须忽略这个占位 Bearer 凭据，或通过 `extra_headers` 替换 `Authorization`。未配置 `api_base` 的公共 OpenAI 端点仍要求 `api_key`。
+
+例如，受 service token Access 策略保护的 Cloudflare AI Gateway 自定义域名可以配置为：
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "api_base": "https://ai.example.com/openai",
+    "extra_headers": {
+      "CF-Access-Client-Id": "your-access-client-id",
+      "CF-Access-Client-Secret": "your-access-client-secret"
     }
   }
 }

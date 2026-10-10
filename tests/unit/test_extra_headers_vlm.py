@@ -853,6 +853,101 @@ class TestVLMConfigExtraHeaders:
         }
 
 
+class TestVLMCustomEndpointAuthentication:
+    """Test keyless custom endpoints that authenticate outside Bearer auth."""
+
+    @pytest.mark.parametrize(
+        "config_data",
+        [
+            {
+                "provider": "openai",
+                "api_base": "https://gateway.example.com/v1",
+                "extra_headers": {"X-Gateway-Key": "gateway-secret"},
+            },
+            {
+                "providers": {
+                    "openai": {
+                        "api_base": "https://gateway.example.com/v1",
+                        "extra_headers": {"X-Gateway-Key": "gateway-secret"},
+                    }
+                }
+            },
+            {
+                "credentials": [
+                    {
+                        "provider": "openai",
+                        "api_base": "https://gateway.example.com/v1",
+                        "extra_headers": {"X-Gateway-Key": "gateway-secret"},
+                    }
+                ]
+            },
+        ],
+    )
+    def test_custom_openai_endpoint_allows_missing_api_key(self, config_data):
+        config = VLMConfig(model="gateway-model", **config_data)
+
+        assert config.is_available()
+        assert config.credentials[0].provider == "openai"
+        assert config.credentials[0].api_key is None
+        assert config.credentials[0].api_base == "https://gateway.example.com/v1"
+
+    def test_keyless_custom_endpoint_can_be_selected_from_multiple_providers(self):
+        config = VLMConfig(
+            model="gateway-model",
+            providers={
+                "openai": {"api_base": "https://gateway.example.com/v1"},
+                "volcengine": {"api_key": "volcengine-key"},
+            },
+        )
+
+        assert config.credentials[0].provider == "openai"
+        assert config.is_available()
+
+    @pytest.mark.parametrize("api_base", [None, "", "   "])
+    def test_default_openai_still_requires_api_key(self, api_base):
+        with pytest.raises(ValueError, match="requires 'api_key' to be set"):
+            VLMConfig(provider="openai", model="gpt-4o-mini", api_base=api_base)
+
+    @pytest.mark.parametrize("provider", ["azure", "volcengine", "kimi", "glm"])
+    def test_other_providers_still_require_api_key(self, provider):
+        with pytest.raises(ValueError, match="requires 'api_key' to be set"):
+            VLMConfig(
+                provider=provider,
+                model="provider-model",
+                api_base="https://gateway.example.com/v1",
+            )
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncOpenAI")
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_custom_endpoint_reaches_clients_with_headers_and_placeholder_key(
+        self, mock_openai_class, mock_async_openai_class
+    ):
+        sync_client = MagicMock()
+        async_client = MagicMock()
+        mock_openai_class.return_value = sync_client
+        mock_async_openai_class.return_value = async_client
+        headers = {
+            "CF-Access-Client-Id": "client-id",
+            "CF-Access-Client-Secret": "client-secret",
+        }
+        config = VLMConfig(
+            provider="openai",
+            model="gateway-model",
+            api_base="https://gateway.example.com/openai",
+            extra_headers=headers,
+        )
+
+        vlm = config.get_vlm_instance()
+        assert vlm.get_client() is sync_client
+        assert vlm.get_async_client() is async_client
+
+        for constructor in (mock_openai_class, mock_async_openai_class):
+            kwargs = constructor.call_args.kwargs
+            assert kwargs["api_key"] == "no-key"
+            assert kwargs["base_url"] == "https://gateway.example.com/openai"
+            assert kwargs["default_headers"] == headers
+
+
 class TestVLMConfigExtraRequestBody:
     """Test VLMConfig passes extra_request_body to VLM instance config."""
 

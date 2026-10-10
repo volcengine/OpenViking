@@ -24,6 +24,13 @@ def _normalize_provider_name(name: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _openai_endpoint_allows_missing_api_key(
+    provider_name: Optional[str], api_base: Optional[str]
+) -> bool:
+    """Return whether a custom OpenAI-compatible endpoint can own authentication."""
+    return provider_name == "openai" and isinstance(api_base, str) and bool(api_base.strip())
+
+
 def _reject_stream_config(data: Any, location: str) -> None:
     if not isinstance(data, dict):
         return
@@ -58,7 +65,9 @@ def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    id: Optional[str] = RuntimeField(default=None, description="Unique identifier for this credential")
+    id: Optional[str] = RuntimeField(
+        default=None, description="Unique identifier for this credential"
+    )
     provider: Optional[str] = RuntimeField(default=None, description="Provider type")
     model: Optional[str] = RuntimeField(
         default=None,
@@ -313,7 +322,11 @@ class VLMConfig(BaseModel):
                             )
                     elif provider_name not in ("litellm", None) and not cred.api_key:
                         # Also check providers dict for fallback
-                        if not self._get_credential_api_key(cred):
+                        if not self._get_credential_api_key(
+                            cred
+                        ) and not _openai_endpoint_allows_missing_api_key(
+                            provider_name, cred.api_base
+                        ):
                             raise ValueError(
                                 f"Credential {i} ({cred.id or 'unnamed'}): requires 'api_key' to be set"
                             )
@@ -330,7 +343,13 @@ class VLMConfig(BaseModel):
                         raise ValueError(
                             "VLM configuration requires Codex OAuth credentials in ~/.openviking/codex_auth.json or an importable Codex CLI auth file"
                         )
-                elif provider_name != "litellm" and not self._get_effective_api_key():
+                elif (
+                    provider_name != "litellm"
+                    and not self._get_effective_api_key()
+                    and not _openai_endpoint_allows_missing_api_key(
+                        provider_name, self._get_effective_api_base()
+                    )
+                ):
                     raise ValueError("VLM configuration requires 'api_key' to be set")
         return self
 
@@ -563,6 +582,17 @@ class VLMConfig(BaseModel):
             return config["api_key"]
         return None
 
+    def _get_effective_api_base(self) -> str | None:
+        """Get the endpoint selected for the active credential or provider."""
+        if self.credentials:
+            return self.credentials[0].api_base
+        if self.api_base:
+            return self.api_base
+        config, _ = self._match_provider()
+        if config and config.get("api_base"):
+            return config["api_base"]
+        return None
+
     def _get_provider_config_by_name(self, provider_name: str) -> Dict[str, Any]:
         config = dict(self.providers.get(provider_name) or {})
         if self.api_key and "api_key" not in config:
@@ -583,6 +613,8 @@ class VLMConfig(BaseModel):
 
     def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
         if config.get("api_key"):
+            return True
+        if _openai_endpoint_allows_missing_api_key(provider_name, config.get("api_base")):
             return True
         if provider_name == "litellm":
             return True
@@ -830,11 +862,14 @@ class VLMConfig(BaseModel):
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
-        if self._resolve_provider_name() == "openai-codex":
+        provider_name = self._resolve_provider_name()
+        if provider_name == "openai-codex":
             has_codex_auth_available = _load_codex_auth_module().has_codex_auth_available
 
             return bool(self._get_effective_api_key() or has_codex_auth_available())
-        if self._resolve_provider_name() == "litellm":
+        if provider_name == "litellm":
+            return bool(self.model)
+        if _openai_endpoint_allows_missing_api_key(provider_name, self._get_effective_api_base()):
             return bool(self.model)
         return self._get_effective_api_key() is not None
 
