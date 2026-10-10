@@ -3019,6 +3019,38 @@ async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(mo
     assert delete_message.record_ids == ["empty-l2"]
 
 
+@pytest.mark.asyncio
+async def test_direct_index_action_forwards_existing_summary_to_write_vectorizer(monkeypatch):
+    """vectors_only write must preserve the planner's summary_first input."""
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking_cli.session.user_id import UserIdentifier
+
+    vectorize = AsyncMock(return_value=True)
+    monkeypatch.setattr(context_update_execution, "vectorize_resource_file", vectorize)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="Embedding", get_queue=lambda *args, **kwargs: object()),
+    )
+    action = DirectIndexAction(
+        "upsert",
+        "viking://resources/repo/a.md",
+        2,
+        "a-l2",
+        md5="new-md5",
+        summary="existing L2 abstract",
+    )
+
+    await context_update_execution.enqueue_direct_index_actions(
+        (action,),
+        ctx=RequestContext(UserIdentifier("acc", "user"), Role.USER),
+    )
+
+    assert vectorize.await_args.kwargs["summary"] == "existing L2 abstract"
+    assert vectorize.await_args.kwargs["scalar_override"] == {"_record_id": "a-l2"}
+
+
 def test_semantic_message_roundtrip_uses_explicit_plan():
     from openviking.storage.context_update_plan import (
         IndexSlot,

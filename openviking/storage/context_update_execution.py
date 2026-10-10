@@ -108,6 +108,7 @@ async def enqueue_direct_index_actions(
                     **dict(action.upsert_fields),
                     "_record_id": action.record_id,
                 },
+                summary=action.summary,
                 action=action.action.value,
                 field_patch=action.field_patch,
             )
@@ -175,6 +176,7 @@ async def vectorize_resource_file(
     file_md5: str | None = None,
     scalar_override: Optional[dict[str, Any]] = None,
     field_patch: FieldPatch | None = None,
+    summary: str = "",
     action: str = "merge",
 ) -> bool:
     """Enqueue a single file's L2 vector using the standard file text policy.
@@ -194,7 +196,7 @@ async def vectorize_resource_file(
     if parent is None:
         return False
     name = file_uri.rsplit("/", 1)[-1]
-    existing_abstract = str((scalar_override or {}).get("abstract") or "")
+    existing_abstract = str(summary or (scalar_override or {}).get("abstract") or "")
     return await vectorize_file(
         file_path=file_uri,
         summary_dict={"name": name, "summary": existing_abstract},
