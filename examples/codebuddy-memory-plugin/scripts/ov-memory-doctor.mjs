@@ -60,7 +60,7 @@ const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
 // The local development marketplace created alongside this plugin. The id the
 // registry stores is `<name>@<marketplace>`.
 const PLUGIN_NAME = "openviking-memory";
-const MARKETPLACE = "openviking-local";
+const MARKETPLACE = "openviking";
 const PLUGIN_ID = `${PLUGIN_NAME}@${MARKETPLACE}`;
 const CODEBUDDY_DIR = join(homedir(), ".codebuddy");
 const STATE_FILES = ["last-recall.json", "last-capture.json", "daily-stats.json", "server-probe.json"];

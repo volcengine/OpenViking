@@ -92,8 +92,8 @@ codebuddy --plugin-dir examples/codebuddy-memory-plugin
 `~/.codebuddy/plugins/data/<id>-inline/`。要长期生效，加一个本地 marketplace 并装进 user 作用域：
 
 ```bash
-codebuddy plugin marketplace add examples/codebuddy-memory-plugin-marketplace
-codebuddy plugin install openviking-memory@openviking-local --scope user
+codebuddy plugin marketplace add examples
+codebuddy plugin install openviking-memory@openviking --scope user
 ```
 
 ## 测试与诊断
