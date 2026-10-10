@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Mapping, Optional, Union
 from uuid import uuid4
 
 from openviking.storage.index_action import FieldPatch, IndexAction
+from openviking.utils.model_call import current_model_workload
 
 EmbeddingInput = Union[str, List[Dict[str, Any]]]
 
@@ -101,6 +102,9 @@ class EmbeddingMsg:
     id: str = field(default_factory=lambda: str(uuid4()))
     telemetry_id: str = ""
     queue_enqueued_at: float = 0.0
+    model_operation: str = "other"
+    model_deadline_at: float | None = None
+    root_task_id: str = ""
 
     def __init__(
         self,
@@ -113,11 +117,22 @@ class EmbeddingMsg:
         field_modes: Optional[Dict[str, str]] = None,
         initial_fields: Optional[Dict[str, Any]] = None,
         queue_enqueued_at: float = 0.0,
+        model_operation: str | None = None,
+        model_deadline_at: float | None = None,
+        root_task_id: str | None = None,
         *,
         payload: EmbeddingPayload | None = None,
     ) -> None:
         self.id = str(uuid4())
         self.telemetry_id = telemetry_id
+        model_scope = current_model_workload()
+        self.model_operation = model_scope.operation if model_operation is None else model_operation
+        self.model_deadline_at = (
+            model_scope.deadline_at
+            if model_operation is None and model_deadline_at is None
+            else model_deadline_at
+        )
+        self.root_task_id = model_scope.root_task_id if root_task_id is None else str(root_task_id)
         self.queue_enqueued_at = max(float(queue_enqueued_at or 0.0), 0.0)
         self.action = IndexAction(action)
         if payload is not None:
@@ -323,6 +338,15 @@ class EmbeddingMsg:
             "id": self.id,
             "telemetry_id": self.telemetry_id,
             "queue_enqueued_at": self.queue_enqueued_at,
+            **(
+                {"model_operation": self.model_operation} if self.model_operation != "other" else {}
+            ),
+            **(
+                {"model_deadline_at": self.model_deadline_at}
+                if self.model_deadline_at is not None
+                else {}
+            ),
+            **({"root_task_id": self.root_task_id} if self.root_task_id else {}),
             "action": self.action.value,
             "payload": self.payload.to_dict(),
         }
@@ -388,6 +412,9 @@ class EmbeddingMsg:
                 payload=payload,
                 telemetry_id=str(data.get("telemetry_id") or ""),
                 queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
+                model_operation=data.get("model_operation", "other"),
+                model_deadline_at=data.get("model_deadline_at"),
+                root_task_id=data.get("root_task_id", ""),
             )
         else:
             obj = cls(
@@ -400,6 +427,9 @@ class EmbeddingMsg:
                 field_modes=data.get("field_modes"),
                 initial_fields=data.get("initial_fields"),
                 queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
+                model_operation=data.get("model_operation", "other"),
+                model_deadline_at=data.get("model_deadline_at"),
+                root_task_id=data.get("root_task_id", ""),
             )
         obj.id = str(data.get("id") or obj.id)
         return obj

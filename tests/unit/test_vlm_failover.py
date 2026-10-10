@@ -7,10 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.models.vlm.base import (
-    FailoverVLM,
-    PrimaryBackupSwitcher,
-)
+from openviking.models.vlm.base import FailoverVLM, MultiCredentialVLM, PrimaryBackupSwitcher
 from openviking.models.vlm.token_usage import TokenUsageTracker
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -742,6 +739,79 @@ class TestVLMConfigWithBackup:
         # Should be a MultiCredentialVLM instance
         assert hasattr(instance, "_vlm_instances")
         assert len(instance._vlm_instances) == 2
+
+
+def _mock_vlm(name: str) -> Mock:
+    vlm = Mock()
+    vlm.model = name
+    vlm.provider = "openai"
+    vlm.thinking = False
+    vlm.max_retries = 3
+    return vlm
+
+
+@pytest.mark.asyncio
+async def test_multicredential_stream_unknown_error_does_not_switch():
+    primary = _mock_vlm("primary")
+    backup = _mock_vlm("backup")
+    wrapper = MultiCredentialVLM([primary, backup], ["primary", "backup"])
+    calls = []
+
+    async def stream(vlm):
+        calls.append(vlm)
+        raise RuntimeError("opaque provider failure")
+        yield  # pragma: no cover
+
+    with pytest.raises(RuntimeError, match="opaque provider failure"):
+        async for _item in wrapper.stream_with_failover(stream):
+            pass
+
+    assert calls == [primary]
+
+
+@pytest.mark.asyncio
+async def test_multicredential_stream_never_replays_after_visible_output():
+    primary = _mock_vlm("primary")
+    backup = _mock_vlm("backup")
+    wrapper = MultiCredentialVLM([primary, backup], ["primary", "backup"])
+    calls = []
+    output = []
+
+    async def stream(vlm):
+        calls.append(vlm)
+        yield "visible"
+        raise RuntimeError("429 TooManyRequests")
+
+    with pytest.raises(RuntimeError, match="429"):
+        async for item in wrapper.stream_with_failover(stream):
+            output.append(item)
+
+    assert output == ["visible"]
+    assert calls == [primary]
+
+
+@pytest.mark.asyncio
+async def test_multicredential_media_unknown_error_does_not_switch(tmp_path):
+    primary = _mock_vlm("primary")
+    backup = _mock_vlm("backup")
+    primary.supports_media.return_value = True
+    backup.supports_media.return_value = True
+    primary.get_media_completion_async = AsyncMock(
+        side_effect=RuntimeError("opaque provider failure")
+    )
+    backup.get_media_completion_async = AsyncMock(return_value="unexpected replay")
+    wrapper = MultiCredentialVLM([primary, backup], ["primary", "backup"])
+
+    with pytest.raises(RuntimeError, match="opaque provider failure"):
+        await wrapper.get_media_completion_async(
+            prompt="describe",
+            media_path=tmp_path / "missing.mp3",
+            filename="missing.mp3",
+            media_type="audio",
+        )
+
+    primary.get_media_completion_async.assert_awaited_once()
+    backup.get_media_completion_async.assert_not_awaited()
 
 
 class TestPrimaryBackupSwitcher:

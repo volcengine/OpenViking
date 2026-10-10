@@ -15,7 +15,7 @@ from openviking.models.network import (
 )
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
-from openviking.utils.model_retry import retry_async
+from openviking.utils.model_call import model_call
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -120,12 +120,12 @@ class VolcEngineVLM(OpenAIVLM):
                 raise ImportError(
                     "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
                 )
-            kwargs = dict(
-                api_key=self.api_key,
-                base_url=self.api_base,
-                timeout=self.timeout,
-                max_retries=0,
-            )
+            kwargs = {
+                "api_key": self.api_key,
+                "base_url": self.api_base,
+                "timeout": self.timeout,
+                "max_retries": 0,
+            }
             http_client = create_optional_sync_httpx_client(
                 self.api_base,
                 timeout=self.timeout,
@@ -143,12 +143,12 @@ class VolcEngineVLM(OpenAIVLM):
             raise ImportError(
                 "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        kwargs = dict(
-            api_key=self.api_key,
-            base_url=self.api_base,
-            timeout=self.timeout,
-            max_retries=0,
-        )
+        kwargs = {
+            "api_key": self.api_key,
+            "base_url": self.api_base,
+            "timeout": self.timeout,
+            "max_retries": 0,
+        }
         http_client = create_optional_async_httpx_client(
             self.api_base,
             timeout=self.timeout,
@@ -190,6 +190,7 @@ class VolcEngineVLM(OpenAIVLM):
             media_type=media_type,
         )
 
+    @model_call("vlm")
     def get_completion(
         self,
         prompt: str = "",
@@ -232,6 +233,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @model_call("vlm")
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -276,13 +278,9 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
 
-        async def _call() -> Union[str, VLMResponse]:
+        try:
             t0 = time.perf_counter()
-            try:
-                response = await client.chat.completions.create(**kwargs)
-            except Exception as error:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
-                raise
+            response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             result = self._build_vlm_response(response, has_tools=bool(tools))
@@ -292,13 +290,9 @@ class VolcEngineVLM(OpenAIVLM):
             if content:
                 tracer.info(f"message.content={content}")
             return content
-
-        return await retry_async(
-            _call,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name="VolcEngine VLM async completion",
-        )
+        except Exception as e:
+            self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=e)
+            raise
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -414,6 +408,7 @@ class VolcEngineVLM(OpenAIVLM):
         else:
             return {"type": "image_url", "image_url": {"url": image}}
 
+    @model_call("vlm")
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -464,6 +459,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @model_call("vlm")
     async def get_vision_completion_async(
         self,
         prompt: str = "",
