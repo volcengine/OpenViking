@@ -2752,6 +2752,10 @@ class Session:
         tracker = get_task_tracker()
         if tracker.has_work(str(task_id)):
             return False
+        # The predecessor writes .done before releasing its queue work, so a
+        # completion between the pending check above and has_work is visible now.
+        if await self._archives.terminal_state(predecessor_uri) != "pending":
+            return True
 
         error = "Session commit queue work is missing"
         await self._write_failed_marker(

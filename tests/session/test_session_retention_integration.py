@@ -342,6 +342,39 @@ async def test_phase2_defers_live_predecessor_and_skips_missing_queue_work(
     assert not await session._viking_fs.exists(f"{session.uri}/history/archive_001/.failed.json")
 
 
+async def test_predecessor_completing_during_orphan_check_is_not_marked_failed(
+    client,
+    monkeypatch,
+):
+    session = client(session_id="phase2_predecessor_completion_race_test")
+    await session.ensure_exists()
+    first_uri = await _write_archive(
+        session,
+        1,
+        [_text_message("u1", "user", "pending one")],
+        meta={"phase1": {"status": "ready", "queue_message": {"task_id": "task-1"}}},
+        done={},
+    )
+    # The worker writes .done and then releases its queue work; the orphan check
+    # reads the predecessor state just before that and has_work just after.
+    released = False
+    terminal_state = session._archives.terminal_state
+
+    async def state_before_release(uri):
+        return await terminal_state(uri) if released else "pending"
+
+    def has_work(task_id):
+        nonlocal released
+        released = True
+        return False
+
+    monkeypatch.setattr(session._archives, "terminal_state", state_before_release)
+    monkeypatch.setattr(get_task_tracker(), "has_work", has_work)
+
+    assert await session._can_run_archive(2)
+    assert not await session._viking_fs.exists(f"{first_uri}/.failed.json", ctx=session.ctx)
+
+
 async def test_missing_previous_archive_directory_allows_phase2(
     client,
 ):
