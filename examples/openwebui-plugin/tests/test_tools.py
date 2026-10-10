@@ -162,6 +162,38 @@ async def test_ov_session_status_gets_session(client: httpx.AsyncClient) -> None
     assert sent.url.path == "/api/v1/sessions/sess-42"
 
 
+@pytest.mark.parametrize(
+    ("session_id", "encoded_id"),
+    [
+        ("plain-session", "plain-session"),
+        ("会话", "%E4%BC%9A%E8%AF%9D"),
+        ("session space", "session%20space"),
+        ("session.underscore_42", "session.underscore_42"),
+        ("feishu__cli_test__oc_test#om_test", "feishu__cli_test__oc_test%23om_test"),
+        ("session#会话", "session%23%E4%BC%9A%E8%AF%9D"),
+        ("session%23literal", "session%2523literal"),
+        ("session%25literal", "session%2525literal"),
+    ],
+)
+@respx.mock
+async def test_ov_session_status_preserves_literal_id(
+    client: httpx.AsyncClient, session_id: str, encoded_id: str
+) -> None:
+    route = respx.get(f"http://ov.test/api/v1/sessions/{encoded_id}").mock(
+        return_value=httpx.Response(
+            200, json={"status": "ok", "result": {"session_id": session_id}}
+        )
+    )
+    response = await client.post("/tools/ov_session_status", json={"session_id": session_id})
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["session_id"] == session_id
+    sent = route.calls.last.request
+    _assert_headers(sent)
+    assert sent.url.raw_path == f"/api/v1/sessions/{encoded_id}".encode()
+    assert not sent.url.query
+    assert not sent.url.fragment
+
+
 @respx.mock
 async def test_error_pass_through(client: httpx.AsyncClient) -> None:
     respx.post("http://ov.test/api/v1/search/find").mock(
