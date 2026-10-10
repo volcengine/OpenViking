@@ -1,5 +1,7 @@
 """Native host history and capture remain independent of OV archive summaries."""
 
+import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -145,3 +147,45 @@ def test_framework_summary_persists_and_resumes_with_no_ov_context(tmp_path):
     captured = [m for archive in client.archives["durable-host"] for m in archive["messages"]]
     assert len(captured) == 8  # Four user/assistant pairs, no replayed tail or synthetic summary.
     assert not any("Early constraint:" in str(message) for message in captured)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("first_commits", [False, True])
+@pytest.mark.asyncio
+async def test_concurrent_capture_hooks_keep_their_commit_policies(asynchronous, first_commits):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class PausedClient(NoContextClient):
+        def batch_add_messages(self, session_id, messages, **kwargs):
+            if session_id == "first":
+                entered.set()
+                assert release.wait(5), "other session did not finish its capture"
+            return super().batch_add_messages(session_id, messages, **kwargs)
+
+    client = PausedClient()
+    middleware = OpenVikingContextMiddleware(client=client, commit_on_after_agent=True)
+
+    async def capture(session_id, commit):
+        name = "after_agent" if commit else "before_model"
+        state = {"session_id": session_id, "messages": [HumanMessage(content=session_id)]}
+        if asynchronous:
+            await getattr(middleware, "a" + name)(state, None)
+        else:
+            await asyncio.to_thread(getattr(middleware, name), state, None)
+
+    first = asyncio.create_task(capture("first", first_commits))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        await capture("second", not first_commits)
+    finally:
+        release.set()
+        await first
+        await middleware.aclose()
+
+    committed, pending = ("first", "second") if first_commits else ("second", "first")
+    assert len(client.archives[committed]) == 1
+    assert client.archives[committed][0]["messages"][0]["parts"][0]["text"] == committed
+    assert not client.sessions[committed]
+    assert not client.archives[pending]
+    assert client.sessions[pending][0]["parts"][0]["text"] == pending

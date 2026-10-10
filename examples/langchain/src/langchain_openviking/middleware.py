@@ -312,10 +312,10 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
         plan = self._capture_plan(state, runtime)
         if plan is None:
             return None
-        self.recorder.commit_policy = self.commit_policy if commit else None
+        policy = self.commit_policy if commit else None
         if plan.unchanged:
             with self._actor_peer_scope(plan.actor_peer_id):
-                self.recorder.record(plan.session_id, ())
+                self.recorder.record(plan.session_id, (), commit_policy=policy)
             self._pending_context_parts.pop(plan.key, None)
             return None
         try:
@@ -325,6 +325,7 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
                     plan.messages[plan.start :],
                     peer_id=plan.peer_id,
                     context_parts=plan.context_parts,
+                    commit_policy=policy,
                 )
         except OpenVikingPartialWriteError as exc:
             self._handle_partial_capture(plan, exc)
@@ -347,10 +348,10 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
         plan = self._capture_plan(state, runtime)
         if plan is None:
             return None
-        self.recorder.commit_policy = self.commit_policy if commit else None
+        policy = self.commit_policy if commit else None
         if plan.unchanged:
             with self._actor_peer_scope(plan.actor_peer_id):
-                await self.recorder.arecord(plan.session_id, ())
+                await self.recorder.arecord(plan.session_id, (), commit_policy=policy)
             self._pending_context_parts.pop(plan.key, None)
             return None
         try:
@@ -360,6 +361,7 @@ class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
                     plan.messages[plan.start :],
                     peer_id=plan.peer_id,
                     context_parts=plan.context_parts,
+                    commit_policy=policy,
                 )
         except OpenVikingPartialWriteError as exc:
             self._handle_partial_capture(plan, exc)
