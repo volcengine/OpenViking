@@ -29,6 +29,14 @@ class StudioFeishuChannel(FeishuChannel):
         self.last_error = None
         self.chat_names = {}
 
+    def _openviking_connection(self):
+        """本机器人安装时下发的 OpenViking 连接（含真实 user_id/api_key）。
+
+        通道侧的成员提及记忆必须与 agent 记忆使用同一身份，否则会退回全局配置
+        （admin_user_id="default"）并用错误的 key 解析出别的用户。
+        """
+        return self.record.get("identity")
+
     async def start(self):
         from vikingbot.studio.providers.feishu.transport import run_connection
 

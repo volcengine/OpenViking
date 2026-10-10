@@ -928,6 +928,13 @@ class Config(BaseSettings):
     )
     storage_workspace: Optional[str] = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
+    reply_bot_mention: bool = Field(
+        default=False,
+        description=(
+            "是否回复机器人 @ 本机器人的消息：默认False=机器人消息一律跳过（原逻辑）；"
+            "True=被 @ 时允许处理，支持机器人互 @"
+        ),
+    )
     mode: BotMode = BotMode.NORMAL
 
     @model_validator(mode="after")

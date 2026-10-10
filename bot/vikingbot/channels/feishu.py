@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -74,6 +75,13 @@ MSG_TYPE_MAP = {
 
 # Pre-compiled regex patterns
 OPEN_ID_MENTION_PATTERN = re.compile(r"@ou_[a-f0-9]+")
+# 终止标签（写法对齐 @ 标签）：<stop></stop> / <stop/> 表示全局静默；
+# <stop name="A"></stop> 表示仅对名为 A 的对象静默。兼容自闭合、任意属性、大小写。
+STOP_TAG_PATTERN = re.compile(r"<\s*stop\b[^>]*?(?:/\s*>|>)", re.IGNORECASE)
+# 从终止标签中提取 name 属性值（允许带引号或不带引号）。
+STOP_NAME_ATTR_PATTERN = re.compile(r"""name\s*=\s*["']?\s*([^"'\s>]+)""", re.IGNORECASE)
+# 模型输出里的「按显示名 @」占位：<at name=成员名></at>，用于替换成真实 open_id。
+AT_NAME_MENTION_PATTERN = re.compile(r"<at\s+name=[\"']?([^\"'>\s]+)[\"']?\s*></at>")
 
 
 class FeishuChannel(BaseChannel):
@@ -89,6 +97,15 @@ class FeishuChannel(BaseChannel):
     """
 
     name = "feishu"
+    # 「成员 -> open_id」映射落在该机器人自己的记忆空间，便于人工查看与审计。
+    # 目录结构：viking://user/{user}/memories/entities/feishu/{app_id}/{chat_id}.md
+    # user 取该机器人自身的用户（见 _mention_bot_user_id：连接 user_id > 配置
+    # admin_user_id > /health 解析），与 agent 记忆同命名空间，避免所有机器人共写到
+    # ~（共享用户）下。仅用 config.ov_server.admin_user_id 不够：studio/api_key 模式下
+    # 该字段是占位符 "default"，真实身份在按机器人下发的连接里。
+    # open_id 按「应用(app_id) + 群(chat_id)」双重隔离：同一成员在不同应用、不同群
+    # 拿到的 open_id 都可能不同，因此必须按群分片存储与缓存，否则会跨群串味。
+    MENTION_MEMORY_ROOT_TEMPLATE = "viking://user/{user}/memories/entities/feishu/{app_id}/"
     # 飞书官方支持的处理中表情列表，按顺序发送
     PROCESSING_EMOJIS = [
         "StatusInFlight",
@@ -123,6 +140,21 @@ class FeishuChannel(BaseChannel):
         self._chat_member_cache: OrderedDict[str, dict[str, Any]] = (
             OrderedDict()
         )  # chat_id -> {members, expires_at, last_error_at}
+        # 「群(chat_id) -> {成员显示名(lower) -> open_id}」缓存。
+        # 飞书 open_id 按应用隔离，且同一成员在不同群的 open_id 也可能不同；
+        # 群成员接口又不返回机器人成员，只能从入站事件的 mentions 学习。
+        # 因此缓存必须按 chat_id 分片，避免跨群串味。
+        self._mention_name_cache: dict[str, dict[str, str]] = {}
+        self._mention_cache_loaded: set[str] = set()  # 已从本地 JSON 加载过的 chat_id
+        self._mention_memory_loaded: dict[str, float] = {}  # chat_id -> 记忆回填过期时间
+        self._mention_memory_persisted: set[str] = set()  # 本进程内已成功镜像到 viking 的 chat_id
+        self._chat_name_cache: dict[str, str] = {}  # chat_id -> 群名称
+        # 本机器人自身的 OpenViking 用户名（记忆命名空间），首次解析后缓存。
+        self._bot_user_id: str | None = None
+        self._bot_user_source: str = "unresolved"  # 用户名来源，便于排查
+        # 诊断日志：当前用户在 OpenViking 中的身份，首次打印后缓存避免重复登录。
+        self._current_user_log: str | None = None
+        self._MENTION_MEMORY_CACHE_TTL_SEC = 60  # 记忆回填缓存时长
         self._MAX_USER_CACHE_SIZE = 1000  # 最大缓存1000个用户
         self._CHAT_MEMBER_CACHE_TTL_SEC = 300
         self._CHAT_MEMBER_CACHE_MAX_CHATS = 30
@@ -292,6 +324,9 @@ class FeishuChannel(BaseChannel):
 
             # 处理业务结果
             data = response.data
+            chat_name = str(getattr(data, "name", "") or "")
+            if chat_name:
+                self._chat_name_cache[chat_id] = chat_name
             mode = "group"
             group_message_type = getattr(data, "group_message_type", "")
             if group_message_type and group_message_type == "thread":
@@ -312,6 +347,43 @@ class FeishuChannel(BaseChannel):
         if bot_id:
             return getattr(getattr(mention, "id", None), "open_id", None) == bot_id
         return bool(self.config.bot_name and getattr(mention, "name", "") == self.config.bot_name)
+
+    def _reply_bot_mention_enabled(self) -> bool:
+        """是否允许处理「机器人 @ 本机器人」的消息。
+
+        默认 False：保留原逻辑，机器人消息一律跳过，避免机器人互刷死循环；
+        仅当 bot.reply_bot_mention=true 且本条消息 @ 了本机器人时，才放行。
+        """
+        return bool(getattr(self._bot_config, "reply_bot_mention", False))
+
+    def _openviking_connection(self) -> dict[str, Any] | None:
+        """本通道对应的 OpenViking 连接（含真实 user_id / api_key）。
+
+        基类无连接，返回 None；按机器人安装的子类（如 StudioFeishuChannel）会返回各自
+        的连接，用于把记忆写到「本机器人自身」的用户空间，而不是回退到全局配置或共享用户。
+        """
+        return None
+
+    def _stop_targets_self(self, content: str) -> bool:
+        """入站内容里是否含「针对本 bot」的终止标签。
+
+        - `<stop></stop>` / `<stop/>`：无 name，全局静默，命中即停止；
+        - `<stop name="X"></stop>`：仅当 X 是本 bot 名称或本 bot open_id 时命中。
+        """
+        if not content:
+            return False
+        self_names = {
+            str(getattr(self.config, "bot_name", "") or "").strip().lower(),
+            str(getattr(self, "bot_open_id", "") or "").strip().lower(),
+        }
+        self_names.discard("")
+        for match in STOP_TAG_PATTERN.finditer(content):
+            name_match = STOP_NAME_ATTR_PATTERN.search(match.group(0))
+            if not name_match:
+                return True  # 无 name → 全局静默
+            if name_match.group(1).strip().lower() in self_names:
+                return True
+        return False
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
@@ -569,7 +641,18 @@ class FeishuChannel(BaseChannel):
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content, msg)
 
-            content_with_mentions = cleaned_content
+            # 终止标签：仅当回复除 <stop> 标签外没有其它内容（自我静默）时整条不发送；
+            # 带 name 的标签表示「仅指定对象静默」，需随消息发出，供接收方判断是否自我静默。
+            if STOP_TAG_PATTERN.search(cleaned_content):
+                if not STOP_TAG_PATTERN.sub("", cleaned_content).strip() and not images:
+                    logger.info(
+                        f"[FEISHU_STOP] self-silence reply (only stop tag), skip sending: "
+                        f"session={msg.session_key}"
+                    )
+                    return False
+
+            # 把模型输出的 <at name=成员名></at> 换成本应用维度的真实 open_id
+            content_with_mentions = await self._resolve_mention_names(cleaned_content, reply_to)
 
             # --- Build interactive card with markdown rendering ---
             original_sender_id = None
@@ -866,6 +949,375 @@ class FeishuChannel(BaseChannel):
             "last_error_at": last_error_at,
         }
 
+    def _mention_cache_file(self, chat_id: str) -> Path:
+        """每个「应用 + 群」一个本地缓存文件，目录结构同记忆存储：feishu/{app_id}/chat_{chat_id}.json。"""
+        return get_data_path() / "feishu" / self.config.app_id / f"chat_{chat_id}.json"
+
+    async def _mention_bot_user_id(self) -> str:
+        """该机器人自身的 OpenViking 用户名，用作记忆命名空间。
+
+        取值顺序：
+        1. 本通道携带的 OpenViking 连接里的 user_id——按机器人安装（studio）时连接由
+           调用方下发，是最权威的身份来源，也是 agent 记忆实际使用的 user_id。
+        2. 显式配置 config.ov_server.admin_user_id（非空且非 "default"）——trusted/root
+           模式下由调用方指定，直接采用。
+        3. 用连接/配置里的 user API key 调 /health 解析真实 user_id——api_key 模式下
+           服务端按 key 识别用户，config 里的 admin_user_id 只是占位符 "default"，
+           硬拼 viking://user/default/ 会被拒。
+        4. 都拿不到时返回空串，由 _mention_memory_dir 回退到 viking://~/。
+        """
+        if self._bot_user_id is not None:
+            return self._bot_user_id
+        config = self._bot_config or load_config()
+        ov_cfg = getattr(config, "ov_server", None)
+        connection = self._openviking_connection() or {}
+        conn_user = str(connection.get("user_id") or "").strip()
+        if conn_user:
+            self._bot_user_id = conn_user
+            self._bot_user_source = "connection"
+            return self._bot_user_id
+        configured = str(getattr(ov_cfg, "admin_user_id", "") or "").strip()
+        if configured and configured != "default":
+            self._bot_user_id = configured
+            self._bot_user_source = "config"
+            return self._bot_user_id
+        # /health 与 VikingClient 保持一致：server_url 取配置，api_key 优先用连接里的。
+        server_url = str(
+            getattr(ov_cfg, "server_url", "") or connection.get("server_url") or ""
+        ).strip()
+        api_key = str(
+            connection.get("api_key") or getattr(ov_cfg, "api_key", "") or ""
+        ).strip()
+        resolved = ""
+        if server_url and api_key:
+            try:
+                async with httpx.AsyncClient(timeout=2.0, trust_env=False) as http:
+                    resp = await http.get(
+                        f"{server_url.rstrip('/')}/health",
+                        headers={"X-API-Key": api_key},
+                    )
+                if resp.status_code < 300:
+                    resolved = str((resp.json() or {}).get("user_id") or "").strip()
+            except Exception as e:
+                logger.warning(f"[FEISHU_MENTION] resolve bot user via /health failed: {e}")
+        if resolved:
+            self._bot_user_source = "health"
+            logger.info(f"[FEISHU_MENTION] resolved bot user id from /health: {resolved}")
+        else:
+            self._bot_user_source = "unresolved"
+            logger.warning(
+                "[FEISHU_MENTION] bot user id unresolved; memory will fall back to viking://~/"
+            )
+        self._bot_user_id = resolved
+        return self._bot_user_id
+
+    async def _log_current_user(self) -> None:
+        """诊断用：收到消息时打印本机器人在 OpenViking 中的真实身份。
+
+        直接复用 _mention_bot_user_id 的解析结果，避免打印 VikingClient 的中间态
+        （api_key 模式下 client.user_id=None / admin_user_id=default）而误导排查。
+        """
+        if self._current_user_log is not None:
+            logger.info(f"[FEISHU_USER] {self._current_user_log}")
+            return
+        config = self._bot_config or load_config()
+        ov_cfg = getattr(config, "ov_server", None)
+        connection = self._openviking_connection() or {}
+        bot_user = await self._mention_bot_user_id()
+        api_key = connection.get("api_key") or getattr(ov_cfg, "api_key", "")
+        self._current_user_log = " ".join(
+            [
+                f"app_id={self.config.app_id}",
+                f"conn.user_id={connection.get('user_id') or '<none>'}",
+                f"cfg.admin_user_id={getattr(ov_cfg, 'admin_user_id', '') or '<empty>'}",
+                f"server_url={getattr(ov_cfg, 'server_url', '') or connection.get('server_url') or ''}",
+                f"api_key={'<set>' if api_key else '<empty>'}",
+                f"resolved_bot_user={bot_user or '<unresolved>'}",
+                f"source={self._bot_user_source}",
+            ]
+        )
+        logger.info(f"[FEISHU_USER] {self._current_user_log}")
+
+    def _mention_memory_dir(self, admin_user_id: str) -> str:
+        """机器人自身用户下的记忆目录；用户名缺失或为 dev 占位符时回退到 ~ 并告警。"""
+        user = str(admin_user_id or "").strip()
+        if not user or user == "default":
+            logger.warning(
+                f"[FEISHU_MENTION] admin_user_id={user or '<empty>'}, "
+                "fallback to viking://~/ for memory"
+            )
+            return f"viking://~/memories/entities/feishu/{self.config.app_id}/"
+        return self.MENTION_MEMORY_ROOT_TEMPLATE.format(
+            user=user, app_id=self.config.app_id
+        )
+
+    def _mention_memory_uri(self, admin_user_id: str, chat_id: str) -> str:
+        """每个群聊一个记忆文件，文件名用 chat_id，便于按群查看与审计。"""
+        return f"{self._mention_memory_dir(admin_user_id)}{chat_id}.md"
+
+    async def _get_chat_name(self, chat_id: str) -> str:
+        """获取并缓存群名称（复用 _get_chat_mode 的 im.v1.chat.aget 响应）。"""
+        if chat_id in self._chat_name_cache:
+            return self._chat_name_cache[chat_id]
+        if chat_id.startswith("oc_"):
+            await self._get_chat_mode(chat_id)
+        return self._chat_name_cache.get(chat_id, "")
+
+    def _load_mention_name_cache(self, chat_id: str | None = None) -> None:
+        """惰性加载该群本地持久化的 {成员名 -> open_id} 缓存（跨重启不丢）。"""
+        if not chat_id or chat_id in self._mention_cache_loaded:
+            return
+        self._mention_cache_loaded.add(chat_id)
+        try:
+            path = self._mention_cache_file(chat_id)
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                bucket = self._mention_name_cache.setdefault(chat_id, {})
+                loaded = 0
+                if isinstance(data, dict):
+                    for name, open_id in data.items():
+                        # 只接受扁平 {name: open_id}；非字符串值（历史嵌套格式）直接忽略。
+                        if isinstance(name, str) and isinstance(open_id, str) and name and open_id:
+                            bucket[name.lower()] = open_id
+                            loaded += 1
+                logger.debug(f"[FEISHU_MENTION] loaded {loaded} cached mention ids from {path}")
+        except Exception as e:
+            logger.warning(f"[FEISHU_MENTION] load mention cache failed: {e}")
+
+    def _save_mention_name_cache(self, chat_id: str | None = None) -> None:
+        if not chat_id:
+            return
+        try:
+            path = self._mention_cache_file(chat_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(self._mention_name_cache.get(chat_id, {}), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"[FEISHU_MENTION] save mention cache failed: {e}")
+
+    @staticmethod
+    def _render_chat_mention_memory(
+        chat_id: str, chat_name: str, mapping: dict[str, str]
+    ) -> str:
+        """群记忆文件内容：纯文本 key-value（非 JSON），一个群一个文件。"""
+        title = f"{chat_name} ({chat_id})" if chat_name else chat_id
+        lines = [
+            f"# 飞书成员提及映射 - {title}",
+            "",
+            "本文件由机器人运行时自动维护，记录本飞书应用+本群维度下「成员显示名 -> open_id」的映射，",
+            "用于把回复里的 `<at name=成员名></at>` 解析成真实可通知的 @。",
+            "",
+            "注意：open_id 与飞书应用、群都绑定，不同应用/群可能不同；",
+            "该文件仅供系统解析使用，严禁在回复正文、解释或举例中输出 ou_ 开头的 id。",
+            "",
+            f"chat_id: {chat_id}",
+            f"chat_name: {chat_name}",
+            "",
+        ]
+        for name in sorted(mapping):
+            lines.append(f"name: {name}")
+            lines.append("member_id_type: open_id")
+            lines.append(f"member_id: {mapping[name]}")
+            lines.append("")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_chat_mention_memory(content: str) -> dict[str, str]:
+        """解析群记忆文件，返回 {成员名(lower): member_id}。"""
+        mapping: dict[str, str] = {}
+        current_name = ""
+        for line in content.splitlines():
+            key, sep, value = line.partition(":")
+            if not sep:
+                continue
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "name":
+                current_name = value
+            elif key == "member_id" and current_name and value:
+                mapping[current_name.lower()] = value
+                current_name = ""
+        return mapping
+
+    async def _persist_chat_mention_memory(self, chat_id: str) -> bool:
+        """把该群的「成员名 -> open_id」全量写入一个记忆文件；失败只告警，不影响收发。
+
+        返回是否写入成功，供调用方决定是否需要重试镜像。
+        """
+        if not chat_id or not chat_id.startswith("oc_"):
+            return False
+        mapping = self._mention_name_cache.get(chat_id) or {}
+        if not mapping:
+            return False
+        try:
+            from vikingbot.openviking_mount.ov_server import VikingClient
+
+            config = self._bot_config or load_config()
+            chat_name = await self._get_chat_name(chat_id)
+            # 记忆写在机器人自身用户名下（与 agent 记忆同命名空间）。
+            bot_user_id = await self._mention_bot_user_id()
+            root_uri = self._mention_memory_dir(bot_user_id)
+            uri = self._mention_memory_uri(bot_user_id, chat_id)
+            client = await VikingClient.create(
+                connection=self._openviking_connection(), config=config
+            )
+            try:
+                logger.debug(f"[FEISHU_MENTION] mkdir {root_uri}")
+                # batch_write 不会自动建父目录，需先确保目录存在（重复创建无害）。
+                # 服务端 mkdir 会递归补齐父目录；失败必须可见，否则 batch_write 也会连带失败。
+                try:
+                    await client.mkdir(root_uri)
+                except Exception as e:
+                    logger.warning(
+                        f"[FEISHU_MENTION] mkdir {root_uri} failed: {e}"
+                    )
+                # memories 不支持二进制写入，必须走纯文本 content（不能用 content_base64）。
+                await client.batch_write(
+                    root_uri=root_uri,
+                    operations=[
+                        {
+                            "uri": uri,
+                            "content": self._render_chat_mention_memory(
+                                chat_id, chat_name, mapping
+                            ),
+                            "mode": "upsert",
+                        }
+                    ],
+                    wait=False,
+                )
+                logger.info(
+                    f"[FEISHU_MENTION] persisted {len(mapping)} members to {uri}"
+                )
+            finally:
+                await client.close()
+            return True
+        except Exception as e:
+            logger.warning(f"[FEISHU_MENTION] persist chat memory failed: {e}")
+            return False
+
+    async def _load_mention_cache_from_memory(self, chat_id: str | None = None) -> None:
+        """从该群的记忆文件回填「成员名 -> open_id」缓存（带 TTL，避免频繁读取）。"""
+        if not chat_id or not chat_id.startswith("oc_"):
+            return
+        if self._mention_memory_loaded.get(chat_id, 0) > time.time():
+            return
+        self._mention_memory_loaded[chat_id] = time.time() + self._MENTION_MEMORY_CACHE_TTL_SEC
+        try:
+            from vikingbot.openviking_mount.ov_server import VikingClient
+
+            config = self._bot_config or load_config()
+            uri = self._mention_memory_uri(await self._mention_bot_user_id(), chat_id)
+            client = await VikingClient.create(
+                connection=self._openviking_connection(), config=config
+            )
+            try:
+                content = await client.read_content(uri=uri, level="read")
+            finally:
+                await client.close()
+            if not content:
+                return
+            bucket = self._mention_name_cache.setdefault(chat_id, {})
+            added = 0
+            for name, member_id in self._parse_chat_mention_memory(content).items():
+                # 本地 JSON 中已有的值优先，记忆文件只补缺。
+                if name not in bucket:
+                    bucket[name] = member_id
+                    added += 1
+            logger.debug(
+                f"[FEISHU_MENTION] memory cache loaded for {chat_id}: +{added} names "
+                f"(total {len(bucket)})"
+            )
+        except Exception as e:
+            # 回填失败不阻塞收发，并允许下次重试。
+            self._mention_memory_loaded.pop(chat_id, None)
+            logger.warning(f"[FEISHU_MENTION] load mention memory failed: {e}")
+
+    async def _learn_mentions(self, mentions: Any, chat_id: str | None = None) -> None:
+        """从入站事件的 mentions 学习「成员名 -> 本应用+本群维度 open_id」。
+
+        飞书 open_id 按应用隔离，且同一成员在不同群的 open_id 也可能不同；
+        群成员接口又不返回机器人成员。因此要 @ 别的机器人，只能从本应用收到的
+        mentions[].name + mentions[].id.open_id 反推映射，并按群分片缓存/落盘。
+        """
+        if not chat_id or not chat_id.startswith("oc_"):
+            return
+        self._load_mention_name_cache(chat_id)
+        bucket = self._mention_name_cache.setdefault(chat_id, {})
+        changed = False
+        for mention in mentions or []:
+            name = str(getattr(mention, "name", "") or "").strip()
+            mention_id = getattr(mention, "id", None)
+            open_id = str(getattr(mention_id, "open_id", "") or "") if mention_id else ""
+            if not name or not open_id:
+                continue
+            key = name.lower()
+            if bucket.get(key) != open_id:
+                bucket[key] = open_id
+                changed = True
+                logger.debug(f"[FEISHU_MENTION] learned {name} -> {open_id} in {chat_id}")
+        if changed:
+            self._save_mention_name_cache(chat_id)
+        # 映射有变化时全量重写该群记忆文件；此外每个进程内每个群至少镜像一次，
+        # 避免本地 JSON 已预热（changed=False）时 viking 记忆文件从未生成。
+        if not changed and chat_id in self._mention_memory_persisted:
+            logger.debug(f"[FEISHU_MENTION] mirror already persisted for {chat_id}, skip")
+            return
+        if not bucket:
+            return
+        if await self._persist_chat_mention_memory(chat_id):
+            self._mention_memory_persisted.add(chat_id)
+
+    async def _resolve_mention_names(self, content: str, chat_id: str | None = None) -> str:
+        """把模型输出的 <at name=成员名></at> 换成本应用+本群维度的 <at id=open_id></at>。"""
+        pattern = AT_NAME_MENTION_PATTERN
+        if not pattern.search(content):
+            return content
+        self._load_mention_name_cache(chat_id)
+        if chat_id and chat_id.startswith("oc_"):
+            try:
+                await asyncio.wait_for(
+                    self._load_mention_cache_from_memory(chat_id), timeout=5
+                )
+            except Exception as e:
+                logger.warning(f"[FEISHU_MENTION] memory cache load skipped: {e}")
+
+        def _substitute(text: str) -> str:
+            bucket = self._mention_name_cache.get(chat_id or "", {})
+
+            def _replace(match: re.Match[str]) -> str:
+                open_id = bucket.get(match.group(1).strip().lower())
+                if not open_id:
+                    return match.group(0)
+                return f'<at id="{open_id}"></at>'
+
+            return pattern.sub(_replace, text)
+
+        resolved = _substitute(content)
+        if not pattern.search(resolved):
+            return resolved
+
+        # 缓存缺失时兜底拉一次群成员（仅能补全人类成员），再重试
+        if chat_id and chat_id.startswith("oc_"):
+            try:
+                members = await self._get_chat_members_cached(chat_id)
+                bucket = self._mention_name_cache.setdefault(chat_id, {})
+                for open_id, name in members.items():
+                    if name:
+                        bucket.setdefault(str(name).strip().lower(), open_id)
+            except Exception as e:
+                logger.warning(f"[FEISHU_MENTION] fallback fetch chat members failed: {e}")
+            resolved = _substitute(resolved)
+
+        unresolved = [match.group(1) for match in pattern.finditer(resolved)]
+        if unresolved:
+            logger.warning(
+                f"[FEISHU_MENTION] unresolved member names: {unresolved}; "
+                f"known names={sorted(self._mention_name_cache.get(chat_id or '', {}))}"
+            )
+        return resolved
+
     async def _fetch_chat_members(self, chat_id: str) -> dict[str, str]:
         if not self._client or not GetChatMembersRequest:
             return {}
@@ -891,9 +1343,17 @@ class FeishuChannel(BaseChannel):
 
             data = response.data
             items = getattr(data, "items", []) if data else []
+            logger.debug(
+                f"[FEISHU_MENTION] raw chat members for {chat_id}: "
+                f"count={len(items)} page_token={bool(page_token)}"
+            )
             for item in items:
                 member_id = getattr(item, "member_id", "")
                 name = getattr(item, "name", "")
+                logger.debug(
+                    f"[FEISHU_MENTION] raw member: id={member_id} name={name!r} "
+                    f"type={getattr(item, 'member_type', '')!r}"
+                )
                 if member_id and name:
                     members[member_id] = name
 
@@ -905,7 +1365,8 @@ class FeishuChannel(BaseChannel):
 
         return members
 
-    async def _get_group_member_name(self, chat_id: str, open_id: str) -> str | None:
+    async def _get_chat_members_cached(self, chat_id: str) -> dict[str, str]:
+        """带缓存与失败冷却的群成员拉取（注意：接口只返回人类成员）。"""
         now = time.time()
         entry = self._chat_member_cache.get(chat_id)
 
@@ -913,24 +1374,26 @@ class FeishuChannel(BaseChannel):
             self._chat_member_cache.move_to_end(chat_id)
             members = entry.get("members", {})
             if entry.get("expires_at", 0) > now:
-                return members.get(open_id)
+                return members
             if (
                 now - float(entry.get("last_error_at", 0) or 0)
                 < self._CHAT_MEMBER_FETCH_COOLDOWN_SEC
             ):
-                return members.get(open_id)
+                return members
 
         try:
             members = await self._fetch_chat_members(chat_id)
             self._save_chat_member_cache(chat_id, members)
-            return members.get(open_id)
+            return members
         except Exception as e:
             logger.warning(f"Failed to get chat members for {chat_id}: {e}")
-            stale_members: dict[str, str] = {}
-            if entry:
-                stale_members = entry.get("members", {})
+            stale_members: dict[str, str] = entry.get("members", {}) if entry else {}
             self._save_chat_member_cache(chat_id, stale_members, last_error_at=now)
-            return stale_members.get(open_id)
+            return stale_members
+
+    async def _get_group_member_name(self, chat_id: str, open_id: str) -> str | None:
+        members = await self._get_chat_members_cached(chat_id)
+        return members.get(open_id)
 
     async def _get_user_name(self, open_id: str, chat_id: str | None = None) -> str | None:
         """
@@ -977,6 +1440,9 @@ class FeishuChannel(BaseChannel):
                 return
             self._processed_message_ids[message_id] = None
 
+            # 诊断：收到消息时先打印本机器人在 OpenViking 中的当前用户身份。
+            await self._log_current_user()
+
             # 定期清理去重缓存（每100条清理一次，减少开销）
             if (
                 len(self._processed_message_ids) % 100 == 0
@@ -985,11 +1451,39 @@ class FeishuChannel(BaseChannel):
                 while len(self._processed_message_ids) > 500:
                     self._processed_message_ids.popitem(last=False)
 
-            # 2. 跳过机器人自身消息
-            if sender.sender_type == "bot":
-                return
+            logger.debug(
+                f"[FEISHU_INBOUND] sender_type={getattr(sender, 'sender_type', None)} "
+                f"sender_id={getattr(getattr(sender, 'sender_id', None), 'open_id', None)} "
+                f"msg_type={message.message_type} chat_type={message.chat_type} "
+                f"mentions={[{'name': getattr(m, 'name', None), 'open_id': getattr(getattr(m, 'id', None), 'open_id', None)} for m in (getattr(message, 'mentions', None) or [])]}"
+            )
 
-            # 3. 基础信息提取
+            # 2. 检查是否被@（机器人消息只有被 @ 时才处理，避免机器人互刷死循环）
+            is_mentioned = False
+            if hasattr(message, "mentions") and message.mentions:
+                for mention in message.mentions:
+                    if self._is_bot_mention(mention):
+                        is_mentioned = True
+                        break
+
+            # 3. 机器人消息处理开关（保留原逻辑：默认机器人消息直接跳过）
+            #    默认 bot.reply_bot_mention=false 时，机器人消息一律 return；
+            #    仅当启用开关且本条消息 @ 了本机器人时，才继续处理（允许机器人互 @）。
+            if sender.sender_type == "bot":
+                if not (self._reply_bot_mention_enabled() and is_mentioned):
+                    logger.info(
+                        f"[FEISHU_INBOUND] skip bot message {message_id}, "
+                        f"bot.reply_bot_mention: {str(self._reply_bot_mention_enabled()).lower()}, "
+                        f"is_mentioned: {str(is_mentioned).lower()}"
+                    )
+                    return
+
+            # 从入站 mentions 学习「成员名 -> 本应用维度 open_id」，供发送侧 @ 解析使用
+            await self._learn_mentions(
+                getattr(message, "mentions", None), getattr(message, "chat_id", None)
+            )
+
+            # 4. 基础信息提取
             sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
             if sender_id == "unknown":
                 logger.warning(f"Received message from unknown sender: {message_id}")
@@ -999,18 +1493,17 @@ class FeishuChannel(BaseChannel):
             chat_type = message.chat_type  # "p2p" or "group"
             msg_type = message.message_type
 
-            # 4. 解析消息内容和媒体
+            # 5. 解析消息内容和媒体
             content, media = await self._parse_message_content(message, msg_type, message_id)
             if not content:
                 return
 
-            # 5. 检查是否被@
-            is_mentioned = False
-            if hasattr(message, "mentions") and message.mentions:
-                for mention in message.mentions:
-                    if self._is_bot_mention(mention):
-                        is_mentioned = True
-                        break
+            # 5.5 终止标签：入站消息若含针对本 bot（或无 name 的全局）<stop>，直接不处理、不回复。
+            if self._stop_targets_self(content):
+                logger.info(
+                    f"[FEISHU_STOP] inbound stop tag for self, skip message: {message_id}"
+                )
+                return
 
             # 6. 检查是否需要处理该消息
             should_process = await self._check_should_process(
