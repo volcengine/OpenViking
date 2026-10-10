@@ -22,6 +22,26 @@ const state = vi.hoisted(() => ({
   preview: vi.fn(),
   copy: vi.fn(),
 }))
+vi.mock('#/components/code-editor', () => ({
+  CodeEditor: ({
+    initialContent,
+    ariaLabel,
+    readOnly,
+    onChange,
+  }: {
+    initialContent: string
+    ariaLabel: string
+    readOnly: boolean
+    onChange: (content: string) => void
+  }) => (
+    <textarea
+      aria-label={ariaLabel}
+      value={initialContent}
+      readOnly={readOnly}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}))
 vi.mock('#/lib/clipboard', () => ({ copyTextToClipboard: state.copy }))
 vi.mock('../-lib/config-file-api', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -553,7 +573,8 @@ it('shares form edits and whole-file edits across modes, preserving all other se
   })
   await apply()
   fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
-  const input = screen.getByLabelText<HTMLTextAreaElement>('models.fileContent')
+  const input =
+    await screen.findByLabelText<HTMLTextAreaElement>('models.fileContent')
   const raw = JSON.parse(input.value)
   expect(raw.vlm.credentials[0].model).toBe('form-draft')
   expect(raw.storage).toEqual(file.storage)
@@ -575,7 +596,8 @@ it('blocks invalid JSON from saving or switching, then discards the same draft',
   mount()
   await screen.findByText('model-a')
   fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
-  const input = screen.getByLabelText<HTMLTextAreaElement>('models.fileContent')
+  const input =
+    await screen.findByLabelText<HTMLTextAreaElement>('models.fileContent')
   fireEvent.change(input, { target: { value: '{broken' } })
   expect(screen.getByText('models.invalidJsonObject')).toBeTruthy()
   expect(

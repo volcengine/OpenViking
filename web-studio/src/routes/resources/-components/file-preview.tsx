@@ -41,12 +41,12 @@ import {
 } from '../-hooks/viking-fm'
 import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
-import type { CodeEditorHandle } from './code-editor'
+import type { CodeEditorHandle } from '#/components/code-editor'
 import { OkfMetadataPanel } from './okf-metadata-panel'
 import { YamlMetadata } from './yaml-metadata'
 
 const LazyCodeEditor = lazy(() =>
-  import('./code-editor').then((m) => ({ default: m.CodeEditor })),
+  import('#/components/code-editor').then((m) => ({ default: m.CodeEditor })),
 )
 const LazyMermaidDiagram = lazy(() =>
   import('./mermaid-diagram').then((m) => ({ default: m.MermaidDiagram })),

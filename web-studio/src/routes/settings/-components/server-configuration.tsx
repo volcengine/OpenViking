@@ -42,7 +42,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { copyTextToClipboard } from '#/lib/clipboard'
 import { Button } from '#/components/ui/button'
-import { Textarea } from '#/components/ui/textarea'
+import { useTheme } from 'next-themes'
 import { Badge } from '#/components/ui/badge'
 import {
   DropdownMenu,
@@ -83,6 +83,12 @@ import type {
   ModelConfig,
 } from '../-lib/config-file-api'
 import type { EditableModelKind, FieldSpec } from './model-fields'
+
+const LazyCodeEditor = React.lazy(() =>
+  import('#/components/code-editor').then((module) => ({
+    default: module.CodeEditor,
+  })),
+)
 
 const visibleModelKinds: ReadonlyArray<EditableModelKind> = ['vlm', 'embedding']
 
@@ -369,6 +375,7 @@ const policies: FieldSpec[] = [
 
 export function ServerConfigurationEditor() {
   const { t } = useTranslation('settings')
+  const { resolvedTheme } = useTheme()
   const {
     connection,
     connectionRole,
@@ -712,27 +719,30 @@ export function ServerConfigurationEditor() {
         )}
         {editMode === 'file' ? (
           <div className="grid gap-3">
-            <label
-              htmlFor="startup-config-content"
-              className="text-sm font-medium"
-            >
-              {t('models.fileContent')}
-            </label>
-            <Textarea
-              id="startup-config-content"
-              spellCheck={false}
-              readOnly={pending || query.data?.writable === false}
-              className="min-h-[28rem] w-full resize-y font-mono text-xs leading-6"
-              value={document?.content ?? ''}
-              onChange={(event) => {
-                if (pending || !document) return
-                setBaseline((previous) => previous ?? query.data ?? null)
-                setSaved(false)
-                mutation.reset()
-                preview.reset()
-                setDraft({ ...document, content: event.target.value })
-              }}
-            />
+            <p className="text-sm font-medium">{t('models.fileContent')}</p>
+            <div className="h-[min(60vh,36rem)] min-h-80 min-w-0">
+              <React.Suspense
+                fallback={<p role="status">{t('models.loading')}</p>}
+              >
+                <LazyCodeEditor
+                  filename="ov.conf"
+                  language="json"
+                  ariaLabel={t('models.fileContent')}
+                  initialContent={document?.content ?? ''}
+                  isDark={resolvedTheme === 'dark'}
+                  lineWrapping
+                  readOnly={pending || query.data?.writable === false}
+                  onChange={(content) => {
+                    if (pending || !document) return
+                    setBaseline((previous) => previous ?? query.data ?? null)
+                    setSaved(false)
+                    mutation.reset()
+                    preview.reset()
+                    setDraft({ ...document, content })
+                  }}
+                />
+              </React.Suspense>
+            </div>
             {invalidJson && (
               <p role="alert" className="text-destructive">
                 {t('models.invalidJsonObject')}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import {
   EditorView,
   keymap,
@@ -95,6 +95,32 @@ export interface CodeEditorHandle {
   getContent: () => string
 }
 
+function accessExtensions(readOnly: boolean) {
+  return [
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    ...(readOnly
+      ? [keymap.of(searchKeymap)]
+      : [
+          highlightActiveLineGutter(),
+          highlightActiveLine(),
+          foldGutter(),
+          indentOnInput(),
+          bracketMatching(),
+          closeBrackets(),
+          autocompletion(),
+          highlightSelectionMatches(),
+          keymap.of([
+            ...closeBracketsKeymap,
+            ...defaultKeymap,
+            ...searchKeymap,
+            ...historyKeymap,
+            indentWithTab,
+          ]),
+        ]),
+  ]
+}
+
 interface CodeEditorProps {
   initialContent: string
   filename: string
@@ -103,6 +129,9 @@ interface CodeEditorProps {
   enableLanguageSupport?: boolean
   lineWrapping?: boolean
   appearance?: 'editor' | 'plain'
+  language?: string
+  ariaLabel?: string
+  onChange?: (content: string) => void
 }
 
 export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
@@ -115,11 +144,22 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       enableLanguageSupport = true,
       lineWrapping = false,
       appearance = 'editor',
+      language,
+      ariaLabel,
+      onChange,
     },
     ref,
   ) {
     const containerRef = useRef<HTMLDivElement>(null)
     const viewRef = useRef<EditorView | null>(null)
+    const onChangeRef = useRef(onChange)
+    const contentRef = useRef(initialContent)
+    const readOnlyRef = useRef(readOnly)
+    const syncingRef = useRef(false)
+    const accessRef = useRef(new Compartment())
+    onChangeRef.current = onChange
+    contentRef.current = initialContent
+    readOnlyRef.current = readOnly
 
     useImperativeHandle(ref, () => ({
       getContent: () => viewRef.current?.state.doc.toString() ?? initialContent,
@@ -135,8 +175,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           lineNumbers(),
           drawSelection(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          EditorState.readOnly.of(readOnly),
-          EditorView.editable.of(!readOnly),
+          history(),
+          EditorView.contentAttributes.of(
+            ariaLabel ? { 'aria-label': ariaLabel } : {},
+          ),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged && !syncingRef.current)
+              onChangeRef.current?.(update.state.doc.toString())
+          }),
           EditorView.theme({
             '&': {
               height: '100%',
@@ -186,29 +232,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           }),
         ]
 
-        if (readOnly) {
-          extensions.push(keymap.of(searchKeymap))
-        } else {
-          extensions.push(
-            highlightActiveLineGutter(),
-            highlightActiveLine(),
-            history(),
-            foldGutter(),
-            indentOnInput(),
-            bracketMatching(),
-            closeBrackets(),
-            autocompletion(),
-            highlightSelectionMatches(),
-            keymap.of([
-              ...closeBracketsKeymap,
-              ...defaultKeymap,
-              ...searchKeymap,
-              ...historyKeymap,
-              indentWithTab,
-            ]),
-          )
-        }
-
         if (lineWrapping) {
           extensions.push(EditorView.lineWrapping)
         }
@@ -217,7 +240,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           extensions.push(syntaxHighlighting(oneDarkHighlightStyle))
         }
 
-        const lang = enableLanguageSupport ? detectLanguage(filename) : null
+        const lang = enableLanguageSupport
+          ? (language ?? detectLanguage(filename))
+          : null
         if (lang && languageLoaders[lang]) {
           try {
             const langSupport = await languageLoaders[lang]()
@@ -229,8 +254,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
 
         if (destroyed) return
 
+        extensions.push(
+          accessRef.current.of(accessExtensions(readOnlyRef.current)),
+        )
         const state = EditorState.create({
-          doc: initialContent,
+          doc: contentRef.current,
           extensions,
         })
 
@@ -254,10 +282,33 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       appearance,
       filename,
       isDark,
-      initialContent,
       lineWrapping,
-      readOnly,
+      language,
+      ariaLabel,
     ])
+
+    useEffect(() => {
+      const view = viewRef.current
+      if (!view || view.state.doc.toString() === initialContent) return
+      syncingRef.current = true
+      try {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: initialContent,
+          },
+        })
+      } finally {
+        syncingRef.current = false
+      }
+    }, [initialContent])
+
+    useEffect(() => {
+      viewRef.current?.dispatch({
+        effects: accessRef.current.reconfigure(accessExtensions(readOnly)),
+      })
+    }, [readOnly])
 
     return (
       <div
