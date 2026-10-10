@@ -253,3 +253,91 @@ test("pre-compact does not commit when the catch-up append fails entirely", asyn
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+async function identityFixture(stateDir) {
+  const now = Date.now() - 1000;
+  for (const id of ["named", "alias", "unknown", "0"]) {
+    await writeFile(join(stateDir, `${id}.json`), JSON.stringify({
+      codexSessionId: id,
+      ovSessionId: `cx-${id}`,
+      capturedTurnCount: 1,
+      createdAt: now,
+      lastUpdatedAt: now,
+    }));
+    await writeEndedMarker(stateDir, id, now);
+  }
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  await writeFile(transcriptPath, [turn("user", "turn-0"), turn("assistant", "turn-1")].join("\n"));
+  const before = new Map();
+  for (const name of await readdir(stateDir)) before.set(name, await readFile(join(stateDir, name)));
+  return { transcriptPath, before };
+}
+
+for (const { name, input, id } of [
+  { name: "native session_id", input: { session_id: "named" }, id: "named" },
+  { name: "canonical sessionId alias", input: { sessionId: "named" }, id: "named" },
+  { name: "null native ID with canonical alias", input: { session_id: null, sessionId: "named" }, id: "named" },
+  { name: "native ID precedence", input: { session_id: "named", sessionId: "alias" }, id: "named" },
+  { name: "literal unknown ID", input: { session_id: "unknown" }, id: "unknown" },
+  { name: "string zero ID", input: { session_id: "0" }, id: "0" },
+]) {
+  test(`pre-compact uses ${name} without touching other sessions`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-identity-"));
+    const calls = [];
+    try {
+      const { transcriptPath, before } = await identityFixture(stateDir);
+      await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+        const { output } = await runPreCompact(
+          { ...input, transcript_path: transcriptPath },
+          baseEnv(baseUrl, stateDir),
+        );
+        assert.match(output.systemMessage, new RegExp(`cx-${id} is committed`));
+      });
+      assert.deepEqual(calls.map(({ path }) => path), [
+        "/health",
+        `/api/v1/sessions/cx-${id}/messages/batch`,
+        `/api/v1/sessions/cx-${id}/commit`,
+      ]);
+      const state = JSON.parse(await readFile(join(stateDir, `${id}.json`), "utf-8"));
+      assert.equal(state.ovSessionId, null);
+      assert.equal(state.capturedTurnCount, 2);
+      assert.equal(await endedMarkerExists(stateDir, id), false);
+      for (const [file, contents] of before) {
+        if (file === `${id}.json` || file.startsWith(`${id}.ended.`)) continue;
+        assert.deepEqual(await readFile(join(stateDir, file)), contents, `${file} must remain unchanged`);
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const { name, input, extra } of [
+  { name: "missing ID", input: {} },
+  { name: "null ID", input: { session_id: null } },
+  { name: "empty ID", input: { session_id: "" } },
+  { name: "empty native ID with an alias", input: { session_id: "", sessionId: "named" } },
+  { name: "disabled hook with missing ID", input: {}, extra: { OPENVIKING_AUTO_COMMIT_ON_COMPACT: "0" } },
+]) {
+  test(`pre-compact skips ${name} before state or HTTP access`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-no-id-"));
+    const calls = [];
+    try {
+      const { transcriptPath, before } = await identityFixture(stateDir);
+      await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+        const { output } = await runPreCompact(
+          { ...input, transcript_path: transcriptPath },
+          baseEnv(baseUrl, stateDir, extra),
+        );
+        assert.deepEqual(output, {});
+      });
+      assert.equal(calls.length, 0);
+      assert.deepEqual((await readdir(stateDir)).sort(), [...before.keys()].sort());
+      for (const [file, contents] of before) {
+        assert.deepEqual(await readFile(join(stateDir, file)), contents, `${file} must remain unchanged`);
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
