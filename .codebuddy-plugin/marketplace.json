@@ -1,0 +1,15 @@
+{
+  "name": "openviking",
+  "description": "OpenViking plugins for the CodeBuddy Code CLI.",
+  "owner": {
+    "name": "OpenViking"
+  },
+  "plugins": [
+    {
+      "name": "openviking-memory",
+      "description": "Long-term semantic memory for CodeBuddy Code, powered by OpenViking",
+      "source": "./examples/codebuddy-memory-plugin",
+      "category": "productivity"
+    }
+  ]
+}

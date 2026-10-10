@@ -11,6 +11,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **Codex / TraeCode CLI 2.0** | [Codex 记忆插件](./04-codex.md) — 生命周期 hooks 自动召回与增量捕获 |
 | **Cursor** | [Cursor 记忆集成](./12-cursor.md) — 一条命令安装生命周期 Hook、MCP 工具、Rules 与 Skills |
 | **TRAE / TRAE CN** | [TRAE 记忆集成](./13-trae.md) — 一个安装器完成 prompt 召回、回合捕获与 OpenViking 工具接入 |
+| **CodeBuddy Code** | [CodeBuddy Code 记忆插件](./20-codebuddy.md) — 带 hooks 与 MCP 代理的插件，从本仓库的 marketplace 安装 |
 | **DeepSeek Harness（`dsh`）** | [DeepSeek Harness 记忆插件](./17-dsh.md) — 进程内 Cordis 插件，pre-step 召回、事件捕获与 OpenViking MCP 工具 |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md)。自动捕获和召回记忆，旧版本使用内置提供方。 |
 | **OpenCode** | [OpenCode 插件](./10-opencode.md) — MCP 工具 + 生命周期 hooks，覆盖仓库上下文、自动召回与捕获 |
