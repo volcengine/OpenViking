@@ -26,6 +26,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ChunkMeta,
     ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
@@ -64,6 +65,83 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    @pytest.mark.parametrize(
+        ("user_peer", "assistant_peer", "expected"),
+        [
+            (None, None, "**user**: OWNER_REQUEST\n**assistant**: AGENT_RESPONSE"),
+            (
+                "workspace-agent",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: OWNER_REQUEST\n"
+                "**assistant [peer=workspace-agent]**: AGENT_RESPONSE",
+            ),
+            (
+                "owner",
+                "agent",
+                "**user [peer=owner]**: OWNER_REQUEST\n**assistant [peer=agent]**: AGENT_RESPONSE",
+            ),
+        ],
+    )
+    def test_event_chatlog_preserves_role_and_peer(self, user_peer, assistant_peer, expected):
+        """通过事件模板验证持久化正文保留角色和 peer。"""
+        context = ExtractContext(
+            [
+                Message(id="u", role="user", peer_id=user_peer, parts=[TextPart("OWNER_REQUEST")]),
+                Message(
+                    id="a",
+                    role="assistant",
+                    peer_id=assistant_peer,
+                    parts=[TextPart("AGENT_RESPONSE")],
+                ),
+            ]
+        )
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(
+            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
+        )
+        schema = registry.get("events")
+        assert schema is not None
+        rendered = MemoryFileUtils.write(
+            MemoryFile(extra_fields={"ranges": "0-1", "summary": "对话记录"}),
+            content_template=schema.content_template,
+            extract_context=context,
+        )
+        assert expected in rendered
+
+    @pytest.mark.parametrize(
+        ("second_role", "second_peer", "expected"),
+        [
+            ("user", "workspace-agent", "**user [peer=workspace-agent]**: first second"),
+            (
+                "assistant",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: first...\n"
+                "**assistant [peer=workspace-agent]**: ...second",
+            ),
+            (
+                "user",
+                "other-agent",
+                "**user [peer=workspace-agent]**: first...\n**user [peer=other-agent]**: ...second",
+            ),
+        ],
+    )
+    def test_event_chatlog_merges_chunks_only_for_same_role_and_peer(
+        self, second_role, second_peer, expected
+    ):
+        """即使分块来源相同，也不能跨角色或 peer 合并正文。"""
+        messages = [
+            Message(id="c0", role="user", peer_id="workspace-agent", parts=[TextPart("first ")]),
+            Message(id="c1", role=second_role, peer_id=second_peer, parts=[TextPart("second")]),
+        ]
+        context = ExtractContext(
+            messages,
+            chunk_meta={
+                id(message): ChunkMeta(source_message_id="source", chunk_index=i, chunk_count=2)
+                for i, message in enumerate(messages)
+            },
+        )
+        assert context.get_event_content("0-1", "") == expected
 
     def test_extract_context_initializes_page_id_map(self):
         extract_context = ExtractContext(
