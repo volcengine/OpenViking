@@ -121,7 +121,7 @@ const workspace = {
       overview: 'Overview',
       queue: 'Task queue',
       vikingdb: 'VectorDB',
-      models: 'Models',
+      configuration: 'Server configuration',
       filesystem: 'Filesystem',
       lock: 'Locks',
       retrieval: 'Retrieval',
@@ -780,8 +780,16 @@ const workspace = {
   },
   settings: {
     pageTitle: 'Settings',
-    tabs: { connection: 'Connection', models: 'Models' },
+    tabs: { connection: 'Connection', configuration: 'Server configuration' },
     models: {
+      editMode: 'Editing mode',
+      formMode: 'Form editor',
+      fileMode: 'File editor',
+      fileContent: 'ov.conf JSON',
+      validateFailed: 'Configuration validation failed.',
+      validating: 'Validating...',
+      fileScope:
+        'Both editors share one configuration draft. Form edits cover VLM and Embedding; the file editor covers all settings. Saving updates ov.conf and requires a server restart. It does not restart the service or update runtime overrides.',
       invalidJsonObject: 'Enter a valid JSON object',
       copyModelId: 'Copy model ID',
       copied: 'Model ID copied',
@@ -797,8 +805,6 @@ const workspace = {
       discardAll: 'Discard changes',
       saveAll: 'Save configuration',
       reloadFile: 'Reload file (discard unsaved edits first)',
-      fileScope:
-        "Server file configuration applies to accounts inheriting defaults. Restart after saving; other accounts' overrides are not deleted.",
       restartRequired:
         'File settings differ from running settings. Restart the server to apply them.',
       fileReadOnly:

@@ -15,14 +15,17 @@ export type ModelEntry = {
   config: ModelConfig
   available?: boolean
 }
-export type ModelConfiguration = {
-  revision?: string
+export type ConfigFileDraft = {
+  content: string
+  models: Record<ModelKind, ModelEntry>
+}
+export type ConfigFileConfiguration = ConfigFileDraft & {
+  revision: string
   file_path?: string
   writable?: boolean
   restart_required?: boolean
   overrides?: { cluster: string[]; account: string[] }
   settings: Partial<Record<ModelKind, ModelConfig>>
-  models: Record<ModelKind, ModelEntry>
 }
 export const embeddingModes = ['dense', 'sparse', 'hybrid'] as const
 export const embeddingCredentialFields = [
@@ -73,7 +76,7 @@ export function embeddingPatch(config: ModelConfig): ModelConfig {
   return patch
 }
 
-export function createModelManagementApi(
+export function createConfigFileApi(
   connection: ConnectionDraft,
   trusted: boolean,
 ) {
@@ -85,8 +88,8 @@ export function createModelManagementApi(
   return {
     get: async () => {
       const result = await getOvResult<
-        Omit<ModelConfiguration, 'models'> & {
-          models?: Partial<ModelConfiguration['models']>
+        Omit<ConfigFileConfiguration, 'models'> & {
+          models?: Partial<ConfigFileConfiguration['models']>
         }
       >(
         client.get({
@@ -95,18 +98,21 @@ export function createModelManagementApi(
         }),
       )
       const models = result.models
-      if (!models || modelKinds.some((kind) => !models[kind]))
+      if (
+        typeof result.content !== 'string' ||
+        !models ||
+        modelKinds.some((kind) => !models[kind])
+      )
         throw new Error('Model configuration response is unavailable')
-      return { ...result, models: models as ModelConfiguration['models'] }
+      return { ...result, models: models as ConfigFileConfiguration['models'] }
     },
-    save: (changes: ModelChanges, revision?: string) =>
-      getOvResult(
-        client.patch({
-          url,
-          query: { source: 'file' },
+    preview: (content: string, changes: ModelChanges = {}) =>
+      getOvResult<ConfigFileDraft>(
+        client.post({
+          url: `${url}/preview`,
           headers: { 'Content-Type': 'application/json' },
           body: {
-            revision,
+            content,
             settings: Object.fromEntries(
               Object.entries(changes).map(([kind, config]) => [
                 kind,
@@ -116,6 +122,15 @@ export function createModelManagementApi(
               ]),
             ),
           },
+        }),
+      ),
+    save: (content: string, revision: string) =>
+      getOvResult(
+        client.patch({
+          url,
+          query: { source: 'file' },
+          headers: { 'Content-Type': 'application/json' },
+          body: { revision, content },
         }),
       ),
   }

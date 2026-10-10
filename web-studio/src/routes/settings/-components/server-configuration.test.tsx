@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -10,7 +11,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
-import { ModelManagement } from './model-management'
+import { ServerConfigurationEditor } from './server-configuration'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import en from '#/i18n/locales/en/workspace'
 
@@ -18,12 +19,17 @@ const state = vi.hoisted(() => ({
   role: 'root',
   get: vi.fn(),
   save: vi.fn(),
+  preview: vi.fn(),
   copy: vi.fn(),
 }))
 vi.mock('#/lib/clipboard', () => ({ copyTextToClipboard: state.copy }))
-vi.mock('../-lib/model-management-api', async (importOriginal) => ({
+vi.mock('../-lib/config-file-api', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createModelManagementApi: () => ({ get: state.get, save: state.save }),
+  createConfigFileApi: () => ({
+    get: state.get,
+    save: state.save,
+    preview: state.preview,
+  }),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
@@ -110,12 +116,42 @@ const data = {
     },
   },
 }
+const file = {
+  vlm: language,
+  embedding: data.models.embedding.config,
+  rerank: data.models.rerank.config,
+  server: { port: 1933, root_api_key: '${ROOT_KEY}' },
+  storage: { workspace: '/server/data' },
+}
+const content = JSON.stringify(file, null, 2)
+async function apply() {
+  await act(async () => {
+    fireEvent.click(screen.getByText('models.apply'))
+  })
+}
 function mount(
   payload: typeof data & {
     overrides?: { cluster: string[]; account: string[] }
   } = data,
 ) {
-  state.get.mockResolvedValue(structuredClone(payload))
+  state.get.mockResolvedValue({ ...structuredClone(payload), content })
+  state.preview.mockImplementation(async (text: string, changes = {}) => {
+    const raw = { ...JSON.parse(text), ...changes }
+    return {
+      content: Object.keys(changes).length
+        ? JSON.stringify(raw, null, 2)
+        : text,
+      models: Object.fromEntries(
+        Object.entries(payload.models).map(([kind, entry]) => [
+          kind,
+          {
+            ...entry,
+            config: raw[kind] ?? entry.config,
+          },
+        ]),
+      ),
+    }
+  })
   state.save.mockResolvedValue({})
   state.copy.mockResolvedValue(undefined)
   const client = new QueryClient({
@@ -123,7 +159,7 @@ function mount(
   })
   render(
     <QueryClientProvider client={client}>
-      <ModelManagement />
+      <ServerConfigurationEditor />
     </QueryClientProvider>,
   )
   return client
@@ -134,7 +170,9 @@ async function menuAction(
   name: string,
 ) {
   fireEvent.click(region.getAllByRole('button', { name: 'models.more' })[index])
-  fireEvent.click(await screen.findByRole('menuitem', { name }))
+  await act(async () => {
+    fireEvent.click(await screen.findByRole('menuitem', { name }))
+  })
 }
 function section(name: string) {
   return within(screen.getByRole('region', { name: `models.${name}` }))
@@ -154,17 +192,22 @@ it.each([false, true])(
     fireEvent.change(screen.getByLabelText('models.fields.model'), {
       target: { value: 'draft-model' },
     })
-    if (applied) fireEvent.click(screen.getByText('models.apply'))
+    if (applied) await apply()
     const refreshed = structuredClone(data)
     refreshed.revision = 'external-revision'
     refreshed.models.vlm.config.timeout = 99
-    state.get.mockResolvedValue(refreshed)
-    await client.refetchQueries({ queryKey: ['model-management', 'default'] })
-    if (!applied) fireEvent.click(screen.getByText('models.apply'))
+    state.get.mockResolvedValue({
+      ...refreshed,
+      content: JSON.stringify({ ...file, vlm: refreshed.models.vlm.config }),
+    })
+    await client.refetchQueries({
+      queryKey: ['server-configuration', 'default'],
+    })
+    if (!applied) await apply()
     fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
     await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
     expect(state.save.mock.calls[0][1]).toBe('revision')
-    expect(state.save.mock.calls[0][0].vlm.timeout).toBe(60)
+    expect(JSON.parse(state.save.mock.calls[0][0]).vlm.timeout).toBe(60)
   },
 )
 it('allows keyless OpenAI-compatible embedding endpoints but requires an address', async () => {
@@ -179,11 +222,11 @@ it('allows keyless OpenAI-compatible embedding endpoints but requires an address
   const base = screen.getByLabelText('models.fields.api_base')
   expect(base.hasAttribute('required')).toBe(true)
   fireEvent.change(base, { target: { value: 'http://localhost:8000/v1' } })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
   expect(
-    state.save.mock.calls[0][0].embedding.dense.credentials[0],
+    JSON.parse(state.save.mock.calls[0][0]).embedding.dense.credentials[0],
   ).toMatchObject({ api_key: null, api_base: 'http://localhost:8000/v1' })
 })
 it('shows file scope, restart and override warnings and blocks saves to read-only files', async () => {
@@ -219,7 +262,7 @@ it('stages additions and confirmed deletions, cancels edits and undoes the draft
   fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
     target: { value: 'new-key' },
   })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   expect(vlm.getByText('new-model')).toBeTruthy()
   expect(state.save).not.toHaveBeenCalled()
   await menuAction(vlm, 2, 'models.remove')
@@ -230,11 +273,13 @@ it('stages additions and confirmed deletions, cancels edits and undoes the draft
   )
   expect(vlm.getByText('new-model')).toBeTruthy()
   await menuAction(vlm, 2, 'models.remove')
-  fireEvent.click(
-    within(screen.getByRole('dialog')).getByRole('button', {
-      name: 'models.remove',
-    }),
-  )
+  await act(async () => {
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'models.remove',
+      }),
+    )
+  })
   expect(vlm.queryByText('new-model')).toBeNull()
   fireEvent.click(vlm.getAllByRole('button', { name: 'models.edit' })[0])
   fireEvent.change(screen.getByLabelText('models.fields.model'), {
@@ -242,6 +287,8 @@ it('stages additions and confirmed deletions, cancels edits and undoes the draft
   })
   fireEvent.click(screen.getByText('models.dismiss'))
   expect(vlm.queryByText('discarded')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'models.saveAll' })).toBeNull()
+  await menuAction(vlm, 0, 'models.moveDown')
   fireEvent.click(screen.getByRole('button', { name: 'models.discardAll' }))
   expect(vlm.queryByText('models.unsaved')).toBeNull()
 })
@@ -285,7 +332,7 @@ it('places each add button alongside model settings in the section header', asyn
   fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
     target: { value: 'new-embedding-key' },
   })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   expect(
     section('embeddingType').getAllByRole('button', { name: 'models.edit' }),
   ).toHaveLength(2)
@@ -313,7 +360,7 @@ it('offers the target vector group when adding to multiple embedding groups', as
   fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
     target: { value: 'sparse-key' },
   })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   expect(
     embedding.getAllByRole('button', { name: 'models.edit' }),
   ).toHaveLength(3)
@@ -343,13 +390,13 @@ it.each(['vlmType', 'embeddingType'])(
     fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
       target: { value: 'custom-secret' },
     })
-    fireEvent.click(screen.getByText('models.apply'))
+    await apply()
     expect(
       section(kind).getByText('https://gateway.example.com/v1'),
     ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
     await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
-    const changes = state.save.mock.calls[0][0]
+    const changes = JSON.parse(state.save.mock.calls[0][0])
     const credentials =
       kind === 'vlmType'
         ? changes.vlm.credentials
@@ -372,19 +419,17 @@ it('saves visible categories together without altering hidden model settings', a
   fireEvent.change(screen.getByLabelText('models.fields.max_retries'), {
     target: { value: '5' },
   })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() =>
-    expect(state.save).toHaveBeenCalledWith(
-      {
-        vlm: {
-          ...language,
-          credentials: [language.credentials[1], language.credentials[0]],
-        },
-        embedding: { ...data.models.embedding.config, max_retries: 5 },
+    expect(JSON.parse(state.save.mock.calls[0][0])).toEqual({
+      ...file,
+      vlm: {
+        ...language,
+        credentials: [language.credentials[1], language.credentials[0]],
       },
-      'revision',
-    ),
+      embedding: { ...data.models.embedding.config, max_retries: 5 },
+    }),
   )
   expect(state.save).toHaveBeenCalledTimes(1)
 })
@@ -421,18 +466,16 @@ it('allows embedding policy edits without exposing identity fields', async () =>
   fireEvent.change(screen.getByLabelText('models.fields.max_retries'), {
     target: { value: '5' },
   })
-  fireEvent.click(screen.getByText('models.apply'))
+  await apply()
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() =>
-    expect(state.save).toHaveBeenCalledWith(
-      {
-        embedding: {
-          ...data.models.embedding.config,
-          max_retries: 5,
-        },
+    expect(JSON.parse(state.save.mock.calls[0][0])).toEqual({
+      ...file,
+      embedding: {
+        ...data.models.embedding.config,
+        max_retries: 5,
       },
-      'revision',
-    ),
+    }),
   )
 })
 it('retains the draft after backend validation failure', async () => {
@@ -497,4 +540,110 @@ it('uses localized validation text for invalid JSON', async () => {
   expect(headers.checkValidity()).toBe(false)
   fireEvent.change(headers, { target: { value: '{"A":"B"}' } })
   expect(headers.validationMessage).toBe('')
+})
+
+it('shares form edits and whole-file edits across modes, preserving all other sections', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.change(screen.getByLabelText('models.fields.model'), {
+    target: { value: 'form-draft' },
+  })
+  await apply()
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  const input = screen.getByLabelText<HTMLTextAreaElement>('models.fileContent')
+  const raw = JSON.parse(input.value)
+  expect(raw.vlm.credentials[0].model).toBe('form-draft')
+  expect(raw.storage).toEqual(file.storage)
+  expect(raw.server.root_api_key).toBe('${ROOT_KEY}')
+  raw.server.port = 1934
+  raw.vlm.credentials[0].model = 'file-draft'
+  const text = JSON.stringify(raw, null, 4)
+  fireEvent.change(input, { target: { value: text } })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'models.formMode' }))
+  })
+  expect(await screen.findByText('file-draft')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
+  expect(state.save).toHaveBeenCalledTimes(1)
+  expect(await screen.findByText('models.restartRequired')).toBeTruthy()
+})
+it('blocks invalid JSON from saving or switching, then discards the same draft', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  const input = screen.getByLabelText<HTMLTextAreaElement>('models.fileContent')
+  fireEvent.change(input, { target: { value: '{broken' } })
+  expect(screen.getByText('models.invalidJsonObject')).toBeTruthy()
+  expect(
+    screen
+      .getByRole('button', { name: 'models.formMode' })
+      .hasAttribute('disabled'),
+  ).toBe(true)
+  expect(
+    screen
+      .getByRole('button', { name: 'models.saveAll' })
+      .hasAttribute('disabled'),
+  ).toBe(true)
+  expect(state.save).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'models.discardAll' }))
+  expect(input.value).toBe(content)
+  expect(screen.queryByRole('button', { name: 'models.saveAll' })).toBeNull()
+})
+it('keeps full-file text and its original revision after validation and save failures', async () => {
+  const client = mount()
+  await screen.findByText('model-a')
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  const text = JSON.stringify({
+    ...file,
+    server: { ...file.server, port: 1934 },
+  })
+  fireEvent.change(screen.getByLabelText('models.fileContent'), {
+    target: { value: text },
+  })
+  state.preview.mockRejectedValue(new Error('Invalid startup configuration'))
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'models.formMode' }))
+  })
+  await screen.findByText(/Invalid startup configuration/)
+  expect(
+    screen.getByLabelText<HTMLTextAreaElement>('models.fileContent').value,
+  ).toBe(text)
+  state.get.mockResolvedValue({
+    ...data,
+    content,
+    revision: 'external-revision',
+  })
+  await act(async () => {
+    await client.refetchQueries({
+      queryKey: ['server-configuration', 'default'],
+    })
+  })
+  state.save.mockRejectedValue(new Error('ov.conf changed'))
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
+  expect(
+    screen.getByLabelText<HTMLTextAreaElement>('models.fileContent').value,
+  ).toBe(text)
+})
+it('keeps the form dialog and input when draft validation fails', async () => {
+  mount()
+  await screen.findByText('model-a')
+  state.preview.mockRejectedValue(new Error('Invalid configuration fields'))
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.change(screen.getByLabelText('models.fields.model'), {
+    target: { value: 'rejected-model' },
+  })
+  await apply()
+  const dialog = within(screen.getByRole('dialog'))
+  expect(await dialog.findByText(/Invalid configuration fields/)).toBeTruthy()
+  expect(
+    dialog.getByLabelText<HTMLInputElement>('models.fields.model').value,
+  ).toBe('rejected-model')
+  expect(state.save).not.toHaveBeenCalled()
 })

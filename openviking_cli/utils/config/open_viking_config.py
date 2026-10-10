@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import hashlib
 import json
 import logging
 import os
@@ -627,6 +628,7 @@ class OpenVikingConfigSingleton:
     _lock: Lock = Lock()
     _initializing: bool = False
     _config_file: Optional[Path] = None
+    _config_file_revision: Optional[str] = None
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
@@ -684,6 +686,7 @@ class OpenVikingConfigSingleton:
                 if config_dict is not None:
                     cls._instance = OpenVikingConfig.from_dict(config_dict)
                     cls._config_file = None
+                    cls._config_file_revision = None
                 else:
                     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
                     if path is not None:
@@ -712,8 +715,8 @@ class OpenVikingConfigSingleton:
             if not config_path.exists():
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
-            with open(config_path, "r", encoding="utf-8-sig") as f:
-                raw = f.read()
+            data = config_path.read_bytes()
+            raw = data.decode("utf-8-sig")
 
             # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
             # Unset variables are left unchanged by expandvars().
@@ -722,6 +725,7 @@ class OpenVikingConfigSingleton:
 
             config = OpenVikingConfig.from_dict(config_data)
             cls._config_file = config_path.resolve()
+            cls._config_file_revision = hashlib.sha256(data).hexdigest()
             return config
         except json.JSONDecodeError as e:
             raise ValueError(f"Config file JSON format error: {e}")
@@ -742,6 +746,12 @@ class OpenVikingConfigSingleton:
         with cls._lock:
             cls._instance = None
             cls._config_file = None
+            cls._config_file_revision = None
+
+    @classmethod
+    def get_config_file_revision(cls) -> Optional[str]:
+        """Return the revision of the complete file read at startup."""
+        return cls._config_file_revision
 
     @classmethod
     def get_config_file(cls) -> Optional[Path]:

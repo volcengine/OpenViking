@@ -1,4 +1,4 @@
-"""Versioned, atomic model edits to the actual startup configuration file."""
+"""Versioned, atomic edits to the actual startup configuration file."""
 
 import fcntl
 import hashlib
@@ -65,20 +65,33 @@ def _revision(data: bytes) -> str:
 
 def _validate(raw: dict) -> OpenVikingConfig:
     try:
-        return OpenVikingConfig.from_dict(json.loads(os.path.expandvars(json.dumps(raw))))
+        from openviking.server.config import ServerConfig
+
+        expanded = json.loads(os.path.expandvars(json.dumps(raw)))
+        server = expanded.get("server")
+        ServerConfig.model_validate({} if server is None else server)
+        return OpenVikingConfig.from_dict(expanded)
     except Exception as exc:
         # Validation errors may contain API keys from rejected input.
-        raise ValueError("Invalid ov.conf configuration; check model fields") from exc
+        raise ValueError("Invalid ov.conf configuration; check configuration fields") from exc
+
+
+def _parse(content: str) -> dict:
+    try:
+        raw = json.loads(content.lstrip("\ufeff"))
+        if not isinstance(raw, dict):
+            raise ValueError()
+        return raw
+    except ValueError as exc:
+        raise ValueError("ov.conf must contain a JSON object") from exc
 
 
 def _read(path: Path):
     data = path.read_bytes()
     try:
-        raw = json.loads(data.decode("utf-8-sig"))
-        if not isinstance(raw, dict):
-            raise ValueError()
-    except (ValueError, UnicodeError) as exc:
-        raise ValueError("ov.conf must contain a JSON object") from exc
+        raw = _parse(data.decode("utf-8-sig"))
+    except UnicodeError as exc:
+        raise ValueError("ov.conf must contain UTF-8 JSON") from exc
     return data, raw, _validate(raw)
 
 
@@ -89,9 +102,7 @@ def _path() -> Path:
     return path
 
 
-def read_model_file() -> dict:
-    path = _path()
-    data, raw, config = _read(path)
+def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
     models = {}
     for kind in MODEL_KINDS:
         inherited = kind == "query_planner" and (
@@ -127,22 +138,38 @@ def read_model_file() -> dict:
             "config": value,
             **({"available": model.is_available()} if kind == "rerank" else {}),
         }
+    return models
+
+
+def preview_config_file(content: str, settings: dict | None = None) -> dict:
+    """Validate a draft and project its form fields without writing or publishing it."""
+    raw = _parse(content)
+    if settings:
+        _apply_model_changes(raw, settings)
+        content = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+    config = _validate(raw)
+    return {"content": content, "models": _model_view(raw, config)}
+
+
+def read_config_file() -> dict:
+    path = _path()
+    data, raw, config = _read(path)
     active = OpenVikingConfigSingleton.get_instance()
-    pending = any(
-        getattr(config, kind).model_dump() != getattr(active, kind).model_dump()
-        if getattr(config, kind) is not None and getattr(active, kind) is not None
-        else getattr(config, kind) != getattr(active, kind)
-        for kind in MODEL_KINDS
-    )
+    startup_revision = OpenVikingConfigSingleton.get_config_file_revision()
     return {
+        "content": data.decode("utf-8-sig"),
         "settings": {kind: raw[kind] for kind in MODEL_KINDS if kind in raw},
-        "models": models,
+        "models": _model_view(raw, config),
         "revision": _revision(data),
         "file_path": str(path),
         "writable": bool(path.stat().st_mode & 0o222)
         and os.access(path, os.W_OK)
         and os.access(path.parent, os.W_OK),
-        "restart_required": pending,
+        "restart_required": (
+            _revision(data) != startup_revision
+            if startup_revision is not None
+            else config.model_dump() != active.model_dump()
+        ),
     }
 
 
@@ -228,9 +255,26 @@ def _atomic_write(path: Path, data: bytes, mode: int) -> None:
             os.unlink(temporary)
 
 
-def save_model_file(settings: dict, revision: str) -> dict:
+def _apply_model_changes(raw: dict, settings: dict) -> None:
     if not settings or set(settings) - set(MODEL_KINDS):
-        raise ValueError("Only model sections can be edited")
+        raise ValueError("Only model sections can be edited through the form")
+    for kind, value in settings.items():
+        if value is None:
+            if kind != "query_planner":
+                raise ValueError("Only query_planner can be reset to inherit VLM")
+            raw.pop(kind, None)
+        elif isinstance(value, dict):
+            raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
+        else:
+            raise ValueError("Model configuration must be an object")
+
+
+def save_config_file(settings: dict, revision: str, content: str | None = None) -> dict:
+    """Save one startup-file revision; never update the running configuration."""
+    if content is not None and settings:
+        raise ValueError("Supply either full file content or model settings, not both")
+    if content is None and not settings:
+        raise ValueError("Supply full file content or model settings")
     path = _path()
     lock_fd = os.open(path.with_name(f".{path.name}.studio.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(lock_fd, "w") as lock:
@@ -241,18 +285,16 @@ def save_model_file(settings: dict, revision: str) -> dict:
         mode = stat.S_IMODE(path.stat().st_mode)
         if not mode & 0o222 or not os.access(path, os.W_OK):
             raise ValueError("ov.conf is read-only")
-        for kind, value in settings.items():
-            if value is None:
-                if kind != "query_planner":
-                    raise ValueError("Only query_planner can be reset to inherit VLM")
-                raw.pop(kind, None)
-            elif isinstance(value, dict):
-                raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
-            else:
-                raise ValueError("Model configuration must be an object")
+        if content is None:
+            _apply_model_changes(raw, settings)
+            content = json.dumps(raw, ensure_ascii=False, indent=2) + "\n"
+        else:
+            raw = _parse(content)
         _validate(raw)
         if path.read_bytes() != data:
             raise ValueError("ov.conf changed; reload before saving")
-        _atomic_write(path.with_name(f"{path.name}.studio.bak"), data, 0o600)
-        _atomic_write(path, (json.dumps(raw, ensure_ascii=False, indent=2) + "\n").encode(), mode)
-    return {"revision": _revision(path.read_bytes()), "restart_required": True}
+        output = content.encode("utf-8")
+        if output != data:
+            _atomic_write(path.with_name(f"{path.name}.studio.bak"), data, 0o600)
+            _atomic_write(path, output, mode)
+    return {"revision": _revision(output), "restart_required": True}

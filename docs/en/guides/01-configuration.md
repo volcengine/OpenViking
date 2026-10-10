@@ -114,27 +114,31 @@ Account-owned business code must resolve model configuration through
 evaluation composition roots. A CI architecture test rejects new direct reads
 of Cluster VLM or Query Planner configuration from other production modules.
 
-Web Studio's **Settings → Models** edits the server's actual startup `ov.conf`, rather than creating Account model overrides. Only ROOT may read/write credentials; responses disable caching.
-The file configuration API supports all four categories, including JEV parameters. Web Studio currently shows only VLM and Embedding; Query Planner and Rerank are hidden without changing their existing settings. VLM, Query Planner and Embedding use ordered `credentials` arrays; Rerank has a single binding.
-Confirmed edits, additions, ordering and inheritance resets remain drafts. The page-level Save configuration action submits all changes with one revision check; Discard changes clears all unsaved drafts.
-Lists show file settings, not necessarily running models. Saving requires a server restart. Embedding identity, dimensions and input remain protected in the UI; credentials must remain compatible with existing vectors. Saving does not rebuild indexes.
-Unchanged fields and environment references are preserved. The previous file is backed up as `<filename>.studio.bak` with mode 0600. Read-only files cannot be saved.
-Existing runtime overrides are not silently removed. The UI reports Cluster and current Account overrides; other Accounts may also have overrides and need separate review.
+Web Studio's **Settings → Server configuration** edits the server's actual startup `ov.conf`. ROOT credentials are required; file and draft responses disable caching. It does not create Account model overrides.
 
-The existing Cluster configuration API accepts `source=file`; default runtime behavior is unchanged:
+- **Form editor** exposes common VLM and Embedding fields. Confirmed changes, additions and ordering update the same full-file draft while preserving settings outside the form.
+- **File editor** edits the complete JSON document, including server, authentication, storage, retrieval, Query Planner and Rerank settings. Switching back to the form validates and projects this draft without saving it. Invalid JSON blocks switching and saving; schema errors retain the draft.
+- Both modes share one **Save configuration** and **Discard changes** action. Saving writes the file, not the running configuration. The page distinguishes **unsaved changes** from **saved, restart required**. It never restarts or hot-reloads the service automatically.
+
+The form protects Embedding identity, dimensions and input contracts. File mode allows complete configuration changes; operators must keep embedding settings compatible with existing vectors. Saving does not rebuild indexes.
+Literal environment references are retained. Full-file saves replace the document exactly, so removing a field in file mode removes it from `ov.conf`. The previous file is backed up as `<filename>.studio.bak` with mode 0600. Read-only files cannot be saved.
+Existing runtime overrides are not removed. The UI reports Cluster and current Account model overrides; other Accounts may also have overrides and need separate review.
+
+The existing Cluster configuration API accepts `source=file`; its default runtime behavior is unchanged:
 
 ```http
 GET   /api/v1/admin/configuration?source=file&account_id=default
+POST  /api/v1/admin/configuration/preview
 PATCH /api/v1/admin/configuration?source=file
 ```
 
-GET returns `models`, `file_path`, `revision`, `writable`, `restart_required` and override warnings. PATCH example:
+GET returns the literal full-file `content`, projected `models`, `file_path`, `revision`, `writable`, `restart_required` and override warnings. POST accepts `content` and optional model `settings`; it validates/projects the draft without writing or publishing it. PATCH replaces the full file after validating the revision and configuration:
 
 ```json
-{"revision": "<revision from GET>", "settings": {"rerank": {"provider": "jev", "model": "jev-latest", "api_key": "<your-jev-api-key>", "mode": "choice", "threshold": 0}}}
+{"revision": "<revision from GET>", "content": "<complete ov.conf JSON text>"}
 ```
 
-Stale revisions are rejected; reload before retrying. Only model sections are writable. Setting `query_planner` to null removes that section to inherit VLM. Servers initialized without a startup file cannot use file editing. Avoid concurrent UI edits and external configuration-management writers.
+The model-only `settings` PATCH remains supported; do not send it together with `content`. `query_planner: null` in a model PATCH removes that section to inherit VLM. Stale revisions are rejected without losing the browser draft. Servers initialized without a startup file cannot use file editing. Avoid concurrent UI edits and external configuration-management writers.
 
 The original runtime configuration APIs remain unchanged:
 

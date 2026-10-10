@@ -31,7 +31,7 @@ import { cn } from '#/lib/utils'
 import { localizeCapabilityDetail } from './-lib/localize-capability-probe'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
-import { ModelManagement } from './-components/model-management'
+import { ServerConfigurationEditor } from './-components/server-configuration'
 
 export const Route = createFileRoute('/settings')({
   component: ConnectionSettingsRoute,
@@ -46,13 +46,15 @@ function ConnectionSettingsRoute() {
       <Tabs defaultValue="connection" className="min-w-0 gap-5">
         <TabsList variant="line">
           <TabsTrigger value="connection">{t('tabs.connection')}</TabsTrigger>
-          <TabsTrigger value="models">{t('tabs.models')}</TabsTrigger>
+          <TabsTrigger value="configuration">
+            {t('tabs.configuration')}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="connection">
           <ConnectionSettingsPanel />
         </TabsContent>
-        <TabsContent value="models">
-          <ModelManagement key={identityScopeKey} />
+        <TabsContent value="configuration">
+          <ServerConfigurationEditor key={identityScopeKey} />
         </TabsContent>
       </Tabs>
     </div>

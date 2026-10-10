@@ -140,6 +140,7 @@ class ConfigPatchRequest(BaseModel):
 
     settings: dict[str, Any] = Field(default_factory=dict)
     revision: str | None = None
+    content: str | None = None
 
 
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
@@ -814,15 +815,19 @@ async def get_cluster_configuration(
     """Return the cluster layer's explicit runtime configuration."""
     runtime_config = _get_runtime_config_manager()
     if source == "file":
-        from openviking.config.model_file import MODEL_KINDS, read_model_file
+        from openviking.config.config_file import MODEL_KINDS, read_config_file
 
         response.headers["Cache-Control"] = "no-store"
         try:
-            result = await asyncio.to_thread(read_model_file)
+            result = await asyncio.to_thread(read_config_file)
         except (ValueError, OSError) as exc:
-            raise FailedPreconditionError("Cannot read the server startup configuration file") from exc
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
         cluster = await runtime_config.get_settings(ConfigScope.cluster())
-        account = await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
+        account = (
+            await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
+        )
         result["overrides"] = {
             "cluster": [key for key in MODEL_KINDS if (cluster or {}).get(key) is not None],
             "account": [key for key in MODEL_KINDS if (account or {}).get(key) is not None],
@@ -843,16 +848,22 @@ async def patch_cluster_configuration(
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
     if source == "file":
-        from openviking.config.model_file import save_model_file
+        from openviking.config.config_file import save_config_file
 
         response.headers["Cache-Control"] = "no-store"
         try:
-            result = await asyncio.to_thread(save_model_file, body.settings, body.revision or "")
+            result = await asyncio.to_thread(
+                save_config_file, body.settings, body.revision or "", body.content
+            )
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         except OSError as exc:
-            raise FailedPreconditionError("Cannot write ov.conf; check file and directory permissions") from exc
+            raise FailedPreconditionError(
+                "Cannot write ov.conf; check file and directory permissions"
+            ) from exc
         return Response(status="ok", result=result)
+    if body.content is not None:
+        raise InvalidArgumentError("Full file content requires source=file")
     runtime_config = _get_runtime_config_manager()
     try:
         await runtime_config.patch_cluster(body.settings)
@@ -860,6 +871,30 @@ async def patch_cluster_configuration(
         raise InvalidArgumentError(str(exc)) from exc
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
+
+
+class ConfigFilePreviewRequest(BaseModel):
+    content: str
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/configuration/preview")
+@require_auth_root
+async def preview_startup_configuration(
+    body: ConfigFilePreviewRequest,
+    request: Request,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Validate/project a full startup-file draft without touching disk or runtime."""
+    from openviking.config.config_file import preview_config_file
+
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = await asyncio.to_thread(preview_config_file, body.content, body.settings)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+    return Response(status="ok", result=result)
 
 
 # ---- User endpoints ----

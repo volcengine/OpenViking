@@ -14,7 +14,7 @@ import {
 } from '#/components/ui/select'
 import { Field, FieldLabel } from '#/components/ui/field'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
-import type { ModelConfig } from '../-lib/model-management-api'
+import type { ModelConfig } from '../-lib/config-file-api'
 
 export type EditableModelKind = 'vlm' | 'embedding'
 

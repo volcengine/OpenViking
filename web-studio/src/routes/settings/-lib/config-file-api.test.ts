@@ -1,9 +1,6 @@
 import axios from 'axios'
 import { afterEach, expect, it, vi } from 'vitest'
-import {
-  createModelManagementApi,
-  embeddingPatch,
-} from './model-management-api'
+import { createConfigFileApi, embeddingPatch } from './config-file-api'
 import type { InternalAxiosRequestConfig } from 'axios'
 
 afterEach(() => vi.restoreAllMocks())
@@ -47,7 +44,7 @@ it('sends only editable embedding fields and retains credential extensions suppo
     },
   })
 })
-it('uses ROOT credentials, loads all effective models and saves each type in its proper endpoint', async () => {
+it('uses ROOT credentials to preview a full draft without saving, then saves one full revision', async () => {
   const requests: InternalAxiosRequestConfig[] = []
   vi.spyOn(axios, 'create').mockReturnValue(
     axios.create({
@@ -62,6 +59,7 @@ it('uses ROOT credentials, loads all effective models and saves each type in its
             status: 'ok',
             result: {
               revision: 'file-revision',
+              content: '{"server":{"port":1933}}',
               models: Object.fromEntries(
                 ['vlm', 'embedding', 'query_planner', 'rerank'].map((kind) => [
                   kind,
@@ -74,7 +72,7 @@ it('uses ROOT credentials, loads all effective models and saves each type in its
       },
     }),
   )
-  const api = createModelManagementApi(
+  const api = createConfigFileApi(
     {
       baseUrl: 'http://localhost:1933',
       accountId: 'default',
@@ -85,15 +83,10 @@ it('uses ROOT credentials, loads all effective models and saves each type in its
     false,
   )
   const loaded = await api.get()
-  await api.save(
-    {
-      vlm: { model: 'test' },
-      query_planner: null,
-      rerank: { model: 'test' },
-      embedding: { max_retries: 2 },
-    },
-    loaded.revision,
-  )
+  const draft = await api.preview(loaded.content, {
+    embedding: { max_retries: 2 },
+  })
+  await api.save(draft.content, loaded.revision)
   expect(
     requests.every(
       (request) => request.headers.get('X-API-Key') === 'root-key',
@@ -101,16 +94,17 @@ it('uses ROOT credentials, loads all effective models and saves each type in its
   ).toBe(true)
   expect(requests[0].url).toContain('source=file')
   expect(requests[0].url).not.toContain('/accounts/')
+  expect(requests[1].method).toBe('post')
+  expect(requests[1].url).toContain('/api/v1/admin/configuration/preview')
   expect(JSON.parse(requests[1].data)).toEqual({
-    revision: 'file-revision',
-    settings: {
-      vlm: { model: 'test' },
-      query_planner: null,
-      rerank: { model: 'test' },
-      embedding: { max_retries: 2 },
-    },
+    content: loaded.content,
+    settings: { embedding: { max_retries: 2 } },
   })
-  expect(requests).toHaveLength(2)
-  expect(requests[1].method).toBe('patch')
-  expect(requests[1].url).toContain('/admin/configuration?source=file')
+  expect(requests).toHaveLength(3)
+  expect(requests[2].method).toBe('patch')
+  expect(requests[2].url).toContain('/admin/configuration?source=file')
+  expect(JSON.parse(requests[2].data)).toEqual({
+    revision: 'file-revision',
+    content: loaded.content,
+  })
 })

@@ -351,6 +351,63 @@ async def test_studio_file_configuration_permissions_revision_and_overrides(
     assert settings["vlm"]["model"] == "override-model"
 
 
+async def test_studio_full_configuration_preview_and_save_are_root_only(
+    lightweight_admin_client,
+    template_account,
+    tmp_path,
+    monkeypatch,
+):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    _, admin_headers = template_account
+    path = tmp_path / "startup.conf"
+    path.write_text('{"server":{"port":1933},"storage":{"workspace":"/tmp/old"}}')
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    before = path.read_bytes()
+    url = "/api/v1/admin/configuration"
+    loaded = await lightweight_admin_client.get(
+        url, params={"source": "file"}, headers=root_headers()
+    )
+    result = loaded.json()["result"]
+    assert result["content"] == before.decode()
+    content = '{"server":{"port":1934},"storage":{"workspace":"/tmp/new"}}'
+    preview_url = url + "/preview"
+    denied = await lightweight_admin_client.post(
+        preview_url, headers=admin_headers, json={"content": content}
+    )
+    assert denied.status_code == 403
+    preview = await lightweight_admin_client.post(
+        preview_url, headers=root_headers(), json={"content": content}
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["cache-control"] == "no-store"
+    assert preview.json()["result"]["content"] == content
+    assert path.read_bytes() == before
+    body = {"content": content, "revision": result["revision"]}
+    denied = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=admin_headers, json=body
+    )
+    assert denied.status_code == 403
+    saved = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=root_headers(), json=body
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.headers["cache-control"] == "no-store"
+    assert path.read_text() == content
+    assert path.with_name(path.name + ".studio.bak").read_bytes() == before
+    stale = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=root_headers(), json=body
+    )
+    assert stale.status_code == 400
+    runtime = await lightweight_admin_client.patch(url, headers=root_headers(), json=body)
+    assert runtime.status_code == 400
+    invalid = await lightweight_admin_client.post(
+        preview_url, headers=root_headers(), json={"content": '{"server":{"port":"bad"}}'}
+    )
+    assert invalid.status_code == 400
+    assert path.read_text() == content
+
+
 @pytest.mark.parametrize(
     "memory_type",
     ["profile", "preferences", "entities", "events", "soul", "identity"],

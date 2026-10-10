@@ -42,6 +42,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { copyTextToClipboard } from '#/lib/clipboard'
 import { Button } from '#/components/ui/button'
+import { Textarea } from '#/components/ui/textarea'
 import { Badge } from '#/components/ui/badge'
 import {
   DropdownMenu,
@@ -70,16 +71,16 @@ import {
   providers,
 } from './model-fields'
 import {
-  createModelManagementApi,
+  createConfigFileApi,
   embeddingModes,
   credentials,
   object,
-} from '../-lib/model-management-api'
+} from '../-lib/config-file-api'
 import type {
-  ModelChanges,
-  ModelConfiguration,
+  ConfigFileDraft,
+  ConfigFileConfiguration,
   ModelConfig,
-} from '../-lib/model-management-api'
+} from '../-lib/config-file-api'
 import type { EditableModelKind, FieldSpec } from './model-fields'
 
 const visibleModelKinds: ReadonlyArray<EditableModelKind> = ['vlm', 'embedding']
@@ -365,7 +366,7 @@ const policies: FieldSpec[] = [
   { key: 'circuit_breaker', type: 'json' },
 ]
 
-export function ModelManagement() {
+export function ServerConfigurationEditor() {
   const { t } = useTranslation('settings')
   const {
     connection,
@@ -378,21 +379,21 @@ export function ModelManagement() {
     connectionRole === 'root' &&
     (serverMode === 'api_key' || serverMode === 'trusted')
   const api = React.useMemo(
-    () => createModelManagementApi(connection, serverMode === 'trusted'),
+    () => createConfigFileApi(connection, serverMode === 'trusted'),
     [connection, serverMode],
   )
   const queryClient = useQueryClient()
-  const queryKey = ['model-management', identityScopeKey]
+  const queryKey = ['server-configuration', identityScopeKey]
   const query = useQuery({
     queryKey,
     queryFn: api.get,
     enabled: allowed,
     retry: false,
   })
-  const [drafts, setDrafts] = React.useState<ModelChanges>({})
-  const [baseline, setBaseline] = React.useState<ModelConfiguration | null>(
-    null,
-  )
+  const [draft, setDraft] = React.useState<ConfigFileDraft | null>(null)
+  const [editMode, setEditMode] = React.useState<'form' | 'file'>('form')
+  const [baseline, setBaseline] =
+    React.useState<ConfigFileConfiguration | null>(null)
   const [editor, setEditor] = React.useState<Editor | null>(null)
   const [confirm, setConfirm] = React.useState<{
     kind: EditableModelKind
@@ -401,26 +402,53 @@ export function ModelManagement() {
   } | null>(null)
   const [saved, setSaved] = React.useState(false)
   const mutation = useMutation({
-    mutationFn: (changes: ModelChanges) =>
-      api.save(changes, baseline?.revision),
+    mutationFn: (content: string) =>
+      api.save(content, (baseline ?? query.data)!.revision),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey })
-      setDrafts({})
+      setDraft(null)
       setEditor(null)
       setBaseline(null)
       setSaved(true)
       toast.success(t('models.saved'))
     },
   })
+  const document = draft ?? baseline ?? query.data
+  const dirty =
+    draft !== null && draft.content !== (baseline ?? query.data)?.content
+  const preview = useMutation({
+    mutationFn: ({
+      content,
+      changes,
+    }: {
+      content: string
+      changes?: Partial<Record<EditableModelKind, ModelConfig>>
+      returnToForm?: boolean
+    }) => api.preview(content, changes),
+    onSuccess: (result, variables) => {
+      setDraft(result)
+      setEditor(null)
+      setConfirm(null)
+      if (variables.returnToForm) setEditMode('form')
+    },
+  })
+  const pending = mutation.isPending || preview.isPending
+  let invalidJson = false
+  try {
+    const parsed: unknown = JSON.parse(document?.content ?? '{}')
+    invalidJson = !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+  } catch {
+    invalidJson = true
+  }
   function current(kind: EditableModelKind): ModelConfig {
-    return drafts[kind] ?? (baseline ?? query.data)?.models[kind].config ?? {}
+    return document?.models[kind].config ?? {}
   }
   function change(kind: EditableModelKind, value: ModelConfig) {
-    if (mutation.isPending) return
+    if (pending || !document) return
     setBaseline((previous) => previous ?? query.data ?? null)
     mutation.reset()
     setSaved(false)
-    setDrafts((previous) => ({ ...previous, [kind]: value }))
+    preview.mutate({ content: document.content, changes: { [kind]: value } })
   }
   function bindings(kind: EditableModelKind, mode?: string) {
     const config = current(kind)
@@ -449,7 +477,7 @@ export function ModelManagement() {
     readonly = false,
     settings = false,
   ) {
-    if (mutation.isPending && !readonly) return
+    if (pending && !readonly) return
     setBaseline((previous) => previous ?? query.data ?? null)
     const config = current(kind)
     const value = settings
@@ -471,10 +499,13 @@ export function ModelManagement() {
   }
   function dismissEditor() {
     setEditor(null)
-    if (!Object.keys(drafts).length) setBaseline(null)
+    if (!dirty) {
+      setDraft(null)
+      setBaseline(null)
+    }
   }
   function applyEditor() {
-    if (!editor || editor.readonly || mutation.isPending) return
+    if (!editor || editor.readonly || pending) return
     const { kind, mode, index, value, settings } = editor
     if (settings) change(kind, value)
     else {
@@ -496,10 +527,9 @@ export function ModelManagement() {
         })
       else reorder(kind, mode, values)
     }
-    setEditor(null)
   }
   function confirmAction() {
-    if (!confirm || mutation.isPending) return
+    if (!confirm || pending) return
     reorder(
       confirm.kind,
       confirm.mode,
@@ -507,7 +537,6 @@ export function ModelManagement() {
         (_, index) => index !== confirm.index,
       ),
     )
-    setConfirm(null)
   }
   if (isConnectionRoleLoading || (allowed && query.isPending))
     return <p role="status">{t('models.loading')}</p>
@@ -531,7 +560,6 @@ export function ModelManagement() {
         </Button>
       </div>
     )
-  const pending = mutation.isPending
   const hasOverrides = Boolean(
     query.data?.overrides?.cluster.length ||
     query.data?.overrides?.account.length,
@@ -564,7 +592,7 @@ export function ModelManagement() {
               <Badge
                 variant="outline"
                 className={
-                  query.data?.restart_required || hasOverrides
+                  query.data?.restart_required || saved || hasOverrides
                     ? 'border-amber-500/40 text-amber-700 dark:text-amber-300'
                     : ''
                 }
@@ -573,7 +601,7 @@ export function ModelManagement() {
                   <LockIcon />
                 ) : hasOverrides ? (
                   <AlertTriangleIcon />
-                ) : query.data?.restart_required ? (
+                ) : query.data?.restart_required || saved ? (
                   <ClockIcon />
                 ) : (
                   <CheckIcon />
@@ -583,7 +611,7 @@ export function ModelManagement() {
                     ? 'models.readOnlyStatus'
                     : hasOverrides
                       ? 'models.hasOverrides'
-                      : query.data?.restart_required
+                      : query.data?.restart_required || saved
                         ? 'models.pendingRestart'
                         : 'models.inSync',
                 )}
@@ -591,12 +619,13 @@ export function ModelManagement() {
             </div>
             <Action
               label={t('models.reloadFile')}
-              disabled={
-                pending || query.isFetching || Object.keys(drafts).length > 0
-              }
+              disabled={pending || query.isFetching || dirty}
               onClick={() => {
                 setSaved(false)
                 mutation.reset()
+                preview.reset()
+                setDraft(null)
+                setBaseline(null)
                 void query.refetch()
               }}
             >
@@ -609,7 +638,7 @@ export function ModelManagement() {
             </summary>
             <p className="mt-2 break-all font-mono">{query.data?.file_path}</p>
           </details>
-          {query.data?.restart_required && (
+          {(query.data?.restart_required || saved) && (
             <p role="status" className="text-amber-700 dark:text-amber-300">
               {t('models.restartRequired')}
             </p>
@@ -645,130 +674,193 @@ export function ModelManagement() {
             </p>
           )}
         </div>
-        {visibleModelKinds.map((kind) => {
-          const config = current(kind)
-          const dirty = kind in drafts
-          const groups =
-            kind === 'embedding'
-              ? embeddingModes
-                  .filter((mode) => config[mode])
-                  .map((mode) => ({ mode, config: object(config[mode]) }))
-              : [{ mode: undefined, config }]
-          return (
-            <section
-              key={kind}
-              aria-label={t(titles[kind])}
-              className="min-w-0 border-b pb-6 last:border-b-0"
+        <div
+          className="flex flex-wrap items-center gap-2"
+          role="group"
+          aria-label={t('models.editMode')}
+        >
+          <Button
+            variant={editMode === 'form' ? 'default' : 'outline'}
+            disabled={pending || invalidJson}
+            aria-pressed={editMode === 'form'}
+            onClick={() => {
+              if (editMode === 'form' || !document || pending) return
+              setBaseline((previous) => previous ?? query.data ?? null)
+              preview.mutate({ content: document.content, returnToForm: true })
+            }}
+          >
+            {t('models.formMode')}
+          </Button>
+          <Button
+            variant={editMode === 'file' ? 'default' : 'outline'}
+            disabled={pending}
+            aria-pressed={editMode === 'file'}
+            onClick={() => setEditMode('file')}
+          >
+            {t('models.fileMode')}
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">{t('models.fileScope')}</p>
+        {preview.isError && !editor && !confirm && (
+          <p role="alert" className="break-all text-destructive">
+            {t('models.validateFailed')} {preview.error.message}
+          </p>
+        )}
+        {editMode === 'file' ? (
+          <div className="grid gap-3">
+            <label
+              htmlFor="startup-config-content"
+              className="text-sm font-medium"
             >
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-semibold">{t(titles[kind])}</h2>
-                  {dirty && (
-                    <Badge variant="secondary">{t('models.unsaved')}</Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <Action
-                    label={t('models.parameters')}
-                    disabled={pending}
-                    onClick={() =>
-                      open(kind, undefined, undefined, false, true)
-                    }
-                  >
-                    <Settings2Icon />
-                  </Action>
-                  {kind === 'embedding' && groups.length > 1 ? (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={t('models.addModel')}
-                            title={t('models.addModel')}
-                            disabled={pending}
-                          />
+              {t('models.fileContent')}
+            </label>
+            <Textarea
+              id="startup-config-content"
+              spellCheck={false}
+              readOnly={pending || query.data?.writable === false}
+              className="min-h-[28rem] w-full resize-y font-mono text-xs leading-6"
+              value={document?.content ?? ''}
+              onChange={(event) => {
+                if (pending || !document) return
+                setBaseline((previous) => previous ?? query.data ?? null)
+                setSaved(false)
+                mutation.reset()
+                preview.reset()
+                setDraft({ ...document, content: event.target.value })
+              }}
+            />
+            {invalidJson && (
+              <p role="alert" className="text-destructive">
+                {t('models.invalidJsonObject')}
+              </p>
+            )}
+          </div>
+        ) : (
+          visibleModelKinds.map((kind) => {
+            const config = current(kind)
+            const groups =
+              kind === 'embedding'
+                ? embeddingModes
+                    .filter((mode) => config[mode])
+                    .map((mode) => ({ mode, config: object(config[mode]) }))
+                : [{ mode: undefined, config }]
+            return (
+              <section
+                key={kind}
+                aria-label={t(titles[kind])}
+                className="min-w-0 border-b pb-6 last:border-b-0"
+              >
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base font-semibold">
+                      {t(titles[kind])}
+                    </h2>
+                    {dirty && (
+                      <Badge variant="secondary">{t('models.unsaved')}</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Action
+                      label={t('models.parameters')}
+                      disabled={pending}
+                      onClick={() =>
+                        open(kind, undefined, undefined, false, true)
+                      }
+                    >
+                      <Settings2Icon />
+                    </Action>
+                    {kind === 'embedding' && groups.length > 1 ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={t('models.addModel')}
+                              title={t('models.addModel')}
+                              disabled={pending}
+                            />
+                          }
+                        >
+                          <PlusIcon />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {groups.map((group) => (
+                            <DropdownMenuItem
+                              key={group.mode}
+                              onClick={() => open(kind, group.mode)}
+                            >
+                              {t(`models.${group.mode}`)}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : (
+                      <Action
+                        label={t('models.addModel')}
+                        disabled={
+                          pending || (kind === 'embedding' && !groups.length)
+                        }
+                        onClick={() =>
+                          open(
+                            kind,
+                            kind === 'embedding' ? groups[0]?.mode : undefined,
+                          )
                         }
                       >
                         <PlusIcon />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {groups.map((group) => (
-                          <DropdownMenuItem
-                            key={group.mode}
-                            onClick={() => open(kind, group.mode)}
-                          >
-                            {t(`models.${group.mode}`)}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ) : (
-                    <Action
-                      label={t('models.addModel')}
-                      disabled={
-                        pending || (kind === 'embedding' && !groups.length)
-                      }
-                      onClick={() =>
-                        open(
-                          kind,
-                          kind === 'embedding' ? groups[0]?.mode : undefined,
-                        )
-                      }
-                    >
-                      <PlusIcon />
-                    </Action>
-                  )}
+                      </Action>
+                    )}
+                  </div>
                 </div>
-              </div>
-              {groups.map((group) => (
-                <div key={group.mode || kind} className="min-w-0">
-                  {group.mode && (
-                    <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                      <Badge variant="outline">
-                        {t(`models.${group.mode}`)}
-                      </Badge>
-                      <span>
-                        {t('models.dimension')}:{' '}
-                        {String(group.config.dimension)}
-                      </span>
-                      {credentials(group.config).some(
-                        (binding) =>
-                          binding.model && binding.model !== group.config.model,
-                      ) && (
-                        <span className="break-all">
-                          {t('models.model')}: {String(group.config.model)}
+                {groups.map((group) => (
+                  <div key={group.mode || kind} className="min-w-0">
+                    {group.mode && (
+                      <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                        <Badge variant="outline">
+                          {t(`models.${group.mode}`)}
+                        </Badge>
+                        <span>
+                          {t('models.dimension')}:{' '}
+                          {String(group.config.dimension)}
                         </span>
-                      )}
-                    </div>
-                  )}
-                  <ModelList
-                    group={`${kind}-${group.mode || ''}`}
-                    values={credentials(group.config)}
-                    fallback={group.config}
-                    disabled={pending}
-                    onOrder={(values) => reorder(kind, group.mode, values)}
-                    onOpen={(index, readonly) =>
-                      open(kind, group.mode, index, readonly)
-                    }
-                    onDelete={(index) => {
-                      setBaseline((previous) => previous ?? query.data ?? null)
-                      setConfirm({ kind, mode: group.mode, index })
-                    }}
-                  />
-                </div>
-              ))}
-            </section>
-          )
-        })}
-        {Object.keys(drafts).length > 0 && (
+                        {credentials(group.config).some(
+                          (binding) =>
+                            binding.model &&
+                            binding.model !== group.config.model,
+                        ) && (
+                          <span className="break-all">
+                            {t('models.model')}: {String(group.config.model)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <ModelList
+                      group={`${kind}-${group.mode || ''}`}
+                      values={credentials(group.config)}
+                      fallback={group.config}
+                      disabled={pending}
+                      onOrder={(values) => reorder(kind, group.mode, values)}
+                      onOpen={(index, readonly) =>
+                        open(kind, group.mode, index, readonly)
+                      }
+                      onDelete={(index) => {
+                        setBaseline(
+                          (previous) => previous ?? query.data ?? null,
+                        )
+                        setConfirm({ kind, mode: group.mode, index })
+                      }}
+                    />
+                  </div>
+                ))}
+              </section>
+            )
+          })
+        )}
+        {dirty && (
           <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 shadow-lg backdrop-blur-sm">
-            <p className="text-sm">
-              {t('models.changedCategories', {
-                count: Object.keys(drafts).length,
-              })}
-            </p>
+            <p className="text-sm">{t('models.unsaved')}</p>
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -776,8 +868,9 @@ export function ModelManagement() {
                 size="sm"
                 disabled={pending}
                 onClick={() => {
-                  setDrafts({})
+                  setDraft(null)
                   setBaseline(null)
+                  preview.reset()
                   mutation.reset()
                   setSaved(false)
                 }}
@@ -788,11 +881,19 @@ export function ModelManagement() {
               <Button
                 type="button"
                 size="sm"
-                disabled={pending || query.data?.writable === false}
-                onClick={() => mutation.mutate(drafts)}
+                disabled={
+                  pending || invalidJson || query.data?.writable === false
+                }
+                onClick={() => document && mutation.mutate(document.content)}
               >
                 <SaveIcon />
-                {t(pending ? 'models.saving' : 'models.saveAll')}
+                {t(
+                  mutation.isPending
+                    ? 'models.saving'
+                    : preview.isPending
+                      ? 'models.validating'
+                      : 'models.saveAll',
+                )}
               </Button>
             </div>
           </div>
@@ -801,7 +902,7 @@ export function ModelManagement() {
       <Dialog
         open={Boolean(editor)}
         onOpenChange={(isOpen) => {
-          if (!isOpen) dismissEditor()
+          if (!isOpen && !pending) dismissEditor()
         }}
       >
         <DialogContent className="gap-0 overflow-hidden rounded-lg p-0 sm:max-w-lg">
@@ -826,6 +927,14 @@ export function ModelManagement() {
               }}
             >
               <div className="grid max-h-[calc(100dvh-14rem)] gap-5 overflow-y-auto px-6 py-5">
+                {preview.isError && (
+                  <p
+                    role="alert"
+                    className="break-all text-sm text-destructive"
+                  >
+                    {t('models.validateFailed')} {preview.error.message}
+                  </p>
+                )}
                 <ModelFields
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
                   fields={fields}
@@ -933,7 +1042,12 @@ export function ModelManagement() {
                 )}
               </div>
               <DialogFooter className="flex-row justify-end border-t bg-muted/20 px-6 py-4">
-                <Button type="button" variant="outline" onClick={dismissEditor}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={dismissEditor}
+                >
                   {t(editor.readonly ? 'models.close' : 'models.dismiss')}
                 </Button>
                 {editor.readonly ? (
@@ -942,7 +1056,7 @@ export function ModelManagement() {
                     disabled={pending}
                     onClick={(event) => {
                       event.preventDefault()
-                      if (mutation.isPending) return
+                      if (pending) return
                       setBaseline((previous) => previous ?? query.data ?? null)
                       setEditor({ ...editor, readonly: false })
                     }}
@@ -963,9 +1077,12 @@ export function ModelManagement() {
       <Dialog
         open={Boolean(confirm)}
         onOpenChange={(isOpen) => {
-          if (!isOpen) {
+          if (!isOpen && !pending) {
             setConfirm(null)
-            if (!Object.keys(drafts).length) setBaseline(null)
+            if (!dirty) {
+              setDraft(null)
+              setBaseline(null)
+            }
           }
         }}
       >
@@ -976,9 +1093,13 @@ export function ModelManagement() {
           <DialogFooter>
             <Button
               variant="outline"
+              disabled={pending}
               onClick={() => {
                 setConfirm(null)
-                if (!Object.keys(drafts).length) setBaseline(null)
+                if (!dirty) {
+                  setDraft(null)
+                  setBaseline(null)
+                }
               }}
             >
               {t('models.dismiss')}
