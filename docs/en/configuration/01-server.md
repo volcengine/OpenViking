@@ -246,6 +246,9 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `stalled_predecessor_timeout_seconds` | number | `1800` | Commits of one session run strictly in order. If the running commit at the head of that chain shows no progress for this many seconds, the next commit cancels it, its archive is recorded as failed, and the chain continues. Progress means a task state update, a completed Phase 2 step, or a successful model response. `0` disables the cancellation; must be at least `0`; requires a server restart after changes |
+
+A blocked chain is logged as a WARNING once the head commit has been idle for half of `stalled_predecessor_timeout_seconds` (after 1800 seconds when the timeout is `0`), and a cancellation is logged as an ERROR. Both also increment `openviking_session_lifecycle_total{action="commit_stall"}` with `status` set to `blocked`, `cancelled`, or `abandoned` (the commit did not stop within another timeout after cancellation and was skipped). Only commits executing in the same server process are checked.
 
 ### `queue_workers.external_task`
 

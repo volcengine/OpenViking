@@ -37,7 +37,7 @@ from openviking.service.task_tracker_concurrency import (
     StoreIOLimiter,
     run_to_completion,
 )
-from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex
+from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex, get_task_context
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -145,6 +145,25 @@ def set_task_tracker(tracker: "TaskTracker") -> None:
     global _instance
     with _init_lock:
         _instance = tracker
+
+
+def report_task_progress(task_id: Optional[str] = None) -> None:
+    """Best-effort liveness signal for the task bound to the current coroutine.
+
+    This only updates process-local runtime state; it never writes the task store
+    and never raises, so it is safe to call from hot paths such as model calls.
+    """
+    try:
+        if task_id is None:
+            context = get_task_context()
+            if context is None:
+                return
+            task_id = context.task_id
+        tracker = _instance
+        if tracker is not None:
+            tracker.report_progress(task_id)
+    except Exception:
+        logger.debug("Failed to record task progress", exc_info=True)
 
 
 # ── Sanitization ──
@@ -919,6 +938,25 @@ class TaskTracker:
     def has_work(self, task_id: str) -> bool:
         """Return whether a task still owns durable or active queue work."""
         return self._work_index.has_work(task_id)
+
+    def report_progress(self, task_id: str) -> None:
+        """Record a process-local progress heartbeat for an executing task."""
+        self._work_index.touch_progress(task_id)
+
+    def last_progress_at(self, task_id: str) -> Optional[float]:
+        """Return the newest progress time: a persisted task update or a heartbeat."""
+        candidates = []
+        task = self._cached_task(task_id)
+        if task is not None:
+            candidates.append(task.updated_at)
+        heartbeat = self._work_index.last_progress(task_id)
+        if heartbeat is not None:
+            candidates.append(heartbeat)
+        return max(candidates, default=None)
+
+    def is_executing(self, task_id: str) -> bool:
+        """Return whether a coroutine in this process is currently running the task."""
+        return self._work_index.is_active(task_id)
 
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""

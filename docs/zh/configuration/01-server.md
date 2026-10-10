@@ -245,6 +245,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | 同时消费的 SessionCommit 作业数，必须大于 `0`；修改后需重启服务 |
+| `stalled_predecessor_timeout_seconds` | number | `1800` | 同一 session 的 commit 严格按顺序执行。若排在最前、正在运行的 commit 超过该秒数没有任何进展，下一个 commit 会取消它，将其 archive 记为失败，后续 commit 继续执行。进展指任务状态更新、Phase 2 步骤完成或模型成功返回。设为 `0` 关闭自动取消；必须不小于 `0`；修改后需重启服务 |
+
+当排在最前的 commit 空闲超过 `stalled_predecessor_timeout_seconds` 的一半（超时设为 `0` 时为 1800 秒）时，会输出 WARNING 日志提示该 session 的 commit 链被阻塞；取消时输出 ERROR 日志。两者都会累加 `openviking_session_lifecycle_total{action="commit_stall"}`，`status` 为 `blocked`、`cancelled` 或 `abandoned`（取消后又超过一个超时周期仍未停止，直接跳过）。只检查在同一服务进程内执行的 commit。
 
 ### `queue_workers.external_task`
 
