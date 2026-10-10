@@ -89,7 +89,13 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
         # loses identity when independent environment references have equal values.
         fallbacks = (provider_config, original) if not explicit or key == "api_key" else (original,)
         for node in (source, *fallbacks):
-            if key in node and json.loads(os.path.expandvars(_dump(node[key]))) == value:
+            if key not in node:
+                continue
+            expanded = json.loads(os.path.expandvars(_dump(node[key])))
+            matches = expanded == value
+            if key == "provider" and isinstance(expanded, str) and isinstance(value, str):
+                matches = expanded.strip().lower() == value.strip().lower()
+            if matches:
                 values[key] = node[key]
                 break
     return values
@@ -262,6 +268,24 @@ def _merge(old: dict, changes: dict) -> dict:
     return result
 
 
+def _restore_environment_references(original, value):
+    if isinstance(original, _EnvironmentReference) and value == original:
+        return original
+    if isinstance(original, dict) and isinstance(value, dict):
+        return {
+            key: _restore_environment_references(original.get(key), item)
+            for key, item in value.items()
+        }
+    if isinstance(original, list) and isinstance(value, list):
+        return [
+            _restore_environment_references(
+                original[index] if index < len(original) else None, item
+            )
+            for index, item in enumerate(value)
+        ]
+    return value
+
+
 def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     result = _merge(old, changes)
     if "credentials" not in changes:
@@ -305,12 +329,7 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
         original = original_bindings.get(binding.get("id") or f"credential-{index}", {})
         # JSON requests carry references as plain strings. Preserve their original
         # quoting when the form keeps the same field, including after reordering.
-        binding = {
-            key: original[key]
-            if isinstance(original.get(key), _EnvironmentReference) and value == original[key]
-            else value
-            for key, value in binding.items()
-        }
+        binding = _restore_environment_references(original, binding)
         result["credentials"].append(_merge(defaults, binding))
     for key in fields:
         result.pop(key, None)

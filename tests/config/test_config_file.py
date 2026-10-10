@@ -568,3 +568,75 @@ def test_shared_vlm_model_changes_preserve_inheritance_and_explicit_overrides(
     assert config.vlm.credentials[0].model == binding_model
     assert config.vlm.credentials[0].api_key == "resolved-secret"
     assert json.loads(path.read_text())["embedding"] == raw["embedding"]
+
+
+@pytest.mark.parametrize(
+    "kind,field,nested",
+    [
+        ("vlm", "extra_headers", {"Authorization": "$STUDIO_NESTED_REFERENCE"}),
+        ("vlm", "extra_request_body", {"routing": {"values": ["$STUDIO_NESTED_REFERENCE"]}}),
+        ("embedding", "extra_headers", {"Authorization": "$STUDIO_NESTED_REFERENCE"}),
+    ],
+)
+def test_nested_unquoted_references_survive_form_transport_and_reordering(
+    config_file, monkeypatch, kind, field, nested
+):
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_NESTED_REFERENCE", '"Bearer test-value"')
+    section = raw["vlm"] if kind == "vlm" else raw["embedding"]["dense"]
+    section["credentials"] = [
+        {"id": "first", "provider": "openai", field: nested},
+        {"id": "second", "provider": "openai", field: {"literal": "keep"}},
+    ]
+    content = json.dumps(raw).replace('"$STUDIO_NESTED_REFERENCE"', "$STUDIO_NESTED_REFERENCE")
+    path.write_text(content)
+    loaded = read_config_file()
+    model = json.loads(json.dumps(loaded["models"][kind]["config"]))
+    projected_section = model if kind == "vlm" else model["dense"]
+    projected_section["credentials"].reverse()
+    changes = (
+        {**model, "timeout": 42}
+        if kind == "vlm"
+        else {"dense": {"credentials": projected_section["credentials"]}}
+    )
+    draft = preview_config_file(content, {kind: changes})
+    assert "$STUDIO_NESTED_REFERENCE" in draft["content"]
+    assert '"$STUDIO_NESTED_REFERENCE"' not in draft["content"]
+    save_config_file(draft["content"], loaded["revision"])
+    config = OpenVikingConfigSingleton._load_from_file(str(path))
+    current = config.vlm if kind == "vlm" else config.embedding.dense
+    assert current.credentials[1].id == "first"
+    expected = {"Authorization": "Bearer test-value"}
+    if field == "extra_request_body":
+        expected = {"routing": {"values": ["Bearer test-value"]}}
+    assert getattr(current.credentials[1], field) == expected
+    assert getattr(current.credentials[0], field) == {"literal": "keep"}
+
+
+@pytest.mark.parametrize("provider", ["OpenAI", " OpenAI "])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_normalized_provider_references_survive_unrelated_form_edits(
+    config_file, monkeypatch, provider, explicit
+):
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_PROVIDER_REFERENCE", provider)
+    if explicit:
+        raw["vlm"]["credentials"] = [
+            {"provider": "${STUDIO_PROVIDER_REFERENCE}", "api_key": "${STUDIO_TEST_KEY}"}
+        ]
+    else:
+        raw["vlm"]["provider"] = "${STUDIO_PROVIDER_REFERENCE}"
+    path.write_text(json.dumps(raw))
+    loaded = read_config_file()
+    model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
+    assert model["credentials"][0]["provider"] == "${STUDIO_PROVIDER_REFERENCE}"
+    model["timeout"] = 42
+    draft = preview_config_file(loaded["content"], {"vlm": model})
+    save_config_file(draft["content"], loaded["revision"])
+    assert json.loads(path.read_text())["vlm"]["credentials"][0]["provider"] == (
+        "${STUDIO_PROVIDER_REFERENCE}"
+    )
+    monkeypatch.setenv("STUDIO_PROVIDER_REFERENCE", "volcengine")
+    config = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert config.vlm.credentials[0].provider == "volcengine"
+    assert config.vlm.timeout == 42
