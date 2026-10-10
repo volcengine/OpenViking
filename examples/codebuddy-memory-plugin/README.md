@@ -109,8 +109,8 @@ add the local marketplace under `examples/codebuddy-memory-plugin-marketplace`
 and install it into the user scope:
 
 ```bash
-codebuddy plugin marketplace add examples/codebuddy-memory-plugin-marketplace
-codebuddy plugin install openviking-memory@openviking-local --scope user
+codebuddy plugin marketplace add examples
+codebuddy plugin install openviking-memory@openviking --scope user
 ```
 
 ## Tests and diagnostics
