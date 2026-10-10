@@ -89,7 +89,7 @@ codebuddy --plugin-dir examples/codebuddy-memory-plugin
 ```
 
 `--plugin-dir` 是会话级的：不写任何 CodeBuddy 配置；去掉参数即无痕——除了插件自己的状态目录
-`~/.codebuddy/plugins/data/<id>-inline/`。要长期生效，加一个本地 marketplace 并装进 user 作用域：
+`~/.codebuddy/plugins/data/<id>-inline/`。要长期生效，把 `examples/`（它声明了 `./codebuddy-memory-plugin`）作为 marketplace 装上，再装进 user 作用域：
 
 ```bash
 codebuddy plugin marketplace add examples
