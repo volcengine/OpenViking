@@ -924,6 +924,83 @@ class PDFParser(BaseParser):
         await self._mineru_upload_file(client, urls[0], pdf_path)
         return result
 
+    async def _mineru_submit_agent_file(
+        self, client, base: str, pdf_path: Path
+    ) -> Dict[str, Any]:
+        """Agent lightweight API handshake: request a signed upload url, then PUT.
+
+        ``POST /api/v1/agent/parse/file`` (JSON) -> ``data.task_id`` +
+        ``data.file_url``. The parse starts on its own once the upload lands, so no
+        submit call is needed afterwards. Needs no token, which makes it the
+        fallback when ``mineru_token`` is unset or rejected.
+        """
+        origin = base.split("/api/", 1)[0]
+        payload: Dict[str, Any] = {
+            "file_name": pdf_path.name,
+            "enable_table": True,
+            "is_ocr": False,
+            "enable_formula": True,
+        }
+        payload.update(self.config.mineru_bodys or {})
+        url = f"{origin}/api/v1/agent/parse/file"
+        result = await self._mineru_post_json(client, url, payload)
+        data = self._mineru_payload_data(result)
+        file_url = data.get("file_url")
+        if not file_url:
+            raise ValueError(f"MinerU {url} returned no file_url: {result!r}")
+        await self._mineru_upload_file(client, file_url, pdf_path)
+        return result
+
+    async def _mineru_agent_file_flow(
+        self, client, meta: Dict[str, Any], pdf_path: Path, **kwargs
+    ) -> tuple[str, Dict[str, Any]]:
+        """Drive an Agent-lightweight task to completion and return its markdown.
+
+        Unlike the v4 precision API this route returns markdown at a CDN link
+        instead of a zip, and it extracts no images, so the result is used as-is.
+        """
+        base = self._mineru_base_url()
+        origin = base.split("/api/", 1)[0]
+        result = await self._mineru_submit_agent_file(client, base, pdf_path)
+        data = self._mineru_payload_data(result)
+        task_id = data["task_id"]
+        meta["api_mode"] = "agent-file"
+        meta["task_id"] = task_id
+
+        poll_url = f"{origin}/api/v1/agent/parse/{task_id}"
+        logger.info(f"MinerU agent task {task_id} submitted; polling {poll_url}")
+
+        done_states = ("done", "failed")
+        busy_states = ("waiting-file", "uploading", "pending", "running")
+        deadline = time.monotonic() + self.config.mineru_timeout
+        markdown_url = None
+        while time.monotonic() < deadline:
+            body = await self._mineru_get_json(client, poll_url)
+            entry = self._mineru_payload_data(body)
+            state = entry.get("state")
+            if state == "done":
+                markdown_url = entry.get("markdown_url")
+                break
+            if state not in busy_states:
+                raise ValueError(
+                    f"MinerU agent task failed: state={state} "
+                    f"err_code={entry.get('err_code')} err_msg={entry.get('err_msg')}"
+                )
+            await asyncio.sleep(2.0)
+
+        if not markdown_url:
+            raise TimeoutError(
+                f"MinerU agent task {task_id} did not finish within "
+                f"{self.config.mineru_timeout}s"
+            )
+
+        response = await client.get(markdown_url)
+        response.raise_for_status()
+        markdown_content = response.text
+        meta["images_saved"] = 0
+        logger.info(f"MinerU agent-file conversion: {len(markdown_content)} chars")
+        return markdown_content, meta
+
     async def _mineru_run_task_flow(
         self, client, meta: Dict[str, Any], pdf_path: Path, **kwargs
     ) -> tuple[str, Dict[str, Any]]:
@@ -939,6 +1016,9 @@ class PDFParser(BaseParser):
         base = self._mineru_base_url()
 
         # Hosted v4 local-upload handshake (JSON reserve -> PUT -> auto submit).
+        # Requires a bearer token: without one the API answers 401, which is an
+        # endpoint-level rejection rather than a hard failure, so it falls through
+        # to the token-free Agent route instead of aborting the parse.
         try:
             result = await self._mineru_submit_file_batch(client, base, pdf_path)
             meta["api_mode"] = "online-file-batch"
@@ -953,6 +1033,29 @@ class PDFParser(BaseParser):
         except (ValueError, MinerUAPIError) as exc:
             errors.append(f"{base}/file-urls/batch: {exc}")
             logger.info("MinerU /file-urls/batch unavailable (%s); trying /tasks", exc)
+        except Exception as exc:
+            status = self._http_status(exc)
+            if status in (401, 403):
+                errors.append(f"{base}/file-urls/batch: HTTP {status}")
+                logger.info(
+                    "MinerU v4 rejected the credentials (HTTP %s); "
+                    "falling back to the token-free Agent API",
+                    status,
+                )
+            else:
+                raise
+
+        # Token-free Agent route. Tried next because it needs no credentials and
+        # skips the v4 quota entirely; when it answers, the heavier precision API
+        # above has already failed or is unnecessary.
+        if not self.config.mineru_token:
+            try:
+                return await self._mineru_agent_file_flow(
+                    client, meta, pdf_path, **kwargs
+                )
+            except Exception as exc:
+                errors.append(f"agent/parse/file: {exc}")
+                logger.info("MinerU agent API unavailable (%s)", exc)
 
         for url, kind, data, file_field in (
             (f"{base}/tasks", "v2-tasks", self._mineru_v2_form(), "files"),
@@ -1157,7 +1260,7 @@ class PDFParser(BaseParser):
         resource_name: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """Unpack the zip result: locate the markdown and persist images."""
-        from openviking.utils.zip_safe import safe_extract_zip
+        from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
 
         import zipfile
 
