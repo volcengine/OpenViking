@@ -350,7 +350,19 @@ async function searchAllSources(fetchJSON, cfg, query, perSourceLimit, options, 
   const results = await Promise.all(
     SOURCES.map((src) => searchOneSource(fetchJSON, cfg, query, src, perSourceLimit, options)),
   );
-  const all = results.flat();
+  let all = results.flat();
+  // Client-side fallback mirror of the server's exclude_uris: a configured
+  // subtree URI drops both the subtree root and everything under it, so the
+  // fallback path cannot reintroduce what the search body excludes (#5402).
+  const excludeUris = Array.isArray(options.excludeUris) ? options.excludeUris : [];
+  if (excludeUris.length) {
+    const prefixes = excludeUris
+      .filter((u) => typeof u === "string" && u.trim())
+      .map((u) => u.replace(/\/+$/, ""));
+    all = all.filter(
+      (it) => !prefixes.some((p) => it.uri === p || String(it.uri).startsWith(p + "/")),
+    );
+  }
   log("recall_search_summary", {
     counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
     total: all.length,
