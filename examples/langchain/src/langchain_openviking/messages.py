@@ -12,6 +12,7 @@ try:
     from langchain_core.messages import (
         AIMessage,
         BaseMessage,
+        ChatMessage,
         HumanMessage,
         SystemMessage,
         ToolMessage,
@@ -96,13 +97,20 @@ def langchain_message_to_openviking(
             }
         ]
 
-    if isinstance(message, SystemMessage):
+    if isinstance(message, SystemMessage) or (
+        isinstance(message, ChatMessage) and message.role == "system"
+    ):
         return []
 
     text = extract_message_text(getattr(message, "content", ""))
     if not text:
         return []
-    role = "user" if getattr(message, "type", "") == "human" else "assistant"
+    role = (
+        "user"
+        if getattr(message, "type", "") == "human"
+        or (isinstance(message, ChatMessage) and message.role == "user")
+        else "assistant"
+    )
     return [{"role": role, "parts": [{"type": "text", "text": text}]}]
 
 

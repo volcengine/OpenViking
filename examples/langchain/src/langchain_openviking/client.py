@@ -825,7 +825,11 @@ def get_latest_user_text(messages: Iterable[Any]) -> str:
             content = message.get("content")
         else:
             content = getattr(message, "content", "")
-        if role in {"human", "user"}:
+        if role == "chat":
+            role = (
+                message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+            )
+        if role in ("human", "user"):
             text = extract_message_text(content).strip()
             if text:
                 return text

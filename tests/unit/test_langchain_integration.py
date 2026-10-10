@@ -10,7 +10,7 @@ pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
 import langchain_openviking.client as client_helpers
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -19,6 +19,7 @@ from langchain_openviking import (
     OpenVikingContextMiddleware,
     OpenVikingRetriever,
     OpenVikingSessionContextAssembler,
+    OpenVikingSessionRecorder,
     OpenVikingStore,
     create_openviking_tools,
     with_openviking_context,
@@ -28,6 +29,7 @@ from langchain_openviking.client import (
     apply_commit_policy,
     call_openviking,
     ensure_client,
+    get_latest_user_text,
 )
 from langchain_openviking.history import (
     langchain_message_to_openviking,
@@ -788,6 +790,52 @@ def test_system_messages_are_never_persisted_to_openviking_history():
     )
 
     assert payloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["history", "ahistory", "recorder", "arecorder"])
+@pytest.mark.parametrize(
+    "role,expected", [("user", "user"), ("system", None), ("assistant", "assistant")]
+)
+async def test_generic_chat_message_roles_in_session_history(entry, role, expected):
+    client = InMemoryOpenVikingClient()
+    message = ChatMessage(role=role, content="Role-specific conversation text.")
+    history = OpenVikingChatMessageHistory("chat-roles", client=client, async_client=client)
+    recorder = OpenVikingSessionRecorder(client=client, async_client=client)
+    try:
+        if entry == "history":
+            history.add_messages([message])
+        elif entry == "ahistory":
+            await history.aadd_messages([message])
+        elif entry == "recorder":
+            recorder.record("chat-roles", [message])
+        else:
+            await recorder.arecord("chat-roles", [message])
+        expected_roles = [] if expected is None else [expected]
+        assert [item["role"] for item in client.sessions["chat-roles"]] == expected_roles
+        restored = await history.aget_messages()
+        assert [item.type for item in restored] == [
+            "human" if value == "user" else "ai" for value in expected_roles
+        ]
+        assert [item.content for item in restored] == [message.content] * len(expected_roles)
+    finally:
+        await history.aclose()
+        await recorder.aclose()
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        (ChatMessage(role="user", content="Current question."), "Current question."),
+        ({"type": "chat", "role": "user", "content": "Current question."}, "Current question."),
+        (ChatMessage(role="system", content="Runtime policy."), "Earlier question."),
+        (ChatMessage(role="critic", content="Critique."), "Earlier question."),
+        (HumanMessage(content="Current question.", role="system"), "Current question."),
+        (ChatMessage(role="user", content=""), "Earlier question."),
+    ],
+)
+def test_generic_chat_message_roles_in_recall_query(message, expected):
+    assert get_latest_user_text([HumanMessage(content="Earlier question."), message]) == expected
 
 
 def test_session_context_assembler_uses_archive_active_messages_and_recall():
