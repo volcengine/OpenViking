@@ -63,7 +63,11 @@ def indexed_tags(uri: str, tags, level: int = 2):
     """Derive the reserved scope from URI; callers cannot spoof this tag."""
     result = [tag for tag in tags or [] if not str(tag).lower().startswith(TAG_PREFIX)]
     target = scope_and_root(uri)
-    if target:
+    if target and uri.rstrip("/") == target[1]:
+        # A policy root contains many expiring objects. Its summary has no
+        # single deadline, including the parent of all Sessions.
+        result.append(CONTAINER_TAG)
+    elif target:
         result.append(TAG_PREFIX + target[0])
     elif level in (0, 1) and _container_uri(uri):
         # Cross-file summaries may contain expired descendants. They do not
@@ -159,7 +163,11 @@ def project_results(records, config: TTLConfig | None):
     for record in records:
         uri = record.get("uri", "")
         target = scope_and_root(uri)
-        if not target or (record.get("level", 2) != 2 and target[0] != "sessions"):
+        if (
+            not target
+            or uri.rstrip("/") == target[1]
+            or (record.get("level", 2) != 2 and target[0] != "sessions")
+        ):
             continue
         if config.resolve_uri_policy(uri, target[0]).mode != "days":
             continue
