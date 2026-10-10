@@ -1,6 +1,6 @@
 //! Multi-backend runtime assembly from validated mount configuration.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,10 +13,12 @@ use crate::core::multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS};
 use crate::core::plugin::ServicePlugin;
 use crate::core::types::{BackendRole, BackendsConfig, ConfigValue, PluginConfig};
 use crate::multibackend::config::{
-    item_params_to_config_values, sync_mode_from_config, validate_backup_excludes,
-    validate_primary_encryption_flags, validate_redirect_targets,
+    item_params_to_config_values, validate_backups_config, validate_primary_encryption_flags,
 };
-use crate::multibackend::meta::RelativePathFsContextResolver;
+use crate::multibackend::meta::{MetadataStore, RelativePathFsContextResolver};
+#[cfg(feature = "cache")]
+use crate::multibackend::provider::CacheProvider;
+use crate::multibackend::provider::{FilesystemProvider, MultiWriteProvider};
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::shape::validate::ensure_backend_shape;
 
@@ -51,14 +53,15 @@ pub async fn init_backend_plugin(
     Ok(Arc::from(fs))
 }
 
-/// Build the multi-backend wrapper from primary and backup configuration.
-pub async fn build_multi_write_fs(
+/// Build the multi-backend wrapper without starting background work.
+pub(crate) async fn build_inactive_multi_write_fs(
     registry: &Arc<RwLock<HashMap<String, Arc<dyn ServicePlugin>>>>,
     config: &PluginConfig,
     bc: &BackendsConfig,
     build_ctx: MultiBackendBuildContext,
 ) -> Result<MultiWriteWrappedFS> {
     let global_encryption_enabled = build_ctx.global_encryption_enabled();
+    validate_backups_config(bc)?;
     validate_primary_encryption_flags(config, global_encryption_enabled)?;
 
     let primary_raw = init_backend_plugin(registry, &config.name, &config.params).await?;
@@ -92,22 +95,37 @@ pub async fn build_multi_write_fs(
         primary_raw.clone()
     };
 
+    let metadata_store = Arc::new(MetadataStore::new(
+        primary_backend.clone(),
+        build_ctx.pathlock_manager.clone(),
+        &build_ctx.backend_prefix,
+    )?);
+    let metadata_provider: Arc<dyn MultiWriteProvider> = match bc.provider.as_str() {
+        "filesystem" => Arc::new(FilesystemProvider::new(metadata_store.clone())),
+        "cache" => {
+            #[cfg(feature = "cache")]
+            {
+                let runtime = build_ctx.cache_runtime.clone().ok_or_else(|| {
+                    Error::config("backups.provider = 'cache' requires a top-level CacheRuntime")
+                })?;
+                Arc::new(CacheProvider::new(
+                    metadata_store.clone(),
+                    runtime,
+                    bc.namespace.clone(),
+                )?)
+            }
+            #[cfg(not(feature = "cache"))]
+            {
+                return Err(Error::config(
+                    "backups.provider = 'cache' requires the ragfs cache feature",
+                ));
+            }
+        }
+        _ => unreachable!("backup provider validated before construction"),
+    };
+
     let mut backup_entries: Vec<BackendEntry> = Vec::new();
-    let mut seen_names: HashSet<String> = HashSet::new();
-
     for item in &bc.items {
-        if item.name == "primary" {
-            return Err(Error::config(
-                "backup backend name 'primary' is reserved".to_string(),
-            ));
-        }
-        if !seen_names.insert(item.name.clone()) {
-            return Err(Error::config(format!(
-                "duplicate backup name '{}'",
-                item.name
-            )));
-        }
-
         let backup_params = item_params_to_config_values(&item.params)?;
         let backup_raw = init_backend_plugin(registry, &item.backend, &backup_params).await?;
         let backup_encrypted = global_encryption_enabled
@@ -160,26 +178,17 @@ pub async fn build_multi_write_fs(
             role: BackendRole::Backup,
             backend: backup_backend,
             raw_backend: None,
-            operations: item.operations.clone().unwrap_or_default(),
-            excludes: item.excludes.clone().unwrap_or_default(),
         });
     }
 
-    validate_redirect_targets(&config.primary_redirects, &backup_entries)?;
-    validate_backup_excludes(bc)?;
-
     MultiWriteWrappedFS::builder(primary_backend)
         .with_primary_raw_backend(primary_raw)
+        .with_metadata_store(metadata_store)
+        .with_metadata_provider(metadata_provider)
         .with_backups(backup_entries)
-        .with_redirects(config.primary_redirects.clone())
-        .sync_mode(sync_mode_from_config(bc))
-        .write_concurrency(bc.write_concurrency)
-        .retry_interval(Duration::from_millis(
-            bc.retry_interval_ms.unwrap_or(30_000),
-        ))
-        .retry_backoff_base_ms(bc.retry_backoff_base_ms.unwrap_or(1_000))
-        .max_retry_per_round(bc.retry_max_retries_per_round.unwrap_or(3))
-        .quarantine_after_failures(bc.retry_quarantine_after_failures.unwrap_or(9))
+        .initial_partitions(bc.initial_partitions)
+        .checkpoint_interval(Duration::from_secs(bc.checkpoint_interval_secs))
         .ctx_resolver(Arc::new(RelativePathFsContextResolver))
-        .build()
+        .build_inactive()
+        .await
 }

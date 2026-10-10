@@ -16,6 +16,7 @@ from starlette.requests import Request
 
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth.plugins.api_key import _api_key_root_can_access_path
 from openviking.server.auth.registry import get_registry
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
@@ -80,6 +81,20 @@ def _set_fake_task_tracker():
 ROOT_KEY = "root-secret-key-for-testing-only-1234567890abcdef"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/system/backend/sync-status",
+        "/api/v1/system/backend/sync-retry",
+        "/api/v1/system/sync/viking://resources",
+        "/api/v1/system/sync/viking://resources/retry",
+    ],
+)
+def test_root_key_allowlist_rejects_removed_sync_paths(path: str):
+    """Removed sync paths must stay outside the API-key root allowlist."""
+    assert not _api_key_root_can_access_path(path)
+
+
 def _make_request(
     path: str,
     headers: dict[str, str] | None = None,
@@ -107,6 +122,8 @@ def _make_request(
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is not None:
         app.state.auth_plugin = plugin_cls()
+        if effective_auth_mode == "trusted" and api_key_manager is not None:
+            app.state.auth_plugin._api_key_manager = api_key_manager
     scope = {
         "type": "http",
         "path": path,
@@ -369,46 +386,6 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
     assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
 
-async def test_admin_sync_route_accepts_root_key(auth_client: httpx.AsyncClient, auth_service):
-    """ROOT keys should be allowed to call the system sync admin route."""
-    calls: list[str] = []
-
-    async def _fake_system_sync_status(uri: str, ctx):
-        calls.append(uri)
-        return {"path": uri, "entry_count": 1}
-
-    auth_service.fs.system_sync_status = _fake_system_sync_status
-
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": ROOT_KEY},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["result"] == {"path": "viking://resources", "entry_count": 1}
-    assert calls == ["viking://resources"]
-
-
-async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient, user_key: str):
-    """Regular user keys must not access the system sync admin route."""
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": user_key},
-    )
-    assert resp.status_code == 403
-    assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
-
-    tenant_resp = await auth_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": "default",
-            "X-OpenViking-User": "default",
-        },
-    )
-    assert tenant_resp.status_code == 403
-    assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
-
-
 async def test_task_endpoints_require_auth():
     """Task endpoints must reject unauthenticated callers before lookup/filtering."""
     set_task_tracker(None)
@@ -499,8 +476,8 @@ async def test_user_key_cannot_access_admin_api(auth_client: httpx.AsyncClient, 
     assert resp.status_code == 403
 
 
-async def test_admin_key_cannot_switch_effective_user_within_account(auth_app):
-    """ADMIN API keys cannot assert a different data-plane user in api_key mode."""
+async def test_admin_key_ignores_effective_user_headers(auth_app):
+    """ADMIN API keys ignore identity assertion headers in api_key mode."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     admin_key = await manager.create_account(account_id, "admin_user")
@@ -517,17 +494,18 @@ async def test_admin_key_cannot_switch_effective_user_within_account(auth_app):
         api_key_manager=manager,
     )
 
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-Account"):
-        await resolve_identity(
-            request,
-            x_api_key=admin_key,
-            x_openviking_account=account_id,
-            x_openviking_user="alice",
-        )
+    identity = await resolve_identity(
+        request,
+        x_api_key=admin_key,
+        x_openviking_account=account_id,
+        x_openviking_user="alice",
+    )
+
+    assert (identity.account_id, identity.user_id) == (account_id, "admin_user")
 
 
-async def test_admin_key_cannot_switch_account_via_header(auth_app):
-    """ADMIN keys must stay inside their own account."""
+async def test_admin_key_ignores_account_header(auth_app):
+    """ADMIN keys stay inside their own account when an assertion header differs."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     admin_key = await manager.create_account(account_id, "admin_user")
@@ -542,16 +520,17 @@ async def test_admin_key_cannot_switch_account_via_header(auth_app):
         api_key_manager=manager,
     )
 
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-Account"):
-        await resolve_identity(
-            request,
-            x_api_key=admin_key,
-            x_openviking_account="other-account",
-        )
+    identity = await resolve_identity(
+        request,
+        x_api_key=admin_key,
+        x_openviking_account="other-account",
+    )
+
+    assert (identity.account_id, identity.user_id) == (account_id, "admin_user")
 
 
-async def test_user_key_resolves_to_key_user_and_cannot_switch_user(auth_app):
-    """USER keys resolve to their owner and may not impersonate another user."""
+async def test_user_key_resolves_to_owner_and_ignores_user_header(auth_app):
+    """USER keys resolve to their owner and ignore identity assertion headers."""
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     await manager.create_account(account_id, "admin_user")
@@ -585,12 +564,13 @@ async def test_user_key_resolves_to_key_user_and_cannot_switch_user(auth_app):
         api_key_manager=manager,
     )
 
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-User"):
-        await resolve_identity(
-            forbidden_request,
-            x_api_key=user_key,
-            x_openviking_user="bob",
-        )
+    identity = await resolve_identity(
+        forbidden_request,
+        x_api_key=user_key,
+        x_openviking_user="bob",
+    )
+
+    assert (identity.account_id, identity.user_id) == (account_id, "alice")
 
 
 async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.AsyncClient, auth_app):
@@ -1208,9 +1188,7 @@ async def test_trusted_identity_registration_keeps_rootless_admin_api_disabled(a
     from openviking.server.auth.plugins import TrustedAuthPlugin
 
     config = ServerConfig(auth_mode="trusted")
-    app = _build_auth_http_test_app(
-        identity=None, auth_enabled=False, auth_mode="trusted"
-    )
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False, auth_mode="trusted")
     app.state.config = config
 
     @app.get("/api/v1/admin/guarded")
@@ -1262,9 +1240,7 @@ async def test_disabled_trusted_identity_registration_and_admin_paths_do_not_enq
                 "X-OpenViking-Account": "acme",
                 "X-OpenViking-User": "alice",
             }
-            request = _make_request(
-                path, headers=headers, auth_enabled=False, auth_mode="trusted"
-            )
+            request = _make_request(path, headers=headers, auth_enabled=False, auth_mode="trusted")
             request.app.state.config = config
             request.app.state.api_key_manager = app.state.api_key_manager
             await plugin.resolve_identity(
@@ -1335,7 +1311,9 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
         original_ensure = plugin._api_key_manager.ensure_trusted_identities
 
         async def _fail_once(identities):
-            monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", original_ensure)
+            monkeypatch.setattr(
+                plugin._api_key_manager, "ensure_trusted_identities", original_ensure
+            )
             raise RuntimeError("temporary storage failure")
 
         monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", _fail_once)
@@ -1351,7 +1329,12 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
 
 def test_trusted_identity_registration_config_allows_disabling():
     """A zero interval disables registration; negative values remain invalid."""
-    assert ServerConfig(trusted_identity_flush_interval_seconds=0).trusted_identity_flush_interval_seconds == 0
+    assert (
+        ServerConfig(
+            trusted_identity_flush_interval_seconds=0
+        ).trusted_identity_flush_interval_seconds
+        == 0
+    )
     with pytest.raises(ValueError):
         ServerConfig(trusted_identity_flush_interval_seconds=-1)
     with pytest.raises(ValueError):

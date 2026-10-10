@@ -211,7 +211,7 @@ test("lintServerConf covers every harness, not just the two with a legacy ov.con
 });
 
 test("assessReady interprets the readiness checks", () => {
-  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok", multiwrite_sync: "not_supported" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
+  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
   let report = createReport();
   assert.equal(assessReady(report, ok).ready, true);
   assert.equal(report.exitCode(), 0);

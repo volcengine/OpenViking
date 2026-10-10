@@ -349,18 +349,6 @@ class AsyncAGFSClient:
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
 
-    async def system_sync_status(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
-        return await self.run("system_sync_status", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
-    async def system_sync_retry(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
-        return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
     # -- pathlock async wrappers ------------------------------------------------
 
     async def pathlock_acquire_exact(

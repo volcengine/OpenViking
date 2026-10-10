@@ -38,26 +38,13 @@ control files, and `.relations.json` are outside the OVPack migration scope.
 
 ## Working with Multi-Write Storage
 
-Multi-write storage only replicates writes that happen after it is enabled. It
-does not automatically copy historical files that already existed before
-`storage.agfs.backups` was turned on.
+V2 startup imports current V1 primary files into partitioned metadata and
+removes V1 sidecars. It does not remove extra old files from backups. Pause
+all instances and take a complete backup before the first V2 startup.
 
-To seed the primary and replicas together, enable multi-write on the **empty target environment before restoring** the package:
-
-1. Pause application writes and export or back up each source account.
-2. Configure the target primary and backup backends, including their write policies, then start the target server and provision its restore identity.
-3. Restore or import through that server so historical content passes through the configured write fanout.
-4. Check synchronization status for every restored scope and verify the expected files in each replica before switching traffic. Asynchronous replication can still be pending after restore returns.
-5. Resume writes after validating content and index integrity. Keep the source and backup until verification is complete.
-
-For example, using the target account's admin key:
-
-```bash
-ov system backend sync-status viking://resources
-ov system backend sync-status viking://user
-```
-
-Restoring first and enabling backups afterwards only replicates subsequent writes; it does not seed historical content into replicas.
+Once import starts, in-place rollback is unsupported. Restore the complete
+pre-import backup to return to V1. After startup, verify primary content with
+normal file APIs and monitor backup lag through Prometheus metrics.
 
 For more details, see the [Multi-Write Storage Guide](./13-multi-write-storage.md).
 

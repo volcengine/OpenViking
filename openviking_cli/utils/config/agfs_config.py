@@ -446,7 +446,7 @@ class AGFSConfig(BaseModel):
         default=None, description="Multi-write backups configuration. None = single backend mode."
     )
     redirects: Optional[List[dict[str, Any]]] = Field(
-        default=None, description="Primary redirect policies."
+        default=None, description="[Deprecated] Primary redirect policies. Ignored by V2."
     )
 
     @model_validator(mode="after")
@@ -494,9 +494,38 @@ class AGFSConfig(BaseModel):
                     "db_path/queue_db_path will be ignored."
                 )
 
-        if self.redirects is not None and self.backups is None:
-            raise ValueError(
-                "redirects requires backups; single-backend mode does not support redirects"
-            )
+        if self.backups is not None:
+            initial_partitions = self.backups.get("initial_partitions", 16)
+            if (
+                not isinstance(initial_partitions, int)
+                or isinstance(initial_partitions, bool)
+                or not 1 <= initial_partitions <= 1024
+            ):
+                raise ValueError("backups initial_partitions must be between 1 and 1024")
+
+            checkpoint_interval_secs = self.backups.get("checkpoint_interval_secs", 86400)
+            if (
+                not isinstance(checkpoint_interval_secs, int)
+                or isinstance(checkpoint_interval_secs, bool)
+                or checkpoint_interval_secs < 60
+            ):
+                raise ValueError("backups checkpoint_interval_secs must be at least 60")
+
+            if self.backups.get("provider", "filesystem") not in {"filesystem", "cache"}:
+                raise ValueError("backups provider must be 'filesystem' or 'cache'")
+
+            names = set()
+            for item in self.backups.get("items", []):
+                if not isinstance(item, dict):
+                    raise ValueError("backups items must be objects")
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("backup name must not be empty")
+                name = name.strip()
+                if name == "primary":
+                    raise ValueError("backup name 'primary' is reserved")
+                if name in names:
+                    raise ValueError("backup names must be unique")
+                names.add(name)
 
         return self

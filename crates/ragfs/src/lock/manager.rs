@@ -875,7 +875,7 @@ impl PathLockManager {
                     }
 
                     if waiting.0.is_none() {
-                        info!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
+                        debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
                         waiting.0 = Some(&self.waiting_lock_count);
                         self.waiting_lock_count
                             .fetch_add(1, AtomicOrdering::Relaxed);

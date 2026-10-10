@@ -178,11 +178,9 @@ function findRoute(method, documentedPath) {
     const candidateMethod = candidate.slice(0, separator)
     const candidatePath = candidate.slice(separator + 1)
     if (candidateMethod !== method) continue
-    const placeholderPattern =
-      candidatePath.startsWith('/webdav/resources/{}') ||
-      candidatePath.startsWith('/api/v1/system/sync/{}')
-        ? '.+'
-        : '[^/]+'
+    const placeholderPattern = candidatePath.startsWith('/webdav/resources/{}')
+      ? '.+'
+      : '[^/]+'
     const pattern = candidatePath
       .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       .replace(/\\\{\\\}/g, placeholderPattern)
@@ -351,10 +349,7 @@ function routeIsCovered(route, coverage) {
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(
       /\\\{\\\}/g,
-      routePath.startsWith('/webdav/resources/{}') ||
-        routePath.startsWith('/api/v1/system/sync/{}')
-        ? '.+'
-        : '[^/]+'
+      routePath.startsWith('/webdav/resources/{}') ? '.+' : '[^/]+'
     )
   for (const reference of coverage) {
     const referenceSeparator = reference.indexOf(' ')

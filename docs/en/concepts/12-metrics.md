@@ -289,14 +289,22 @@ seconds, for example `123 ns = 0.000000123 seconds`.
 | `openviking_ragfs_cache_bytes_total` | Counter | `source` | bytes from backend/cache |
 | `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | cumulative get/put/delete duration |
 | `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved counts |
-| `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | background tasks, including the retry loop |
-| `openviking_ragfs_multiwrite_read_routes_total` | Counter | `route` | primary/backup/redirect/miss selections |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | active flush runtime, `0` or `1` per mount |
+| `openviking_ragfs_multiwrite_pending_events` | Gauge | none | submitted events that are queued, executing, or awaiting retry |
+| `openviking_ragfs_multiwrite_errors_total` | Counter | `worker` | final failures for `flush`, `checkpoint`, `catch_up`, or `gc` |
+| `openviking_ragfs_multiwrite_backend_lag_events` | Gauge | `backend, partition` | sum of `tail - synced_seq` across accounts |
+| `openviking_ragfs_multiwrite_protocol_version` | Gauge | `version` | mount count for the closed label `v2` |
+| `openviking_ragfs_multiwrite_protocol_status` | Gauge | `status` | mount count for closed labels `migrating` and `stable` |
 
 These metrics have no `mount` or `account_id` label. Cache and multi-backend
 families are absent when those capabilities are not enabled. `status` is
 `success` or `error`; `exists=false` is successful and `replace` uses `rename`.
 Histogram buckets cover all outcomes, with finite bounds from 0.0001 to 10 seconds.
 Python `get_stats()` retains its microsecond fields.
+
+The protocol family always contains both closed-label series. One unreadable
+or invalid protocol, account, or segment manifest rejects the
+whole scrape snapshot instead of publishing partial zero lag.
 
 ### Tasks and Task Tracker
 

@@ -41,7 +41,13 @@ class RagfsBindingConfig:
         cachefs_backend = getattr(cachefs, "backend", "local")
         pathlock = self.agfs.pathlock.model_dump(mode="json", exclude_none=True)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
-        uses_runtime = cachefs_backend == "cache" or queue_backend == "cache" or pathlock_uses_cache
+        backups = getattr(self.agfs, "backups", None)
+        uses_runtime = (
+            cachefs_backend == "cache"
+            or queue_backend == "cache"
+            or pathlock_uses_cache
+            or _get_config_value(backups, "provider", "filesystem") == "cache"
+        )
         if (
             pathlock_uses_cache
             and self.cache is not None
@@ -60,8 +66,8 @@ class RagfsBindingConfig:
         else:
             if uses_runtime:
                 raise ValueError(
-                    "top-level cache config is required when CacheFS, QueueFS, or cache-backed PathLock "
-                    "uses the shared Runtime"
+                    "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
+                    "or cache-backed multi-write uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(cachefs)
         binding_config: Dict[str, Any] = {
@@ -301,10 +307,8 @@ def _generate_plugin_config(
     # Check for multi-write configuration
     backups_config = getattr(agfs_config, "backups", None)
     redirects_config = getattr(agfs_config, "redirects", None)
-    if redirects_config is not None and backups_config is None:
-        raise ValueError(
-            "redirects requires backups; single-backend mode does not support redirects"
-        )
+    if redirects_config is not None:
+        logger.warning("storage.agfs.redirects is deprecated and ignored")
 
     # Build primary backend plugin config
     primary_plugin_config: Dict[str, Any] = {}
@@ -325,12 +329,6 @@ def _generate_plugin_config(
         mount_config["backups"] = _serialize_backups_config(backups_config, data_path)
         mount_config["server_encryption_enabled"] = server_encryption_enabled
         mount_config["primary_encryption_enabled"] = server_encryption_enabled
-
-        # Serialize redirect policies
-        if redirects_config is not None:
-            mount_config["primary_redirects"] = [
-                _serialize_redirect_policy(p) for p in redirects_config
-            ]
 
     # Determine the plugin type name for the primary backend
     if backend == "local":
@@ -370,6 +368,9 @@ def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
 
 def _get_backend_specific_params(item: Any) -> Any:
     """Return backend-specific nested params from one backup item using the backend name key."""
+    params = _get_config_value(item, "params")
+    if params is not None:
+        return params
     backend_params = _get_config_value(item, "backend_params")
     if backend_params is not None:
         return backend_params
@@ -482,19 +483,40 @@ def _normalize_backup_item(item: Any, data_path: Path) -> Dict[str, Any]:
 
 
 def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str, Any]:
-    """Serialize raw multi-write backups config with top-level passthrough and normalized items."""
+    """Serialize V2 backups while warning about and stripping legacy fields."""
     result = _dump_config_object(backups_config)
-    result.setdefault("sync_type", "async")
-    result["items"] = [
-        _normalize_backup_item(item, data_path)
-        for item in _get_config_value(backups_config, "items", [])
-    ]
+    deprecated_fields = []
+    for field_name in (
+        "sync_type",
+        "write_ack_count",
+        "write_ack_timeout_ms",
+        "write_concurrency",
+        "retry_interval_ms",
+        "retry_backoff_base_ms",
+        "retry_max_retries_per_round",
+        "retry_quarantine_after_failures",
+        "read_probe_cache_ttl_ms",
+    ):
+        if field_name in result:
+            deprecated_fields.append(field_name)
+            result.pop(field_name)
+
+    items = []
+    for item in _get_config_value(backups_config, "items", []):
+        normalized = _normalize_backup_item(item, data_path)
+        for field_name in ("timeout", "operations", "excludes"):
+            if field_name in normalized:
+                deprecated_fields.append(f"items.{field_name}")
+                normalized.pop(field_name)
+        items.append(normalized)
+    result["items"] = items
+
+    if deprecated_fields:
+        logger.warning(
+            "Deprecated backups configuration fields are ignored: %s",
+            ", ".join(dict.fromkeys(deprecated_fields)),
+        )
     return result
-
-
-def _serialize_redirect_policy(policy: Any) -> Dict[str, Any]:
-    """Serialize one raw redirect/exclude policy object to a dict."""
-    return _dump_config_object(policy)
 
 
 def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any]:

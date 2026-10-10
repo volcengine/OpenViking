@@ -21,7 +21,7 @@ Rules:
 
 - When global `encryption.enabled=true`, the primary backend must be encrypted.
 - Each backup backend may control its own encryption through `encryption.enabled`.
-- Multi-write internal metadata such as `.redirect.json` and `.sync_log.json` follows the primary backend's encryption policy.
+- V2 multi-write metadata is stored on the raw primary and bypasses `EncryptionWrappedFS`.
 - OpenViking does not expose and does not need public encryption APIs for operating on these internal files.
 
 See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more multi-write configuration details.

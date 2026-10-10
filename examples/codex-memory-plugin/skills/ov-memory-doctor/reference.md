@@ -152,7 +152,7 @@ port is bound only after initialization finishes, so "connection refused"
 during startup is normal; `/health` 200 says nothing about embedding or VLM.
 
 `GET /ready` (no auth, 200 or 503):
-`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…,"multiwrite_sync":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
+`{"status":"ready"|"not_ready","checks":{"agfs":{"status":…,"checks":{"filesystem":…}},"vectordb":…,"api_key_manager":…,"embedding":…,"ollama":…}}`.
 `ok`, `not_configured` and `not_supported` count as healthy; `embedding` is a
 real embed call with a 10s cap. `503 {"status":"not_ready","reason":"initializing"}`
 while booting; 404 on servers that predate the endpoint. The official docker

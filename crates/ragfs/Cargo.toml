@@ -19,11 +19,6 @@ name = "ragfs-shell"
 path = "src/shell/main.rs"
 
 [[test]]
-name = "cache_wrapper"
-path = "tests/cache_wrapper.rs"
-required-features = ["cache", "test-utils"]
-
-[[test]]
 name = "cache_runtime"
 path = "tests/cache_runtime.rs"
 required-features = ["cache", "test-utils"]
@@ -67,6 +62,7 @@ filelocks = "0.1.0"
 
 # Data structures
 radix_trie = "0.2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Error handling
 anyhow = "1.0"

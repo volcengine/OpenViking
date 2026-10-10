@@ -77,6 +77,17 @@
         "agfs": {
             "backend": "local",
             "timeout": 10,
+            "backups_example": {
+                "_comment": "Rename this key to backups to enable V2 multi-write.",
+                "initial_partitions": 16,
+                "checkpoint_interval_secs": 86400,
+                "provider": "cache",
+                "items": [{
+                    "name": "local-backup",
+                    "backend": "local",
+                    "params": {"workspace": "./data/backup"}
+                }]
+            },
             "cachefs": {
                 "backend": "local",
                 "namespace": "openviking",

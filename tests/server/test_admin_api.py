@@ -34,7 +34,7 @@ from openviking.server.user_config import (
     user_config_backup_uri,
 )
 from openviking.service.core import OpenVikingService
-from openviking.service.deletion import setup_deletion
+from openviking.service.deletion import DeletionService, setup_deletion
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
@@ -304,6 +304,28 @@ async def _wait_for_task(client: httpx.AsyncClient, task_id: str) -> dict:
 
 
 # ---- Account CRUD ----
+
+
+async def test_delete_account_files_disables_automatic_pathlock(monkeypatch):
+    """Account cleanup must bypass the deleted tree's automatic PathLock."""
+    path = "/local/account-to-delete"
+    agfs = Mock()
+    agfs.rm = AsyncMock()
+    agfs.stat = AsyncMock(side_effect=AGFSNotFoundError(path))
+    service = Mock()
+    service.viking_fs._async_agfs = agfs
+    tracker = Mock()
+    monkeypatch.setattr("openviking.service.deletion.get_task_tracker", lambda: tracker)
+    deletion = DeletionService(
+        service=service,
+        manager=Mock(),
+        service_loop=asyncio.get_running_loop(),
+    )
+
+    await deletion._delete_account_files("account-to-delete")
+
+    agfs.rm.assert_awaited_once_with(path, recursive=True, auto_pathlock=False)
+    tracker.forget_account_tasks.assert_called_once_with("account-to-delete")
 
 
 @pytest_asyncio.fixture
@@ -1658,10 +1680,23 @@ async def test_create_account(
     adapter = Mock(mode="vikingdb", USE_CONTENT_FIELD=True)
     adapter.get.return_value = []
     adapter.get_collection.return_value.get_meta_data.return_value = {
-        "Fields": [{"FieldName": name} for name in (
-            "id", "uri", "account_id", "context_type", "abstract", "level",
-            "user", "agent", "vector", "sparse_vector", "created_at", "updated_at",
-        )]
+        "Fields": [
+            {"FieldName": name}
+            for name in (
+                "id",
+                "uri",
+                "account_id",
+                "context_type",
+                "abstract",
+                "level",
+                "user",
+                "agent",
+                "vector",
+                "sparse_vector",
+                "created_at",
+                "updated_at",
+            )
+        ]
     }
     adapter.upsert.side_effect = lambda rows: [row["id"] for row in rows]
     factory = Mock(return_value=adapter)
@@ -1725,7 +1760,9 @@ async def test_create_account_rolls_back_when_runtime_config_write_fails(
     )
 
     assert response.status_code == 500
-    assert not any(item["account_id"] == acct for item in admin_app.state.api_key_manager.get_accounts())
+    assert not any(
+        item["account_id"] == acct for item in admin_app.state.api_key_manager.get_accounts()
+    )
     assert not await _agfs_exists(admin_service, f"/local/{acct}")
 
 
@@ -2046,9 +2083,7 @@ async def test_list_accounts_with_watcher_uses_memory(
     manager = lightweight_admin_app.state.api_key_manager
     monkeypatch.setattr(manager._legacy, "_read_json", _unexpected_read)
     try:
-        resp = await lightweight_admin_client.get(
-            "/api/v1/admin/accounts", headers=root_headers()
-        )
+        resp = await lightweight_admin_client.get("/api/v1/admin/accounts", headers=root_headers())
         users_resp = await lightweight_admin_client.get(
             "/api/v1/admin/accounts/default/users", headers=root_headers()
         )
@@ -2262,7 +2297,9 @@ async def test_delete_account(
     assert manager.get_deletion(acct) is None
     assert not manager.has_user(acct, "alice")
     assert await get_task_tracker().get(old_task.task_id, account_id=acct, user_id="alice") is None
-    assert await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice") is None
+    assert (
+        await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice") is None
+    )
     assert (await _wait_for_task(admin_client, task_id))["status"] == "failed"
 
     # Late cleanup deliveries are harmless after deletion, including when the
@@ -2299,9 +2336,10 @@ async def test_delete_account(
         skipped = await _wait_for_task(admin_client, late_task_id)
         assert skipped["status"] == "completed"
         assert skipped["result"] == {"deleted": not recreated, "stale": True}
-        assert await get_task_tracker().get(
-            user_cleanup.task_id, account_id=acct, user_id="alice"
-        ) is None
+        assert (
+            await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice")
+            is None
+        )
         assert await _agfs_exists(admin_service, path) is recreated
         if recreated:
             assert manager.resolve(replacement_key).user_id == "bob"

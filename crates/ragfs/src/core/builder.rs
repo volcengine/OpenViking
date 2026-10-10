@@ -200,6 +200,8 @@ pub async fn build_configured_stack(
             CacheNamespace::new(&cache.cachefs.namespace),
             cache.cachefs.policy,
         ))
+    } else if let Some(runtime) = runtime.as_ref() {
+        Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))
     } else {
         Arc::new(MountableFS::new())
     };

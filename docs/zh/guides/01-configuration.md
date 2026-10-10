@@ -1260,8 +1260,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 |------|------|------|--------|
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
-| `backups` | object | 主备存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
-| `redirects` | array | 主备存储的文件重定向策略。命中后文件写入指定 backup，而不是 primary | `[]` |
+| `backups` | object | 多写存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
 | `queuefs` | object | QueueFS 配置。控制 `/queue` 的命名空间模式、后端和运行时参数 | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str（可选）| 旧版兼容字段，用于覆盖 QueueFS 的 sqlite 数据库文件路径。已被 `storage.agfs.queuefs.db_path` 取代。未设置时默认为 `{storage.workspace}/_system/queue/queue.db`。适用于 workspace 卷不支持 sqlite 的场景（例如某些网络文件系统） | `null` |
 | `s3` | object | S3 后端配置（`backend=s3` 时使用） | - |
@@ -1276,7 +1275,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 ##### 主备存储配置
 
-`storage.agfs.backups` 用于启用主备存储。未配置时，OpenViking 保持单 backend 模式。
+`storage.agfs.backups` 启用异步 V2 多写。顶层 backend 始终是唯一直接读取来源。
 
 ```json
 {
@@ -1284,26 +1283,16 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
     "workspace": "./data",
     "agfs": {
       "backend": "local",
-      "redirects": [
-        {
-          "type": "FileExtensionPolicy",
-          "extensions": ["(pdf|ppt|zip)"],
-          "target": ["s3-backup"]
-        }
-      ],
       "backups": {
-        "sync_type": "async",
+        "initial_partitions": 16,
+        "checkpoint_interval_secs": 86400,
+        "provider": "filesystem",
         "items": [
           {
-            "name": "s3-backup",
-            "backend": "s3",
-            "s3": {
-              "bucket": "openviking-backup",
-              "region": "cn-beijing",
-              "endpoint": "https://tos-s3-cn-beijing.volces.com",
-              "access_key": "your-ak",
-              "secret_key": "your-sk",
-              "prefix": "multi-write"
+            "name": "local-backup",
+            "backend": "local",
+            "params": {
+              "workspace": "./data/backup"
             }
           }
         ]
@@ -1317,36 +1306,13 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `sync_type` | str | 主备同步模式，支持 `"async"` 或 `"sync"` | `"async"` |
-| `write_ack_count` | int | `sync` 模式下返回前需要的 backup 确认数 | 全部 backup |
-| `write_ack_timeout_ms` | int | `sync` 模式下等待 backup 确认的超时时间，单位毫秒 | `null` |
-| `write_concurrency` | int | 异步 backup 写入并发上限 | `null` |
-| `items` | array | backup backend 列表，每个 item 复用普通 backend 配置并增加 `name`、`operations`、`excludes`、`encryption` 等字段 | `[]` |
+| `initial_partitions` | int | account 首次初始化的 metadata partition 数；修改不影响已有 account | `16` |
+| `checkpoint_interval_secs` | int | Checkpoint 扫描间隔，最小值为 `60` | `86400` |
+| `provider` | str | Metadata provider：`filesystem` 或复用顶层 CacheRuntime 的 `cache` | `"filesystem"` |
+| `items` | array | backup 列表，包含 `name`、`backend`、`params` 和可选 `encryption` | `[]` |
 
-`redirects` 常用字段：
-
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `type` | str | 策略类型，支持 `"FileExtensionPolicy"` 或 `"FileOverSizePolicy"` | 必填 |
-| `extensions` | array | `FileExtensionPolicy` 使用的扩展名正则列表，例如 `["(pdf\|ppt)"]` | `[]` |
-| `max_size_mb` | int | `FileOverSizePolicy` 使用的文件大小阈值，单位 MB | `null` |
-| `target` | array | 命中策略后写入的 backup `name` 列表 | 必填 |
-
-按文件大小重定向示例：
-
-```json
-{
-  "type": "FileOverSizePolicy",
-  "max_size_mb": 100,
-  "target": ["s3-backup"]
-}
-```
-
-注意：
-
-- `redirects` 配置在顶层 `storage.agfs`，表示 primary 的重定向策略。
-- `target` 必须引用 `backups.items[]` 中已经定义的 backup `name`。
-- 命中 redirect 的文件仍会通过普通文件系统 API 呈现为可读、可列举的文件。
+Python 配置层仍接受旧 sync、retry、operations、excludes 和 redirects
+字段，输出 warning 后会在调用 Rust 前删除，字段不生效。
 
 更多配置示例见 [主备存储指南](./13-multi-write-storage.md)。
 
@@ -1414,9 +1380,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 }
 ```
 
-标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache`，或 PathLock 选择 `provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
 
-这是一次配置破坏性变更：`storage.agfs.cache`、`storage.agfs.queuefs.backend="redis"` 和 `storage.agfs.queuefs.redis` 已删除并会被拒绝。请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，业务模块改为 `cachefs.backend="cache"` 或 `queuefs.backend="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
+这是一次配置破坏性变更：`storage.agfs.cache`、`storage.agfs.queuefs.backend="redis"`、`storage.agfs.queuefs.redis` 和 `storage.agfs.backups.provider="redis"` 已删除并会被拒绝。请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
 ##### QueueFS 配置
 

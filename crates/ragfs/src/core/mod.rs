@@ -23,7 +23,7 @@ pub mod stats_wrapper;
 pub mod types;
 
 // Re-export commonly used types
-pub use crate::multibackend::{FsContextResolver, MetaStateStore};
+pub use crate::multibackend::FsContextResolver;
 #[cfg(feature = "cache")]
 pub use builder::{
     build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
@@ -37,13 +37,12 @@ pub use encryption_wrapper::EncryptionWrappedFS;
 pub use errors::{Error, Result};
 pub use filesystem::FileSystem;
 pub use mountable::MountableFS;
-pub use multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS, SyncMode};
+pub use multibackend_wrapper::{BackendEntry, MultiWriteWrappedFS};
 pub use plugin::{HealthStatus, PluginRegistry, ServicePlugin};
 pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, StatsCollector};
 pub use stats_wrapper::StatsWrappedFS;
 pub use types::{
-    BackendItemConfig, BackendRole, BackendSyncState, BackendsConfig, ConfigParameter, ConfigValue,
-    EncryptionConfig, FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult,
-    ListSortBy, OperationItemConfig, PluginConfig, RedirectEntry, RedirectMeta, RedirectPolicy,
-    SortOrder, SyncLogEntry, SyncLogMeta, SyncOp, SyncType, TreeEntry, WriteFlag,
+    BackendItemConfig, BackendRole, BackendsConfig, ConfigParameter, ConfigValue, EncryptionConfig,
+    FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy, PluginConfig,
+    SortOrder, TreeEntry, WriteFlag,
 };

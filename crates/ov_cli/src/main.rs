@@ -1589,29 +1589,6 @@ enum SystemCommands {
         #[command(subcommand)]
         action: commands::crypto::CryptoCommands,
     },
-    /// Backend sync inspection and repair commands
-    Backend {
-        #[command(subcommand)]
-        action: SystemBackendCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum SystemBackendCommands {
-    /// Show multi-write backend sync status for a URI subtree
-    #[command(name = "sync-status")]
-    SyncStatus {
-        /// Viking URI to inspect
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
-    /// Retry pending multi-write backend sync work for a URI subtree
-    #[command(name = "sync-retry")]
-    SyncRetry {
-        /// Viking URI to repair
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -2544,14 +2521,6 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
         {
             path.push(watch_subcommand.to_string());
         }
-        if command == "system"
-            && path.get(1).is_some_and(|token| token == "backend")
-            && let Some(backend_subcommand) =
-                tokens.get(2).map(|token| canonical_plain_help_token(token))
-            && backend_subcommand != "help"
-        {
-            path.push(backend_subcommand.to_string());
-        }
         return Some(PlainHelpMisuse {
             help_command: prefixed_help_command(&path),
         });
@@ -2763,10 +2732,6 @@ fn known_task_command_requires_config(tokens: &[String]) -> bool {
 fn known_system_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
         Some("wait" | "status" | "health" | "consistency") => true,
-        Some("backend") => matches!(
-            tokens.get(2).map(String::as_str),
-            None | Some("sync-status" | "sync-retry")
-        ),
         Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
         _ => false,
     }
@@ -4032,7 +3997,7 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -4382,22 +4347,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cli_parses_system_backend_sync_status() {
-        let cli = Cli::try_parse_from(["ov", "system", "backend", "sync-status", "viking://a"])
-            .expect("system backend sync-status should parse");
-
-        match cli.command {
-            Commands::System { action } => match action {
-                SystemCommands::Backend { action } => match action {
-                    SystemBackendCommands::SyncStatus { uri } => assert_eq!(uri, "viking://a"),
-                    _ => panic!("expected backend sync-status command"),
-                },
-                _ => panic!("expected system backend command"),
-            },
-            _ => panic!("expected system command"),
-        }
-    }
 
     #[test]
     fn server_commands_require_existing_cli_config() {
@@ -4623,7 +4572,6 @@ mod tests {
             &["ov", "config", "validate"],
             &["ov", "config", "show"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend", "sync-status"],
             &["ov", "admin", "list-accounts"],
         ] {
             assert!(
@@ -4708,9 +4656,6 @@ mod tests {
             &["ov", "system", "status"],
             &["ov", "system", "health"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend"],
-            &["ov", "system", "backend", "sync-status"],
-            &["ov", "system", "backend", "sync-retry"],
             &["ov", "system", "crypto"],
             &["ov", "system", "crypto", "init-key"],
             &["ov", "session", "new"],
@@ -5627,10 +5572,6 @@ mod tests {
             (
                 vec!["ov", "system", "consistency", "help"],
                 "ov system consistency --help",
-            ),
-            (
-                vec!["ov", "system", "backend", "sync-status", "help"],
-                "ov system backend sync-status --help",
             ),
         ] {
             let misuse = plain_help_misuse(&os_args(&args))

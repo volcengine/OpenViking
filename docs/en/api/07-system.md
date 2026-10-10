@@ -1,6 +1,8 @@
 # System Status
 
-The OpenViking System API provides health, readiness, consistency, and multi-write backend synchronization status. Component observers and Prometheus metrics are documented separately.
+The OpenViking System API provides health, readiness, consistency, and
+background-processing status. Component observers and Prometheus metrics are
+documented separately.
 
 ## API Reference
 
@@ -415,99 +417,6 @@ ov system wait --timeout 60
   }
 }
 ```
-
----
-
-### backend_sync_status()
-
-Return multi-write backend synchronization status for a Viking URI subtree. This endpoint requires ROOT or ADMIN permission.
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-status
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-The URI-path form is also available:
-
-```http
-GET /api/v1/system/sync/{sync_path}
-```
-
-**CLI**
-
-```bash
-ov system backend sync-status viking://resources
-```
-
-**Response example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "entry_count": 12
-  }
-}
-```
-
-`result` is supplied by the active filesystem backend. `path` identifies the queried scope and `entry_count` is the number of sync records in that scope. A backend may add diagnostics such as pending or failed records.
-
-### backend_sync_retry()
-
-Retry incomplete multi-write backend synchronization work for a URI subtree. This endpoint requires ROOT or ADMIN permission.
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-retry
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-The URI-path form is:
-
-```http
-POST /api/v1/system/sync/{sync_path}/retry
-```
-
-**CLI**
-
-```bash
-ov system backend sync-retry viking://resources
-```
-
-**Response example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "retried": 2,
-    "failed": 0
-  }
-}
-```
-
-`retried` is the number of records rescheduled by this request, and `failed` is the number that could not be scheduled. A backend may include additional diagnostic fields.
-
-The public Python, TypeScript, and Go SDKs do not currently expose multi-write backend synchronization methods, so the sections above show only HTTP and CLI tabs.
 
 ---
 

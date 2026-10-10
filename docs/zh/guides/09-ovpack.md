@@ -33,22 +33,12 @@ Session 通过 user 命名空间一起迁移，路径为
 
 ## 与主备存储配合
 
-主备存储只复制启用之后的新写入，不会自动同步启用之前已经存在的历史文件。如需同时为 primary 和副本写入存量，应在**空目标环境恢复之前**启用主备存储：
+V2 启动会把当前 V1 primary 文件导入分区 metadata，并删除 V1 sidecar。
+导入不会删除 backup 中多余的旧文件。首次 V2 启动前，应停服所有实例并创建
+完整备份。
 
-1. 暂停业务写入，按源 account 分别导出或备份。
-2. 配置目标 primary、backup backend 及其写策略，启动目标服务并创建恢复身份。
-3. 通过该服务恢复或导入，使存量内容经过已配置的主备复制分发。
-4. 对每个恢复的 scope 检查同步状态，并在切流前验证各副本中的文件。恢复返回时，异步复制仍可能未完成。
-5. 验证内容和索引完整性后再恢复业务写入；验证完成前保留源数据和备份。
-
-例如，使用目标 account 的 admin key 检查：
-
-```bash
-ov system backend sync-status viking://resources
-ov system backend sync-status viking://user
-```
-
-先恢复再启用 backups 只会复制后续写入，不能把历史内容补到副本。
+导入开始后不支持原地回滚。要恢复 V1，必须恢复导入前的完整备份。启动后使用
+普通文件 API 验证 primary 内容，并通过 Prometheus 指标观察 backup lag。
 
 更多说明见 [主备存储指南](./13-multi-write-storage.md)。
 

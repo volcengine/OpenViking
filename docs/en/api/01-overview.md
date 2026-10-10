@@ -359,10 +359,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for background processing |
 | POST | `/api/v1/system/consistency` | Check filesystem and vector-index consistency |
-| POST | `/api/v1/system/backend/sync-status` | Query backend synchronization status |
-| POST | `/api/v1/system/backend/sync-retry` | Retry backend synchronization |
-| GET | `/api/v1/system/sync/{sync_path}` | Path-form compatibility endpoint for synchronization status |
-| POST | `/api/v1/system/sync/{sync_path}/retry` | Path-form compatibility endpoint for synchronization retry |
 
 ### [Resources](02-resources.md) and [Filesystem](03-filesystem.md)
 

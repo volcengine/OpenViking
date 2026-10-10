@@ -1270,7 +1270,6 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `backups` | object | Multi-write storage configuration. When set, the top-level `backend` acts as the primary backend and `backups.items[]` defines backup backends | `null` |
-| `redirects` | array | File redirect policies for multi-write storage. Matching files are written to the specified backup instead of the primary backend | `[]` |
 | `queuefs` | object | QueueFS configuration. Controls the namespace mode, backend, and runtime options for `/queue` | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str (optional) | Legacy compatibility field for QueueFS sqlite DB path. Superseded by `storage.agfs.queuefs.db_path`. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -1284,7 +1283,8 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 
 ##### Multi-Write Storage Configuration
 
-`storage.agfs.backups` enables multi-write storage. If it is not configured, OpenViking stays in single-backend mode.
+`storage.agfs.backups` enables asynchronous V2 multi-write storage. The
+top-level backend remains the only direct read source.
 
 ```json
 {
@@ -1292,26 +1292,16 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
     "workspace": "./data",
     "agfs": {
       "backend": "local",
-      "redirects": [
-        {
-          "type": "FileExtensionPolicy",
-          "extensions": ["(pdf|ppt|zip)"],
-          "target": ["s3-backup"]
-        }
-      ],
       "backups": {
-        "sync_type": "async",
+        "initial_partitions": 16,
+        "checkpoint_interval_secs": 86400,
+        "provider": "filesystem",
         "items": [
           {
-            "name": "s3-backup",
-            "backend": "s3",
-            "s3": {
-              "bucket": "openviking-backup",
-              "region": "cn-beijing",
-              "endpoint": "https://tos-s3-cn-beijing.volces.com",
-              "access_key": "your-ak",
-              "secret_key": "your-sk",
-              "prefix": "multi-write"
+            "name": "local-backup",
+            "backend": "local",
+            "params": {
+              "workspace": "./data/backup"
             }
           }
         ]
@@ -1325,36 +1315,14 @@ Common `backups` fields:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `sync_type` | str | Multi-write sync mode. Supports `"async"` or `"sync"` | `"async"` |
-| `write_ack_count` | int | Number of backup acknowledgements required before a `sync` write returns | all backups |
-| `write_ack_timeout_ms` | int | Timeout in milliseconds while waiting for backup acknowledgements in `sync` mode | `null` |
-| `write_concurrency` | int | Maximum async backup write concurrency | `null` |
-| `items` | array | Backup backend list. Each item reuses normal backend configuration and adds fields such as `name`, `operations`, `excludes`, and `encryption` | `[]` |
+| `initial_partitions` | int | Initial metadata partitions; changes do not affect existing accounts | `16` |
+| `checkpoint_interval_secs` | int | Checkpoint discovery interval; minimum `60` | `86400` |
+| `provider` | str | Metadata provider: `filesystem` or top-level CacheRuntime-backed `cache` | `"filesystem"` |
+| `items` | array | Backups with `name`, `backend`, `params`, and optional `encryption` | `[]` |
 
-Common `redirects` fields:
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `type` | str | Policy type. Supports `"FileExtensionPolicy"` or `"FileOverSizePolicy"` | required |
-| `extensions` | array | Extension regex list used by `FileExtensionPolicy`, for example `["(pdf\\|ppt)"]` | `[]` |
-| `max_size_mb` | int | File size threshold in MB used by `FileOverSizePolicy` | `null` |
-| `target` | array | Backup `name` list that receives matched files | required |
-
-File-size redirect example:
-
-```json
-{
-  "type": "FileOverSizePolicy",
-  "max_size_mb": 100,
-  "target": ["s3-backup"]
-}
-```
-
-Notes:
-
-- `redirects` is configured at top-level `storage.agfs` and defines redirect policies for the primary backend.
-- `target` must reference an existing backup `name` from `backups.items[]`.
-- Files matched by redirect still appear as normal readable and listable files through the filesystem APIs.
+The Python configuration layer still accepts legacy sync, retry, operations,
+excludes, and redirects fields. It warns and removes them before calling Rust;
+the fields have no effect.
 
 See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more examples.
 
@@ -1422,9 +1390,9 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 }
 ```
 
-The canonical configuration has no global `cache.enabled`. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, or when PathLock selects `provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled`. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
 
-This is a breaking configuration change. `storage.agfs.cache`, `storage.agfs.queuefs.backend="redis"`, and `storage.agfs.queuefs.redis` are rejected. Move Provider settings to top-level `cache.provider/cache.params`, select `cachefs.backend="cache"` or `queuefs.backend="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
+This is a breaking configuration change. `storage.agfs.cache`, `storage.agfs.queuefs.backend="redis"`, `storage.agfs.queuefs.redis`, and `storage.agfs.backups.provider="redis"` are rejected. Move Provider settings to top-level `cache.provider/cache.params`, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
 ##### QueueFS Configuration
 

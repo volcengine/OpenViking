@@ -440,59 +440,62 @@ def test_generate_plugin_config_forwards_queuefs_runtime_options():
     assert plugins["queuefs"]["config"]["busy_timeout_ms"] == 1234
 
 
-def test_agfs_redirects_require_backups():
-    """Single-backend mode must reject redirect policies during config validation."""
-    with pytest.raises(ValueError, match="redirects requires backups"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            redirects=[
-                {
-                    "type": "FileExtensionPolicy",
-                    "extensions": ["(md)"],
-                    "target": ["s3-backup"],
-                }
-            ],
-        )
-
-
-def test_generate_plugin_config_rejects_redirects_without_backups(tmp_path):
-    """Runtime plugin config generation must also reject redirect-only configs."""
-    config = type(
-        "RedirectOnlyConfig",
-        (),
+def test_agfs_redirects_without_backups_are_parse_only():
+    """Legacy redirects must remain constructible without enabling multi-write."""
+    redirects = [
         {
-            "backend": "local",
-            "s3": None,
-            "backups": None,
-            "redirects": [
-                type(
-                    "RedirectPolicy",
-                    (),
-                    {
-                        "type": "FileExtensionPolicy",
-                        "extensions": ["(md)"],
-                        "target": ["s3-backup"],
-                    },
-                )()
-            ],
-            "queuefs": type(
-                "QueueConfig",
-                (),
-                {
-                    "mode": "shared",
-                    "backend": "sqlite",
-                    "db_path": None,
-                    "recover_stale_sec": 0,
-                    "busy_timeout_ms": 5000,
-                },
-            )(),
-            "queue_db_path": None,
-        },
-    )()
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
 
-    with pytest.raises(ValueError, match="redirects requires backups"):
-        _generate_plugin_config(config, tmp_path)
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        redirects=redirects,
+    )
+
+    assert config.redirects == redirects
+
+
+def test_generate_plugin_config_ignores_redirects_without_backups(tmp_path):
+    """Legacy redirects must not alter a single-backend mount config."""
+    redirects = [
+        {
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
+    config = AGFSConfig(path=str(tmp_path), backend="local", redirects=redirects)
+    plain_config = AGFSConfig(path=str(tmp_path), backend="local")
+
+    mount_config = _generate_plugin_config(config, tmp_path)["localfs"]["config"]
+    plain_mount_config = _generate_plugin_config(plain_config, tmp_path)["localfs"]["config"]
+
+    assert mount_config == plain_mount_config
+
+
+def test_generate_plugin_config_ignores_redirects_with_backups(tmp_path):
+    """Legacy redirects must remain accepted without reaching Rust."""
+    redirects = [
+        {
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={"items": [{"name": "mem-backup", "backend": "memory"}]},
+        redirects=redirects,
+    )
+
+    mount_config = _generate_plugin_config(config, tmp_path)["localfs"]["config"]
+
+    assert "primary_redirects" not in mount_config
 
 
 def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
@@ -517,20 +520,85 @@ def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
     assert mount_config["primary_encryption_enabled"] is True
 
 
-def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
-    """Plugin config generation should normalize backup params while preserving top-level multi-write fields."""
+def test_generate_plugin_config_preserves_v2_backups_without_sync_type(tmp_path):
+    """V2 backup fields must pass through without injecting a V1 sync mode."""
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={
+            "initial_partitions": 32,
+            "checkpoint_interval_secs": 120,
+            "provider": "filesystem",
+            "items": [{"name": "mem-backup", "backend": "memory"}],
+        },
+    )
+
+    backups = _generate_plugin_config(config, tmp_path)["localfs"]["config"]["backups"]
+
+    assert backups["initial_partitions"] == 32
+    assert backups["checkpoint_interval_secs"] == 120
+    assert backups["provider"] == "filesystem"
+    assert "sync_type" not in backups
+
+
+@pytest.mark.parametrize("provider", ["filesystem", "cache"])
+def test_agfs_config_accepts_supported_v2_backup_providers(provider):
+    """AGFS config must accept each specified metadata provider."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        backups={"provider": provider, "items": []},
+    )
+
+    assert config.backups["provider"] == provider
+
+
+@pytest.mark.parametrize(
+    ("backups", "expected"),
+    [
+        ({"initial_partitions": 0, "items": []}, "initial_partitions"),
+        ({"initial_partitions": 1025, "items": []}, "initial_partitions"),
+        ({"checkpoint_interval_secs": 59, "items": []}, "checkpoint_interval_secs"),
+        ({"provider": "memory", "items": []}, "provider"),
+        ({"provider": "redis", "items": []}, "provider"),
+        ({"items": [{"name": " ", "backend": "memory"}]}, "name"),
+        ({"items": [{"name": "primary", "backend": "memory"}]}, "primary"),
+        (
+            {
+                "items": [
+                    {"name": "backup-a", "backend": "memory"},
+                    {"name": "backup-a", "backend": "memory"},
+                ]
+            },
+            "unique",
+        ),
+    ],
+)
+def test_agfs_config_rejects_invalid_v2_backups(backups, expected):
+    """AGFS config must reject invalid V2 backup fields before Rust startup."""
+    with pytest.raises(ValueError, match=expected):
+        AGFSConfig(path="/tmp/ov-test", backend="local", backups=backups)
+
+
+def test_generate_plugin_config_strips_legacy_multiwrite_fields(tmp_path):
+    """Plugin config generation should strip legacy fields before calling Rust."""
     explicit_backup_dir = tmp_path / "backup-local-no-mkdir"
     config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
         backups={
-            "retry_interval_ms": 1234,
-            "retry_backoff_base_ms": 55,
+            "sync_type": "async",
+            "write_ack_count": 1,
+            "write_ack_timeout_ms": 1000,
+            "write_concurrency": 2,
             "items": [
                 {
                     "name": "local-explicit",
                     "backend": "local",
-                    "local": {"workspace": str(explicit_backup_dir)},
+                    "params": {"workspace": str(explicit_backup_dir)},
+                    "timeout": 10,
+                    "operations": [{"operation": "write", "priority": 1}],
+                    "excludes": [{"type": "FileExtensionPolicy", "extensions": [".tmp"]}],
                 },
                 {
                     "name": "local-default",
@@ -558,12 +626,17 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
     plugins = _generate_plugin_config(config, tmp_path)
 
     mount_backups = plugins["localfs"]["config"]["backups"]
-    assert mount_backups["retry_interval_ms"] == 1234
-    assert mount_backups["retry_backoff_base_ms"] == 55
+    assert {
+        "sync_type",
+        "write_ack_count",
+        "write_ack_timeout_ms",
+        "write_concurrency",
+    }.isdisjoint(mount_backups)
 
     explicit_local, default_local, s3_backup = mount_backups["items"]
     assert explicit_local["backend"] == "localfs"
     assert explicit_local["params"]["local_dir"] == str(explicit_backup_dir)
+    assert {"timeout", "operations", "excludes"}.isdisjoint(explicit_local)
     assert not explicit_backup_dir.exists()
 
     assert default_local["backend"] == "localfs"
@@ -694,6 +767,23 @@ def test_ragfs_binding_enables_runtime_for_queuefs_cache_backend(tmp_path):
         path=str(tmp_path),
         backend="local",
         queuefs={"backend": "cache", "cache_key_prefix": "queue-runtime"},
+    )
+
+    binding = RagfsBindingConfig(
+        agfs=agfs_config,
+        cache=CacheConfig(provider="redis", params={}),
+    ).to_binding_dict()
+
+    assert binding["cache"]["enabled"] is False
+    assert binding["cache"]["runtime_enabled"] is True
+
+
+def test_ragfs_binding_enables_runtime_for_multiwrite_cache_provider(tmp_path):
+    """Multi-write cache metadata should enable Runtime without CacheFS."""
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={"provider": "cache", "items": []},
     )
 
     binding = RagfsBindingConfig(

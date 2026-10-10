@@ -956,6 +956,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::IsADirectory(_) => new_py_err("AGFSIsADirectoryError", msg),
         ragfs::core::Error::DirectoryNotEmpty(_) => new_py_err("AGFSDirectoryNotEmptyError", msg),
         ragfs::core::Error::InvalidOperation(_) => new_py_err("AGFSInvalidOperationError", msg),
+        ragfs::core::Error::NotSupported(_) => new_py_err("AGFSNotSupportedError", msg),
         ragfs::core::Error::Io(_) => new_py_err("AGFSIoError", msg),
         ragfs::core::Error::Plugin(_) => {
             // Check if the plugin error message contains known patterns
@@ -1628,7 +1629,11 @@ impl RAGFSBindingClient {
                 cache_config.stack_config(),
             ))
             .map_err(|error| {
-                PyRuntimeError::new_err(format!("Failed to build RAGFS stack: {error}"))
+                if matches!(error, ragfs::core::Error::NotSupported(_)) {
+                    to_py_err(error)
+                } else {
+                    PyRuntimeError::new_err(format!("Failed to build RAGFS stack: {error}"))
+                }
             })?;
 
         // Build the git service from inline config when present; otherwise fall
@@ -1652,7 +1657,7 @@ impl RAGFSBindingClient {
         })
     }
 
-    /// Stop mounted background services, then close the shared CacheRuntime.
+    /// Stop mounts requiring explicit cleanup, then close the shared CacheRuntime.
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         let mountable = Arc::clone(&self.mountable);
         let cache_runtime = self.cache_runtime.clone();
@@ -2169,7 +2174,6 @@ impl RAGFSBindingClient {
     ///         - "backups": nested dict matching BackendsConfig schema
     ///         - "server_encryption_enabled": bool
     ///         - "primary_encryption_enabled": bool
-    ///         - "primary_redirects": list of redirect policy dicts
     #[pyo3(signature = (fstype, path, config=None))]
     fn mount(
         &self,
@@ -2431,58 +2435,6 @@ impl RAGFSBindingClient {
                 .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
             serde_json_to_py(py, &value)
         })
-    }
-
-    /// Query multi-write sync status under a file or directory path.
-    ///
-    /// Args:
-    ///     path: Absolute AGFS path rooted at the mounted namespace
-    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
-    ///
-    /// Returns:
-    ///     A JSON-like dict describing pending and acknowledged backup sync state.
-    #[pyo3(signature = (path, ctx=None))]
-    fn system_sync_status(
-        &self,
-        py: Python<'_>,
-        path: String,
-        ctx: Option<HashMap<String, String>>,
-    ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
-        let mountable = self.mountable.clone();
-        let result = self
-            .run_scoped(py, fs_ctx, move || async move {
-                mountable.system_sync_status(&path).await
-            })
-            .map_err(to_py_err)?;
-
-        Python::attach(|py| serde_json_to_py(py, &result))
-    }
-
-    /// Manually retry lagging multi-write backup sync operations under a path.
-    ///
-    /// Args:
-    ///     path: Absolute AGFS path rooted at the mounted namespace
-    ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
-    ///
-    /// Returns:
-    ///     A JSON-like dict summarizing retry results per target backend.
-    #[pyo3(signature = (path, ctx=None))]
-    fn system_sync_retry(
-        &self,
-        py: Python<'_>,
-        path: String,
-        ctx: Option<HashMap<String, String>>,
-    ) -> PyResult<Py<PyAny>> {
-        let fs_ctx = build_fs_context(ctx);
-        let mountable = self.mountable.clone();
-        let result = self
-            .run_scoped(py, fs_ctx, move || async move {
-                mountable.system_sync_retry(&path).await
-            })
-            .map_err(to_py_err)?;
-
-        Python::attach(|py| serde_json_to_py(py, &result))
     }
 
     /// Calculate file digest (not yet implemented in ragfs).

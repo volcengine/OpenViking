@@ -1,26 +1,26 @@
 //! Multi-write metadata management.
-//!
-//! Provides `MetaStateStore` for serialized read-modify-write of `.redirect.json` and
-//! `.sync_log.json` through `primary_backend`, and `FsContextResolver` for recovering
-//! `FsContext` from paths in background tasks.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::core::context::{FsContext, FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
-use crate::core::types::{RedirectMeta, SyncLogMeta, WriteFlag};
+use crate::core::types::{FileInfo, WriteFlag};
+use crate::lock::PathLockManager;
+use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, SYSTEM_DIR, VBUCKETS};
+use crate::multibackend::model::{
+    BackendState, CheckpointsManifest, PartitionEntry, PartitionManifest, PartitionState,
+    PartitionsManifest, ProtocolState, ProtocolStatus, ScopeKey, SegmentManifest,
+};
+use crate::multibackend::router::{build_initial_routes, MultiWritePaths};
 
 /// Trait for resolving `FsContext` from a filesystem path.
 ///
-/// Used by background tasks (retry_loop, backfill, system_sync_retry) that lack a
-/// foreground request context. Implementations extract `account_id` from the path
-/// (e.g. `/local/{account_id}/...`).
+/// Implementations extract `account_id` from the path (e.g. `/local/{account_id}/...`).
 pub trait FsContextResolver: Send + Sync {
     /// Recover `FsContext` from a normalized path.
     /// Returns an error if the path cannot be resolved to a valid context.
@@ -34,7 +34,7 @@ impl FsContextResolver for DefaultFsContextResolver {
     fn resolve(&self, path: &str) -> Result<FsContext> {
         let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         // Path format: /local/{account_id}/...
-        if parts.len() >= 2 && parts[0] == "local" && !parts[1].is_empty() {
+        if parts.len() >= 2 && parts[0] == MULTIWRITE_MOUNT_PREFIX.trim_start_matches('/') && !parts[1].is_empty(){
             Ok(Arc::new(FsContextInner::new(parts[1].to_string())))
         } else {
             Err(Error::internal(format!(
@@ -61,429 +61,458 @@ impl FsContextResolver for RelativePathFsContextResolver {
     }
 }
 
-/// Internal file name for redirect metadata.
-pub(crate) const REDIRECT_FILE: &str = ".redirect.json";
-/// Internal file name for sync-log metadata.
-pub(crate) const SYNC_LOG_FILE: &str = ".sync_log.json";
-/// Hidden multi-write internal file names (redirect / sync-log metadata).
-pub(crate) const MULTIWRITE_INTERNAL_NAMES: &[&str] = &[SYNC_LOG_FILE, REDIRECT_FILE];
-const GLOBAL_STATE_FILE: &str = "/_system/.multiwrite.global.json";
-const GLOBAL_STATE_VERSION: u32 = 1;
-
-type TrackedLock = Mutex<()>;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct GlobalMultiWriteState {
-    version: u32,
-    next_seq: u64,
+/// Closed worker labels used by the multi-write error counter.
+#[derive(Clone, Copy)]
+pub(crate) enum MultiWriteWorker {
+    Flush,
+    Checkpoint,
+    CatchUp,
+    Gc,
 }
 
-impl Default for GlobalMultiWriteState {
-    /// Create the default persisted global state for multi-write sequencing.
-    fn default() -> Self {
-        Self {
-            version: GLOBAL_STATE_VERSION,
-            next_seq: 1,
-        }
-    }
+/// Primary filesystem store for V2 multi-write metadata.
+pub struct MetadataStore {
+    primary: Arc<dyn FileSystem>,
+    pathlock_manager: Arc<PathLockManager>,
+    paths: MultiWritePaths,
+    worker_errors: [AtomicU64; 4],
 }
 
-/// Unified metadata store for `.redirect.json` and `.sync_log.json`.
-///
-/// All reads and writes go through `primary_backend`, inheriting its encryption
-/// configuration. Directory-level locks ensure serialized access to both metadata
-/// files within the same directory.
-pub struct MetaStateStore {
-    /// Primary backend (may be encrypted)
-    primary_backend: Arc<dyn FileSystem>,
-    /// Per-directory locks for serialized read-modify-write
-    dir_locks: Mutex<HashMap<String, Arc<TrackedLock>>>,
-    /// Dedicated global state lock for next_seq persistence.
-    global_state_lock: Mutex<()>,
-    /// Context resolver for background tasks
-    ctx_resolver: Arc<dyn FsContextResolver>,
-}
-
-impl MetaStateStore {
-    /// Create a new MetaStateStore.
+impl MetadataStore {
+    /// Create a V2 metadata store for one logical mount prefix.
     pub fn new(
-        primary_backend: Arc<dyn FileSystem>,
-        ctx_resolver: Arc<dyn FsContextResolver>,
-    ) -> Self {
-        Self::with_cache_config(primary_backend, ctx_resolver, 0, Duration::ZERO)
+        primary: Arc<dyn FileSystem>,
+        pathlock_manager: Arc<PathLockManager>,
+        mount_prefix: &str,
+    ) -> Result<Self> {
+        Ok(Self {
+            primary,
+            pathlock_manager,
+            paths: MultiWritePaths::new(mount_prefix)?,
+            worker_errors: std::array::from_fn(|_| AtomicU64::new(0)),
+        })
     }
 
-    /// Create a new MetaStateStore; cache parameters are retained as no-op compatibility knobs.
-    pub fn with_cache_config(
-        primary_backend: Arc<dyn FileSystem>,
-        ctx_resolver: Arc<dyn FsContextResolver>,
-        _meta_cache_capacity: usize,
-        _meta_cache_ttl: Duration,
-    ) -> Self {
-        Self {
-            primary_backend,
-            dir_locks: Mutex::new(HashMap::new()),
-            global_state_lock: Mutex::new(()),
-            ctx_resolver,
+    /// Record one final failure for the selected worker.
+    pub(crate) fn record_worker_error(&self, worker: MultiWriteWorker) {
+        self.worker_errors[worker as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Return the final failure count for the selected worker.
+    pub(crate) fn worker_error_count(&self, worker: MultiWriteWorker) -> u64 {
+        self.worker_errors[worker as usize].load(Ordering::Relaxed)
+    }
+
+    /// Return the logical-to-backend path mapper owned by this store.
+    pub fn paths(&self) -> &MultiWritePaths {
+        &self.paths
+    }
+
+    /// List account directories currently visible on the primary filesystem.
+    pub(crate) async fn initialized_accounts(&self) -> Result<Vec<String>> {
+        let mut accounts = Vec::new();
+        for entry in self.primary.read_internal_dir("/").await? {
+            if !entry.is_dir || entry.name == SYSTEM_DIR {
+                continue;
+            }
+            let manifest = self.paths.account_manifest(&entry.name)?.1;
+            match self.primary.stat(&manifest).await {
+                Ok(_) => accounts.push(entry.name),
+                Err(Error::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        accounts.sort();
+        Ok(accounts)
+    }
+
+    /// Return whether the primary account root still exists.
+    pub(crate) async fn account_exists(&self, account_id: &str) -> Result<bool> {
+        let root = self
+            .paths
+            .raw_backend_path(&format!("{MULTIWRITE_MOUNT_PREFIX}/{account_id}"))?;
+        match self.primary.stat(&root).await {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
-    /// Get or create a per-directory lock.
-    async fn get_dir_lock(&self, dir: &str) -> Arc<TrackedLock> {
-        let mut locks = self.dir_locks.lock().await;
-        if let Some(lock) = locks.get(dir).cloned() {
-            return lock;
+    /// Return the path lock manager used by V2 metadata operations.
+    pub(crate) fn pathlock_manager(&self) -> &PathLockManager {
+        &self.pathlock_manager
+    }
+
+    /// Build the filesystem context used for one logical metadata path.
+    fn metadata_context(&self, logical_path: &str) -> Result<FsContext> {
+        let parts: Vec<&str> = logical_path.trim_start_matches('/').split('/').collect();
+        if parts.len() >= 2 && parts[0] == MULTIWRITE_MOUNT_PREFIX.trim_start_matches('/') && !parts[1].is_empty(){
+            return Ok(Arc::new(
+                FsContextInner::new(parts[1].to_string())
+                    .with_bypass_cache(true)
+                    .with_auto_pathlock_disabled(),
+            ));
         }
-        let lock = Arc::new(TrackedLock::new(()));
-        locks.insert(dir.to_string(), lock.clone());
-        lock
+        Err(Error::internal(format!(
+            "cannot resolve metadata FsContext from path: {logical_path}"
+        )))
     }
 
-    /// Return the dedicated `_system` context used by global metadata.
-    fn system_ctx() -> FsContext {
-        Arc::new(FsContextInner::new("_system".to_string()))
+    /// Read one complete binary value from a canonical logical path.
+    pub(crate) async fn read_bytes(&self, logical_path: &str) -> Result<Vec<u8>> {
+        let backend_path = self.paths.raw_backend_path(logical_path)?;
+        let context = self.metadata_context(logical_path)?;
+        FS_CTX
+            .scope(context, self.primary.read(&backend_path, 0, 0))
+            .await
     }
 
-    /// Build the effective context for metadata access.
-    fn effective_meta_ctx(dir: &str, ctx: &FsContext) -> FsContext {
-        if dir == "/" {
-            Arc::new(Self::system_ctx().with_auto_pathlock_disabled())
-        } else {
-            Arc::new(ctx.with_auto_pathlock_disabled())
+    /// Read and validate the current V2 protocol status.
+    pub(crate) async fn protocol_status(&self) -> Result<ProtocolStatus> {
+        let state: ProtocolState = self.read_json(&self.paths.mount_protocol().0).await?;
+        state.validate()?;
+        Ok(state.status)
+    }
+
+    /// Replace protocol bytes under an Exact lock when the current value matches.
+    pub(crate) async fn compare_protocol(
+        &self,
+        expected: &[u8],
+        replacement: &[u8],
+    ) -> Result<bool> {
+        let logical_path = self.paths.mount_protocol().0;
+        let lease = self
+            .pathlock_manager
+            .acquire_exact(
+                &logical_path,
+                self.pathlock_manager
+                    .default_lock_timeout()
+                    .max(std::time::Duration::from_secs(5)),
+                None,
+            )
+            .await?;
+        let operation = async {
+            match self.read_bytes(&logical_path).await {
+                Ok(current) if current == expected => {
+                    self.write_bytes(&logical_path, replacement).await?;
+                    Ok(true)
+                }
+                Ok(_) | Err(Error::NotFound(_)) => Ok(false),
+                Err(error) => Err(error),
+            }
         }
+        .await;
+        let release = self
+            .pathlock_manager
+            .release(&lease)
+            .await
+            .map_err(Error::from);
+        merge_operation_and_cleanup(operation, release)
     }
 
-    /// Build the full path for a metadata file in a directory.
-    fn meta_path(dir: &str, filename: &str) -> String {
-        if dir == "/" {
-            format!("/{}", filename)
-        } else {
-            format!("{}/{}", dir, filename)
-        }
-    }
-
-    /// Read one JSON metadata file, returning default for missing or empty files.
-    async fn read_meta<T>(&self, dir: &str, filename: &str, ctx: &FsContext) -> Result<T>
+    /// Read and deserialize one JSON value from a canonical logical path.
+    pub async fn read_json<T>(&self, logical_path: &str) -> Result<T>
     where
-        T: DeserializeOwned + Default,
+        T: DeserializeOwned,
     {
-        let path = Self::meta_path(dir, filename);
-        let effective_ctx = Self::effective_meta_ctx(dir, ctx);
-        match FS_CTX
-            .scope(effective_ctx, async {
-                self.primary_backend.read(&path, 0, 0).await
+        let bytes = self.read_bytes(logical_path).await?;
+        serde_json::from_slice(&bytes).map_err(Error::from)
+    }
+
+    /// Write complete binary bytes to a canonical logical path.
+    pub(crate) async fn write_bytes(&self, logical_path: &str, bytes: &[u8]) -> Result<()> {
+        let backend_path = self.paths.raw_backend_path(logical_path)?;
+        let context = self.metadata_context(logical_path)?;
+        FS_CTX
+            .scope(context, async {
+                self.primary
+                    .ensure_parent_dirs(&backend_path, 0o755)
+                    .await?;
+                self.primary
+                    .write(&backend_path, bytes, 0, WriteFlag::Create)
+                    .await?;
+                Ok(())
             })
             .await
-        {
-            Ok(data) => {
-                if data.is_empty() {
-                    Ok(T::default())
-                } else {
-                    serde_json::from_slice(&data).map_err(Error::from)
-                }
-            }
-            Err(Error::NotFound(_)) => Ok(T::default()),
-            Err(e) => Err(e),
+    }
+
+    /// Validate and write one JSON value at a logical path.
+    pub async fn publish_json<T, F>(&self, logical_path: &str, value: &T, validate: F) -> Result<()>
+    where
+        T: Serialize,
+        F: FnOnce(&T) -> Result<()>,
+    {
+        let bytes = serde_json::to_vec(value)?;
+        validate(value)?;
+        self.write_bytes(logical_path, &bytes).await
+    }
+
+    /// Create one immutable blob or accept an identical existing value.
+    pub async fn write_immutable(&self, logical_path: &str, bytes: &[u8]) -> Result<()> {
+        match self.read_bytes(logical_path).await {
+            Ok(existing) if existing == bytes => Ok(()),
+            Ok(_) => Err(Error::AlreadyExists(format!(
+                "immutable metadata differs: {logical_path}"
+            ))),
+            Err(Error::NotFound(_)) => self.write_bytes(logical_path, bytes).await,
+            Err(error) => Err(error),
         }
     }
 
-    /// Read redirect metadata from a directory (returns default if not found).
-    async fn read_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
-        self.read_meta(dir, REDIRECT_FILE, ctx).await
+    /// List one raw metadata directory without public hidden-name filtering.
+    pub(crate) async fn list_directory(&self, logical_path: &str) -> Result<Vec<FileInfo>> {
+        let backend_path = self.paths.raw_backend_path(logical_path)?;
+        self.primary.read_internal_dir(&backend_path).await
     }
 
-    /// Read sync log metadata from a directory (returns default if not found).
-    async fn read_sync_log_meta(&self, dir: &str, ctx: &FsContext) -> Result<SyncLogMeta> {
-        self.read_meta(dir, SYNC_LOG_FILE, ctx).await
+    /// Remove one raw metadata file while treating absence as success.
+    pub(crate) async fn remove_file(&self, logical_path: &str) -> Result<()> {
+        let backend_path = self.paths.raw_backend_path(logical_path)?;
+        self.remove_if_present(&backend_path).await
     }
 
-    /// Read both metadata files from the primary backend.
-    async fn read_dir_meta_pair(
+    /// Remove one raw metadata tree while treating absence as success.
+    pub(crate) async fn remove_all(&self, logical_path: &str) -> Result<()> {
+        let backend_path = self.paths.raw_backend_path(logical_path)?;
+        match self.primary.remove_all(&backend_path).await {
+            Ok(()) | Err(Error::NotFound(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Recheck destructive GC safety while the caller holds the account Exact lock.
+    pub(crate) async fn gc_scope_is_safe(&self, scope: &ScopeKey) -> Result<bool> {
+        let path = self.paths.account_manifest(&scope.account_id)?.0;
+        let manifest: PartitionsManifest = self.read_json(&path).await?;
+        manifest.validate()?;
+        scope.validate_against_manifest(&manifest)?;
+        let stable = manifest
+            .partitions
+            .iter()
+            .filter_map(|(&id, entry)| (entry.state == PartitionState::Stable).then_some(id))
+            .collect::<Vec<_>>();
+        Ok(stable.len() == manifest.partitions.len()
+            && manifest.directory_events.iter().all(|event| {
+                stable.iter().all(|id| {
+                    event.positions.iter().any(|position| {
+                        position.partition_id == *id && position.epoch == manifest.epoch
+                    })
+                })
+            }))
+    }
+
+    /// Initialize one account under an Exact manifest lock and return its manifest.
+    pub async fn initialize_account(
         &self,
-        dir: &str,
-        ctx: &FsContext,
-    ) -> Result<(RedirectMeta, SyncLogMeta)> {
-        let redirect = self.read_redirect_meta(dir, ctx).await?;
-        let sync_log = self.read_sync_log_meta(dir, ctx).await?;
-        Ok((redirect, sync_log))
+        account_id: &str,
+        partition_count: u32,
+        backup_names: &[String],
+    ) -> Result<PartitionsManifest> {
+        let logical_manifest = self.paths.account_manifest(account_id)?.0;
+        let lease = self
+            .pathlock_manager
+            .acquire_exact(
+                &logical_manifest,
+                self.pathlock_manager
+                    .default_lock_timeout()
+                    .max(std::time::Duration::from_secs(5)),
+                None,
+            )
+            .await?;
+        let result = self
+            .initialize_account_locked(account_id, partition_count, backup_names)
+            .await;
+        let release = self
+            .pathlock_manager
+            .release(&lease)
+            .await
+            .map_err(Error::from);
+        merge_operation_and_cleanup(result, release)
     }
 
-    /// Write one JSON metadata file to a directory.
-    async fn write_meta<T>(
+    /// Update one partitions manifest while holding its Exact lock.
+    pub(crate) async fn update_partitions_manifest<T, F>(
         &self,
-        dir: &str,
-        filename: &str,
-        meta: &T,
-        ctx: &FsContext,
+        account_id: &str,
+        update: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(&mut PartitionsManifest) -> Result<T>,
+    {
+        let logical_manifest = self.paths.account_manifest(account_id)?.0;
+        let lease = self
+            .pathlock_manager
+            .acquire_exact(
+                &logical_manifest,
+                self.pathlock_manager
+                    .default_lock_timeout()
+                    .max(std::time::Duration::from_secs(5)),
+                None,
+            )
+            .await?;
+        let operation = async {
+            let mut manifest: PartitionsManifest = self.read_json(&logical_manifest).await?;
+            manifest.validate()?;
+            let original = manifest.clone();
+            let output = update(&mut manifest)?;
+            validate_partitions_manifest_update(&original, &manifest)?;
+            manifest.validate()?;
+            if manifest != original {
+                self.publish_json(&logical_manifest, &manifest, PartitionsManifest::validate)
+                    .await?;
+            }
+            Ok(output)
+        }
+        .await;
+        let release = self
+            .pathlock_manager
+            .release(&lease)
+            .await
+            .map_err(Error::from);
+        merge_operation_and_cleanup(operation, release)
+    }
+
+    /// Initialize account metadata while the caller holds the manifest lock.
+    async fn initialize_account_locked(
+        &self,
+        account_id: &str,
+        partition_count: u32,
+        backup_names: &[String],
+    ) -> Result<PartitionsManifest> {
+        let logical_manifest = self.paths.account_manifest(account_id)?.0;
+        match self
+            .read_json::<PartitionsManifest>(&logical_manifest)
+            .await
+        {
+            Ok(manifest) => {
+                manifest.validate()?;
+                return Ok(manifest);
+            }
+            Err(Error::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+
+        let routes = build_initial_routes(partition_count)?;
+        let partitions = (0..partition_count)
+            .map(|partition_id| {
+                (
+                    partition_id,
+                    PartitionEntry {
+                        state: PartitionState::Stable,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let manifest = PartitionsManifest {
+            version: 1,
+            epoch: 1,
+            vbuckets: VBUCKETS,
+            partitions,
+            routes,
+            directory_events: Vec::new(),
+        };
+        manifest.validate()?;
+
+        let backend_states = backup_names
+            .iter()
+            .map(|name| (name.clone(), BackendState { synced_seq: 0 }))
+            .collect::<BTreeMap<_, _>>();
+        for partition_id in 0..partition_count {
+            let partition = PartitionManifest {
+                version: 1,
+                partition_id,
+                epoch: 1,
+            };
+            self.write_validated_json_immutable(
+                &self.paths.partition_manifest(account_id, partition_id)?.0,
+                &partition,
+                PartitionManifest::validate,
+            )
+            .await?;
+
+            let segments = SegmentManifest {
+                version: 1,
+                next_seq: 1,
+                segments: Vec::new(),
+                backend_states: backend_states.clone(),
+            };
+            self.write_validated_json_immutable(
+                &self.paths.segment_manifest(account_id, partition_id)?.0,
+                &segments,
+                SegmentManifest::validate,
+            )
+            .await?;
+
+            let checkpoints = CheckpointsManifest {
+                version: 1,
+                latest_checkpoint: None,
+            };
+            self.write_validated_json_immutable(
+                &self.paths.checkpoints_manifest(account_id, partition_id)?.0,
+                &checkpoints,
+                CheckpointsManifest::validate,
+            )
+            .await?;
+        }
+        self.write_validated_json_immutable(
+            &logical_manifest,
+            &manifest,
+            PartitionsManifest::validate,
+        )
+        .await?;
+        Ok(manifest)
+    }
+
+    /// Validate, serialize, and create one immutable JSON metadata file.
+    async fn write_validated_json_immutable<T, F>(
+        &self,
+        logical_path: &str,
+        value: &T,
+        validate: F,
     ) -> Result<()>
     where
         T: Serialize,
+        F: FnOnce(&T) -> Result<()>,
     {
-        let path = Self::meta_path(dir, filename);
-        let data = serde_json::to_vec(meta)?;
-        let effective_ctx = Self::effective_meta_ctx(dir, ctx);
-        FS_CTX
-            .scope(effective_ctx, async {
-                self.primary_backend
-                    .write(&path, &data, 0, WriteFlag::Create)
-                    .await
-                    .map(|_| ())
-            })
-            .await
+        let bytes = serde_json::to_vec(value)?;
+        validate(value)?;
+        self.write_immutable(logical_path, &bytes).await
     }
 
-    /// Write redirect metadata to a directory.
-    async fn write_redirect_meta(
-        &self,
-        dir: &str,
-        meta: &RedirectMeta,
-        ctx: &FsContext,
-    ) -> Result<()> {
-        self.write_meta(dir, REDIRECT_FILE, meta, ctx).await
+    /// Remove a temporary file while treating an absent file as clean.
+    async fn remove_if_present(&self, backend_path: &str) -> Result<()> {
+        match self.primary.remove(backend_path).await {
+            Ok(()) | Err(Error::NotFound(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
+}
 
-    /// Write sync log metadata to a directory.
-    async fn write_sync_log_meta(
-        &self,
-        dir: &str,
-        meta: &SyncLogMeta,
-        ctx: &FsContext,
-    ) -> Result<()> {
-        self.write_meta(dir, SYNC_LOG_FILE, meta, ctx).await
-    }
-
-    /// Serialized read-modify-write of both `.redirect.json` and `.sync_log.json` in a directory.
-    ///
-    /// Acquires the directory lock, reads both metadata files, applies `op`, and writes both back.
-    /// This prevents concurrent updates from losing entries.
-    pub async fn update_dir_meta<F>(&self, dir: &str, ctx: &FsContext, op: F) -> Result<()>
-    where
-        F: FnOnce(&mut RedirectMeta, &mut SyncLogMeta) -> Result<()>,
+/// Reject updates that change the fixed partition routing identity.
+fn validate_partitions_manifest_update(
+    original: &PartitionsManifest,
+    updated: &PartitionsManifest,
+) -> Result<()> {
+    if original.epoch != updated.epoch
+        || original.partitions != updated.partitions
+        || original.routes != updated.routes
     {
-        let lock = self.get_dir_lock(dir).await;
-        let _guard = lock.lock().await;
-
-        let (mut redirect_meta, mut sync_log_meta) = self.read_dir_meta_pair(dir, ctx).await?;
-        let original_redirect = redirect_meta.clone();
-        let original_sync_log = sync_log_meta.clone();
-
-        op(&mut redirect_meta, &mut sync_log_meta)?;
-
-        if redirect_meta != original_redirect {
-            self.write_redirect_meta(dir, &redirect_meta, ctx).await?;
-        }
-        if sync_log_meta != original_sync_log {
-            self.write_sync_log_meta(dir, &sync_log_meta, ctx).await?;
-        }
-        Ok(())
+        return Err(Error::invalid_operation(
+            "partition routing cannot change after account initialization",
+        ));
     }
-
-    /// Serialized read-modify-write of two directories' metadata (for cross-directory rename).
-    ///
-    /// Acquires both directory locks in lexicographic order to prevent deadlock,
-    /// then reads and updates all four metadata files within the same critical section.
-    /// Caller must ensure source_dir != target_dir; use update_dir_meta for same-directory case.
-    pub async fn update_dual_dir_meta<F>(
-        &self,
-        source_dir: &str,
-        target_dir: &str,
-        ctx: &FsContext,
-        op: F,
-    ) -> Result<()>
-    where
-        F: FnOnce(
-            &mut RedirectMeta,
-            &mut SyncLogMeta,
-            &mut RedirectMeta,
-            &mut SyncLogMeta,
-        ) -> Result<()>,
-    {
-        // Acquire locks in lexicographic order to avoid deadlock.
-        let (first_dir, second_dir) = if source_dir < target_dir {
-            (source_dir, target_dir)
-        } else {
-            (target_dir, source_dir)
-        };
-
-        let lock1 = self.get_dir_lock(first_dir).await;
-        let lock2 = self.get_dir_lock(second_dir).await;
-        let _guard1 = lock1.lock().await;
-        let _guard2 = lock2.lock().await;
-
-        let (mut src_redirect, mut src_sync_log) = self.read_dir_meta_pair(source_dir, ctx).await?;
-        let (mut tgt_redirect, mut tgt_sync_log) = self.read_dir_meta_pair(target_dir, ctx).await?;
-        let original_src_redirect = src_redirect.clone();
-        let original_src_sync_log = src_sync_log.clone();
-        let original_tgt_redirect = tgt_redirect.clone();
-        let original_tgt_sync_log = tgt_sync_log.clone();
-
-        op(
-            &mut src_redirect,
-            &mut src_sync_log,
-            &mut tgt_redirect,
-            &mut tgt_sync_log,
-        )?;
-
-        if src_redirect != original_src_redirect {
-            self.write_redirect_meta(source_dir, &src_redirect, ctx)
-                .await?;
-        }
-        if src_sync_log != original_src_sync_log {
-            self.write_sync_log_meta(source_dir, &src_sync_log, ctx)
-                .await?;
-        }
-        if tgt_redirect != original_tgt_redirect {
-            self.write_redirect_meta(target_dir, &tgt_redirect, ctx)
-                .await?;
-        }
-        if tgt_sync_log != original_tgt_sync_log {
-            self.write_sync_log_meta(target_dir, &tgt_sync_log, ctx)
-                .await?;
-        }
-        Ok(())
-    }
-
-    /// Read redirect metadata for a directory (public, used by read_dir to merge redirect entries).
-    pub async fn get_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
-        self.read_redirect_meta(dir, ctx).await
-    }
-
-    /// Read sync log metadata for a directory (public, used by retry_loop).
-    pub async fn get_sync_log_meta(&self, dir: &str, ctx: &FsContext) -> Result<SyncLogMeta> {
-        self.read_sync_log_meta(dir, ctx).await
-    }
-
-    /// Get a reference to the context resolver.
-    pub fn ctx_resolver(&self) -> &Arc<dyn FsContextResolver> {
-        &self.ctx_resolver
-    }
-
-    /// Get a reference to the primary backend.
-    pub fn primary_backend(&self) -> &Arc<dyn FileSystem> {
-        &self.primary_backend
-    }
-
-    /// Allocate and persist the next global sequence number.
-    pub async fn next_seq(&self) -> Result<u64> {
-        let _guard = self.global_state_lock.lock().await;
-        let mut state = self.read_global_state().await?;
-        let seq = state.next_seq;
-        state.next_seq = state.next_seq.saturating_add(1);
-        self.write_global_state(&state).await?;
-        Ok(seq)
-    }
-
-    /// Read the persisted global state file.
-    async fn read_global_state(&self) -> Result<GlobalMultiWriteState> {
-        let ctx = Self::system_ctx();
-        match FS_CTX
-            .scope(ctx.clone(), async {
-                self.primary_backend.read(GLOBAL_STATE_FILE, 0, 0).await
-            })
-            .await
-        {
-            Ok(data) => {
-                if data.is_empty() {
-                    Ok(GlobalMultiWriteState::default())
-                } else {
-                    let state: GlobalMultiWriteState = serde_json::from_slice(&data)?;
-                    if state.version != GLOBAL_STATE_VERSION {
-                        return Err(Error::config(format!(
-                            "unsupported multi-write global state version {}",
-                            state.version
-                        )));
-                    }
-                    Ok(state)
-                }
-            }
-            Err(Error::NotFound(_)) => Ok(GlobalMultiWriteState::default()),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Persist the global sequence state through the primary backend.
-    async fn write_global_state(&self, state: &GlobalMultiWriteState) -> Result<()> {
-        let ctx = Self::system_ctx();
-        let data = serde_json::to_vec(state)?;
-        FS_CTX
-            .scope(ctx.clone(), async {
-                self.primary_backend
-                    .ensure_parent_dirs(GLOBAL_STATE_FILE, 0o755)
-                    .await?;
-                self.primary_backend
-                    .write(GLOBAL_STATE_FILE, &data, 0, WriteFlag::Create)
-                    .await
-                    .map(|_| ())
-            })
-            .await
-    }
+    Ok(())
 }
 
-/// Per-path serialization queue for async write ordering.
-///
-/// Ensures that multiple writes to the same path are executed in FIFO order
-/// on backup backends, preventing out-of-order application.
-pub struct PathSerializer {
-    queues: Mutex<HashMap<String, Arc<TrackedLock>>>,
-}
-
-impl PathSerializer {
-    /// Create a new PathSerializer.
-    pub fn new() -> Self {
-        Self::with_limits(0, Duration::ZERO)
-    }
-
-    /// Create a PathSerializer; limit arguments are ignored for compatibility.
-    pub fn with_limits(_capacity: usize, _ttl: Duration) -> Self {
-        Self {
-            queues: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Run one async operation under the per-path serialization lock.
-    pub async fn with_path_lock<F, Fut, T>(&self, path: &str, op: F) -> T
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = T>,
-    {
-        let mut queues = self.queues.lock().await;
-        let lock = queues
-            .entry(path.to_string())
-            .or_insert_with(|| Arc::new(TrackedLock::new(())))
-            .clone();
-        drop(queues);
-
-        let _guard = lock.lock().await;
-        op().await
-    }
-
-    /// Return the number of tracked queue entries.
-    #[cfg(test)]
-    pub async fn len(&self) -> usize {
-        self.queues.lock().await.len()
-    }
-}
-
-impl Default for PathSerializer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Extract the directory path from a file path.
-pub(crate) fn parent_dir(path: &str) -> String {
-    match path.rfind('/') {
-        Some(0) => "/".to_string(),
-        Some(pos) => path[..pos].to_string(),
-        None => "/".to_string(),
-    }
-}
-
-/// Extract the file name from a path.
-pub(crate) fn file_name(path: &str) -> &str {
-    match path.rfind('/') {
-        Some(pos) => &path[pos + 1..],
-        None => path,
+/// Preserve an operation error while requiring cleanup to succeed.
+fn merge_operation_and_cleanup<T>(operation: Result<T>, cleanup: Result<()>) -> Result<T> {
+    match (operation, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(Error::internal(format!(
+            "{error}; cleanup failed: {cleanup_error}"
+        ))),
     }
 }
 
@@ -497,21 +526,6 @@ pub fn current_required_ctx() -> Result<FsContext> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::memfs::MemFileSystem;
-    use std::sync::Arc;
-
-    #[test]
-    fn test_parent_dir() {
-        assert_eq!(parent_dir("/a/b/c.txt"), "/a/b");
-        assert_eq!(parent_dir("/a"), "/");
-        assert_eq!(parent_dir("/"), "/");
-    }
-
-    #[test]
-    fn test_file_name() {
-        assert_eq!(file_name("/a/b/c.txt"), "c.txt");
-        assert_eq!(file_name("/a"), "a");
-    }
 
     #[test]
     fn test_default_resolver() {
@@ -526,49 +540,5 @@ mod tests {
     fn test_default_resolver_invalid_path() {
         let resolver = DefaultFsContextResolver;
         assert!(resolver.resolve("/invalid/path").is_err());
-    }
-
-
-    #[tokio::test]
-    async fn test_invalid_sync_log_json_returns_error() {
-        let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let store = MetaStateStore::new(primary.clone(), Arc::new(DefaultFsContextResolver));
-        let ctx = Arc::new(FsContextInner::new("acct".to_string()));
-
-        FS_CTX
-            .scope(ctx.clone(), async {
-                primary
-                    .ensure_parent_dirs("/local/acct/docs/.sync_log.json", 0o755)
-                    .await?;
-                primary
-                    .write(
-                        "/local/acct/docs/.sync_log.json",
-                        b"{not valid json",
-                        0,
-                        WriteFlag::Create,
-                    )
-                    .await?;
-                Ok::<(), Error>(())
-            })
-            .await
-            .unwrap();
-
-        let result = store.get_sync_log_meta("/local/acct/docs", &ctx).await;
-        assert!(result.is_err(), "corrupted metadata must fail fast");
-    }
-
-    #[tokio::test]
-    async fn test_next_seq_uses_dedicated_global_lock() {
-        let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
-        let store = MetaStateStore::new(primary, Arc::new(DefaultFsContextResolver));
-
-        assert_eq!(store.next_seq().await.unwrap(), 1);
-        assert_eq!(store.next_seq().await.unwrap(), 2);
-
-        let dir_locks = store.dir_locks.lock().await;
-        assert!(
-            !dir_locks.contains_key(GLOBAL_STATE_FILE),
-            "global sequence locking should not occupy the directory lock pool"
-        );
     }
 }

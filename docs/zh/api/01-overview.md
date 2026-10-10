@@ -354,10 +354,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/system/status` | 系统状态 |
 | POST | `/api/v1/system/wait` | 等待后台处理完成 |
 | POST | `/api/v1/system/consistency` | 文件系统与向量索引一致性检查 |
-| POST | `/api/v1/system/backend/sync-status` | 查询后端同步状态 |
-| POST | `/api/v1/system/backend/sync-retry` | 重试后端同步 |
-| GET | `/api/v1/system/sync/{sync_path}` | 路径形式的同步状态兼容接口 |
-| POST | `/api/v1/system/sync/{sync_path}/retry` | 路径形式的同步重试兼容接口 |
 
 ### [资源](02-resources.md)与[文件系统](03-filesystem.md)
 
