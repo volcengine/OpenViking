@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.config.schema import SessionKey
+from vikingbot.sandbox.backends import direct as direct_backend
 from vikingbot.sandbox.backends.direct import DirectBackend
 
 
@@ -44,6 +45,49 @@ async def test_exec_tool_runs_in_selected_directory(tmp_path, relative_dir):
         await sandbox.stop()
 
     assert result.strip() == str(working_dir)
+
+
+@pytest.mark.asyncio
+async def test_direct_backend_decodes_windows_native_child_output(tmp_path, monkeypatch):
+    class Config:
+        restrict_workspaces = True
+
+    class Process:
+        returncode = 7
+
+        async def communicate(self):
+            output = "你好 日本語\n".encode("cp936")
+            return output, output
+
+    async def spawn(*args, **kwargs):
+        return Process()
+
+    monkeypatch.setattr(direct_backend.asyncio, "create_subprocess_shell", spawn)
+    monkeypatch.setattr(direct_backend, "_WINDOWS_ANSI_ENCODING", "cp936")
+
+    workspace = tmp_path / "workspace"
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="exec-test")
+    sandbox = DirectBackend(Config(), session_key, workspace)
+    await sandbox.start()
+    try:
+        result = await sandbox.execute("native-child")
+    finally:
+        await sandbox.stop()
+
+    assert result == "你好 日本語\n\nSTDERR:\n你好 日本語\n\n\nExit code: 7"
+    assert "\ufffd" not in result
+
+
+def test_direct_backend_prefers_utf8_over_windows_fallback(monkeypatch):
+    monkeypatch.setattr(direct_backend, "_WINDOWS_ANSI_ENCODING", "cp936")
+
+    assert direct_backend._decode_process_output("你好 日本語".encode()) == "你好 日本語"
+
+
+def test_direct_backend_keeps_posix_replacement_policy(monkeypatch):
+    monkeypatch.setattr(direct_backend, "_WINDOWS_ANSI_ENCODING", None)
+
+    assert direct_backend._decode_process_output(b"valid\xfftail") == "valid\ufffdtail"
 
 
 def test_compile_exec_requires_opt_in():
