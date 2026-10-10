@@ -542,7 +542,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
                         return ProcessResult.success()
 
-                    if self._vlm_resolver is None:
+                    if not msg.wait_for_embeddings_only and self._vlm_resolver is None:
                         raise RuntimeError(
                             "SemanticProcessor requires a VLM resolver for account-owned work"
                         )
@@ -554,7 +554,10 @@ class SemanticProcessor(DequeueHandlerBase):
                     dag_stats = None
                     processing_succeeded = False
                     try:
-                        if msg.plan is not None:
+                        if msg.wait_for_embeddings_only:
+                            # SemanticMessageWork drains the embedding roots before release.
+                            pass
+                        elif msg.plan is not None:
                             if msg.uri.rstrip("/") != msg.plan.root_uri:
                                 raise ValueError("semantic message URI must match plan root_uri")
                             if msg.context_type != msg.plan.context_type:
@@ -678,7 +681,12 @@ class SemanticProcessor(DequeueHandlerBase):
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
                                 recursive=msg.recursive,
-                                lock=semantic_lock.lock,
+                                lock=(
+                                    None
+                                    if msg.generation_trigger == "content_write"
+                                    and msg.lock_handoff is not None
+                                    else semantic_lock.lock
+                                ),
                                 is_code_repo=msg.is_code_repo,
                                 changes=changes,
                                 skip_vectorization=msg.skip_vectorization,

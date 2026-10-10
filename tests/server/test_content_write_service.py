@@ -280,9 +280,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
         "direct_entries"
     ] == inherited_entries
-    await service.fs.write(
-        explicit_file, "first", ctx=admin, wait=True, acl={"entries": []}
-    )
+    await service.fs.write(explicit_file, "first", ctx=admin, wait=True, acl={"entries": []})
     assert (await service.fs.get_acl(explicit_file, ctx=admin))["effective_entries"] == []
 
     explicit_import = "viking://resources/explicit_import"
@@ -293,9 +291,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl(explicit_import, ctx=admin))[
         "direct_entries"
     ] == inherited_entries
-    imported_children = (
-        await service.fs.ls(explicit_import, ctx=admin, simple=True)
-    ).entries
+    imported_children = (await service.fs.ls(explicit_import, ctx=admin, simple=True)).entries
     for child in imported_children:
         report = await service.fs.get_acl(child, ctx=admin)
         assert report["direct_entries"] == []
@@ -532,6 +528,7 @@ class _FakePathLock:
         self.acquire_result = acquire_result
         self.acquire_error = acquire_error
         self.release_calls = []
+        self.handoff_calls = []
 
     async def pathlock_acquire_exact(self, lock_path):
         del lock_path
@@ -543,6 +540,12 @@ class _FakePathLock:
 
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
+
+    async def pathlock_to_handoff(self, lease):
+        return {"owner_id": lease.id, "covered_paths": [{"path": "/fake/file", "kind": "exact"}]}
+
+    async def pathlock_handoff(self, lease):
+        self.handoff_calls.append(lease.id)
 
 
 class _FakeVikingFS:
@@ -663,7 +666,7 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
+async def test_write_timeout_after_enqueue_keeps_resource_lock_handed_off(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -689,7 +692,8 @@ async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
             wait=True,
         )
 
-    assert viking_fs._async_agfs.release_calls == ["lock-1"]
+    assert viking_fs._async_agfs.release_calls == []
+    assert viking_fs._async_agfs.handoff_calls == ["lock-1"]
     assert viking_fs.delete_temp_calls == []
     assert viking_fs.content[file_uri] == "updated"
 
@@ -790,6 +794,7 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
     assert result["uri"] == file_uri
     assert viking_fs.write_file_calls[0][0:2] == (file_uri, "updated")
     assert viking_fs.write_file_calls[0][2].id == "lock-1"
+    assert viking_fs._async_agfs.handoff_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio
@@ -822,7 +827,9 @@ async def test_resource_write_skips_busy_parent_and_keeps_file_work(monkeypatch,
     assert len(queue.messages) == 1
     assert queue.messages[0].changes == {"modified": [file_uri]}
     assert queue.messages[0].aggregate_directory is False
-    assert viking_fs._async_agfs.release_calls == ["lock-1"]
+    assert queue.messages[0].lock_handoff["covered_paths"][0]["kind"] == "exact"
+    assert viking_fs._async_agfs.release_calls == []
+    assert viking_fs._async_agfs.handoff_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio
