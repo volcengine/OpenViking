@@ -692,6 +692,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 file_md5s=msg.file_md5s,
                                 artifact_files=msg.artifact_files,
                                 file_abstracts=msg.file_abstracts,
+                                file_vector_actions=msg.file_vector_actions,
                                 telemetry_id=msg.telemetry_id,
                             )
                             await executor.run(run_uri)

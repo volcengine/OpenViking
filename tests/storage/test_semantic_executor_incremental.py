@@ -455,6 +455,7 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     # a skipped file produces no vector write.
     if f"{root_uri}/a.txt" in expected_files:
         assert processor.file_md5s[f"{root_uri}/a.txt"] == "md5-a-new"
+        assert processor.file_contents[("action", f"{root_uri}/a.txt")] == "merge"
     else:
         assert f"{root_uri}/a.txt" not in processor.file_md5s
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
@@ -463,6 +464,39 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     assert f"- a.txt: {expected_a}" in overview
     assert f"- b.txt: {expected_b}" in overview
     assert parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body.strip()
+
+
+@pytest.mark.asyncio
+async def test_direct_incremental_created_file_forces_vector_upsert(monkeypatch):
+    root_uri = "viking://resources/root"
+    file_uri = f"{root_uri}/new.txt"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "new.txt", "isDir": False}]},
+        file_contents={file_uri: "new body"},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=1,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"added": [file_uri]},
+        file_md5s={file_uri: "new-md5"},
+        file_vector_actions={file_uri: "upsert"},
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.file_contents[("action", file_uri)] == "upsert"
 
 
 @pytest.mark.asyncio

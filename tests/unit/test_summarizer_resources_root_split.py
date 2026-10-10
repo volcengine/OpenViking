@@ -256,7 +256,12 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
     ):
         result = await Summarizer(vlm_processor=None).refresh_file_parents(
             changes=[
-                FileRefreshRequest("viking://resources/docs/a.md", created=True, md5="a"),
+                FileRefreshRequest(
+                    "viking://resources/docs/a.md",
+                    created=True,
+                    md5="a",
+                    vector_action="upsert",
+                ),
                 FileRefreshRequest("viking://resources/docs/b.md", md5="b"),
                 FileRefreshRequest("viking://resources/src/main.py", md5="c"),
             ],
@@ -278,9 +283,13 @@ async def test_grouped_file_refresh_coalesces_only_direct_parents():
         "viking://resources/docs/a.md": "a",
         "viking://resources/docs/b.md": "b",
     }
+    assert messages["viking://resources/docs"].file_vector_actions == {
+        "viking://resources/docs/a.md": "upsert"
+    }
     assert messages["viking://resources/src"].changes == {
         "modified": ["viking://resources/src/main.py"]
     }
+    assert messages["viking://resources/src"].file_vector_actions == {}
 
 
 @pytest.mark.asyncio

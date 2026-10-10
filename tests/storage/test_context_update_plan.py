@@ -2948,6 +2948,40 @@ async def test_commit_and_enqueue_plan_forwards_acl_to_direct_actions(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("created", "expected_action"), [(True, "upsert"), (False, "")])
+async def test_commit_and_enqueue_plan_limits_created_file_upsert_to_write_adapter(
+    created, expected_action
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking.storage.context_update_plan import ContextUpdatePlan, FileRefreshIntent
+    from openviking_cli.session.user_id import UserIdentifier
+
+    uri = "viking://resources/new.md"
+    refresh = AsyncMock(
+        return_value={
+            "status": "success",
+            "enqueued_count": 1,
+            "semantic_action": "refresh_now",
+        }
+    )
+    summarizer = SimpleNamespace(refresh_file_parent=refresh)
+
+    await context_update_execution.commit_and_enqueue_plan(
+        ContextUpdatePlan(
+            uri,
+            "resource",
+            file_refresh=FileRefreshIntent(uri, "new-md5"),
+        ),
+        ctx=RequestContext(UserIdentifier("acc", "owner"), Role.USER),
+        file_created=created,
+        summarizer=summarizer,
+    )
+
+    assert refresh.await_args.kwargs["file_vector_action"] == expected_action
+
+
+@pytest.mark.asyncio
 async def test_direct_index_actions_delete_stale_record_when_embed_is_skipped(monkeypatch):
     from openviking.server.identity import RequestContext, Role
     from openviking.storage import context_update_execution

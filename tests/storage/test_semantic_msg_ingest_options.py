@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
 
 from openviking.storage.acl import AclSpec, AclUpdate
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -101,6 +102,35 @@ def test_semantic_msg_defaults_file_md5s_to_empty():
 
     assert msg.file_md5s == {}
     assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {}
+
+
+def test_semantic_msg_roundtrip_preserves_file_vector_actions():
+    uri = "viking://resources/x/new.md"
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        file_vector_actions={uri: "upsert"},
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.file_vector_actions == {uri: "upsert"}
+
+
+def test_semantic_msg_defaults_file_vector_actions_to_empty():
+    msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
+
+    assert msg.file_vector_actions == {}
+    assert SemanticMsg.from_dict(msg.to_dict()).file_vector_actions == {}
+
+
+def test_semantic_msg_rejects_invalid_file_vector_action():
+    with pytest.raises(ValueError, match="unsupported file vector action"):
+        SemanticMsg(
+            uri="viking://resources/x",
+            context_type="resource",
+            file_vector_actions={"viking://resources/x/a.md": "delete"},
+        )
 
 
 def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():

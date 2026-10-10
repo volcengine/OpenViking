@@ -202,6 +202,7 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
     async def _snapshot(**kwargs):
         captured["formal_snapshot"] = kwargs["formal_snapshot"]
         captured["target_preexisting"] = kwargs["target_preexisting"]
+        captured["vector_inventory"] = kwargs.get("vector_inventory")
         return SimpleNamespace()
 
     async def _plan(**kwargs):
@@ -238,6 +239,7 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
         {"": content_write_module.FormalEntry(is_dir=False)},
         True,
     )
+    assert captured["vector_inventory"] is None
 
 
 @pytest.mark.asyncio
@@ -289,6 +291,7 @@ async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
 
     async def _snapshot(**kwargs):
         captured["bytes"] = kwargs["store"]._data
+        captured["vector_inventory"] = kwargs.get("vector_inventory")
         return SimpleNamespace()
 
     async def _plan(**kwargs):
@@ -321,6 +324,7 @@ async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
 
     fake_fs.read_file.assert_not_awaited()
     assert captured["bytes"] == b"first line"
+    assert captured["vector_inventory"] == {}
     assert result["mode"] == "append"
 
 

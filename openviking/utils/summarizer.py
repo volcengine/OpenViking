@@ -40,6 +40,11 @@ class FileRefreshRequest:
     created: bool = False
     md5: str | None = None
     abstract: str = ""
+    vector_action: str = ""
+
+    def __post_init__(self) -> None:
+        if self.vector_action not in {"", "upsert", "merge"}:
+            raise ValueError(f"unsupported file vector action: {self.vector_action}")
 
 
 class Summarizer:
@@ -60,6 +65,7 @@ class Summarizer:
         created: bool = False,
         file_md5: str | None = None,
         file_abstract: str = "",
+        file_vector_action: str = "",
         generation_trigger: str = "semantic_refresh",
         force_refresh: bool | None = None,
     ) -> Dict[str, Any]:
@@ -83,6 +89,7 @@ class Summarizer:
                     created=created,
                     md5=file_md5,
                     abstract=file_abstract,
+                    vector_action=file_vector_action,
                 ),
             ),
             ctx=ctx,
@@ -197,6 +204,11 @@ class Summarizer:
                     change.file_uri: change.abstract for change in parent_changes if change.abstract
                 }
                 or None,
+                file_vector_actions={
+                    change.file_uri: change.vector_action
+                    for change in parent_changes
+                    if change.vector_action
+                },
             )
             if telemetry_id:
                 get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)

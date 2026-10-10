@@ -448,6 +448,7 @@ class ContentWriteCoordinator:
                             created=not prepared.existed,
                             md5=prepared.plan.file_refresh.md5,
                             abstract=prepared.previous_abstract,
+                            vector_action="upsert" if not prepared.existed else "",
                         )
                         for prepared in committed_resource_plans
                         if prepared.plan.file_refresh is not None
@@ -996,14 +997,14 @@ class ContentWriteCoordinator:
         if vector_store is None or not hasattr(vector_store, "get_incremental_inventory_by_uris"):
             return {}
 
-        uris = [operation["uri"] for operation, _, _ in resource_pending]
+        existing_uris = [operation["uri"] for operation, existed, _ in resource_pending if existed]
         requests = {
-            uri: RequestIntent.from_ingest_options(
-                target_uri=uri,
+            operation["uri"]: RequestIntent.from_ingest_options(
+                target_uri=operation["uri"],
                 processing_mode=DEFAULT_PROCESSING_MODE,
                 ingest_options=None,
             )
-            for uri in uris
+            for operation, _, _ in resource_pending
         }
         projection = set()
         for request in requests.values():
@@ -1011,10 +1012,14 @@ class ContentWriteCoordinator:
             # File-scoped and vectors-only write planning may reuse a hydrated
             # L2 abstract as an embedding source.
             projection.add("abstract")
-        inventories = await vector_store.get_incremental_inventory_by_uris(
-            uris,
-            ctx=ctx,
-            output_fields=sorted(projection),
+        inventories = (
+            await vector_store.get_incremental_inventory_by_uris(
+                existing_uris,
+                ctx=ctx,
+                output_fields=sorted(projection),
+            )
+            if existing_uris
+            else {}
         )
 
         prepared: dict[str, _PreparedBatchResource] = {}
@@ -1054,7 +1059,9 @@ class ContentWriteCoordinator:
                 ),
                 artifact_inventory=inventory,
                 vector_scope="self",
-                vector_inventory=inventories.get(uri, {}),
+                # Explicit write treats missing F as authoritative new state;
+                # an orphan canonical V record is overwritten by UPSERT.
+                vector_inventory=inventories.get(uri, {}) if existed else {},
             )
             _, plan = await build_context_update_plan_from_snapshot(
                 snapshot=rnfv,
@@ -1180,6 +1187,9 @@ class ContentWriteCoordinator:
                 formal_snapshot=target_state.formal_snapshot,
                 artifact_inventory=inline_inventory,
                 vector_scope="self",
+                # This write owns the complete new-file state. Do not read or
+                # inherit an orphan V record when locked F is absent.
+                vector_inventory={} if not target_preexisting else None,
             )
             _, plan = await build_context_update_plan_from_snapshot(
                 snapshot=rnfv,

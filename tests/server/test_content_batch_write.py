@@ -197,7 +197,7 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
     root = "viking://resources/wiki"
     first = f"{root}/docs/a.md"
     second = f"{root}/docs/b.md"
-    vfs = _VFS(root)
+    vfs = _VFS(root, {first: "old A"})
 
     class _VikingDB:
         def __init__(self):
@@ -205,7 +205,18 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
 
         async def get_incremental_inventory_by_uris(self, uris, **kwargs):
             self.calls.append((list(uris), kwargs))
-            return {uri: {} for uri in uris}
+            return {
+                uri: {
+                    "a-l2": {
+                        "id": "a-l2",
+                        "uri": uri,
+                        "level": 2,
+                        "md5": "old-md5",
+                        "abstract": "old abstract",
+                    }
+                }
+                for uri in uris
+            }
 
     vikingdb = _VikingDB()
     coordinator = ContentWriteCoordinator(vfs, vikingdb=vikingdb)
@@ -273,16 +284,23 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
         wait=False,
     )
 
-    assert result["created"] == [first, second]
-    assert vikingdb.calls[0][0] == [first, second]
+    assert result["updated"] == [first]
+    assert result["created"] == [second]
+    assert vikingdb.calls[0][0] == [first]
     assert len(snapshots) == 2
     assert all(snapshot["root_is_file"] is True for snapshot in snapshots)
     assert all(snapshot["vector_scope"] == "self" for snapshot in snapshots)
-    assert all(snapshot["vector_inventory"] == {} for snapshot in snapshots)
+    snapshots_by_uri = {snapshot["target_uri"]: snapshot for snapshot in snapshots}
+    assert snapshots_by_uri[first]["vector_inventory"]["a-l2"]["uri"] == first
+    assert snapshots_by_uri[second]["vector_inventory"] == {}
     assert len(commits) == 2
     assert direct_actions == []
     assert len(refresh_calls) == 1
     assert {change.file_uri for change in refresh_calls[0]} == {first, second}
+    assert {change.file_uri: change.vector_action for change in refresh_calls[0]} == {
+        first: "",
+        second: "upsert",
+    }
 
 
 @pytest.mark.asyncio

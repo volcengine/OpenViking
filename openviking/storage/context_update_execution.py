@@ -272,6 +272,7 @@ async def commit_and_enqueue_plan(
             created=file_created,
             file_md5=plan.file_refresh.md5,
             file_abstract="",
+            file_vector_action="upsert" if file_created else "",
             generation_trigger=generation_trigger,
             force_refresh=force_refresh,
         )
