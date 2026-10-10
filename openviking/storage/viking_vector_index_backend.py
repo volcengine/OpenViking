@@ -1950,12 +1950,6 @@ class VikingVectorIndexBackend:
             return records
         from openviking.storage.ttl import project_results
 
-        cleanup = getattr(self, "ttl_cleanup", None)
-        if cleanup is not None:
-            if cleanup.settings.execution == "sync":
-                await cleanup.on_access_sync(ctx)
-            else:
-                cleanup.on_access(ctx)
         return project_results(records, config)
 
     async def search_in_tenant(

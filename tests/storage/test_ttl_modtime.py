@@ -94,10 +94,6 @@ async def test_real_filter_before_top_k(indexed_fs):
     )
     assert len(rows) == 2
     assert all(int(row["uri"].split("/")[-1].split(".")[0]) >= 3 for row in rows)
-    expired = await backend.filter(
-        filter=query_filter(config(), NOW, expired=True), limit=10, ctx=ctx
-    )
-    assert len(expired) == 3
     overridden = await backend.filter(
         filter=query_filter(config(directories={ROOT: {"mode": "disabled"}}), NOW),
         limit=10,

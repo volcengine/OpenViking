@@ -23,10 +23,10 @@ They are review and performance experiments, not production rollout approval.
 
 | Branch | Trigger / storage | Necessary cost |
 | --- | --- | --- |
-| feat/ttl-modtime-queuefs | Reads/writes coalesce bounded expired-vector discovery; QueueFS persists deletion tasks | Extra background vector query, queue I/O, final delete checks |
+| feat/ttl-modtime-queuefs | Normal accesses supply an already known expired URI; QueueFS persists deletion tasks | Queue I/O and final delete checks only; no candidate discovery query |
 | feat/ttl-modtime-redis | Enabled writes register stable URI with current time in Redis; worker examines due scores | Write-side stat for events, Redis transaction, periodic Redis lookups, final delete checks |
 
-QueueFS also has explicit `ttl_cleanup.execution=sync` for measuring inline discovery/deletion.
+QueueFS also has explicit `ttl_cleanup.execution=sync` for measuring inline deletion of a known URI.
 Normal mode is asynchronous. Redis acknowledgement compares the claimed score before removal so
 an old job cannot remove a newer registration. QueueFS retries an unacknowledged delivery.
 `ttl_cleanup.enabled=false` is the default and performs no cleanup I/O.
@@ -40,6 +40,26 @@ an old job cannot remove a newer registration. QueueFS retries an unacknowledged
 - Passive deletion cannot promise when unaccessed data stops consuming storage or being billed.
   Logical expiration, physical deletion and billing completion are different events.
 - The performance matrix must include main, TTL off, TTL on, and cleanup mixed with searches,
-  including off accounts sharing those resources. Both real VikingDB adapters are required.
+  including off accounts sharing those resources. This review tests public volcengine only; private vikingdb is deferred by user decision.
 - Full list/glob/grep visibility and all direct access surfaces still require a separate rollout audit.
   Passing the retrieval experiment alone does not authorize production deployment.
+
+## B1: known-object access only (2026-10-10)
+
+- Search keeps the pre-TopK TTL filter and never sends a cleanup discovery request.
+- File reads reuse their existing stat; Session metadata reads reuse the already read created_at.
+  A raw body read or a Session child read without the Session creation time does not probe another
+  file and does not promise TTL interception. Missing/untrusted time does not authorize deletion.
+- ls/tree inspect the existing returned page. They neither refill it nor traverse extra directories.
+  A directory modTime is not a Session creation time. Other access surfaces need separate auditing.
+- Session metadata writes can enqueue an already expired Session. Event writes renew modTime;
+  writing new events alone does not discover unrelated old files.
+- QueueFS startup drains previously persisted deletions once; successful enqueues wake the consumer.
+  There is no idle queue polling. Failed deletions retain/retry their durable delivery. Old B0
+  discover notifications are acknowledged without issuing discovery queries.
+- Notifications are best effort before persistence. A crash after enqueue and before wakeup may
+  require a later enqueue or restart. Cold/unobserved objects have no reclamation or billing deadline.
+- Deletion still performs queue I/O, policy/file checks, locks, and physical/vector deletion.
+  Zero additional discovery I/O does not mean zero deletion I/O.
+- Prior 2397120e4 mixed/sync measurements describe B0 and cannot validate B1. New image measurements
+  must report direct-access production separately from search latency and queue/delete costs.

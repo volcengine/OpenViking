@@ -115,21 +115,17 @@ def _exclude_roots(roots):
     return RawDSL({"op": "must_not", "field": "uri", "conds": list(roots), "para": "-d=-1"})
 
 
-def query_filter(config: TTLConfig, now: datetime, *, expired: bool = False):
+def query_filter(config: TTLConfig, now: datetime):
     """One boolean filter before Top-K; exact root overrides win over defaults.
 
-    The expired form is for bounded background discovery only. Missing timestamps
-    never authorize deletion. Parent summaries are excluded for an active policy.
+    Parent summaries are excluded for an active policy. Candidate discovery is
+    deliberately not part of this query contract.
     """
     if not config.enabled:
         return None
-    terms = []
-    if not expired:
-        terms.append(
-            RawDSL(
-                {"op": "must_not", "field": "search_tags", "conds": [*MANAGED_TAGS, CONTAINER_TAG]}
-            )
-        )
+    terms = [
+        RawDSL({"op": "must_not", "field": "search_tags", "conds": [*MANAGED_TAGS, CONTAINER_TAG]})
+    ]
     for scope in TTL_SCOPES:
         overrides = {
             root: policy
@@ -138,8 +134,6 @@ def query_filter(config: TTLConfig, now: datetime, *, expired: bool = False):
         }
         groups = [(None, getattr(config, scope) or config.global_default), *overrides.items()]
         for root, policy in groups:
-            if expired and policy.mode != "days":
-                continue
             conditions = [Eq("search_tags", TAG_PREFIX + scope)]
             if root is not None:
                 conditions.append(PathScope("uri", root))
@@ -150,11 +144,9 @@ def query_filter(config: TTLConfig, now: datetime, *, expired: bool = False):
                 if scope != "sessions":
                     conditions.append(Eq("level", 2))
                 field = "created_at" if scope == "sessions" else "updated_at"
-                conditions.append(Range(field, lte=cutoff) if expired else Range(field, gt=cutoff))
+                conditions.append(Range(field, gt=cutoff))
             terms.append(And(conditions))
-    # With only disabled overrides and no active defaults, the active root
-    # terms still exist. Never turn an empty expired filter into match-all.
-    return Or(terms) if terms else Eq("id", "__ttl_no_candidates__")
+    return Or(terms)
 
 
 def project_results(records, config: TTLConfig | None):

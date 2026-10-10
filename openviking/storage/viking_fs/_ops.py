@@ -1691,6 +1691,19 @@ class _OpsMixin:
         Returns:
             Entries in the requested output format.
         """
+        if getattr(self, "runtime_config_manager", None) is not None:
+            from openviking.config.ttl import resolve_loaded_ttl_config
+
+            real_ctx = self._ctx_or_default(ctx)
+            config = resolve_loaded_ttl_config(self, real_ctx.account_id)
+            if config is not None and config.enabled:
+                visible = []
+                for entry in entries:
+                    if entry.get("access") == "denied" or entry.get("isDir"):
+                        visible.append(entry)
+                    elif not await self._ttl_observe_known(entry.get("uri", ""), entry, real_ctx):
+                        visible.append(entry)
+                entries = visible
         load_abstract = output == "agent" if include_abstract is None else include_abstract
         if output == "original":
             if extra_fields:
@@ -1964,47 +1977,50 @@ class _OpsMixin:
 
     # ========== Other Preserved Methods ==========
 
-    async def _ttl_check_file_read(self, uri, stat, ctx, raw=None):
+    async def _ttl_observe_known(self, uri, stat, ctx, raw=None):
+        """Inspect only metadata already obtained by the normal operation."""
         if getattr(self, "runtime_config_manager", None) is None:
-            return
+            return False
         from openviking.config.ttl import resolve_loaded_ttl_config
         from openviking.storage.ttl import scope_and_root, deletion_uri, expires_at
-        from datetime import datetime, timezone
+        import json
 
         config = resolve_loaded_ttl_config(self, ctx.account_id)
-        if not config.enabled:
-            return
+        if config is None or not config.enabled:
+            return False
         target = scope_and_root(uri)
         if target is None or config.resolve_uri_policy(uri, target[0]).mode != "days":
-            return
-        if stat is None:
-            stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
-        if target[0] != "sessions":
-            # Date-directory aggregates have no independent valid deadline.
-            if uri.endswith(("/.abstract.md", "/.overview.md")):
-                raise NotFoundError(uri, "file")
-            stamp = stat.get("modTime")
-        else:
-            import json
-
+            return False
+        if target[0] == "sessions":
             session = deletion_uri(uri)
-            if session is None:
-                return
-            meta_uri = session + "/.meta.json"
-            meta = (
-                raw
-                if uri == meta_uri and raw is not None
-                else self._handle_agfs_read(
-                    await self._async_agfs.read(self._uri_to_path(meta_uri, ctx=ctx))
-                )
-            )
-            stamp = json.loads(meta).get("created_at")
+            # A child file's modTime says nothing about whole-Session expiry.
+            if session is None or uri != session + "/.meta.json" or raw is None:
+                return False
+            try:
+                stamp = json.loads(raw).get("created_at")
+            except (ValueError, TypeError, AttributeError):
+                return False
+        else:
+            if uri.endswith(("/.abstract.md", "/.overview.md")):
+                return True  # Cross-file summaries have no independent deadline.
+            if not isinstance(stat, dict) or stat.get("isDir"):
+                return False
+            stamp = stat.get("modTime")
         deadline = expires_at(config, uri, stamp)
-        if deadline is None or deadline <= datetime.now(timezone.utc):
-            cleanup = getattr(self, "ttl_cleanup", None)
-            if cleanup is not None:
-                cleanup.on_access(ctx)
-            raise NotFoundError(uri, "file")
+        if deadline is None or deadline > datetime.now(timezone.utc):
+            return False
+        cleanup = getattr(self, "ttl_cleanup", None)
+        notify = getattr(cleanup, "on_expired", None)
+        if notify is not None:
+            if cleanup.settings.execution == "sync":
+                await cleanup.delete_known_sync(uri, ctx)
+            else:
+                notify(uri, ctx)
+        return True
+
+    async def _ttl_check_file_read(self, uri, stat, ctx, raw=None):
+        if await self._ttl_observe_known(uri, stat, ctx, raw):
+            raise NotFoundError(uri, "file", reason="TTL expired")
 
     async def _ttl_after_write(self, uri, ctx, content=None):
         cleanup = getattr(self, "ttl_cleanup", None)
