@@ -281,6 +281,43 @@ async def test_resource_bucket_uses_actor_scope_without_other_peer_scan():
     assert [(entry.uri, entry.origin) for entry in result.entries] == [(actor_uri, "actor_peer")]
 
 
+async def test_actor_scope_drops_other_peer_hits_from_an_unscoped_base_search():
+    """`peer_scope="actor"` is the documented isolation boundary (#5433)."""
+    other_uri = f"{USER_ROOT}/peers/other/memories/events/other.md"
+    self_uri = f"{USER_ROOT}/memories/events/self.md"
+
+    async def fake_find(**kwargs):
+        # The flat path searches with an empty target, which reaches every peer.
+        if kwargs["target_uri"] == "":
+            return _FakeFindResult(
+                memories=[
+                    {"uri": other_uri, "score": 0.95, "abstract": "other peer memory", "level": 2},
+                    {"uri": self_uri, "score": 0.8, "abstract": "self memory", "level": 2},
+                ]
+            )
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        return f"Summary: {uri}"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read, abstract=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="memory", peer_scope="actor", max_tokens=1600),
+    )
+
+    assert [entry.uri for entry in result.entries] == [self_uri]
+    assert result.stats["origins"]["other_peer"] == 0
+    assert result.stats["scoped_out"] == 1
+
+
 async def test_purpose_quotas_are_not_truncated_by_global_limit():
     async def fake_find(**kwargs):
         target_uri = kwargs["target_uri"]
