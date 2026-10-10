@@ -135,32 +135,29 @@ class PDFConfig(ParserConfig):
     Supports three strategies:
     - "local": Use pdfplumber for local PDF→Markdown conversion
     - "mineru": Use MinerU API for remote PDF→Markdown conversion
-    - "mineru-first": Use MinerU API first, fall back to local pdfplumber
     - "auto": Try local first, fallback to MinerU if available
 
     Attributes:
-        strategy: Parsing strategy ("local" | "mineru" | "mineru-first" | "auto")
+        strategy: Parsing strategy ("local" | "mineru" | "auto" | "mineru-first")
         mineru_endpoint: MinerU API endpoint URL
+        mineru_api_mode: MinerU protocol flavor ("sync" | "async" | "auto")
+        mineru_token: Bearer token for the hosted MinerU API
         mineru_timeout: MinerU request timeout in seconds
         mineru_bodys: Additional MinerU API multipart form fields
-        mineru_token: Bearer token for the online MinerU API
-        mineru_api_mode: MinerU protocol flavor ("auto" | "sync" | "async")
     """
 
-    strategy: str = "auto"  # "local" | "mineru" | "mineru-first" | "auto"
+    strategy: str = "auto"  # "local" | "mineru" | "auto" | "mineru-first"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
+    # [local-patch] PR #4818: "auto" detects the protocol, "async" skips the
+    # /file_parse probe, "sync" requires the self-hosted single-shot contract.
+    mineru_api_mode: str = "auto"  # "sync" | "async" | "auto"
+    # [local-patch] Required by the hosted v4 API; omitted upstream, which only
+    # supported the self-hosted mineru-api that needs no bearer token.
+    mineru_token: Optional[str] = None  # Bearer token for the online MinerU API
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
     mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
-    # [local-patch mineru-first] Bearer token for the MinerU cloud API.
-    # Sent as "Authorization: Bearer <token>" on every MinerU request.
-    mineru_token: Optional[str] = None
-    # [local-patch mineru-first] PR #4725: protocol flavor selection.
-    #   "sync"  -> legacy self-hosted single-shot /file_parse contract
-    #   "async" -> task-based contracts (v2-tasks / online-batch)
-    #   "auto"  -> probe /file_parse, fall back to the task protocol on 404
-    mineru_api_mode: str = "auto"  # "auto" | "sync" | "async"
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -181,27 +178,28 @@ class PDFConfig(ParserConfig):
         super().validate()
 
         # Validate PDF-specific fields
-        # [local-patch mineru-first] accept 'mineru-first' (PR #4818)
-        if self.strategy not in ("local", "mineru", "mineru-first", "auto"):
+        # [local-patch] "mineru-first" prefers the hosted async task API and falls
+        # back to local parsing, so it needs an endpoint just like "mineru".
+        if self.strategy not in ("local", "mineru", "auto", "mineru-first"):
             raise ValueError(
-                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', 'mineru-first', or 'auto'"
+                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', "
+                "'auto', or 'mineru-first'"
             )
 
         if self.strategy in ("mineru", "mineru-first"):
             if not self.mineru_endpoint:
                 raise ValueError(
-                    "mineru_endpoint is required when strategy='mineru' or 'mineru-first'"
+                    f"mineru_endpoint is required when strategy='{self.strategy}'"
                 )
+
+        if self.mineru_api_mode not in ("sync", "async", "auto"):
+            raise ValueError(
+                f"Invalid mineru_api_mode '{self.mineru_api_mode}'. "
+                "Must be 'sync', 'async', or 'auto'"
+            )
 
         if self.mineru_timeout <= 0:
             raise ValueError("mineru_timeout must be positive")
-
-        # [local-patch mineru-first] validate MinerU protocol flavor
-        if self.mineru_api_mode not in ("auto", "sync", "async"):
-            raise ValueError(
-                f"Invalid mineru_api_mode '{self.mineru_api_mode}'. "
-                "Must be 'auto', 'sync', or 'async'"
-            )
 
         if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
             raise ValueError(f"Invalid heading_detection: {self.heading_detection}")

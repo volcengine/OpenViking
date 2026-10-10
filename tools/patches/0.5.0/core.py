@@ -652,13 +652,13 @@ class OpenVikingService:
         # Preflight the MinerU endpoint when it will be used, so endpoint
         # misconfiguration or a stopped service surfaces now instead of on the
         # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
         # [local-patch mineru-first] PR #4818:
         #   - "mineru-first" uses the async task endpoints, not /file_parse, so the
         #     synchronous readiness probe does not describe the path actually taken.
         #   - async MinerU modes likewise bypass the sync preflight.
-        #   In both cases the preflight is skipped; failures surface (and fall back)
-        #   on the first real parse instead.
-        pdf_config = self._config.pdf
+        # In both cases the preflight is skipped; failures surface (and fall back)
+        # on the first real parse instead.
         _mineru_api_mode = getattr(pdf_config, "mineru_api_mode", "auto")
         _is_async_mineru = _mineru_api_mode == "async"
         _is_mineru_first = pdf_config.strategy == "mineru-first"
