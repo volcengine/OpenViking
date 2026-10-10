@@ -270,9 +270,18 @@ def _skill_root_from_hit_uri(hit_uri: str) -> str:
 
 
 async def _require_skill(
-    service, ctx: RequestContext, skill_name: str, target_uri: Optional[str] = None
+    service,
+    ctx: RequestContext,
+    skill_name: str,
+    target_uri: Optional[str] = None,
+    *,
+    allow_fallback: bool = True,
 ) -> str:
-    if target_uri:
+    if target_uri is not None:
+        if not target_uri.strip():
+            raise InvalidArgumentError(
+                "Skill target URI cannot be empty", details={"field": "target_uri"}
+            )
         root_uri = _skill_root_uri(ctx, skill_name, target_uri)
         try:
             stat = await service.fs.stat(root_uri, ctx=ctx, skip_count=True)
@@ -282,6 +291,9 @@ async def _require_skill(
             pass
         except Exception as exc:
             raise NotFoundError(root_uri, "skill") from exc
+
+        if not allow_fallback:
+            raise NotFoundError(root_uri, "skill")
 
     user_root_uri = _skill_root_uri(ctx, skill_name)
     try:
@@ -753,7 +765,9 @@ async def update_skill(
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
-    root_uri = await _require_skill(service, _ctx, skill_name, request.target_uri)
+    root_uri = await _require_skill(
+        service, _ctx, skill_name, request.target_uri, allow_fallback=request.target_uri is None
+    )
 
     data = request.data
     allow_local_path_resolution = False
@@ -1039,7 +1053,9 @@ async def delete_skill(
 ):
     """Remove one installed agent skill."""
     service = get_service()
-    root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
+    root_uri = await _require_skill(
+        service, _ctx, skill_name, target_uri, allow_fallback=target_uri is None
+    )
     result = await service.fs.rm(root_uri, ctx=_ctx, recursive=True)
     privacy_deleted = False
     privacy = service.privacy_configs
