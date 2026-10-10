@@ -346,13 +346,25 @@ def has_idle_uncommitted_content(meta: Dict[str, Any]) -> bool:
     )
 
 
-def _is_idle_policy_due(meta: Dict[str, Any], now: datetime) -> bool:
+def is_idle_due(meta: Dict[str, Any], now: datetime) -> bool:
+    """Return True when an idle-timeout commit is due for the given meta.
+
+    Only the append path ever writes ``last_message_at`` (see
+    ``Session._apply_appended_messages_to_state``), so migrated or legacy
+    sessions carry a strictly empty value while still holding uncommitted
+    content. Their idle window elapsed long before the field existed, so an
+    empty ``last_message_at`` counts as immediately due. Malformed values
+    (unparseable strings, non-strings) stay skipped instead of aborting.
+    """
     idle_timeout = get_idle_timeout_seconds(meta.get("auto_commit_policy"))
     if idle_timeout is None:
         return False
     if not has_idle_uncommitted_content(meta):
         return False
-    next_check_at = compute_next_check_at(meta.get("last_message_at", ""), idle_timeout)
+    last_message_at = meta.get("last_message_at", "")
+    if last_message_at == "":
+        return True
+    next_check_at = compute_next_check_at(last_message_at, idle_timeout)
     if not next_check_at:
         return False
     return is_next_check_due(next_check_at, now) is True
@@ -364,7 +376,7 @@ def _coerce_non_negative_int(value: Any) -> int:
 
 
 def _is_idle_candidate(meta: Dict[str, Any], now: datetime) -> bool:
-    return _is_idle_policy_due(meta, now)
+    return is_idle_due(meta, now)
 
 
 def _session_id_from_meta_path(meta_path: str) -> str:
