@@ -7,6 +7,12 @@ import {
 import type { RemoteSourceOptionState } from './resource-source-strategy'
 
 const DEFAULT_STATE: RemoteSourceOptionState = {
+  dingtalk: {
+    identity: '',
+    maxBytesMiB: '512',
+    maxDepth: '20',
+    maxNodes: '1000',
+  },
   feishu: {
     accessToken: '',
     authMode: 'app',
@@ -33,15 +39,42 @@ const DEFAULT_STATE: RemoteSourceOptionState = {
 }
 
 describe('remote resource source strategy', () => {
+  it('builds native DingTalk identity and byte limits', () => {
+    expect(
+      buildRemoteSourceRequestOptions('dingtalk', {
+        ...DEFAULT_STATE,
+        dingtalk: { ...DEFAULT_STATE.dingtalk, identity: 'team-docs' },
+      }),
+    ).toEqual({
+      args: {
+        dingtalk_identity: 'team-docs',
+        dingtalk_max_bytes: 512 * 1024 * 1024,
+        dingtalk_max_depth: 20,
+        dingtalk_max_nodes: 1000,
+      },
+    })
+  })
+
   it('declares TOS as an exact, connector-only, non-watchable source', () => {
     expect(getRemoteResourceCapabilities('tos')).toEqual({
       exactDestination: true,
+      initialPaused: false,
       nativeOptions: false,
       watch: false,
     })
     expect(buildRemoteSourceRequestOptions('tos', DEFAULT_STATE)).toEqual({
       add_type: 'tos',
     })
+  })
+
+  it('exposes initial pause only for DingTalk', () => {
+    expect(getRemoteResourceCapabilities('dingtalk').initialPaused).toBe(true)
+    expect(getRemoteResourceCapabilities('feishu').initialPaused).toBe(false)
+    expect(getRemoteResourceCapabilities('git').initialPaused).toBe(false)
+    expect(getRemoteResourceCapabilities('webPage').initialPaused).toBe(false)
+    expect(getRemoteResourceCapabilities('remoteFile').initialPaused).toBe(
+      false,
+    )
   })
 
   it('builds watched Feishu user credentials', () => {

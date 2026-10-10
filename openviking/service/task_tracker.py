@@ -865,7 +865,9 @@ class TaskTracker:
                 deleted += 1
         return deleted
 
-    async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
+    async def wait_for_descendants(
+        self, task_id: str, current_work_id: str, *, raise_on_failure: bool = False
+    ) -> None:
         """Wait on the same durable work index used by completion and cancellation."""
         if self._work_index.has_work(task_id, exclude_work_id=current_work_id):
             task = self._cached_task(task_id)
@@ -880,6 +882,10 @@ class TaskTracker:
         with pause_task_processing():
             while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
                 await asyncio.sleep(0.05)
+        if raise_on_failure:
+            error = self._work_index.failure(task_id)
+            if error:
+                raise RuntimeError(error)
 
     async def record_event(
         self,

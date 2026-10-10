@@ -276,19 +276,24 @@ class AddResourceProcessor(DequeueHandlerBase):
                             current_stage,
                             error,
                         )
-                        code = result.get("code")
-                        failure_result = {"code": code} if isinstance(code, str) and code else None
+                        failure_result: dict[str, Any] | None = {
+                            key: deepcopy(result[key])
+                            for key in ("code", "dingtalk")
+                            if key in result
+                        }
                         await tracker.fail(
                             msg.task_id,
                             error,
                             account_id=ctx.account_id,
                             user_id=ctx.user.user_id,
-                            result=failure_result,
+                            result=failure_result or None,
                         )
                         await self._record_watch_execution(msg, "failed", error)
                         terminal = True
                         return ProcessResult.failed("resource processing failed")
-                    if not msg.watch_task_id:
+                    if not msg.watch_task_id and not (result.get("meta") or {}).get(
+                        "dingtalk_run_id"
+                    ):
                         await tracker.complete(
                             msg.task_id,
                             deepcopy(result),
@@ -298,10 +303,42 @@ class AddResourceProcessor(DequeueHandlerBase):
                         )
                 else:
                     result = deepcopy(replay_result)
-                await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
+                await tracker.wait_for_descendants(
+                    msg.task_id,
+                    metadata.work_id,
+                    raise_on_failure=bool((result.get("meta") or {}).get("dingtalk_run_id")),
+                )
                 result.setdefault(
                     "queue_status", request_wait_tracker.build_queue_status(telemetry_id)
                 )
+                run_id = (result.get("meta") or {}).get("dingtalk_run_id")
+                queue_status = request_wait_tracker.build_queue_status(telemetry_id)
+                warnings = result.get("warnings") or []
+                unreadable_nodes = (
+                    (result.get("meta") or {})
+                    .get("dingtalk_report", {})
+                    .get("unreadable_nodes", [])
+                )
+                only_unreadable_warnings = bool(unreadable_nodes) and all(
+                    str(warning).startswith("DingTalk sync skipped ")
+                    and str(warning).endswith(
+                        " unreadable source file(s); they will be retried on the next sync."
+                    )
+                    for warning in warnings
+                )
+                if (
+                    run_id
+                    and (not warnings or only_unreadable_warnings)
+                    and not any(status.get("error_count") for status in queue_status.values())
+                ):
+                    from openviking.resource.dingtalk_incremental import mark_complete
+
+                    await mark_complete(
+                        self._viking_fs,
+                        result["root_uri"],
+                        run_id,
+                        ctx,
+                    )
                 if replay_result is None:
                     result["context_count"] = request_wait_tracker.get_embedding_context_count(
                         telemetry_id

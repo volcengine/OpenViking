@@ -16,6 +16,10 @@ export type ResourceImportArgs = Record<string, unknown> & {
   branch?: string
   commit?: string
   depth?: number
+  dingtalk_identity?: string
+  dingtalk_max_bytes?: number
+  dingtalk_max_depth?: number
+  dingtalk_max_nodes?: number
   exclude_paths?: string[]
   feishu_access_token?: string
   feishu_refresh_token?: string
@@ -51,6 +55,7 @@ export type ResourceImportRequest = {
   args?: ResourceImportArgs
   telemetry?: boolean | Record<string, boolean>
   watch_interval?: number
+  is_active?: boolean
   processing_mode?: ResourceProcessingMode
   tags?: string[]
   tag_mode?: ResourceTagMode

@@ -203,10 +203,14 @@ class DirectoryParser(BaseParser):
                 )
             )
 
+            source_meta = kwargs.get("_source_meta")
+            is_dingtalk_source = isinstance(source_meta, dict) and isinstance(
+                source_meta.get("dingtalk_manifest"), list
+            )
             scan_result = scan_directory(
                 root=str(source_path),
                 registry=registry,
-                strict=kwargs.get("strict", False),
+                strict=bool(kwargs.get("strict", False) and not is_dingtalk_source),
                 ignore_dirs=kwargs.get("ignore_dirs"),
                 include=kwargs.get("include"),
                 exclude=kwargs.get("exclude"),
@@ -365,6 +369,7 @@ class DirectoryParser(BaseParser):
                 result.meta["failed_files"] = source_skipped_items
                 result.meta["unsupported_files"] = []
                 result.meta["skipped_files"] = self._parse_skipped(scan_result.skipped)
+                self._copy_dingtalk_meta(result.meta, kwargs.get("_source_meta"))
                 keep_temp = True
                 return result
 
@@ -530,6 +535,7 @@ class DirectoryParser(BaseParser):
             result.meta["failed_files"] = failed_files + source_skipped_items
             result.meta["unsupported_files"] = unsupported_files
             result.meta["skipped_files"] = skipped_files
+            self._copy_dingtalk_meta(result.meta, kwargs.get("_source_meta"))
 
             keep_temp = True
             return result
@@ -541,7 +547,7 @@ class DirectoryParser(BaseParser):
                 f"[DirectoryParser] Failed to parse directory {source_path}: {exc}",
                 exc_info=True,
             )
-            return create_parse_result(
+            result = create_parse_result(
                 root=ResourceNode(type=NodeType.ROOT),
                 source_path=str(source_path),
                 source_format="directory",
@@ -549,6 +555,8 @@ class DirectoryParser(BaseParser):
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to parse directory: {exc}"],
             )
+            self._copy_dingtalk_meta(result.meta, kwargs.get("_source_meta"))
+            return result
         finally:
             if writer is not None and not keep_temp:
                 await writer.cleanup()
@@ -574,6 +582,14 @@ class DirectoryParser(BaseParser):
                         pending_result.temp_dir_path,
                         exc,
                     )
+
+    @staticmethod
+    def _copy_dingtalk_meta(result_meta: Dict[str, Any], source_meta: Any) -> None:
+        if not isinstance(source_meta, dict):
+            return
+        for key, value in source_meta.items():
+            if key.startswith("dingtalk_"):
+                result_meta[key] = value
 
     @staticmethod
     def _include_feishu_path(
@@ -893,7 +909,7 @@ class DirectoryParser(BaseParser):
         if preserve_structure:
             parent = str(PurePosixPath(classified_file.rel_path).parent)
             dest = (
-                    _normalize_output_target(f"{target_uri}/{parent}", target_writer)
+                _normalize_output_target(f"{target_uri}/{parent}", target_writer)
                 if parent != "."
                 else target_uri
             )
@@ -1010,9 +1026,7 @@ class DirectoryParser(BaseParser):
             try:
                 content = detect_and_convert_encoding(src_file.read_bytes(), src_file)
                 if preserve_structure:
-                    dst_uri = _normalize_output_target(
-                        f"{target_uri}/{rel_path}", target_writer
-                    )
+                    dst_uri = _normalize_output_target(f"{target_uri}/{rel_path}", target_writer)
                 else:
                     dst_uri = _normalize_output_target(
                         f"{target_uri}/{PurePosixPath(rel_path).name}",

@@ -427,6 +427,22 @@ class TestMixedDirectory:
         result = await parser.parse(str(tmp_mixed))
         assert len(result.warnings) > 0
 
+    @pytest.mark.asyncio
+    async def test_dingtalk_unsupported_file_is_skipped_even_in_strict_mode(
+        self, tmp_path: Path, parser, fake_fs
+    ) -> None:
+        (tmp_path / "readable.txt").write_text("readable", encoding="utf-8")
+        (tmp_path / "legacy.wps").write_bytes(b"wps")
+
+        result = await parser.parse(
+            str(tmp_path),
+            strict=True,
+            _source_meta={"dingtalk_manifest": []},
+        )
+
+        assert result.meta["file_count"] == 1
+        assert [item["path"] for item in result.meta["unsupported_files"]] == ["legacy.wps"]
+
 
 # ---------------------------------------------------------------------------
 # Tests: files with a parser (parser.parse() path)

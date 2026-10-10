@@ -45,7 +45,13 @@ _SCALAR_FIELDS = frozenset({"search_tags"})
 # Parser and formal-tree entries use the same compact shape. They are defined
 # beside RNFV rather than a legacy planner so every update path shares them.
 CONTROL_BASENAMES = frozenset(
-    {".abstract.md", ".overview.md", ".image_mappings.json", ".artifact_manifest.json"}
+    {
+        ".abstract.md",
+        ".overview.md",
+        ".image_mappings.json",
+        ".artifact_manifest.json",
+        ".dingtalk_sync.json",
+    }
 )
 
 

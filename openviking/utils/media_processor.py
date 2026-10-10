@@ -144,11 +144,12 @@ class UnifiedResourceProcessor:
         if parser_backend is ParserBackend.INTERNAL:
             return False
 
+        from openviking.parse.accessors.dingtalk_accessor import DingTalkAccessor
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
         from openviking.parse.accessors.web_feed_accessor import WebFeedAccessor
 
         accessor = self._get_accessor_registry().get_accessor(source, **kwargs)
-        if isinstance(accessor, (FeishuAccessor, WebFeedAccessor)):
+        if isinstance(accessor, (DingTalkAccessor, FeishuAccessor, WebFeedAccessor)):
             return False
 
         router = self._get_parser_router()
