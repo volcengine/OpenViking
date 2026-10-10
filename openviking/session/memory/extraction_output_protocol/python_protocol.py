@@ -85,7 +85,7 @@ _CONTRACT_PREAMBLE = (
     "  - obj.content.drop(text=...): delete one exact snippet in an editable string (merge_op=patch).",
     "edit()/drop() may be chained, e.g. obj.content.edit(search='a', replace='b').drop(text='c'); do not mix them with .update() in one chain.",
     "A field attribute is a write handle only; you cannot read it as a string or call str methods on it.",
-    "Each search= (and drop text=) MUST be copied verbatim from the current field value shown in the object's sdk.existing(...) binding, and must occur exactly once. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
+    "Each search= (and drop text=) MUST be copied verbatim from the current field value shown in the object's system-provided binding comment, and must occur exactly once. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
     "edit()/drop() only work on an existing memory's editable string field (merge_op=patch); new memories from create/set must be given complete field values.",
     "For existing editable strings (merge_op=patch), prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of such an editable string changes. For string fields marked [replace], always pass the complete new value to obj.content.update(), even for a small change; edit()/drop() are unavailable.",
     'ALWAYS use a triple-quoted string ("""...""") for EVERY natural-language argument '
@@ -98,8 +98,8 @@ _CONTRACT_PREAMBLE = (
     "Use the system-provided existing-object variable names exactly as shown. When a newly "
     "created memory must be referenced by delete(replacement=...) or link(...), assign the "
     "create call to a variable first, for example: canonical = sdk.create_<type>(...); "
-    "duplicate_1.delete(replacement=canonical). Never recreate or rebind an existing object "
-    "with sdk.existing().",
+    "duplicate_1.delete(replacement=canonical). Never recreate or rebind a system-provided "
+    "existing object; the system binds it for you and existing objects cannot be assigned.",
     "",
     "Available write methods for this extraction:",
 )
@@ -353,7 +353,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "An obj.field.edit()/drop() change could not be applied to the target memory object. "
             "The search= (and drop text=) must be copied verbatim from the current field value shown "
-            "in that object's sdk.existing(...) binding, and must occur exactly once. If it occurs "
+            "in that object's system-provided binding comment, and must occur exactly once. If it occurs "
             "more than once, include enough contiguous surrounding context to make it unique. Do not "
             "use text from the conversation or the new facts you intend to add as a search anchor. "
             "If you copy from numbered read output, exclude the `line_number<TAB>` prefix. If the "
@@ -484,10 +484,10 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
     def _render_search_comment(
         context: ExtractionOutputContext, params: dict[str, Any], result: Any
     ) -> str:
-        # Search only returns URIs (no content), so it cannot become an
-        # sdk.existing() binding. Files actually read are bound separately as
-        # sdk.existing(); how to reach the rest depends on whether a read tool
-        # is available this run.
+        # Search only returns URIs (no content), so it cannot become a
+        # system-provided binding. Files actually read are bound separately as
+        # pre-bound variables (see _render_existing_binding); how to reach the
+        # rest depends on whether a read tool is available this run.
         uris = _search_result_uris(result)
         query = params.get("query")
         query_label = f" query={query!r}" if query else ""
@@ -498,7 +498,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             guidance = "read them with the read tool before updating them"
         else:
             guidance = (
-                "any you need to edit are already provided as sdk.existing bindings; "
+                "any you need to edit are already bound by the system; "
                 "there is no read tool, so treat anything not shown above as new"
             )
         return f"# Search{query_label} found the following memory files; {guidance}:\n{listing}"
@@ -540,9 +540,16 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             fields["content"] = strip_line_numbers(content)
         args = [f"memory_type={memory_type!r}"]
         args.extend(f"{_identifier_alias(key)}={value!r}" for key, value in fields.items())
+        # Render the binding as a declarative comment, never as the reserved
+        # sdk.existing() call form: instruction-following models mirror the
+        # syntax they see, and emitting sdk.existing() is rejected by the
+        # validator. Execution is unaffected because the compiler pre-binds the
+        # same variable names in _load_existing_objects().
         binding = (
             f"# Existing memory loaded by {source}; this binding is system-provided.\n"
-            f"{name} = sdk.existing({', '.join(args)})"
+            f"# The variable '{name}' is already bound by the system: use it directly, and\n"
+            f"# never emit a binding call (the reserved sdk.existing call form is rejected).\n"
+            f"# bound object: {name} -> existing {memory_type!r}, fields: {', '.join(args)}"
         )
         if maintenance_notice is not None:
             binding += "\n# Memory maintenance notice: " + json.dumps(
