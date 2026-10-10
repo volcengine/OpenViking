@@ -1,5 +1,7 @@
 # OpenViking memory plugin for the CodeBuddy Code CLI
 
+English / [中文](README_CN.md)
+
 Long-term semantic memory for [CodeBuddy Code](https://cnb.cool/codebuddy/codebuddy-code),
 powered by [OpenViking](https://github.com/volcengine/OpenViking).
 
