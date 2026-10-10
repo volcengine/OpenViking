@@ -49,7 +49,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- Initialize modules ---
   const client = new OVClient(config);
-  const sync = new SyncManager(client, config);
+  const sync = new SyncManager(client, config, (type, data) => pi.appendEntry(type, data));
   const recall = new RecallManager(
     client,
     config,
@@ -188,8 +188,8 @@ export default async function (pi: ExtensionAPI) {
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
-        sync.restoreWatermark(takeover.state.syncedEntryCount);
       }
+      sync.restoreCapture(branch, !ctx.sessionManager.getHeader?.()?.parentSession);
 
       await sync.replayPending();
       if (config.takeoverEnabled && sync.droppedCount > 0) {
