@@ -1096,9 +1096,13 @@ def test_archive_tools_search_and_expand_committed_session():
     assert "Remember cobalt archive detail" in expanded
 
 
-def test_archive_search_without_archive_id_searches_raw_history():
+@pytest.mark.parametrize("query", ["hidden cobalt archive", "C++"])
+def test_archive_search_without_archive_id_searches_raw_history(query):
     client = InMemoryOpenVikingClient()
-    client.add_message("archive-search-session", "user", content="Hidden cobalt archive detail.")
+    client.add_message(
+        "archive-search-session", "user", content="Hidden cobalt archive C++ detail."
+    )
+    client.add_message("archive-search-session", "assistant", content="Unrelated cobalt detail.")
     commit = client.commit_session("archive-search-session")
     assert commit["archive_id"] == "archive_001"
     client.archives["archive-search-session"][0]["overview"] = "compressed summary"
@@ -1108,17 +1112,60 @@ def test_archive_search_without_archive_id_searches_raw_history():
     searched = tools["viking_archive_search"].invoke(
         {
             "session_id": "archive-search-session",
-            "query": "hidden cobalt archive",
+            "query": query,
         }
     )
 
-    assert "Hidden cobalt archive detail" in searched
+    assert "Hidden cobalt archive C++ detail" in searched
+    assert "Unrelated cobalt detail" not in searched
     assert "viking://user/default/sessions/archive-search-session/history" in searched
 
 
 def test_archive_grep_pattern_uses_backend_safe_token_regex():
     assert _archive_grep_pattern("hidden cobalt archive") == "hidden"
     assert "(?=" not in _archive_grep_pattern("hidden cobalt archive")
+
+
+@pytest.mark.parametrize("with_archive_id", [True, False])
+@pytest.mark.parametrize(
+    ("query", "matches"),
+    [
+        ("cobalt archive", True),
+        ("COBALT ARCHIVE", True),
+        ("quartz archive", False),
+        ("部署", True),
+        ("火星", False),
+        ("部署 cobalt", True),
+        ("火星 cobalt", False),
+        ("café", True),
+        ("cafè", False),
+        ("猫", True),
+        ("狗", False),
+        ("猫 cobalt", True),
+        ("狗 cobalt", False),
+        ("x cobalt", True),
+        ("q cobalt", True),  # Preserve the existing short ASCII token filter.
+    ],
+)
+def test_archive_search_preserves_query_terms(with_archive_id, query, matches):
+    client = InMemoryOpenVikingClient(enable_working_memory=True)
+    client.add_message(
+        "query-terms", "user", content="cobalt archive: 部署在月球。café notes. 猫和 x。"
+    )
+    archive_id = client.commit_session("query-terms")["archive_id"]
+    tool = next(
+        tool
+        for tool in create_openviking_tools(client=client)
+        if tool.name == "viking_archive_search"
+    )
+    args = {"session_id": "query-terms", "query": query}
+    if with_archive_id:
+        args["archive_id"] = archive_id
+
+    result = json.loads(tool.invoke(args))
+
+    assert bool(result["matches"]) is matches
+    assert result["count"] == len(result["matches"])
 
 
 def test_commit_policy_commits_when_threshold_is_reached():

@@ -733,7 +733,7 @@ def _search_archive_payload(
     *,
     max_matches: int,
 ) -> dict[str, Any]:
-    tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    tokens = _archive_query_tokens(query)
     sections = _archive_sections(payload)
     matches: list[dict[str, str]] = []
     for label, text in sections:
@@ -791,7 +791,11 @@ def _archive_grep_pattern(query: str) -> str:
 
 
 def _archive_query_tokens(query: str) -> list[str]:
-    return [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    return [
+        token
+        for token in re.findall(r"\w+", query.lower())
+        if len(token) > 1 or not token.isascii()
+    ]
 
 
 def _filter_grep_result(
