@@ -1,0 +1,839 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""
+Unified parser configuration management for OpenViking.
+
+This module consolidates all parser configuration classes that were previously
+scattered across different modules. All configurations inherit from ParserConfig
+and can be loaded from ov.conf files.
+"""
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class ParserConfig:
+    """
+    Base configuration class for all parsers.
+
+    This serves as a foundation for parser-specific configurations,
+    providing common fields and utilities for all parsers.
+
+    Attributes:
+        enabled: Whether the parser is enabled
+        max_content_length: Maximum content length to process (characters)
+        encoding: Default file encoding
+        max_section_size: Maximum tokens per section before splitting
+        section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
+        max_section_chars: Target character limit per section. A single oversized
+            Markdown table row may remain intact to preserve table semantics.
+    """
+
+    enabled: bool = True
+    max_content_length: int = 100000
+    encoding: str = "utf-8"
+
+    # Smart splitting configuration
+    max_section_size: int = 2048  # Maximum tokens per section before splitting
+    section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
+    max_section_chars: int = 6000  # Target character limit per section
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
+        """
+        Create configuration from dictionary.
+
+        Args:
+            data: Configuration dictionary
+
+        Returns:
+            ParserConfig instance
+
+        Examples:
+            >>> config = ParserConfig.from_dict({"max_content_length": 50000})
+        """
+        return cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
+
+    @classmethod
+    def from_yaml(cls, yaml_path: Union[str, Path]) -> "ParserConfig":
+        """
+        Load configuration from YAML file.
+
+        Args:
+            yaml_path: Path to YAML configuration file
+
+        Returns:
+            ParserConfig instance
+
+        Raises:
+            FileNotFoundError: If YAML file doesn't exist
+            ValueError: If YAML is invalid
+
+        Examples:
+            >>> config = ParserConfig.from_yaml("config.yaml")
+        """
+        import yaml
+
+        yaml_path = Path(yaml_path)
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {yaml_path}")
+
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        return cls.from_dict(data)
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if self.max_content_length <= 0:
+            raise ValueError("max_content_length must be positive")
+
+        if not self.encoding:
+            raise ValueError("encoding cannot be empty")
+
+        if self.max_section_size <= 0:
+            raise ValueError("max_section_size must be positive")
+
+        if not 0.0 <= self.section_size_flexibility <= 1.0:
+            raise ValueError("section_size_flexibility must be between 0.0 and 1.0")
+
+        if self.max_section_chars <= 0:
+            raise ValueError("max_section_chars must be positive")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Export configuration as dictionary.
+
+        Returns:
+            Configuration dictionary
+
+        Examples:
+            >>> config = ParserConfig()
+            >>> data = config.to_dict()
+        """
+        from dataclasses import asdict
+
+        return asdict(self)
+
+
+@dataclass
+class PDFConfig(ParserConfig):
+    """
+    Configuration for PDF parsing.
+
+    Supports three strategies:
+    - "local": Use pdfplumber for local PDF→Markdown conversion
+    - "mineru": Use MinerU API for remote PDF→Markdown conversion
+    - "auto": Try local first, fallback to MinerU if available
+
+    Attributes:
+        strategy: Parsing strategy ("local" | "mineru" | "auto" | "mineru-first")
+        mineru_endpoint: MinerU API endpoint URL
+        mineru_api_mode: MinerU protocol flavor ("sync" | "async" | "auto")
+        mineru_token: Bearer token for the hosted MinerU API
+        mineru_timeout: MinerU request timeout in seconds
+        mineru_bodys: Additional MinerU API multipart form fields
+    """
+
+    strategy: str = "auto"  # "local" | "mineru" | "auto" | "mineru-first"
+
+    # MinerU API configuration
+    mineru_endpoint: Optional[str] = None  # API endpoint URL
+    # [local-patch] PR #4818: "auto" detects the protocol, "async" skips the
+    # /file_parse probe, "sync" requires the self-hosted single-shot contract.
+    mineru_api_mode: str = "auto"  # "sync" | "async" | "auto"
+    # [local-patch] Required by the hosted v4 API; omitted upstream, which only
+    # supported the self-hosted mineru-api that needs no bearer token.
+    mineru_token: Optional[str] = None  # Bearer token for the online MinerU API
+    mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
+    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
+
+    # Heading detection configuration
+    heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
+    font_heading_min_delta: float = 1.5  # Minimum font size delta from body text (pt)
+    max_heading_levels: int = 4  # Maximum heading levels for font analysis
+
+    # Image extraction configuration
+    image_resolution: int = 300  # Rendering DPI for extracted image regions
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate PDF-specific fields
+        # [local-patch] "mineru-first" prefers the hosted async task API and falls
+        # back to local parsing, so it needs an endpoint just like "mineru".
+        if self.strategy not in ("local", "mineru", "auto", "mineru-first"):
+            raise ValueError(
+                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', "
+                "'auto', or 'mineru-first'"
+            )
+
+        if self.strategy in ("mineru", "mineru-first"):
+            if not self.mineru_endpoint:
+                raise ValueError(
+                    f"mineru_endpoint is required when strategy='{self.strategy}'"
+                )
+
+        if self.mineru_api_mode not in ("sync", "async", "auto"):
+            raise ValueError(
+                f"Invalid mineru_api_mode '{self.mineru_api_mode}'. "
+                "Must be 'sync', 'async', or 'auto'"
+            )
+
+        if self.mineru_timeout <= 0:
+            raise ValueError("mineru_timeout must be positive")
+
+        if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
+            raise ValueError(f"Invalid heading_detection: {self.heading_detection}")
+
+        if self.font_heading_min_delta <= 0:
+            raise ValueError("font_heading_min_delta must be positive")
+
+
+@dataclass
+class CodeHostingConfig(ParserConfig):
+    """
+    Base configuration for code hosting platform domains.
+
+    Attributes:
+        code_hosting_domains: List of allowed generic code hosting domains
+        github_domains: List of GitHub domains (github.com, www.github.com)
+        gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
+        azure_devops_domains: List of Azure DevOps domains (dev.azure.com, ssh.dev.azure.com)
+    """
+
+    # Code hosting platform configuration
+    code_hosting_domains: list = None
+    github_domains: list = None
+    gitlab_domains: list = None
+    azure_devops_domains: list = None
+
+    def __post_init__(self):
+        """Initialize default values for mutable fields."""
+        if self.code_hosting_domains is None:
+            self.code_hosting_domains = [
+                "github.com",
+                "gitlab.com",
+                "gitcode.com",
+                "gitee.com",
+                "bitbucket.org",
+                "codeberg.org",
+                "gitea.com",
+                "atomgit.com",
+                "git.sr.ht",
+            ]
+        if self.github_domains is None:
+            self.github_domains = ["github.com", "www.github.com"]
+        if self.gitlab_domains is None:
+            self.gitlab_domains = ["gitlab.com", "www.gitlab.com"]
+        if self.azure_devops_domains is None:
+            self.azure_devops_domains = [
+                "dev.azure.com",
+                "ssh.dev.azure.com",
+                "vs-ssh.visualstudio.com",
+            ]
+
+
+@dataclass
+class CodeConfig(CodeHostingConfig):
+    """
+    Configuration for code parsing.
+
+    Attributes:
+        extract_functions: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_classes: Legacy compatibility field; ignored by the fixed skeleton route
+        extract_imports: Legacy compatibility field; ignored by the fixed skeleton route
+        include_comments: Legacy compatibility field; ignored by the fixed skeleton route
+        max_line_length: Legacy compatibility field; ignored by the fixed skeleton route
+        language_hint: Legacy compatibility field; ignored by the fixed skeleton route
+        max_token_limit: Legacy compatibility field; ignored by the fixed skeleton route
+        truncation_strategy: Legacy compatibility field; ignored by the fixed skeleton route
+        warn_on_truncation: Legacy compatibility field; ignored by the fixed skeleton route
+        github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
+    """
+
+    extract_functions: bool = True
+    extract_classes: bool = True
+    extract_imports: bool = True
+    include_comments: bool = True
+    max_line_length: int = 1000
+    language_hint: Optional[str] = None
+    max_token_limit: int = 50000  # Maximum tokens to process per file
+    truncation_strategy: str = "head"  # "head", "tail", or "balanced"
+    warn_on_truncation: bool = True
+    github_raw_domain: str = "raw.githubusercontent.com"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CodeConfig":
+        """Create code configuration, accepting removed fields for upgrade compatibility."""
+
+        data = dict(data)
+        if "code_summary_mode" in data:
+            data.pop("code_summary_mode", None)
+            logger.warning(
+                "code.code_summary_mode is deprecated and ignored; "
+                "code summaries now always use the fixed skeleton route with LLM fallback"
+            )
+
+        return super().from_dict(data)
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate code-specific fields
+        if self.max_line_length <= 0:
+            raise ValueError("max_line_length must be positive")
+
+        if self.max_token_limit <= 0:
+            raise ValueError("max_token_limit must be positive")
+
+        if self.truncation_strategy not in ("head", "tail", "balanced"):
+            raise ValueError(
+                f"Invalid truncation_strategy '{self.truncation_strategy}'. "
+                "Must be 'head', 'tail', or 'balanced'"
+            )
+
+
+@dataclass
+class ImageConfig(ParserConfig):
+    """
+    Configuration for image parsing.
+
+    Attributes:
+        enable_ocr: Whether to perform OCR text extraction, not implemented
+        enable_vlm: Whether to use VLM for visual understanding
+        ocr_lang: Language for OCR (e.g., "chi_sim", "eng")
+        vlm_model: VLM model to use (e.g., "gpt-4-vision")
+        preview_max_dimension: Maximum dimension for preview resizing (resize if larger)
+        max_file_size_mb: Maximum file size before triggering large image processing
+        max_tile_dimension_px: Maximum dimension for individual tiles
+        tile_overlap_px: Number of pixels to overlap between tiles
+        large_image_threshold_dimension: Dimension threshold for large image detection
+    """
+
+    enable_ocr: bool = False
+    enable_vlm: bool = True
+    ocr_lang: str = "eng"
+    vlm_model: Optional[str] = None
+    preview_max_dimension: int = 2048
+    # Large image processing settings
+    max_file_size_mb: float = 10.0  # 10 MB
+    max_tile_dimension_px: int = 2048  # 2048 pixels
+    tile_overlap_px: int = 2  # 2 pixels
+    large_image_threshold_dimension: int = 4096  # 4096 pixels
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate image-specific fields
+        if self.preview_max_dimension <= 0:
+            raise ValueError("preview_max_dimension must be positive")
+        if self.max_file_size_mb <= 0:
+            raise ValueError("max_file_size_mb must be positive")
+        if self.max_tile_dimension_px <= 0:
+            raise ValueError("max_tile_dimension_px must be positive")
+        if self.tile_overlap_px < 0:
+            raise ValueError("tile_overlap_px must be non-negative")
+        if self.large_image_threshold_dimension <= 0:
+            raise ValueError("large_image_threshold_dimension must be positive")
+
+
+@dataclass
+class AudioConfig(ParserConfig):
+    """
+    Configuration for audio parsing.
+
+    Attributes:
+        enable_transcription: Whether to transcribe speech to text
+        transcription_model: Model to use (e.g., "whisper-large-v3")
+        language: Audio language (None for auto-detection)
+        extract_metadata: Whether to extract audio metadata
+    """
+
+    enable_transcription: bool = True
+    transcription_model: str = "whisper-large-v3"
+    language: Optional[str] = None
+    extract_metadata: bool = True
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate audio-specific fields
+        if not self.transcription_model:
+            raise ValueError("transcription_model cannot be empty")
+
+
+@dataclass
+class VideoConfig(ParserConfig):
+    """
+    Configuration for video parsing.
+
+    Attributes:
+        extract_frames: Whether to extract key frames
+        frame_interval: Seconds between frame extraction
+        enable_transcription: Whether to transcribe audio track
+        enable_vlm_description: Whether to use VLM for scene description
+        max_duration: Maximum video duration to process (seconds)
+    """
+
+    extract_frames: bool = True
+    frame_interval: float = 10.0
+    enable_transcription: bool = True
+    enable_vlm_description: bool = False
+    max_duration: float = 3600.0  # 1 hour
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate video-specific fields
+        if self.frame_interval <= 0:
+            raise ValueError("frame_interval must be positive")
+
+        if self.max_duration <= 0:
+            raise ValueError("max_duration must be positive")
+
+
+@dataclass
+class MarkdownConfig(ParserConfig):
+    """
+    Configuration for Markdown parsing.
+
+    Attributes:
+        preserve_links: Whether to preserve hyperlinks in output
+        extract_frontmatter: Whether to REMOVE YAML frontmatter from the stored
+            document body. Frontmatter is parsed into the parse result metadata
+            regardless. Off by default: the parsed metadata is never persisted, so
+            removing the block would silently lose those fields.
+        include_metadata: Whether to include file metadata
+        max_heading_depth: Maximum heading depth to include in structure
+    """
+
+    preserve_links: bool = True
+    extract_frontmatter: bool = False
+    include_metadata: bool = True
+    max_heading_depth: int = 3
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate markdown-specific fields
+        if self.max_heading_depth < 1:
+            raise ValueError("max_heading_depth must be at least 1")
+
+
+@dataclass
+class AnydocConfig(ParserConfig):
+    """Configuration for the shared anydoc Office converter."""
+
+    max_table_rows: int = 1000
+
+    def validate(self) -> None:
+        super().validate()
+        if self.max_table_rows < 0:
+            raise ValueError("max_table_rows must be non-negative")
+
+
+@dataclass
+class HTMLConfig(ParserConfig):
+    """
+    Configuration for HTML parsing.
+
+    Attributes:
+        extract_text_only: Whether to extract only text content
+        preserve_structure: Whether to preserve HTML structure
+        clean_html: Whether to clean HTML tags and attributes
+        extract_metadata: Whether to extract metadata (title, description)
+    """
+
+    extract_text_only: bool = False
+    preserve_structure: bool = True
+    clean_html: bool = True
+    extract_metadata: bool = True
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # No additional validation needed for HTML config
+
+
+@dataclass
+class TextConfig(ParserConfig):
+    """
+    Configuration for plain text parsing.
+
+    Attributes:
+        detect_language: Whether to detect language automatically
+        split_by_paragraphs: Whether to split by paragraphs
+        max_paragraph_length: Maximum paragraph length before splitting
+        preserve_line_breaks: Whether to preserve original line breaks
+    """
+
+    detect_language: bool = True
+    split_by_paragraphs: bool = True
+    max_paragraph_length: int = 1000
+    preserve_line_breaks: bool = False
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Validate base class fields
+        super().validate()
+
+        # Validate text-specific fields
+        if self.max_paragraph_length <= 0:
+            raise ValueError("max_paragraph_length must be positive")
+
+
+@dataclass
+class FeishuConfig(ParserConfig):
+    """
+    Configuration for Feishu/Lark document parsing.
+
+    Attributes:
+        app_id: Feishu app ID (can also be set via FEISHU_APP_ID env var)
+        app_secret: Feishu app secret (can also be set via FEISHU_APP_SECRET env var)
+        domain: Feishu API domain
+        max_rows_per_sheet: Maximum rows per sheet for spreadsheets
+        max_records_per_table: Maximum records per table for bitable
+        download_images: Whether to download images from documents
+        request_timeout: HTTP request timeout in seconds
+    """
+
+    app_id: str = ""
+    app_secret: str = ""
+    domain: str = "https://open.feishu.cn"
+    max_rows_per_sheet: int = 1000
+    max_records_per_table: int = 1000
+    download_images: bool = True
+    request_timeout: float = (
+        30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
+    )
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """
+        Validate configuration.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        super().validate()
+
+        if not isinstance(self.domain, str) or not self.domain.strip():
+            raise ValueError("domain cannot be empty")
+        self.domain = self.domain.strip()
+
+        if (
+            isinstance(self.max_rows_per_sheet, bool)
+            or not isinstance(self.max_rows_per_sheet, int)
+            or self.max_rows_per_sheet <= 0
+        ):
+            raise ValueError("max_rows_per_sheet must be positive")
+
+        if (
+            isinstance(self.max_records_per_table, bool)
+            or not isinstance(self.max_records_per_table, int)
+            or self.max_records_per_table <= 0
+        ):
+            raise ValueError("max_records_per_table must be positive")
+
+        if (
+            isinstance(self.request_timeout, bool)
+            or not isinstance(self.request_timeout, (int, float))
+            or self.request_timeout <= 0
+        ):
+            raise ValueError("request_timeout must be positive")
+
+
+@dataclass
+class DirectoryConfig(ParserConfig):
+    """
+    Configuration for directory parsing.
+
+    Attributes:
+        preserve_structure: Whether to preserve nested directory structure when
+            adding directory resources. When True (default), files maintain their
+            relative path hierarchy. When False, all files are flattened to a
+            single level under the resource root.
+        max_files: Optional maximum number of selected files admitted by one
+            Understanding or Feishu directory import. None (default) means unlimited.
+        max_depth: Maximum nested directory depth below an Understanding directory
+            import root.
+        max_concurrent: Maximum concurrent Understanding jobs shared by all
+            directory imports in one service event loop.
+    """
+
+    preserve_structure: bool = True
+    max_files: Optional[int] = None
+    max_depth: int = 10
+    max_concurrent: int = 4
+
+    def validate(self) -> None:
+        """Validate directory resource and concurrency limits."""
+        super().validate()
+
+        for name in (
+            "max_files",
+            "max_depth",
+            "max_concurrent",
+        ):
+            value = getattr(self, name)
+            if name == "max_files" and value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+
+@dataclass
+class WebFeedConfig(ParserConfig):
+    """
+    Configuration for whole-site ingestion via sitemap / RSS / Atom feeds.
+
+    Used by WebFeedAccessor (and its single-page detect-and-suggest helper).
+    Each setting can be overridden per call via add_resource ``args`` (e.g.
+    ``args={"max_pages": 50}``).
+
+    Attributes:
+        max_pages: Hard cap on the number of pages mirrored per site.
+        max_concurrency: Max concurrent page fetches.
+        request_timeout: Per-request timeout in seconds.
+        politeness_delay: Delay (seconds) before each page fetch, to be polite.
+        same_host_only: Only ingest URLs on the same host as the feed.
+        respect_robots: Honor robots.txt Disallow rules (and discover sitemaps).
+        max_depth: Max recursion depth when following <sitemapindex> entries.
+        suggest_feed: When adding a single webpage, probe for a sitemap/RSS and
+            append a one-line hint suggesting whole-site ingestion (never auto-crawls).
+        suggest_timeout: Hard timeout (seconds) for that single-page probe.
+    """
+
+    max_pages: int = 200
+    max_concurrency: int = 5
+    request_timeout: float = 30.0
+    politeness_delay: float = 0.2
+    same_host_only: bool = True
+    respect_robots: bool = True
+    max_depth: int = 2
+    suggest_feed: bool = True
+    suggest_timeout: float = 2.5
+
+    def validate(self) -> None:
+        """Validate web feed configuration."""
+        super().validate()
+
+        if self.max_pages <= 0:
+            raise ValueError("max_pages must be positive")
+        if self.max_concurrency <= 0:
+            raise ValueError("max_concurrency must be positive")
+        if self.request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        if self.politeness_delay < 0:
+            raise ValueError("politeness_delay must be non-negative")
+        if self.max_depth <= 0:
+            raise ValueError("max_depth must be positive")
+        if self.suggest_timeout <= 0:
+            raise ValueError("suggest_timeout must be positive")
+
+
+@dataclass
+class SemanticConfig:
+    """
+    Configuration for semantic processing (overview/abstract generation).
+
+    Controls prompt budget limits and output size constraints for the
+    SemanticProcessor pipeline.
+    """
+
+    max_file_content_chars: int = 30000
+    """Maximum characters of file content sent to LLM for summary generation."""
+
+    max_skeleton_chars: int = 12000
+    """Maximum characters of code skeleton used for embedding (~3000 tokens)."""
+
+    max_overview_prompt_chars: int = 60000
+    """Maximum characters allowed in the overview generation prompt.
+    If exceeded, file summaries are batched and merged."""
+
+    overview_batch_size: int = 50
+    """Maximum number of file summaries per batch when splitting oversized prompts."""
+
+    overview_sample_limit: int = 32
+    """Maximum direct-child summaries used in one generated directory sidecar."""
+
+    freshness_refresh_ratio: float = 0.10
+    """Pending direct-child change ratio that refreshes a wide directory."""
+
+    abstract_max_chars: int = 256
+    """Maximum characters for generated abstracts."""
+
+    overview_max_chars: int = 4000
+    """Maximum characters for generated overviews."""
+
+    memory_chunk_chars: int = 2000
+    """Maximum characters per chunk when splitting long memories for vectorization.
+    Memories shorter than this are vectorized as a single record."""
+
+    memory_chunk_overlap: int = 200
+    """Character overlap between adjacent memory chunks for context continuity."""
+
+    def __post_init__(self):
+        if self.overview_sample_limit <= 0:
+            raise ValueError("overview_sample_limit must be positive")
+        if not 0 < self.freshness_refresh_ratio <= 1:
+            raise ValueError("freshness_refresh_ratio must be in the range (0, 1]")
+        if self.memory_chunk_chars <= 0:
+            raise ValueError("memory_chunk_chars must be positive")
+        if self.memory_chunk_overlap < 0:
+            raise ValueError("memory_chunk_overlap must be non-negative")
+        if self.memory_chunk_overlap >= self.memory_chunk_chars:
+            raise ValueError("memory_chunk_overlap must be smaller than memory_chunk_chars")
+
+
+# Configuration registry for dynamic loading
+PARSER_CONFIG_REGISTRY = {
+    "pdf": PDFConfig,
+    "code": CodeConfig,
+    "image": ImageConfig,
+    "audio": AudioConfig,
+    "video": VideoConfig,
+    "markdown": MarkdownConfig,
+    "anydoc": AnydocConfig,
+    "html": HTMLConfig,
+    "text": TextConfig,
+    "directory": DirectoryConfig,
+    "feishu": FeishuConfig,
+    "webfeed": WebFeedConfig,
+}
+
+
+def get_parser_config(
+    parser_type: str, config_data: Optional[Dict[str, Any]] = None
+) -> ParserConfig:
+    """
+    Get parser configuration for a specific parser type.
+
+    Args:
+        parser_type: Type of parser (e.g., "pdf", "code", "image")
+        config_data: Optional configuration data dictionary
+
+    Returns:
+        ParserConfig instance for the specified parser type
+
+    Raises:
+        ValueError: If parser_type is not supported
+
+    Examples:
+        >>> # Get default PDF configuration
+        >>> pdf_config = get_parser_config("pdf")
+
+        >>> # Get custom code configuration
+        >>> code_config = get_parser_config("code", {
+        ...     "github_raw_domain": "raw.githubusercontent.com"
+        ... })
+    """
+    if parser_type not in PARSER_CONFIG_REGISTRY:
+        supported = list(PARSER_CONFIG_REGISTRY.keys())
+        raise ValueError(f"Unsupported parser type: '{parser_type}'. Supported: {supported}")
+
+    config_class = PARSER_CONFIG_REGISTRY[parser_type]
+
+    # Always go through from_dict, even with no data: configs that track which
+    # keys a source provided need to see the empty mapping to record that none
+    # were set.
+    return config_class.from_dict(config_data or {})
+
+
+def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, ParserConfig]:
+    """
+    Load all parser configurations from a dictionary.
+
+    Args:
+        config_dict: Configuration dictionary with parser sections
+
+    Returns:
+        Dictionary mapping parser types to their configurations
+
+    Examples:
+        >>> configs = load_parser_configs_from_dict({
+        ...     "pdf": {"strategy": "auto"},
+        ...     "code": {"github_raw_domain": "raw.githubusercontent.com"}
+        ... })
+        >>> pdf_config = configs["pdf"]
+        >>> code_config = configs["code"]
+    """
+    configs = {}
+
+    for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():
+        # from_dict on an empty mapping rather than a bare constructor, so
+        # configs that track provided keys record that a section was absent.
+        configs[parser_type] = config_class.from_dict(config_dict.get(parser_type) or {})
+
+    return configs

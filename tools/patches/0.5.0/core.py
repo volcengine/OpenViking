@@ -1,0 +1,872 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""
+OpenViking Service Core.
+
+Main service class that composes all sub-services and manages infrastructure lifecycle.
+"""
+
+import asyncio
+import inspect
+import os
+from typing import TYPE_CHECKING, Any, Optional
+
+from openviking.core.directories import DirectoryInitializer
+from openviking.privacy import UserPrivacyConfigService
+from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
+from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.server.identity import RequestContext, Role
+from openviking.service.agent_evolution_service import AgentEvolutionService
+from openviking.service.compile_service import CompileService
+from openviking.service.debug_service import DebugService
+from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.fs_service import FSService
+from openviking.service.mineru_preflight import wait_for_mineru_ready
+from openviking.service.pack_service import PackService
+from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
+from openviking.service.resource_service import ResourceService
+from openviking.service.search_service import SearchService
+from openviking.service.session_auto_commit import SessionAutoCommitScheduler
+from openviking.service.session_service import SessionService
+from openviking.service.task_tracker import get_task_tracker, set_task_tracker
+from openviking.session import create_session_compressor
+from openviking.storage.acl import AclManager
+from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
+from openviking.storage.viking_fs import VikingFS, init_viking_fs
+from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.utils.agfs_utils import (
+    build_runtime_ragfs_binding_config,
+    resolve_queuefs_mount_point,
+)
+from openviking.utils.resource_processor import ResourceProcessor
+from openviking.utils.skill_processor import SkillProcessor
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking_cli.utils.config.git_config import GitConfig
+from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
+from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
+from openviking_cli.utils.config.storage_config import StorageConfig
+
+logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
+    from openviking.session.compressor_v3 import SessionCompressorV3
+
+
+class OpenVikingService:
+    """
+    OpenViking main service class.
+
+    Composes all sub-services and manages infrastructure lifecycle.
+    """
+
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
+    ):
+        """Initialize OpenViking service.
+
+        Args:
+            path: Local storage path (overrides ov.conf storage path).
+            user: Username for session management.
+        """
+        # Initialize config from ov.conf
+        config = initialize_openviking_config(
+            user=user,
+            path=path,
+        )
+        self._config = config
+        self._agent_evolution_base_config = config.agent_evolution.model_copy(deep=True)
+        self._user = user or UserIdentifier(config.default_account, config.default_user)
+
+        # Infrastructure
+        self._agfs_client: Optional[Any] = None
+        self._queue_manager: Optional[QueueManager] = None
+        self._vikingdb_manager: Optional[VikingDBManager] = None
+        self._viking_fs: Optional[VikingFS] = None
+        self._embedder: Optional[Any] = None
+        self._resource_processor: Optional[ResourceProcessor] = None
+        self._skill_processor: Optional[SkillProcessor] = None
+        self._session_compressor: Optional["SessionCompressorV3"] = None
+        self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._uri_mutation_coordinator = UriMutationCoordinator()
+        self._watch_scheduler: Optional[WatchScheduler] = None
+        self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
+        self._encryptor: Optional[Any] = None
+        self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._runtime_config_manager: Optional[Any] = None
+        self._vlm_resolver: Optional["VLMResolver"] = None
+        self._vector_config_resolver: Optional[Any] = None
+        self._embedding_provider: Optional[Any] = None
+        self._data_dir_lock_acquired = False
+        self._data_dir_lock_path: Optional[str] = None
+
+        # Sub-services
+        self._fs_service = FSService(
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
+        self._pack_service = PackService()
+        self._search_service = SearchService()
+        self._resource_memory_link_service = ResourceMemoryLinkService()
+        self._resource_service = ResourceService()
+        self._session_service = SessionService()
+        self._debug_service = DebugService()
+        self._agent_evolution_service = AgentEvolutionService()
+        self._external_task_service = ExternalTaskService()
+        self._compile_service = CompileService(
+            config.compile_api,
+            self._external_task_service,
+            self._fs_service,
+        )
+        self._external_task_service.register(self._compile_service)
+
+        # State
+        self._initialized = False
+
+        # Acquire local-storage exclusivity before encryption and storage initialization.
+        self._ensure_data_dir_lock_acquired()
+
+        # Resolve encryption config (root_key) BEFORE building the agfs client, so the binding
+        # stack is constructed with the encryption layer when encryption is enabled. The encryptor
+        # is built here once and reused by initialize().
+        binding_config = self._build_ragfs_binding_config()
+
+        # Initialize storage
+        from openviking.config.vlm import ClusterVLMResolver
+
+        cluster_vlm = ClusterVLMResolver(lambda: config).get_vlm_sync()
+        self._init_storage(
+            config.storage,
+            max_concurrent_embedding=config.embedding.max_concurrent,
+            max_concurrent_semantic=cluster_vlm.max_concurrent,
+            max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
+            max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
+            max_concurrent_reindex=config.queue_workers.reindex.max_concurrent,
+            max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
+            max_concurrent_external_task=config.queue_workers.external_task.max_concurrent,
+            binding_config=binding_config,
+            git_config=config.git,
+        )
+
+    def _init_storage(
+        self,
+        config: StorageConfig,
+        max_concurrent_embedding: int = 10,
+        max_concurrent_semantic: int = 32,
+        max_concurrent_external_parse: int = 4,
+        max_concurrent_add_resource: int = 4,
+        max_concurrent_reindex: int = 4,
+        max_concurrent_session_commit: int = 8,
+        max_concurrent_external_task: int = 10,
+        binding_config: Any = None,
+        *,
+        git_config: Optional[GitConfig] = None,
+    ) -> None:
+        """Initialize storage resources."""
+        from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+
+        # Create RAGFS client using utility
+        runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
+        self._agfs_client = create_agfs_client(runtime_binding_config, git_config=git_config)
+
+        # Initialize QueueManager with agfs_client
+        if self._agfs_client:
+            queue_mount_point = resolve_queuefs_mount_point()
+            self._queue_manager = init_queue_manager(
+                agfs=self._agfs_client,
+                timeout=config.agfs.timeout,
+                mount_point=queue_mount_point,
+                max_concurrent_embedding=max_concurrent_embedding,
+                max_concurrent_semantic=max_concurrent_semantic,
+                max_concurrent_external_parse=max_concurrent_external_parse,
+                max_concurrent_add_resource=max_concurrent_add_resource,
+                max_concurrent_reindex=max_concurrent_reindex,
+                max_concurrent_session_commit=max_concurrent_session_commit,
+                max_concurrent_external_task=max_concurrent_external_task,
+            )
+        else:
+            logger.warning("RAGFS client not initialized, skipping queue manager")
+
+        # Initialize VikingDBManager with QueueManager
+        self._vikingdb_manager = VikingDBManager(
+            vectordb_config=config.vectordb, queue_manager=self._queue_manager
+        )
+        self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
+
+        # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
+        set_task_tracker(config.build_task_tracker(self._agfs_client))
+
+    def _build_ragfs_binding_config(self) -> Any:
+        """Build the single runtime binding config from OpenViking storage + encryption settings."""
+        binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
+        return binding_config
+
+    @property
+    def runtime_config_manager(self) -> Optional[Any]:
+        """The runtime config manager bound to the cluster + account models."""
+        return self._runtime_config_manager
+
+    @property
+    def vector_config_resolver(self) -> Optional[Any]:
+        """The account-aware vector configuration resolver."""
+        return self._vector_config_resolver
+
+    @property
+    def embedding_provider(self) -> Optional[Any]:
+        """The account-aware embedding resource provider."""
+        return self._embedding_provider
+
+    async def release_account_vector_resources(self, account_id: str) -> None:
+        """Release derived vector resources without deleting remote collections."""
+        if self._vikingdb_manager is not None:
+            await self._vikingdb_manager.release_account(account_id)
+        if self._embedding_provider is not None:
+            await self._embedding_provider.invalidate(account_id)
+
+    async def _on_account_vector_config_change(self, event: Any) -> None:
+        """Retire cached resources after eviction or a VectorDB source refresh."""
+        from openviking.config.manager import ConfigChangeReason
+
+        if (
+            event.reason is not ConfigChangeReason.EVICT
+            and "vectordb" not in event.changed_sections
+        ):
+            return
+        account_id = event.scope.key
+        if account_id:
+            await self.release_account_vector_resources(account_id)
+
+    @property
+    def vlm_resolver(self) -> Optional["VLMResolver"]:
+        """The account-aware VLM resolver owned by this service instance."""
+        return self._vlm_resolver
+
+    def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
+        """Set the legacy server value used as the cluster startup baseline."""
+        self._agent_evolution_base_config = config.model_copy(deep=True)
+        self._session_service.set_agent_evolution_config(config)
+
+    async def apply_agent_evolution_config(self) -> None:
+        """Apply the legacy server value to an already initialized manager."""
+        manager = self._runtime_config_manager
+        if manager is None:
+            return
+        base_config = self._config.model_copy(
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)}
+        )
+        await manager.replace_base_config(base_config)
+
+    async def _init_runtime_config_manager(self) -> None:
+        """Build and start the runtime config manager over the AGFS config source.
+
+        Publishing a cluster override swaps the global ``OpenVikingConfig``
+        singleton, so it is available process-wide through
+        ``get_openviking_config`` exactly as before; account overrides are cached
+        per account and loaded on demand by field.
+        """
+        from openviking.config.binding import build_runtime_config_manager
+        from openviking.config.embedding import AccountEmbeddingProvider
+        from openviking.config.scope import ScopeKind
+        from openviking.config.vector import AccountVectorConfigResolver
+        from openviking.config.vlm import AccountVLMProvider
+        from openviking.pyagfs import AsyncAGFSClient
+
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        base_config = self._config.model_copy(
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)},
+        )
+        manager = build_runtime_config_manager(
+            AsyncAGFSClient(self._agfs_client),
+            settings=self._config.runtime_config,
+            base_config=base_config,
+        )
+        await manager.initialize()
+        self._runtime_config_manager = manager
+        if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
+            raise NotInitializedError("ACL")
+        self._vikingdb_manager.acl_manager.set_runtime_config_manager(manager)
+        self._vector_config_resolver = AccountVectorConfigResolver(manager)
+        self._embedding_provider = AccountEmbeddingProvider(
+            self._vector_config_resolver,
+            manager,
+        )
+        self._vikingdb_manager.set_vector_config_resolver(self._vector_config_resolver)
+        # Release the account's derived VectorDB backend when its config
+        # publication is evicted (idle TTL) or deleted, so a cold account does
+        # not keep its adapter/collection handles alive until process exit and a
+        # later access re-resolves through the resolver instead of a stale cache.
+        manager.add_update_consumer(
+            scope=ScopeKind.ACCOUNT,
+            sections={"vectordb", "embedding"},
+            consumer=self._on_account_vector_config_change,
+        )
+        self._session_service.set_runtime_config_manager(manager)
+        self._vlm_resolver = AccountVLMProvider(manager)
+        if self._queue_manager is not None:
+            self._queue_manager.set_vlm_resolver(self._vlm_resolver)
+            self._queue_manager.setup_standard_queues(
+                self._vikingdb_manager,
+                start=False,
+                embedding_provider=self._embedding_provider,
+            )
+
+    def _ensure_data_dir_lock_acquired(self) -> None:
+        """Protect embedded vector storage from concurrent processes in one workspace."""
+        if self._data_dir_lock_acquired:
+            return
+
+        storage = self._config.storage
+        if storage.vectordb.backend not in {"local", "cuvs"}:
+            return
+
+        if not storage.skip_process_lock:
+            from openviking.utils.process_lock import acquire_data_dir_lock
+
+            self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
+        else:
+            logger.warning(
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
+                "embedded vector storage",
+                storage.workspace,
+            )
+        self._data_dir_lock_acquired = True
+
+    def _release_data_dir_lock(self) -> None:
+        """Release this service instance's process-level workspace lock."""
+        lock_path = getattr(self, "_data_dir_lock_path", None)
+        if lock_path:
+            from openviking.utils.process_lock import release_data_dir_lock
+
+            release_data_dir_lock(lock_path)
+        self._data_dir_lock_path = None
+        self._data_dir_lock_acquired = False
+
+    @property
+    def _agfs(self) -> Any:
+        """Internal access to AGFS client for APIKeyManager."""
+        return self._agfs_client
+
+    @property
+    def viking_fs(self) -> Optional[VikingFS]:
+        """Get VikingFS instance."""
+        return self._viking_fs
+
+    @property
+    def vikingdb_manager(self) -> Optional[VikingDBManager]:
+        """Get VikingDBManager instance."""
+        return self._vikingdb_manager
+
+    @property
+    def session_compressor(self) -> Optional["SessionCompressorV3"]:
+        """Get SessionCompressor instance."""
+        return self._session_compressor
+
+    @property
+    def watch_scheduler(self) -> Optional[WatchScheduler]:
+        """Get WatchScheduler instance."""
+        return self._watch_scheduler
+
+    @property
+    def fs(self) -> FSService:
+        """Get FSService instance."""
+        return self._fs_service
+
+    @property
+    def pack(self) -> PackService:
+        """Get PackService instance."""
+        return self._pack_service
+
+    @property
+    def search(self) -> SearchService:
+        """Get SearchService instance."""
+        return self._search_service
+
+    @property
+    def user(self) -> UserIdentifier:
+        """Get current user identifier."""
+        return self._user
+
+    @property
+    def resources(self) -> ResourceService:
+        """Get ResourceService instance."""
+        return self._resource_service
+
+    @property
+    def sessions(self) -> SessionService:
+        """Get SessionService instance."""
+        return self._session_service
+
+    @property
+    def privacy_configs(self) -> Optional[UserPrivacyConfigService]:
+        """Get UserPrivacyConfigService instance."""
+        return self._privacy_config_service
+
+    @property
+    def debug(self) -> DebugService:
+        """Get DebugService instance."""
+        return self._debug_service
+
+    @property
+    def agent_evolution(self) -> AgentEvolutionService:
+        """Get Agent Evolution query service."""
+        return self._agent_evolution_service
+
+    @property
+    def compile(self) -> CompileService:
+        """Get the Compile task service."""
+        return self._compile_service
+
+    async def initialize(self) -> None:
+        """Initialize OpenViking storage and indexes."""
+        if self._initialized:
+            logger.debug("Already initialized")
+            return
+
+        self._ensure_data_dir_lock_acquired()
+
+        if self._vikingdb_manager is None:
+            self._init_storage(
+                self._config.storage,
+                max_concurrent_embedding=self._config.embedding.max_concurrent,
+                max_concurrent_semantic=self._config.vlm.max_concurrent,
+                max_concurrent_external_parse=(
+                    self._config.queue_workers.external_parse.max_concurrent
+                ),
+                max_concurrent_add_resource=(
+                    self._config.queue_workers.add_resource.max_concurrent
+                ),
+                max_concurrent_reindex=self._config.queue_workers.reindex.max_concurrent,
+                max_concurrent_session_commit=(
+                    self._config.queue_workers.session_commit.max_concurrent
+                ),
+                max_concurrent_external_task=(
+                    self._config.queue_workers.external_task.max_concurrent
+                ),
+                binding_config=self._build_ragfs_binding_config(),
+                git_config=self._config.git,
+            )
+
+        config = get_openviking_config()
+
+        if self._encryptor:
+            logger.info("Encryption module initialized")
+        else:
+            logger.info("Encryption module not enabled")
+
+        # Initialize VikingFS and VikingDB with recorder if enabled
+        enable_recorder = os.environ.get(OPENVIKING_ENABLE_RECORDER_ENV, "").lower() == "true"
+
+        # Create context collection
+        if self._vikingdb_manager is None:
+            raise RuntimeError("VikingDBManager not initialized")
+        await init_context_collection(self._vikingdb_manager)
+
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        await self._init_runtime_config_manager()
+        if self._vlm_resolver is None:
+            raise RuntimeError("VLM resolver not initialized")
+        self._viking_fs = init_viking_fs(
+            agfs=self._agfs_client,
+            query_embedder=None,
+            rerank_config=config.rerank,
+            vector_store=self._vikingdb_manager,
+            acl_manager=self._vikingdb_manager.acl_manager,
+            retrieval_config=config.retrieval,
+            grep_config=config.grep,
+            glob_config=config.glob,
+            enable_recorder=enable_recorder,
+            encryptor=self._encryptor,
+            vlm_resolver=self._vlm_resolver,
+            embedding_provider=self._embedding_provider,
+            vector_config_resolver=self._vector_config_resolver,
+        )
+        if enable_recorder:
+            logger.info("VikingFS IO Recorder enabled")
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+            runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
+        )
+
+        # Initialize directories
+        directory_initializer = DirectoryInitializer(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+        )
+        self._directory_initializer = directory_initializer
+        default_ctx = RequestContext(user=self._user, role=Role.ROOT)
+        account_count, user_count = await directory_initializer.initialize_account_workspace(
+            default_ctx
+        )
+        logger.info(
+            "Initialized preset directories account=%d user=%d",
+            account_count,
+            user_count,
+        )
+        self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+
+        # Initialize processors
+        self._skill_processor = SkillProcessor(
+            vikingdb=self._vikingdb_manager,
+            privacy_config_service=self._privacy_config_service,
+            vlm_resolver=self._vlm_resolver,
+        )
+        self._session_compressor = create_session_compressor(
+            vikingdb=self._vikingdb_manager,
+            skill_processor=self._skill_processor,
+            vlm_resolver=self._vlm_resolver,
+        )
+
+        self._watch_scheduler = WatchScheduler(
+            resource_service=self._resource_service,
+            viking_fs=self._viking_fs,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+            runtime_config_manager=self._runtime_config_manager,
+        )
+
+        # Wire up sub-services
+        self._fs_service.set_dependencies(
+            viking_fs=self._viking_fs,
+            vikingdb=self._vikingdb_manager,
+            privacy_config_service=self._privacy_config_service,
+            resource_memory_link_service=self._resource_memory_link_service,
+            watch_scheduler=self._watch_scheduler,
+            uri_mutation_coordinator=self._uri_mutation_coordinator,
+        )
+        self._pack_service.set_dependencies(
+            viking_fs=self._viking_fs,
+            vector_store=self._vikingdb_manager,
+            vector_config_resolver=self._vector_config_resolver,
+        )
+        self._search_service.set_viking_fs(self._viking_fs)
+        self._resource_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            resource_processor=self._resource_processor,
+            skill_processor=self._skill_processor,
+            watch_scheduler=self._watch_scheduler,
+            resource_memory_link_service=self._resource_memory_link_service,
+            runtime_config_manager=self._runtime_config_manager,
+        )
+        self._session_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            session_compressor=self._session_compressor,
+            vlm_resolver=self._vlm_resolver,
+        )
+        self._resource_memory_link_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            session_service=self._session_service,
+        )
+        try:
+            session_auto_commit_config = get_openviking_config().memory.session_auto_commit
+        except Exception:
+            session_auto_commit_config = SessionAutoCommitConfig()
+        self._session_service.set_session_auto_commit_config(session_auto_commit_config)
+        if session_auto_commit_config.enabled:
+            self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
+                self._session_service,
+                session_auto_commit_config,
+                check_interval=session_auto_commit_config.check_interval_seconds,
+            )
+            await self._session_auto_commit_scheduler.start()
+        else:
+            self._session_auto_commit_scheduler = None
+        self._debug_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            config=self._config,
+            agfs_client=self._agfs_client,
+            embedding_provider=self._embedding_provider,
+            vlm_resolver=self._vlm_resolver,
+        )
+        self._agent_evolution_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+        )
+        self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+
+        if self._queue_manager:
+            for queue_name in (
+                self._queue_manager.EXTERNAL_PARSE,
+                self._queue_manager.ADD_RESOURCE,
+            ):
+                self._queue_manager.get_queue(
+                    queue_name,
+                    dequeue_handler=AddResourceProcessor(
+                        self._resource_service,
+                        queue_name,
+                        self._viking_fs,
+                    ),
+                    allow_create=True,
+                )
+            self._queue_manager.get_queue(
+                self._queue_manager.REINDEX,
+                dequeue_handler=ReindexProcessor(self._viking_fs),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.SESSION_COMMIT,
+                dequeue_handler=SessionCommitProcessor(
+                    self._session_service,
+                ),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.EXTERNAL_TASK,
+                dequeue_handler=ExternalTaskProcessor(
+                    self._external_task_service,
+                ),
+                allow_create=True,
+            )
+            # Auth state is initialized by the HTTP server after the core service.
+            # Register durable cleanup work before restoring tracked tasks;
+            # the deletion service binds consumers once auth is ready.
+            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
+            restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            await self._external_task_service.restore_tasks(restored_tasks)
+
+        if self._config.enable_watch_scheduler:
+            await self._watch_scheduler.start()
+            logger.info("WatchScheduler started")
+        else:
+            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
+
+        if self._queue_manager:
+            self._queue_manager.start()
+            logger.info("QueueManager workers started")
+
+        # Preflight the MinerU endpoint when it will be used, so endpoint
+        # misconfiguration or a stopped service surfaces now instead of on the
+        # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
+        # [local-patch mineru-first] PR #4818:
+        #   - "mineru-first" uses the async task endpoints, not /file_parse, so the
+        #     synchronous readiness probe does not describe the path actually taken.
+        #   - async MinerU modes likewise bypass the sync preflight.
+        # In both cases the preflight is skipped; failures surface (and fall back)
+        # on the first real parse instead.
+        _mineru_api_mode = getattr(pdf_config, "mineru_api_mode", "auto")
+        _is_async_mineru = _mineru_api_mode == "async"
+        _is_mineru_first = pdf_config.strategy == "mineru-first"
+        should_preflight_mineru = (
+            not _is_mineru_first
+            and not _is_async_mineru
+            and (
+                pdf_config.strategy == "mineru"
+                or (pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None)
+            )
+        )
+        if (_is_mineru_first or _is_async_mineru) and pdf_config.mineru_endpoint:
+            logger.info(
+                "Skipping MinerU preflight (strategy=%s, api_mode=%s): "
+                "async task endpoints are used; readiness checked on first parse",
+                pdf_config.strategy,
+                _mineru_api_mode,
+            )
+
+        if should_preflight_mineru and pdf_config.mineru_endpoint:
+            try:
+                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+            except RuntimeError as exc:
+                if pdf_config.strategy == "mineru":
+                    raise
+                logger.warning(
+                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                )
+
+        if self._runtime_config_manager is not None:
+            self._runtime_config_manager.start_refresh_loop()
+        self._initialized = True
+        logger.info("OpenVikingService initialized")
+
+    async def close(self) -> None:
+        """Close OpenViking and release resources."""
+        await self._resource_service.close_background_tasks()
+        vlm_resolver = getattr(self, "_vlm_resolver", None)
+
+        if self._runtime_config_manager:
+            await self._runtime_config_manager.stop_refresh_loop()
+            self._runtime_config_manager = None
+            logger.info("Runtime config manager stopped")
+
+        if self._watch_scheduler:
+            await self._watch_scheduler.stop()
+            self._watch_scheduler = None
+            logger.info("WatchScheduler stopped")
+
+        if self._session_auto_commit_scheduler:
+            await self._session_auto_commit_scheduler.stop()
+            self._session_auto_commit_scheduler = None
+            logger.info("SessionAutoCommitScheduler stopped")
+
+        if self._queue_manager:
+            await asyncio.to_thread(self._queue_manager.stop)
+            self._queue_manager = None
+            logger.info("Queue manager stopped")
+
+        close_vlm_resolver = getattr(vlm_resolver, "close", None)
+        if callable(close_vlm_resolver):
+            result = close_vlm_resolver()
+            if inspect.isawaitable(result):
+                await result
+        self._vlm_resolver = None
+        self._config.vlm.close()
+        await asyncio.sleep(0)
+
+        if self._vikingdb_manager:
+            self._vikingdb_manager.mark_closing()
+
+        embedding_provider = getattr(self, "_embedding_provider", None)
+        if embedding_provider:
+            await embedding_provider.close()
+            self._embedding_provider = None
+
+        if self._vikingdb_manager:
+            await self._vikingdb_manager.close()
+            self._vikingdb_manager = None
+        self._vector_config_resolver = None
+
+        if self._agfs_client:
+            close_agfs = getattr(self._agfs_client, "close", None)
+            if callable(close_agfs):
+                await asyncio.to_thread(close_agfs)
+            self._agfs_client = None
+            logger.info("RAGFS binding closed")
+
+        embedder = getattr(self, "_embedder", None)
+        if embedder is not None:
+            embedder.close()
+            self._embedder = None
+            await asyncio.sleep(0)
+
+        self._viking_fs = None
+        self._resource_processor = None
+        self._skill_processor = None
+        self._session_compressor = None
+        self._directory_initializer = None
+        self._privacy_config_service = None
+        self._initialized = False
+
+        # Clear the process-wide registration if it still points at us, so a
+        # closed service is never resolved via the dependency global.
+        from openviking.server.dependencies import get_service_or_none, set_service
+
+        if get_service_or_none() is self:
+            set_service(None)
+
+        # Keep embedded storage exclusive until cleanup succeeds. If cleanup
+        # fails or is cancelled, this service may still own live storage state.
+        self._release_data_dir_lock()
+
+        logger.info("OpenVikingService closed")
+
+    async def reindex(
+        self,
+        *,
+        uri: str,
+        mode: str = "vectors_only",
+        force: bool = False,
+        wait: bool = True,
+        recursive: bool = True,
+        tags: list[str] | None = None,
+        tag_mode: str = "replace",
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI."""
+        if not self._initialized:
+            await self.initialize()
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        from openviking.service.reindex_executor import ReindexExecutor
+
+        executor = ReindexExecutor(
+            vlm_resolver=self._vlm_resolver,
+            vector_config_resolver=self._vector_config_resolver,
+        )
+        execute_kwargs = {
+            "uri": uri,
+            "mode": mode,
+            "wait": wait,
+            "ctx": effective_ctx,
+        }
+        if force:
+            execute_kwargs["force"] = True
+        if not recursive:
+            execute_kwargs["recursive"] = False
+        if tags is not None or tag_mode == "clear":
+            execute_kwargs["tags"] = tags
+            execute_kwargs["tag_mode"] = tag_mode
+        return await executor.execute(**execute_kwargs)
+
+    async def check_consistency(
+        self,
+        *,
+        uri: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        """Check filesystem/vector-index consistency for a URI subtree."""
+        if not self._initialized:
+            await self.initialize()
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        stat = await self._viking_fs.stat(uri, ctx=effective_ctx, skip_count=True)
+        if not stat.get("isDir", False):
+            raise InvalidArgumentError("Consistency check only supports directory URIs.")
+        entries = await self._viking_fs.tree(
+            uri,
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=effective_ctx,
+        )
+        report = await check_index_consistency(
+            self._viking_fs,
+            self._vikingdb_manager,
+            uri,
+            entries,
+            effective_ctx,
+        )
+        return report.to_dict()
+
+    def _ensure_initialized(self) -> None:
+        """Ensure service is initialized."""
+        if not self._initialized:
+            raise NotInitializedError("OpenVikingService")
+
+    async def initialize_account_directories(self, ctx: RequestContext) -> int:
+        """Initialize account-shared preset roots."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0
+        return await self._directory_initializer.initialize_account_directories(ctx)
+
+    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+        """Initialize account and first-user preset directories in one batch."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        return await self._directory_initializer.initialize_account_workspace(ctx)
+
+    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+        """Initialize current user's directory tree."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0
+        return await self._directory_initializer.initialize_user_directories(ctx)
