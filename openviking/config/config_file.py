@@ -1,21 +1,21 @@
 """Versioned, atomic edits to the actual startup configuration file."""
 
-import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from uuid import uuid4
 
-from openviking_cli.utils.config.embedding_config import EmbeddingCredential
+from openviking_cli.utils.config.embedding_config import EmbeddingCredential, EmbeddingModelConfig
 from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
 )
-from openviking_cli.utils.config.vlm_config import VLMCredential
+from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
 MODEL_KINDS = ("vlm", "embedding", "query_planner", "rerank")
 # Match complete JSON strings first so references inside them stay quoted.
@@ -200,6 +200,10 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
                     )
                     for index, binding in enumerate(bindings)
                 ]
+                if kind == "embedding":
+                    for index, binding in enumerate(section["credentials"]):
+                        if not binding.get("id"):
+                            binding["id"] = f"credential-{index}"
         models[kind] = {
             "source": "vlm" if inherited else "server",
             "config": value,
@@ -282,10 +286,14 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     # Materialize inherited bindings before removing legacy fallbacks. Explicit
     # null/empty values must mean clearing, not re-inheriting obsolete secrets.
     defaults = {key: value for key, value in defaults.items() if key in fields}
-    original_bindings = {
-        binding.get("id") or f"credential-{index}": binding
-        for index, binding in enumerate(old.get("credentials") or [])
-    }
+    original_bindings = {}
+    if old:
+        parent = (EmbeddingModelConfig if embedding else VLMConfig).model_validate(
+            json.loads(os.path.expandvars(_dump(old)))
+        )
+        for index, credential in enumerate(parent.credentials or [parent]):
+            original = _binding_values(credential, parent, embedding, old, index)
+            original_bindings[original.get("id") or f"credential-{index}"] = original
     result["credentials"] = []
     for index, binding in enumerate(changes["credentials"]):
         original = original_bindings.get(binding.get("id") or f"credential-{index}", {})
@@ -322,16 +330,20 @@ def _atomic_write(path: Path, data: bytes, mode: int) -> None:
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
-            os.fchmod(stream.fileno(), mode)
+            if sys.platform == "win32":
+                os.chmod(temporary, mode)
+            else:
+                os.fchmod(stream.fileno(), mode)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        if sys.platform != "win32":
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -363,8 +375,15 @@ def save_config_file(settings: dict, revision: str, content: str | None = None) 
         raise ValueError("Supply full file content or model settings")
     path = _path()
     lock_fd = os.open(path.with_name(f".{path.name}.studio.lock"), os.O_CREAT | os.O_RDWR, 0o600)
-    with os.fdopen(lock_fd, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with os.fdopen(lock_fd, "r+b") as lock:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)
         data, raw, _ = _read(path)
         if not revision or revision != _revision(data):
             raise ValueError("ov.conf changed; reload before saving")
