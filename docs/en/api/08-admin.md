@@ -491,7 +491,7 @@ policy. As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
-backends `http`, `volcengine` and `vikingdb` are accepted.
+backends `http`, `volcengine`, `vikingdb` and `qdrant` are accepted.
 
 ```json
 {"settings":{"embedding":{"dense":{"credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]}}}}
@@ -780,14 +780,14 @@ backend type.
 
 | Path | Type and constraints | Meaning |
 | --- | --- | --- |
-| `vectordb.backend` | Required: `http`, `volcengine`, or `vikingdb` | Account supports remote backends only |
+| `vectordb.backend` | Required: `http`, `volcengine`, `vikingdb`, or `qdrant` | Account supports remote backends only |
 | `vectordb.name` | Non-empty string, required | Collection name |
-| `vectordb.url` | String; required for `http` | HTTP backend endpoint |
+| `vectordb.url` | String; required for `http` | HTTP endpoint; also accepted for Qdrant when `qdrant.url` is absent |
 | `vectordb.project` | Non-empty string, default `default` | Project name; `project_name` is the internal field name |
 | `vectordb.index_name` | Non-empty string, required | Index name |
 | `vectordb.distance_metric` | `cosine`, `l2`, or `ip`; default `cosine` | Distance metric |
 | `vectordb.dimension` | Integer, `> 0`, required | Must equal the effective Embedding dimension |
-| `vectordb.sparse_weight` | Number, `>= 0`; default `0` | Sparse/hybrid retrieval weight |
+| `vectordb.sparse_weight` | Number, `>= 0`; default `0`; Qdrant maximum `1` | Sparse/hybrid retrieval weight |
 
 VectorDB subobjects are also entirely create-only:
 
@@ -801,6 +801,17 @@ VectorDB subobjects are also entirely create-only:
 | `vectordb.volcengine.host` | String, optional | Data-plane endpoint for API-key mode; API-key mode requires this or `region` |
 | `vectordb.vikingdb.host` | Non-empty string; required for `vikingdb` | Private-deployment VikingDB endpoint |
 | `vectordb.vikingdb.headers` | `map<string, string>`, optional | Private-deployment request headers; map keys are header names and values are header values |
+| `vectordb.qdrant.url` | String; this or `vectordb.url` is required for `qdrant` | Qdrant REST endpoint |
+| `vectordb.qdrant.api_key` | String, optional | Account-owned Qdrant API key; never inherited from Cluster |
+| `vectordb.qdrant.timeout_seconds` | Number, `> 0`; default `10` | Request timeout |
+| `vectordb.qdrant.dense_vector_name` | Non-empty string; default `vector` | Dense vector name |
+| `vectordb.qdrant.sparse_vector_name` | Non-empty string; default `sparse_vector` | Sparse vector name |
+| `vectordb.qdrant.data_collection_name` | Non-blank string, optional | Explicit physical data collection; otherwise `project__name` |
+| `vectordb.qdrant.metadata_collection_name` | Non-blank string, optional | Explicit metadata collection; otherwise data collection plus `__openviking_meta` |
+
+Account Qdrant settings replace the entire Cluster Qdrant connection block,
+including credentials and physical collection overrides. Explicit physical names
+retain the adapter's logical-collection ownership checks; they do not bypass them.
 
 Account `local`, `cuvs`, `path`, cuVS tuning, and `custom_params` are not
 supported. External control-plane tooling must create remote collections,

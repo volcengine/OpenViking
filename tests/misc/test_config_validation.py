@@ -895,7 +895,7 @@ def test_removed_volcengine_api_key_backend_name_is_rejected():
         assert "volcengine_api_key" in str(e)
 
 
-@pytest.mark.parametrize("backend", ["qdrant"])
+@pytest.mark.parametrize("backend", ["opengauss", "qdrant"])
 def test_removed_third_party_vectordb_backends_are_rejected(backend):
     with pytest.raises(ValueError) as exc_info:
         VectorDBBackendConfig(backend=backend)
@@ -905,6 +905,17 @@ def test_removed_third_party_vectordb_backends_are_rejected(backend):
     assert "local" in message
     assert "volcengine" in message
     assert "vikingdb" in message
+
+
+def test_qdrant_vectordb_backend_is_accepted():
+    config = VectorDBBackendConfig(
+        backend="qdrant",
+        qdrant={"url": "http://127.0.0.1:6333"},
+    )
+
+    assert config.backend == "qdrant"
+    assert config.qdrant is not None
+    assert config.qdrant.url == "http://127.0.0.1:6333"
 
 
 def test_opengauss_backend_is_accepted_with_defaults():

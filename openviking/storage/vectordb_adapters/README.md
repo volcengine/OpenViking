@@ -245,3 +245,71 @@ class ThirdPartyCollectionAdapter(CollectionAdapter):
 - create 后可完成 upsert/get/query/delete/count 全流程。
 - 不改上层业务调用方式即可参与 `find/search` 检索链路。
 - 后端差异全部封装在 adapter 层。
+
+---
+
+## 10. Qdrant REST backend
+
+内置 `backend: qdrant` 使用 Python 标准库通过 Qdrant REST API 访问远端
+collection，不新增 `qdrant-client` 依赖：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "qdrant",
+      "url": "http://127.0.0.1:6333",
+      "project": "default",
+      "name": "context",
+      "dimension": 1536,
+      "sparse_weight": 0.5,
+      "qdrant": {
+        "api_key": "optional-key",
+        "dense_vector_name": "vector",
+        "sparse_vector_name": "sparse_vector",
+        "timeout_seconds": 10,
+        "data_collection_name": "default__context__generation",
+        "metadata_collection_name": "default__context__generation__openviking_meta"
+      }
+    }
+  }
+}
+```
+
+- `sparse_weight: 0` 是 dense-only；`0 < sparse_weight <= 1` 启用 named sparse
+  vector 与 hybrid weighted-RRF。
+- 所有 Qdrant server 节点需要 >=1.16。新 sparse index 使用原生 `update_filter` 的 insert-only 语义
+  建立唯一 owner，并读回验证；旧 term-keyed rows 只读保留。升级时停止所有旧
+  application writers，不支持旧／新版混合写入。可选转换见
+  [maintenance runbook](../../../scripts/maintenance/README.md#upgrade-an-existing-current-format-sparse-dictionary)。
+- Qdrant data collection 会附带一个 OpenViking metadata sidecar，保存 schema、
+  index metadata 与 sparse term dictionary；term ID 使用 Qdrant 兼容的
+  positive uint32 SHA-256 candidate，并在碰撞时 fail closed。没有 marker
+  的既有 collection 会 fail closed，不会被隐式接管。
+- `uri` 会保存标准化路径、深度与 ancestor scope roots；上层 account filter
+  与多 `search_tags` AND 语义会保留。
+- `Contains` 与 Qdrant content grep 不支持；`USE_CONTENT_FIELD=False`，grep
+  继续走 filesystem fallback。
+- `data_collection_name` 与 `metadata_collection_name` 是 current-format target
+  的 physical collection 名称，不是 alias；两者必须互异且不能与 legacy
+  source pair 冲突。省略时沿用 project/name 推导和现有 sidecar fallback。
+- 在线迁移的 `logical_collection`、`migration_id`、`timeout_seconds` 和
+  target pair 会写入并校验 marker；缺少 required identity、foreign marker 或
+  legacy marker 都会 fail closed。`migrator_version` 由代码固定，不自动升级
+  未发布的中间 marker schema。
+- 迁移流程为
+  `preflight -> prepare -> backfill -> reconcile -> verify`。online copy 不冻结
+  整个长窗口，只在 cutover 前由 operator 获取 barrier、drain in-flight writes，
+  再以 `cutover --confirm --lock-held --barrier-held --plan /path/to/plan.json --deployment-hooks /path/to/hooks.json`
+  完成 rollout/readiness/read-only smoke。
+  operator 也负责明确 release barrier。
+- `--allow-acl-fail-open` 只记录并警告 incomplete ACL，绝不伪造保护；barrier
+  release 后若 target 已接受 current-format writes，rollback 必须另做 reverse
+  migration。`retire --confirm` 仅在 retention window 后、target 未被 serving 时
+  使用，且 data 先于 metadata 删除。
+- 可用 `QDRANT_URL`（以及可选的 `QDRANT_API_KEY`）运行 live coverage：
+
+```bash
+QDRANT_URL=http://127.0.0.1:6333 \
+  pytest --confcutdir=tests/storage -q tests/storage/test_qdrant_integration.py
+```

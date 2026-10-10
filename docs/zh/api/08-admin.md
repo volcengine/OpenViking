@@ -671,14 +671,14 @@ Embedding 覆盖；作为 PATCH 提交时只会合并，不会清空已有设置
 
 | 路径 | 类型和约束 | 含义 |
 | --- | --- | --- |
-| `vectordb.backend` | 必填：`http`、`volcengine`、`vikingdb` | Account 仅支持远端 backend |
+| `vectordb.backend` | 必填：`http`、`volcengine`、`vikingdb`、`qdrant` | Account 仅支持远端 backend |
 | `vectordb.name` | 非空 string，必填 | collection 名 |
-| `vectordb.url` | string；`http` 时必填 | HTTP backend endpoint |
+| `vectordb.url` | string；`http` 时必填 | HTTP endpoint；Qdrant 未设置 `qdrant.url` 时也可使用 |
 | `vectordb.project` | 非空 string，默认 `default` | project 名；`project_name` 为内部字段名 |
 | `vectordb.index_name` | 非空 string，必填 | index 名 |
 | `vectordb.distance_metric` | `cosine`、`l2`、`ip`，默认 `cosine` | 距离度量 |
 | `vectordb.dimension` | integer，`> 0`，必填 | 必须与有效 Embedding dimension 一致 |
-| `vectordb.sparse_weight` | number，`>= 0`，默认 `0` | sparse/hybrid 检索权重 |
+| `vectordb.sparse_weight` | number，`>= 0`，默认 `0`；Qdrant 上限为 `1` | sparse/hybrid 检索权重 |
 
 VectorDB 子对象也全部为创建期字段：
 
@@ -692,6 +692,16 @@ VectorDB 子对象也全部为创建期字段：
 | `vectordb.volcengine.host` | string，可选 | API Key 模式的数据面 endpoint；API Key 模式与 `region` 至少提供一个 |
 | `vectordb.vikingdb.host` | 非空 string；`vikingdb` 时必填 | 私有部署 VikingDB endpoint |
 | `vectordb.vikingdb.headers` | `map<string, string>`，可选 | 私有部署请求 headers；map key 为 header 名，value 为 header 值 |
+| `vectordb.qdrant.url` | string；Qdrant 必须提供此字段或 `vectordb.url` | Qdrant REST endpoint |
+| `vectordb.qdrant.api_key` | string，可选 | Account 独立的 Qdrant API key，不继承 Cluster 凭证 |
+| `vectordb.qdrant.timeout_seconds` | number，`> 0`，默认 `10` | 请求超时 |
+| `vectordb.qdrant.dense_vector_name` | 非空 string，默认 `vector` | dense vector 名 |
+| `vectordb.qdrant.sparse_vector_name` | 非空 string，默认 `sparse_vector` | sparse vector 名 |
+| `vectordb.qdrant.data_collection_name` | 非空白 string，可选 | 显式物理 data collection；默认 `project__name` |
+| `vectordb.qdrant.metadata_collection_name` | 非空白 string，可选 | 显式 metadata collection；默认 data collection 加 `__openviking_meta` |
+
+Account Qdrant 配置会完整替换 Cluster Qdrant 连接段，包括凭证与物理集合覆盖值。
+显式物理集合名仍受 adapter 的 logical-collection ownership 校验约束，不会绕过该校验。
 
 不支持 Account `local`、`cuvs`、`path`、cuVS 调优或 `custom_params`。远端 collection、
 index、schema 和授权由外部控制面预先创建；接口只做本地配置与 Embedding/VectorDB 联合
