@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.record_types import ASSOCIATION_RECORD_TYPES
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
@@ -221,6 +222,8 @@ def _matches_filter(expr, record: dict[str, Any]) -> bool:
         return expr.depth == -1 or len(path) - len(root) <= expr.depth
     if isinstance(expr, RawDSL) and expr.payload["op"] == "prefix":
         return str(record.get(expr.payload["field"], "")).startswith(expr.payload["prefix"])
+    if isinstance(expr, RawDSL) and expr.payload["op"] == "must_not":
+        return record.get(expr.payload["field"]) not in expr.payload["conds"]
     raise AssertionError(f"Unexpected filter expression in test: {expr!r}")
 
 
@@ -517,11 +520,12 @@ async def test_transfer_scan_emits_supported_aggregate_request(
     def validate_dsl(node):
         # The deployed recall service accepts path-index must queries, not
         # contains/prefix. Validate the actual adapter output at the I/O boundary.
-        assert node["op"] in {"and", "or", "must"}, node
+        assert node["op"] in {"and", "or", "must", "must_not"}, node
         if node["op"] in {"and", "or"}:
             for child in node["conds"]:
                 validate_dsl(child)
         elif node["field"] == "uri":
+            assert node["op"] == "must"
             assert all(value.startswith("/") for value in node["conds"])
             assert node["para"] in {"-d=0", "-d=-1"}
 
@@ -594,6 +598,11 @@ async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeyp
                         "op": "and",
                         "conds": [
                             {"op": "must", "field": "account_id", "conds": ["acct"]},
+                            {
+                                "op": "must_not",
+                                "field": "type",
+                                "conds": list(ASSOCIATION_RECORD_TYPES),
+                            },
                             {
                                 "op": "must",
                                 "field": "uri",

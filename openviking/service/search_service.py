@@ -6,8 +6,11 @@ Search Service for OpenViking.
 Provides search operations: search, find.
 """
 
+import asyncio
+import math
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
@@ -207,6 +210,50 @@ class SearchService:
             search_type=search_type,
         )
         return result
+
+    async def search_associations(
+        self,
+        query: str,
+        ctx: RequestContext,
+        target_uri: Union[str, List[str]] = "",
+        limit: int = 20,
+        score_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Retrieve memory associations without changing ordinary Find/Search."""
+        from openviking.retrieve.memory_association.index import get_association_config
+
+        if not query.strip():
+            raise InvalidArgumentError("Association query must not be empty")
+        if not 1 <= limit <= 1000:
+            raise InvalidArgumentError("Association limit must be between 1 and 1000")
+        if score_threshold is not None and (
+            not math.isfinite(score_threshold) or not 0 <= score_threshold <= 1
+        ):
+            raise InvalidArgumentError("Association score_threshold must be between 0 and 1")
+        config = get_association_config()
+        if not config.enabled:
+            raise InvalidArgumentError(
+                "Enable retrieval.memory_association to search memory associations"
+            )
+        fs = self._ensure_initialized()
+        targets = resolve_retrieval_targets(target_uri, ctx).target_directories
+        for target in targets:
+            await fs._ensure_retrieval_scope(target, ctx)
+        store = fs._get_vector_store()
+        if store is None:
+            raise NotInitializedError("Vector store")
+        return await asyncio.wait_for(
+            store.memory_association_index.search(
+                query,
+                fs._get_embedder(ctx),
+                ctx,
+                config,
+                target_dirs=targets,
+                limit=limit,
+                score_threshold=score_threshold,
+            ),
+            timeout=config.timeout_s,
+        )
 
     async def find_skills(
         self,

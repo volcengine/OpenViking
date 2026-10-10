@@ -12,6 +12,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.record_types import context_records
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -99,7 +100,9 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
 
     assert await backend.search_by_random(ctx=ctx) == []
     adapter.search_by_random.assert_awaited_once()
-    assert adapter.search_by_random.await_args.kwargs["filter"] == _tenant_filter(ctx)
+    assert adapter.search_by_random.await_args.kwargs["filter"] == And(
+        [_tenant_filter(ctx), context_records()]
+    )
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():

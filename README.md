@@ -344,6 +344,62 @@ Run the open-source server in your own environment under [AGPLv3](LICENSE). It r
 
 The server supports [accounts and user isolation](https://docs.openviking.ai/en/concepts/11-multi-tenant) and opt-in [resource ACLs](https://docs.openviking.ai/en/concepts/15-acl). Configure [authentication](https://docs.openviking.ai/en/guides/04-authentication) before exposing it beyond localhost.
 
+### Optional memory association recall
+
+Memory association recall uses shared cues, such as names, titles, places, and key
+phrases, to locate related memory files. The cues point to existing L2 memories;
+they are retrieval aids rather than another memory category or a relationship graph.
+
+Install the optional NLP dependency and an explicit spaCy model before starting the server:
+
+```bash
+pip install 'openviking[nlp]'
+python -m spacy download en_core_web_sm
+```
+
+Enable association indexing in `ov.conf`:
+
+```json
+{
+  "retrieval": {
+    "memory_association": {
+      "enabled": true,
+      "nlp_model": "en_core_web_sm",
+      "similarity_threshold": 0.5
+    }
+  }
+}
+```
+
+Newly embedded L2 memories receive cue vectors in the **existing context collection**,
+with the reserved scalar `type="memory_association"`. Ordinary Find/Search, context
+inventories, and counts exclude these rows and keep their original candidates,
+scores, and response format. No association boost or automatic result fusion is applied.
+
+Call the separate authenticated endpoint `POST /api/v1/search/associations`:
+
+```json
+{"query": "What instruments does Melanie play?", "target_uri": "viking://~/memories", "limit": 20}
+```
+
+Its `result` contains `query_cues`, `associations`, and `total`. Each association
+contains `cue`, `cue_type`, cosine `score`, and the corresponding `memory_uri`.
+`limit` counts cue-memory associations, not unique cues. An optional `score_threshold`
+in `[0, 1]` overrides the configured threshold. No session, planner, rerank, or LLM
+is called; consumers can read the memory URIs or combine them with ordinary search.
+
+The endpoint authorizes **current parent memories** using the existing account/user/peer
+and ACL scope, then checks the parent ID and source fingerprint. Deleted, stale, or
+inaccessible associations are discarded. Updates, deletes, copies, and moves maintain
+association rows without changing primary memory records. The feature is disabled by
+default; existing memories are not automatically backfilled. The previous experimental
+record discriminator is recognized for isolation and association lookup; this is not an
+automatic index rebuild. Use the new configuration, endpoint, and response names above.
+Cosine dense embeddings are required. At most eight query cues and 500 matches per query
+cue are considered by default. The separate endpoint has its own `timeout_s` budget
+(default 10 seconds); failures do not change ordinary retrieval. The default NLP model
+targets English; other languages require an installed suitable model.
+
 ## Commercial editions
 
 <table>

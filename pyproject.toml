@@ -99,6 +99,8 @@ gateway-fast = [
     "uvloop>=0.21; sys_platform != 'win32'",
     "httptools>=0.6",
 ]
+# spaCy 3.8.15+ requires click>=8.2, incompatible with the LiteLLM pin.
+nlp = ["spacy>=3.8,<3.8.15"]
 test = [
   "pytest>=7.0.0",
   "pytest-asyncio>=0.21.0",

@@ -352,6 +352,7 @@ async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
         ("GET", "/api/v1/observer/system"),
         ("GET", "/api/v1/debug/health"),
         ("GET", "/api/v1/fs/ls?uri=viking://"),
+        ("POST", "/api/v1/search/associations"),
     ]
     for method, url in endpoints:
         resp = await auth_client.request(method, url)
