@@ -183,6 +183,45 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 
 Build your own integration with the [Python](sdk/python/README.md), [Go](sdk/go/README.md), or [TypeScript](sdk/typescript/README.md) SDK, or the [HTTP API](https://docs.openviking.ai/en/api/01-overview).
 
+### Search with memory links
+
+`POST /api/v1/search/search` supports an opt-in `include_links` option in `mode="list"`:
+
+```json
+{
+  "query": "What did Melanie learn from the charity race?",
+  "target_uri": "viking://~/memories",
+  "context_type": "memory",
+  "mode": "list",
+  "limit": 10,
+  "include_links": true,
+  "read_content": true
+}
+```
+
+When a text reranker is configured, `include_links=true` follows native
+`links` and `backlinks` one hop, deduplicates by URI, and ranks all original and
+linked memories together using their indexed abstracts. It also adds accessible
+link metadata to the returned L2 memories. **Without a text reranker, the option
+is ignored:** no link files are read, metadata is not added, and ordinary Search
+results are unchanged. Image search also ignores this text-rerank option.
+
+The option defaults to `false`. The existing Find and default Search retrieval
+paths are unchanged. Each planned query recalls `2 * limit` vector candidates; all eligible
+one-hop targets are then added without a top-k truncation. Deleted, unreadable,
+unindexed, out-of-scope, and filtered-out targets are excluded. Metadata lookups
+are batched and file reads use bounded concurrency. No new association index or
+memory extraction is introduced. Existing memories need native links, generated
+on future commits by enabling `memory.link_enabled`.
+
+The Search link pipeline uses `rerank.batch_size` (default `100`, always capped
+at `100` for VikingDB). Every batch is scored, then all scores are globally sorted
+before selecting `limit` results for that query. Existing multi-query aggregation
+is unchanged. If a batch fails, all partial scores and
+link-only candidates are discarded and original recall candidates are used.
+The link pipeline is implemented in a Search-only helper; the common retriever
+is unchanged.
+
 ## Use it with your agent
 
 Connect your coding agent to OpenViking for cross-session memory. The memory plugin installer covers Claude Code, Codex, Cursor, TRAE, OpenCode and more, and detects which ones you have.

@@ -932,6 +932,18 @@ async def test_search_and_search_context_forward_search_type():
 
 
 @pytest.mark.asyncio
+async def test_search_forwards_link_options():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.search("race", options={"include_links": True})
+
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["include_links"] is True
+
+
+@pytest.mark.asyncio
 async def test_find_extra_forwards_unknown_fields_to_payload():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())

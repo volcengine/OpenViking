@@ -236,6 +236,7 @@ class SearchRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     read_content: bool = False
+    include_links: bool = False
     telemetry: TelemetryRequest = False
     events_time_decay_protection: Optional[str] = None
 
@@ -267,6 +268,8 @@ class SearchRequest(BaseModel):
                 raise ValueError(error)
             return self
 
+        if self.include_links:
+            raise ValueError("include_links is only supported in mode='list'")
         if self.read_content:
             raise ValueError("read_content is only supported in mode='list'")
         if self.target_uri:
@@ -504,6 +507,9 @@ async def search(
     resolved_image_url = _resolve_image_url(request.image_url, _ctx)
 
     async def _search():
+        link_options = {}
+        if request.include_links:
+            link_options["include_links"] = True
         session = None
         # Intent off: skip session.load — SearchService will not scan session either.
         if request.session_id and service.search.is_intent_enabled():
@@ -524,6 +530,7 @@ async def search(
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
             events_time_decay_protection=request.events_time_decay_protection,
+            **link_options,
         )
 
     execution = await run_operation(

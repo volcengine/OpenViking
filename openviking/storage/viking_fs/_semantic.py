@@ -404,6 +404,7 @@ class _SemanticMixin:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        include_links: bool = False,
     ):
         """Complex search with session context.
 
@@ -523,21 +524,34 @@ class _SemanticMixin:
             rerank_config=self.rerank_config,
         )
 
+        # Links are a Search-only rerank option. Without a text reranker the
+        # flag is a no-op, including no metadata reads or response additions.
+        link_search = None
+        if include_links and not image_url and retriever._rerank_client is not None:
+            from openviking.retrieve.memory_links import search_with_memory_links
+
+            link_search = search_with_memory_links
+
         async def _execute(tq: TypedQuery):
             logger.debug(
                 "[VikingFS.search._execute] Calling retriever.retrieve with "
                 f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
             )
+            options = {
+                "limit": limit,
+                "score_threshold": score_threshold,
+                "scope_dsl": filter,
+                "level": level,
+                "events_time_decay_protection": events_time_decay_protection,
+                "request_now": request_now,
+                "search_type": search_type,
+            }
+            if link_search is not None:
+                return await link_search(retriever, self, tq, real_ctx, **options)
             return await retriever.retrieve(
                 tq,
                 ctx=real_ctx,
-                limit=limit,
-                score_threshold=score_threshold,
-                scope_dsl=filter,
-                level=level,
-                events_time_decay_protection=events_time_decay_protection,
-                request_now=request_now,
-                search_type=search_type,
+                **options,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

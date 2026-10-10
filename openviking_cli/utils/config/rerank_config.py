@@ -60,6 +60,16 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum documents per request in Search include_links reranking. All batches are "
+            "combined before selecting results. VikingDB is always capped at 100."
+        ),
+    )
+
     log_payloads: bool = Field(
         default=False,
         description=(

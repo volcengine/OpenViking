@@ -119,6 +119,7 @@ class SearchService:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        include_links: bool = False,
     ) -> Any:
         """Search with session context.
 
@@ -147,6 +148,9 @@ class SearchService:
         if session is not None and self.is_intent_enabled() and not resolved_image_url:
             session_info = await session.get_context_for_search(query)
 
+        link_options = {}
+        if include_links:
+            link_options["include_links"] = True
         result = await viking_fs.search(
             query=query,
             ctx=ctx,
@@ -160,6 +164,7 @@ class SearchService:
             events_time_decay_protection=events_time_decay_protection,
             search_type=search_type,
             context_types=context_types,
+            **link_options,
         )
         return result
 

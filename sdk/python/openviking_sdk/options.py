@@ -35,6 +35,7 @@ class FindOptions(_ExtraOptions, total=False):
 
 class SearchOptions(FindOptions, total=False):
     search_type: Literal["semantic", "keywords"]
+    include_links: bool
 
 
 class SearchContextOptions(_ExtraOptions, total=False):

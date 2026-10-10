@@ -289,6 +289,8 @@ class MatchedContext:
     # Recall-stage vector score and time factor, retained after model rerank.
     origin_score: Optional[float] = None
     time_score: Optional[float] = None
+    links: Optional[List[Dict[str, Any]]] = None
+    backlinks: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass
@@ -386,6 +388,10 @@ class FindResult:
         if ctx.origin_score is not None:
             result["origin_score"] = ctx.origin_score
             result["time_score"] = ctx.time_score
+        for key in ("links", "backlinks"):
+            value = getattr(ctx, key)
+            if value is not None:
+                result[key] = value
         return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
@@ -440,6 +446,8 @@ class FindResult:
                 time_score=d.get("time_score"),
                 match_reason=d.get("match_reason", ""),
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
+                links=d.get("links"),
+                backlinks=d.get("backlinks"),
             )
 
         return cls(
