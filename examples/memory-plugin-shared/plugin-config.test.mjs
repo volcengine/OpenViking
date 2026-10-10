@@ -9,6 +9,7 @@ import { buildContextSearchBody } from "./lib/recall-core.mjs";
 import { buildPluginConfig } from "./lib/plugin-config.mjs";
 import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
+import { loadConfig as loadCodebuddy } from "../codebuddy-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
@@ -31,6 +32,12 @@ const LOADERS = {
     load: (cwd) => loadCodex(cwd),
     options: { manifestUrl: new URL("../codex-memory-plugin/.codex-plugin/plugin.json", import.meta.url), logFile: "codex-hooks.log" },
     owns: [],
+  },
+  codebuddy: {
+    harness: "codebuddy",
+    load: (cwd) => loadCodebuddy(cwd),
+    options: { manifestUrl: new URL("../codebuddy-memory-plugin/.codebuddy-plugin/plugin.json", import.meta.url), logFile: "cb-hooks.log", rootKeyFallback: true },
+    owns: ["configPath", "credentialPath"],
   },
   opencode: {
     harness: "opencode",
