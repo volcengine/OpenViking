@@ -391,6 +391,32 @@ def test_openviking_health_tool_returns_safe_summary():
     assert "postgres://" not in json.dumps(payload)
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_state", "expected_healthy"),
+    [
+        ({"is_healthy": True, "errors": [], "components": {}}, "healthy", True),
+        ({"is_healthy": False, "errors": [], "components": {}}, "unhealthy", False),
+        # Already recognized keys keep precedence over the server's is_healthy flag.
+        ({"healthy": False, "is_healthy": True}, "unhealthy", False),
+    ],
+)
+def test_openviking_health_tool_recognizes_system_status_is_healthy_flag(
+    status: dict[str, Any], expected_state: str, expected_healthy: bool
+):
+    class StatusClient(InMemoryOpenVikingClient):
+        def get_status(self) -> dict[str, Any]:
+            return status
+
+    tools = {tool.name: tool for tool in create_openviking_tools(client=StatusClient())}
+    payload = json.loads(tools["viking_health"].invoke({}))
+
+    assert payload["state"] == expected_state
+    assert payload["healthy"] is expected_healthy
+    assert payload["summary"]["is_healthy"] is status["is_healthy"]
+    assert "errors" not in payload["summary"]
+    assert "components" not in payload["summary"]
+
+
 def test_openviking_read_directory_uri_returns_recoverable_tool_result_for_all_modes():
     class DirectoryReadClient(InMemoryOpenVikingClient):
         def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
