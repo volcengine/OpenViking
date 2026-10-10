@@ -273,25 +273,26 @@ types when required by their schemas.
         session_time_str = session_time.strftime("%Y-%m-%d %H:%M")
         day_of_week = session_time.strftime("%A")
 
-        # 检查是否需要显示范围
-        if last_msg_time and last_msg_time != first_msg_time:
-            last_time = parse_iso_datetime(last_msg_time)
-            time_display = f"{session_time_str} - {last_time.strftime('%Y-%m-%d %H:%M')}"
-        else:
-            time_display = session_time_str
-
         extract_context = self.get_extract_context()
         conversation = self._assemble_conversation(extract_context.messages)
+
+        # Keep the header byte-stable across commits: only the first-message
+        # time never changes, so the moving range end goes below the transcript
+        # instead, preserving the provider prompt-cache prefix over it.
+        range_display = ""
+        if last_msg_time and last_msg_time != first_msg_time:
+            last_time = parse_iso_datetime(last_msg_time)
+            range_display = f"**Conversation ends:** {last_time.strftime('%Y-%m-%d %H:%M')}\n"
 
         return {
             "role": "user",
             "content": f"""## Conversation History
-**Session Time:** {time_display} ({day_of_week})
+**Session Time:** {session_time_str} ({day_of_week})
 Relative times (e.g., 'last week', 'next month') are based on Session Time, not today.
 
 {conversation}
 
-After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
+{range_display}After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
         }
 
     def _assemble_conversation(self, messages: Any) -> str:
