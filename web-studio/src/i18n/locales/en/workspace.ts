@@ -820,6 +820,8 @@ const workspace = {
       configure: 'Configure',
       parameters: 'Model parameters',
       advanced: 'Advanced settings',
+      environmentObject:
+        'This model configuration uses environment variables for objects or arrays. Use the file editor to change it while preserving these references.',
       resetDefault: 'Inherit VLM',
       confirmReset: 'Remove Query Planner from ov.conf and inherit VLM?',
       embeddingContract:

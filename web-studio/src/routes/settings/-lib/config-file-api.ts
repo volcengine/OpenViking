@@ -14,6 +14,7 @@ export type ModelEntry = {
   source: 'account' | 'server' | 'vlm'
   config: ModelConfig
   available?: boolean
+  environment_references?: string[]
 }
 export type ConfigFileDraft = {
   content: string

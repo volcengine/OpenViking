@@ -80,6 +80,8 @@ const language = {
       api_key: 'secret-a',
       api_base: 'https://a.example.com',
       extra_headers: { keep: 'yes' },
+      max_tokens: 2048,
+      extra_request_body: { keep: true },
     },
     {
       id: 'b',
@@ -564,7 +566,7 @@ it('uses localized validation text for invalid JSON', async () => {
   mount()
   await screen.findByText('model-a')
   fireEvent.click(
-    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+    section('embeddingType').getByRole('button', { name: 'models.edit' }),
   )
   const headers = screen.getByLabelText<HTMLTextAreaElement>(
     'models.fields.extra_headers',
@@ -854,7 +856,8 @@ it('keeps saved state when restart is rejected and permits retry without saving 
   await menuAction(section('vlmType'), 0, 'models.moveDown')
   state.restart.mockRejectedValue(new Error('restart unavailable'))
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
-  await screen.findByText('models.restartFailed')
+  await screen.findByText(/models.restartFailed/)
+  expect(screen.getByRole('alert').textContent).toContain('restart unavailable')
   expect(screen.queryByRole('button', { name: 'models.discardAll' })).toBeNull()
   expect(
     screen
@@ -862,4 +865,26 @@ it('keeps saved state when restart is rejected and permits retry without saving 
       .hasAttribute('disabled'),
   ).toBe(false)
   expect(state.save).toHaveBeenCalledTimes(1)
+})
+
+it('keeps environment objects read-only in the form and offers file editing', async () => {
+  const payload = {
+    ...structuredClone(data),
+    models: {
+      ...structuredClone(data.models),
+      vlm: {
+        ...structuredClone(data.models.vlm),
+        environment_references: ['$STUDIO_MODEL_OBJECT'],
+      },
+    },
+  }
+  mount(payload)
+  await screen.findByText('$STUDIO_MODEL_OBJECT')
+  expect(section('vlmType').getByText('models.environmentObject')).toBeTruthy()
+  expect(section('vlmType').queryAllByRole('button')).toHaveLength(0)
+  expect(
+    section('embeddingType').getByRole('button', { name: 'models.edit' }),
+  ).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  expect(await screen.findByLabelText('models.fileContent')).toBeTruthy()
 })

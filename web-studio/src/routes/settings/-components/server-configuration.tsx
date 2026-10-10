@@ -64,12 +64,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '#/components/ui/tooltip'
-import {
-  ModelFields,
-  bindingFields,
-  advancedFields,
-  providers,
-} from './model-fields'
+import { ModelFields, bindingFields, providers } from './model-fields'
 import {
   createConfigFileApi,
   embeddingModes,
@@ -691,7 +686,10 @@ export function ServerConfigurationEditor() {
           )}
           {restartMutation.isError && (
             <p role="alert" className="text-destructive">
-              {t('models.restartFailed')}
+              {t('models.restartFailed')}{' '}
+              {restartMutation.error instanceof Error
+                ? restartMutation.error.message
+                : ''}
             </p>
           )}
           {query.data?.restart?.supported === false && (
@@ -808,6 +806,25 @@ export function ServerConfigurationEditor() {
           </div>
         ) : (
           visibleModelKinds.map((kind) => {
+            const references = document?.models[kind].environment_references
+            if (references?.length)
+              return (
+                <section
+                  key={kind}
+                  aria-label={t(titles[kind])}
+                  className="min-w-0 border-b pb-6 last:border-b-0"
+                >
+                  <h2 className="mb-4 text-base font-semibold">
+                    {t(titles[kind])}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {t('models.environmentObject')}
+                  </p>
+                  <p className="mt-2 break-all font-mono text-xs">
+                    {references.join(', ')}
+                  </p>
+                </section>
+              )
             const config = current(kind)
             const groups =
               kind === 'embedding'
@@ -1118,7 +1135,7 @@ export function ServerConfigurationEditor() {
                       ))}
                   </>
                 )}
-                {!editor.settings && (
+                {!editor.settings && editor.kind === 'embedding' && (
                   <details>
                     <summary className="cursor-pointer text-sm text-muted-foreground">
                       {t('models.advanced')}
@@ -1126,7 +1143,7 @@ export function ServerConfigurationEditor() {
                     <div className="mt-4 grid gap-4">
                       <ModelFields
                         key={provider}
-                        fields={advancedFields(editor.kind)}
+                        fields={[{ key: 'extra_headers', type: 'json' }]}
                         value={editor.value}
                         readOnly={editor.readonly || pending}
                         onChange={(value) => {

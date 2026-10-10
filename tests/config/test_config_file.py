@@ -423,3 +423,47 @@ def test_unquoted_credential_references_survive_transport_and_reordering(config_
     config = OpenVikingConfigSingleton._load_from_file(str(path))
     assert config.vlm.credentials[1].id == "first"
     assert config.vlm.credentials[1].api_key == "resolved-secret"
+
+
+@pytest.mark.parametrize("location", ["vlm", "dense", "credentials", "providers"])
+def test_environment_objects_remain_opaque_and_survive_file_edits(
+    config_file, monkeypatch, location
+):
+    path, raw = config_file
+    model = {"provider": "openai", "model": "gpt-4o", "api_key": "object-secret"}
+    reference = "$STUDIO_MODEL_OBJECT"
+    kind = "embedding" if location == "dense" else "vlm"
+    if location == "vlm":
+        supplied = model
+        raw["vlm"] = reference
+    elif location == "dense":
+        supplied = {**model, "dimension": 1024}
+        raw["embedding"]["dense"] = reference
+    elif location == "credentials":
+        supplied = [model]
+        raw["vlm"]["credentials"] = reference
+    else:
+        supplied = {"openai": {"api_key": "object-secret"}}
+        raw["vlm"].pop("api_key")
+        raw["vlm"]["providers"] = reference
+    monkeypatch.setenv("STUDIO_MODEL_OBJECT", json.dumps(supplied))
+    content = json.dumps(raw).replace(json.dumps(reference), reference)
+    path.write_text(content)
+    OpenVikingConfigSingleton.initialize(config_path=str(path))
+
+    loaded = read_config_file()
+    assert loaded["models"][kind]["environment_references"] == [reference]
+    assert loaded["models"][kind]["config"] == {}
+    assert "object-secret" not in json.dumps(loaded)
+    assert not loaded["restart_required"]
+    assert preview_config_file(content)["models"] == loaded["models"]
+    with pytest.raises(ValueError, match="require file editing"):
+        save_config_file({kind: {"timeout": 42}}, loaded["revision"])
+    assert path.read_text() == content
+
+    draft = preview_config_file(content, {"rerank": {"timeout": 42}})
+    assert f'"{location}": {reference}' in draft["content"]
+    assert "object-secret" not in draft["content"]
+    save_config_file({}, loaded["revision"], draft["content"])
+    assert path.read_text() == draft["content"]
+    assert OpenVikingConfigSingleton._load_from_file(str(path)).rerank.timeout == 42

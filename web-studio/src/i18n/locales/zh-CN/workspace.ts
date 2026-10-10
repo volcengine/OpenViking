@@ -785,6 +785,8 @@ const workspace = {
       configure: '配置',
       parameters: '模型参数',
       advanced: '高级配置',
+      environmentObject:
+        '此模型配置通过环境变量提供对象或数组。请使用文件编辑器修改，以保留这些引用。',
       resetDefault: '继承 VLM',
       confirmReset: '删除 ov.conf 中的 Query Planner 配置，恢复继承 VLM？',
       embeddingContract:

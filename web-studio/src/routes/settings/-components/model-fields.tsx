@@ -84,20 +84,6 @@ export function bindingFields(
   if (provider === 'azure') fields.push({ key: 'api_version' })
   return fields
 }
-export function advancedFields(kind: EditableModelKind): FieldSpec[] {
-  const common: FieldSpec[] = [{ key: 'extra_headers', type: 'json' }]
-  if (kind === 'embedding') return common
-  return [...common, { key: 'log_payloads', type: 'toggle' }]
-  return [
-    ...common,
-    { key: 'extra_request_body', type: 'json' },
-    { key: 'reasoning_effort' },
-    { key: 'max_tokens', type: 'number', min: 1 },
-    { key: 'keepalive_expiry', type: 'number', min: 0 },
-    { key: 'forward_api_key', type: 'toggle' },
-  ]
-}
-
 function JsonField({
   value,
   onChange,

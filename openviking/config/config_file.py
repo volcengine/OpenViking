@@ -149,6 +149,16 @@ def _path() -> Path:
     return path
 
 
+def _structured_environment_references(node) -> list[str]:
+    if isinstance(node, _EnvironmentReference):
+        expanded = json.loads(os.path.expandvars(_dump(node)))
+        return [str(node)] if isinstance(expanded, (dict, list)) else []
+    values = node.values() if isinstance(node, dict) else node if isinstance(node, list) else []
+    return list(
+        dict.fromkeys(ref for value in values for ref in _structured_environment_references(value))
+    )
+
+
 def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
     models = {}
     for kind in MODEL_KINDS:
@@ -158,6 +168,16 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
         model = config.get_query_planner() if inherited else getattr(config, kind)
         value = model.model_dump(exclude_none=True)
         original = raw.get("vlm" if inherited else kind) or {}
+        references = _structured_environment_references(original)
+        if references:
+            # An object/array reference has no literal fields to project. Keep it
+            # opaque rather than exposing or materializing environment secrets.
+            models[kind] = {
+                "source": "vlm" if inherited else "server",
+                "config": {},
+                "environment_references": references,
+            }
+            continue
         # Display literal environment references; never replace them with resolved secrets.
         value = _merge(value, original)
         if kind in ("vlm", "query_planner"):
@@ -326,6 +346,10 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
                 raise ValueError("Only query_planner can be reset to inherit VLM")
             raw.pop(kind, None)
         elif isinstance(value, dict):
+            if _structured_environment_references(raw.get(kind)):
+                raise ValueError(
+                    "Model objects supplied by environment references require file editing"
+                )
             raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
         else:
             raise ValueError("Model configuration must be an object")
