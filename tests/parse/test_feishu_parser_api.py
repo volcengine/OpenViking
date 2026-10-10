@@ -102,6 +102,66 @@ async def test_add_resource_processor_cancelled_context_preserves_group_ids(monk
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
+async def _interrupt_staged_add_resource(monkeypatch, task_status):
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING, result=None)),
+        start=AsyncMock(),
+        update_stage=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
+        get=AsyncMock(return_value=SimpleNamespace(status=task_status)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+    service = SimpleNamespace(
+        execute_add_resource_job=AsyncMock(side_effect=asyncio.CancelledError),
+        _link_resource_reason_memory=AsyncMock(),
+    )
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+        delete_temp=AsyncMock(),
+    )
+    processor = AddResourceProcessor(service, QueueManager.ADD_RESOURCE, viking_fs)
+    msg = AddResourceMsg(
+        task_id="task-interrupted",
+        path="/tmp/report.md",
+        source_path="/tmp/report.md",
+        root_uri="viking://resources/report",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+        staged_source={
+            "temp_uri": "viking://temp/account-1/task-interrupted",
+            "source_uri": "viking://temp/account-1/task-interrupted/source/report.md",
+            "source_type": "local",
+            "original_source": "/tmp/report.md",
+            "meta": {},
+        },
+    )
+    data = msg.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+
+    with pytest.raises(asyncio.CancelledError):
+        await processor._process(msg, data)
+
+    return viking_fs.delete_temp
+
+
+@pytest.mark.asyncio
+async def test_add_resource_worker_shutdown_preserves_staged_source_for_replay(monkeypatch):
+    delete_temp = await _interrupt_staged_add_resource(monkeypatch, TaskStatus.RUNNING)
+
+    delete_temp.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_add_resource_user_cancellation_cleans_staged_source(monkeypatch):
+    delete_temp = await _interrupt_staged_add_resource(monkeypatch, TaskStatus.CANCELLING)
+
+    delete_temp.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_feishu_parser_api_bypasses_accessor():
     result = object()

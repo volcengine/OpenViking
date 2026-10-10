@@ -354,17 +354,28 @@ class AddResourceProcessor(DequeueHandlerBase):
                 terminal = True
                 return ProcessResult.success()
             except asyncio.CancelledError:
-                logger.warning(
-                    "[AddResourceCancelled] %s root=%s",
-                    log_correlation(
-                        task_id=msg.task_id,
-                        telemetry_id=telemetry_id,
-                        message_id=queue_message_id,
-                    ),
-                    msg.root_uri,
-                )
-                await self._record_watch_execution(msg, "cancelled")
-                terminal = True
+                latest_task = None
+                with suppress(Exception):
+                    latest_task = await tracker.get(
+                        msg.task_id,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                if latest_task is not None and latest_task.status in (
+                    TaskStatus.CANCELLING,
+                    TaskStatus.CANCELLED,
+                ):
+                    logger.warning(
+                        "[AddResourceCancelled] %s root=%s",
+                        log_correlation(
+                            task_id=msg.task_id,
+                            telemetry_id=telemetry_id,
+                            message_id=queue_message_id,
+                        ),
+                        msg.root_uri,
+                    )
+                    await self._record_watch_execution(msg, "cancelled")
+                    terminal = True
                 raise
             except Exception as exc:
                 logger.exception(
