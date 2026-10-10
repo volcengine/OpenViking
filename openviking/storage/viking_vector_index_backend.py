@@ -2347,13 +2347,15 @@ class VikingVectorIndexBackend:
         batch_size: int = 100,
         output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """Strictly read lightweight inventory for an exact, bounded URI set.
+        """Read lightweight inventory with one exact scalar query per URI chunk.
 
         Unlike :meth:`get_incremental_inventory_under_uri`, this never uses a
         path scope: every returned record must belong to one of ``uris``.  The
         result remains keyed by the caller's URI spelling and then by record ID
         so file-scoped RNFV snapshots can consume a pre-hydrated V subset
-        without one vector query per file.
+        without one vector query per file.  Canonical V has at most one record
+        per L0/L1/L2 level at each URI; request one extra result so an abnormal
+        duplicate set fails explicitly rather than being silently truncated.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -2384,13 +2386,19 @@ class VikingVectorIndexBackend:
                 ]
             )
             what = f"Incremental inventory for {len(chunk)} exact URI(s)"
-            async for record in self._strict_scan(
-                ctx,
-                scope,
+            result_limit = len(chunk) * 3 + 1
+            page = await self.filter(
+                filter=scope,
+                limit=result_limit,
                 output_fields=projection,
-                batch_size=batch_size,
-                what=what,
-            ):
+                ctx=ctx,
+            )
+            if len(page) >= result_limit:
+                raise RuntimeError(
+                    f"{what} exceeded its canonical L0/L1/L2 record limit; "
+                    "run reindex or prune the duplicate records before retrying"
+                )
+            for record in page:
                 record_id = str(record.get("id") or "")
                 record_uri = str(record.get("uri") or "")
                 try:

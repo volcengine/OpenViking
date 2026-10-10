@@ -9,6 +9,7 @@ import pytest
 
 from openviking.parse.output import AgfsParseOutputStore, ParseArtifactRef
 from openviking.storage.resource_diff import (
+    ArtifactInventory,
     InlineBytesStore,
     build_rnfv_snapshot,
     make_inline_file_inventory,
@@ -640,3 +641,101 @@ async def test_build_rnfv_snapshot_default_scope_reads_subtree():
         f"{root}/a.py",
         f"{root}/sub/b.py",
     }
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_formal_inventory_queries_only_existing_f_uris():
+    from unittest.mock import AsyncMock
+
+    root = "viking://resources/x"
+    vikingdb = _FakeVikingDB({})
+    vikingdb.get_incremental_inventory_under_uri = AsyncMock(
+        side_effect=AssertionError("formal inventory must not scan a vector subtree")
+    )
+    vikingdb.get_incremental_inventory_by_uris = AsyncMock(
+        return_value={
+            root: {"root-l1": {"id": "root-l1", "uri": root, "level": 1, "md5": ""}},
+            f"{root}/a.py": {
+                "a-l2": {"id": "a-l2", "uri": f"{root}/a.py", "level": 2, "md5": "old"}
+            },
+        }
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=vikingdb,
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=ArtifactInventory(
+            entries={"a.py": NewEntry(md5="new")}, artifact_paths={"a.py": "a.py"}
+        ),
+        formal_snapshot=({"a.py": FormalEntry(is_dir=False)}, True),
+        vector_inventory_strategy="formal",
+    )
+
+    assert set(snapshot.vectors.records_by_id) == {"root-l1", "a-l2"}
+    vikingdb.get_incremental_inventory_by_uris.assert_awaited_once()
+    assert set(vikingdb.get_incremental_inventory_by_uris.await_args.args[0]) == {
+        root,
+        f"{root}/a.py",
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_formal_inventory_skips_v_when_f_target_is_absent():
+    from unittest.mock import AsyncMock
+
+    root = "viking://resources/x"
+    vikingdb = _FakeVikingDB({})
+    vikingdb.get_incremental_inventory_by_uris = AsyncMock(
+        side_effect=AssertionError("absent F target must not query stale V")
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=vikingdb,
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=ArtifactInventory(
+            entries={"a.py": NewEntry(md5="new")}, artifact_paths={"a.py": "a.py"}
+        ),
+        target_preexisting=False,
+        vector_inventory_strategy="formal",
+    )
+
+    assert snapshot.vectors.records_by_id == {}
+    vikingdb.get_incremental_inventory_by_uris.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_formal_inventory_rejects_more_than_its_limit():
+    from unittest.mock import AsyncMock
+
+    root = "viking://resources/x"
+    vikingdb = _FakeVikingDB({})
+    vikingdb.get_incremental_inventory_by_uris = AsyncMock(
+        side_effect=AssertionError("limit check must happen before a V query")
+    )
+
+    with pytest.raises(ValueError, match="RNFV inventory limit 2"):
+        await build_rnfv_snapshot(
+            viking_fs=_FakeVikingFS([]),
+            vikingdb=vikingdb,
+            store=InlineBytesStore(b"new"),
+            artifact_ref=object(),
+            target_uri=root,
+            ctx=_Ctx(),
+            artifact_inventory=ArtifactInventory(
+                entries={"a.py": NewEntry(md5="new")}, artifact_paths={"a.py": "a.py"}
+            ),
+            formal_snapshot=(
+                {"a.py": FormalEntry(is_dir=False), "sub": FormalEntry(is_dir=True)},
+                True,
+            ),
+            vector_inventory_strategy="formal",
+            inventory_limit=2,
+        )

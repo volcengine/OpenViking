@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
@@ -49,6 +50,30 @@ from openviking.utils.content_hash import content_md5
 from openviking.utils.log_correlation import log_correlation
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer knob without letting a bad env break ingestion."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %d", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("Ignoring non-positive %s=%r; using %d", name, raw, default)
+        return default
+    return value
+
+
+# add_resources can legitimately ingest a large repository. This bounds the
+# aggregate F-derived URI inventory, not the size of a single VikingDB request.
+RNFV_INVENTORY_LIMIT = _positive_int_env("RNFV_INVENTORY_LIMIT", 1_000_000)
+# Exact filters remain deliberately bounded so their URI list and response do
+# not create one oversized RPC. The backend makes one scalar query per chunk.
+RNFV_INVENTORY_QUERY_BATCH_SIZE = _positive_int_env("RNFV_INVENTORY_QUERY_BATCH_SIZE", 1_000)
 
 
 class ContentState(str, Enum):
@@ -577,13 +602,27 @@ async def build_rnfv_snapshot(
     artifact_inventory: ArtifactInventory | None = None,
     vector_scope: Literal["subtree", "self"] = "subtree",
     vector_inventory: Mapping[str, Mapping[str, Any]] | None = None,
+    vector_inventory_strategy: Literal["subtree", "formal"] = "subtree",
+    inventory_limit: int = RNFV_INVENTORY_LIMIT,
+    inventory_query_batch_size: int = RNFV_INVENTORY_QUERY_BATCH_SIZE,
 ) -> RNFVSnapshot:
     """Read the complete R/N/F/V inputs without deriving an executable plan.
 
-    ``vector_scope="self"`` restricts the V read to the target URI itself
+    ``vector_scope="self"`` restricts the subtree-strategy V read to the target URI itself
     (all levels), which the single-file write path uses so an incremental
     update never reads sibling records under a shared parent directory.
+
+    The opt-in ``vector_inventory_strategy="formal"`` path is for directory
+    add_resources: it derives V query URIs from F after the formal snapshot is
+    available. V-only records are maintenance debt handled by reindex/prune,
+    not content facts for this ingestion transaction.
     """
+    if vector_inventory_strategy not in {"subtree", "formal"}:
+        raise ValueError(f"unsupported RNFV vector inventory strategy: {vector_inventory_strategy}")
+    if inventory_limit <= 0:
+        raise ValueError("RNFV inventory limit must be positive")
+    if inventory_query_batch_size <= 0:
+        raise ValueError("RNFV inventory query batch size must be positive")
     request = request_intent or RequestIntent(
         target_uri=target_uri, processing_mode="semantic_and_vectors"
     )
@@ -610,7 +649,7 @@ async def build_rnfv_snapshot(
         asyncio.create_task(read_artifact()),
         asyncio.create_task(read_formal()),
     ]
-    if request.vectorize and vector_inventory is None:
+    if request.vectorize and vector_inventory is None and vector_inventory_strategy == "subtree":
         tasks.append(
             asyncio.create_task(
                 _read_incremental_vector_inventory(
@@ -631,13 +670,23 @@ async def build_rnfv_snapshot(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     artifact, formal = results[:2]
-    inventory = (
-        dict(vector_inventory)
-        if request.vectorize and vector_inventory is not None
-        else results[2]
-        if request.vectorize
-        else {}
-    )
+    if not request.vectorize:
+        inventory: Dict[str, Dict[str, Any]] = {}
+    elif vector_inventory is not None:
+        inventory = dict(vector_inventory)
+    elif vector_inventory_strategy == "formal":
+        inventory = await _read_formal_incremental_vector_inventory(
+            vikingdb,
+            target_uri=target_uri,
+            formal_entries=formal[0],
+            target_preexisting=target_preexisting,
+            ctx=ctx,
+            projection=projection,
+            inventory_limit=inventory_limit,
+            query_batch_size=inventory_query_batch_size,
+        )
+    else:
+        inventory = results[2]
     target_files, files_complete = formal
     base = target_uri.rstrip("/")
     prefix = base + "/"
@@ -691,6 +740,56 @@ async def _read_incremental_vector_inventory(
     )
 
 
+async def _read_formal_incremental_vector_inventory(
+    vikingdb: Any,
+    *,
+    target_uri: str,
+    formal_entries: Mapping[str, FormalEntry],
+    target_preexisting: bool,
+    ctx: Any,
+    projection: frozenset[str],
+    inventory_limit: int,
+    query_batch_size: int,
+) -> Dict[str, Dict[str, Any]]:
+    """Read V only for nodes currently present in F.
+
+    An explicit add_resources write to a missing formal target treats any V
+    record as stale. Avoiding that query is both cheaper and ensures old
+    scalar/vector state is not inherited into the new resource.
+    """
+    if not target_preexisting:
+        return {}
+
+    base = target_uri.rstrip("/")
+    uris = [base]
+    uris.extend(
+        base if not relative_path.strip("/") else f"{base}/{relative_path.strip('/')}"
+        for relative_path in formal_entries
+    )
+    exact_uris = list(dict.fromkeys(uris))
+    if len(exact_uris) > inventory_limit:
+        raise ValueError(
+            f"RNFV inventory limit {inventory_limit} exceeded for {base}: "
+            f"{len(exact_uris)} formal URI(s)"
+        )
+
+    records_by_uri = await vikingdb.get_incremental_inventory_by_uris(
+        exact_uris,
+        ctx=ctx,
+        batch_size=query_batch_size,
+        output_fields=sorted(projection),
+    )
+    records: Dict[str, Dict[str, Any]] = {}
+    for uri_records in records_by_uri.values():
+        for record_id, record in uri_records.items():
+            if record_id in records:
+                raise RuntimeError(
+                    f"Formal RNFV inventory returned duplicate record id: {record_id}"
+                )
+            records[record_id] = dict(record)
+    return records
+
+
 __all__ = [
     "ArtifactInventory",
     "ContentState",
@@ -703,4 +802,6 @@ __all__ = [
     "make_inline_file_inventory",
     "prepare_artifact_inventory",
     "read_target_file_snapshot",
+    "RNFV_INVENTORY_LIMIT",
+    "RNFV_INVENTORY_QUERY_BATCH_SIZE",
 ]

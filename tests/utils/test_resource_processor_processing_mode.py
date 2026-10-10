@@ -320,6 +320,80 @@ async def test_local_incremental_noop_skips_semantic_queue_and_releases_resource
 
 
 @pytest.mark.asyncio
+async def test_add_resources_rnfv_uses_formal_inventory_strategy(monkeypatch, ctx):
+    from openviking.storage.resource_diff import ArtifactInventory
+    from openviking.storage.resource_rnfv import (
+        FormalTreeSnapshot,
+        NewArtifactSnapshot,
+        NewEntry,
+        RNFVSnapshot,
+        VectorIndexSnapshot,
+    )
+
+    root_uri = "viking://resources/demo"
+    captured = {}
+    viking_fs = SimpleNamespace()
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+
+    artifact_inventory = ArtifactInventory(
+        entries={"a.py": NewEntry(md5="new")}, artifact_paths={"a.py": "a.py"}
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.prepare_artifact_inventory",
+        AsyncMock(return_value=artifact_inventory),
+    )
+
+    async def build_snapshot(**kwargs):
+        captured.update(kwargs)
+        return RNFVSnapshot(
+            request=kwargs["request_intent"],
+            new=NewArtifactSnapshot(entries=artifact_inventory.entries),
+            formal=FormalTreeSnapshot(entries={}),
+            vectors=VectorIndexSnapshot(records_by_id={}, projected_fields=frozenset()),
+        )
+
+    monkeypatch.setattr("openviking.storage.resource_diff.build_rnfv_snapshot", build_snapshot)
+    context_plan = SimpleNamespace(
+        root_uri=root_uri,
+        context_type="resource",
+        content_tree_actions=(),
+        direct_index_actions=(),
+        semantic_plan=None,
+        after_content_commit=lambda: {"status": "success"},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.build_context_update_plan_from_snapshot",
+        AsyncMock(return_value=(SimpleNamespace(entries={}), context_plan)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.execute_content_tree_actions",
+        AsyncMock(),
+    )
+
+    processor = ResourceProcessor(_FakeVikingDB())
+    result = await processor._commit_directory_artifact_with_plan(
+        output_store=object(),
+        artifact_ref=SimpleNamespace(backend="local", root="artifact"),
+        doc_rel="repository",
+        root_uri=root_uri,
+        target_preexisting=True,
+        ctx=ctx,
+        lease_ref=None,
+        vectorize=True,
+        summarize=True,
+        processing_mode="semantic_and_vectors",
+        is_code_repo=False,
+        ingest_options=IngestOptions(),
+        source_metadata=None,
+    )
+
+    assert result == {"status": "success"}
+    assert captured["vector_inventory_strategy"] == "formal"
+    assert captured["inventory_limit"] == 1_000_000
+    assert captured["inventory_query_batch_size"] == 1_000
+
+
+@pytest.mark.asyncio
 async def test_vectors_only_scalar_update_is_enqueued_before_lock_release(monkeypatch, ctx):
     from openviking.storage.context_update_plan import DirectIndexAction
 
@@ -458,9 +532,7 @@ async def test_plan_artifact_is_cleaned_only_after_semantic_enqueue(monkeypatch,
         assert tmp_path.joinpath("artifacts", ref.root.split("/")[-1]).exists()
         return {"status": "success", "enqueued_count": 1}
 
-    processor._summarizer = SimpleNamespace(
-        summarize=AsyncMock(side_effect=summarize)
-    )
+    processor._summarizer = SimpleNamespace(summarize=AsyncMock(side_effect=summarize))
 
     await processor.finish_prepared_resource(
         {

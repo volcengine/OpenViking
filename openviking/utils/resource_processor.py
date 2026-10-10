@@ -325,6 +325,8 @@ class ResourceProcessor:
             execute_content_tree_actions,
         )
         from openviking.storage.resource_diff import (
+            RNFV_INVENTORY_LIMIT,
+            RNFV_INVENTORY_QUERY_BATCH_SIZE,
             build_rnfv_snapshot,
             count_tree_entry_kinds,
             prepare_artifact_inventory,
@@ -373,6 +375,9 @@ class ResourceProcessor:
                     target_preexisting=target_preexisting,
                     artifact_inventory=artifact_inventory,
                     root_is_file=root_is_file,
+                    vector_inventory_strategy="formal",
+                    inventory_limit=RNFV_INVENTORY_LIMIT,
+                    inventory_query_batch_size=RNFV_INVENTORY_QUERY_BATCH_SIZE,
                 )
             from collections import Counter
 

@@ -70,6 +70,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.backend_mode = "local"
         self.vector_dim = 2
         self.scroll_filters = []
+        self.filter_calls = []
         self.acl_manager = None
 
     @property
@@ -103,6 +104,26 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         page = ordered[offset : offset + limit]
         next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
         return page, next_cursor
+
+    async def filter(
+        self,
+        filter,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields=None,
+        order_by=None,
+        order_desc: bool = False,
+        *,
+        ctx: RequestContext,
+    ) -> list[dict[str, Any]]:
+        del output_fields, order_by, order_desc, ctx
+        self.filter_calls.append((filter, limit, offset))
+        ordered = [
+            dict(self.records[key])
+            for key in sorted(self.records)
+            if _matches_filter(filter, self.records[key])
+        ]
+        return ordered[offset : offset + limit]
 
     async def get(self, ids: list[str], *, ctx: RequestContext) -> list[dict[str, Any]]:
         del ctx
@@ -763,6 +784,38 @@ async def test_incremental_inventory_by_uris_reads_exact_uri_groups_only():
     assert all(
         any(isinstance(condition, In) and condition.field == "uri" for condition in filter.conds)
         for filter in backend.scroll_filters
+    )
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_by_uris_uses_one_exact_filter_per_uri_chunk():
+    first = "viking://resources/docs/a.py"
+    second = "viking://resources/docs/b.py"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("a-l2", first, level=2, md5="ma"),
+            _record("b-l2", second, level=2, md5="mb"),
+        ]
+    )
+
+    records = await backend.get_incremental_inventory_by_uris(
+        [first, second],
+        ctx=_ctx(),
+        batch_size=2,
+    )
+
+    assert set(records) == {first, second}
+    assert len(backend.filter_calls) == 1
+    assert backend.scroll_filters == []
+    scope, limit, offset = backend.filter_calls[0]
+    assert offset == 0
+    assert limit == 7  # 3 canonical levels per URI plus the truncation sentinel.
+    assert isinstance(scope, And)
+    assert any(
+        isinstance(condition, In)
+        and condition.field == "uri"
+        and set(condition.values) == {first, second}
+        for condition in scope.conds
     )
 
 
