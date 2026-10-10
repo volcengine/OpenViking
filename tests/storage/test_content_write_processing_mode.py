@@ -118,6 +118,7 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         "summary": "",
     }
     assert vectorize_file.await_args.kwargs["file_md5"] == content_md5(b"updated")
+    assert vectorize_file.await_args.kwargs["preserve_existing_created_at"] is True
     assert "register_request_wait" not in vectorize_file.await_args.kwargs
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"

@@ -687,6 +687,7 @@ async def test_vectors_only_replaces_preexisting_flat_file_without_directory_syn
     viking_fs.delete_temp.assert_awaited_once_with("viking://temp/job-1", ctx=ctx)
     rewrite_image_uris.assert_not_awaited()
     vectorize_file.assert_awaited_once()
+    assert vectorize_file.await_args.kwargs["preserve_existing_created_at"] is True
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
@@ -797,6 +798,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         search_tags=["team=search"],
         search_tag_mode="append",
     )
+    assert page["preserve_existing_created_at"] is True
 
 
 @pytest.mark.asyncio
@@ -847,6 +849,7 @@ async def test_local_vectors_only_uses_artifact_snapshot_when_target_tree_is_emp
     vectorize_file.assert_awaited_once()
     assert vectorize_file.await_args.kwargs["file_content"] == b"print('a')"
     assert vectorize_file.await_args.kwargs["file_md5"] == content_md5(b"print('a')")
+    assert vectorize_file.await_args.kwargs["preserve_existing_created_at"] is True
 
 
 @pytest.mark.asyncio
