@@ -432,7 +432,13 @@ it.each(['vlmType', 'embeddingType'])(
 it('saves visible categories together without altering hidden model settings', async () => {
   mount()
   await screen.findByText('model-a')
+  expect(
+    section('vlmType').getByText('models.preferred').parentElement?.textContent,
+  ).toContain('model-a')
   await menuAction(section('vlmType'), 0, 'models.moveDown')
+  expect(
+    section('vlmType').getByText('models.backup').parentElement?.textContent,
+  ).toContain('model-a')
   fireEvent.click(
     section('embeddingType').getByRole('button', { name: 'models.parameters' }),
   )

@@ -179,13 +179,23 @@ function ModelRow({
         {sortable && count > 1 ? index + 1 : ''}
       </span>
       <div className="min-w-0">
-        <button
-          type="button"
-          onClick={onView}
-          className="max-w-full break-all text-left font-mono text-sm font-medium hover:underline"
-        >
-          {modelId}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onView}
+            className="max-w-full break-all text-left font-mono text-sm font-medium hover:underline"
+          >
+            {modelId}
+          </button>
+          {sortable && (
+            <Badge
+              variant={index === 0 ? 'secondary' : 'outline'}
+              title={t('models.priorityHint')}
+            >
+              {t(index === 0 ? 'models.preferred' : 'models.backup')}
+            </Badge>
+          )}
+        </div>
         <span className="mt-1 block text-xs text-muted-foreground md:hidden">
           {String(value.provider || '')}
         </span>

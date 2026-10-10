@@ -835,6 +835,10 @@ const workspace = {
       hybrid: '混合向量',
       embeddingUnavailable: '嵌入模型配置暂不可用',
       priority: '顺序',
+      preferred: '首选',
+      backup: '备用',
+      priorityHint:
+        '按配置顺序优先使用第一条，故障时切换备用；不表示当前实际使用的连接。',
       actions: '操作',
       drag: '调整生效顺序',
       moveUp: '上移',

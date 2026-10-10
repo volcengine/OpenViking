@@ -870,6 +870,10 @@ const workspace = {
       hybrid: 'Hybrid',
       embeddingUnavailable: 'Embedding configuration is unavailable',
       priority: 'Order',
+      preferred: 'Preferred',
+      backup: 'Backup',
+      priorityHint:
+        'The first entry is preferred; later entries are failover connections. This does not indicate the connection currently in use.',
       actions: 'Actions',
       drag: 'Reorder priority',
       moveUp: 'Move up',
