@@ -75,6 +75,7 @@ class BruteforceSearch {
     }
 
     int index = -1;
+    bool new_slot = false;
     auto it = label_map_.find(label);
 
     if (it != label_map_.end()) {
@@ -110,6 +111,7 @@ class BruteforceSearch {
       }
 
       index = current_count_;
+      new_slot = true;
       label_map_[label] = index;
       uint32_t logical_offset = static_cast<uint32_t>(next_logical_offset_++);
       offset_map_[logical_offset] = index;
@@ -125,6 +127,10 @@ class BruteforceSearch {
     if (vector) {
       quantizer_->encode(static_cast<const float*>(vector), meta_->dimension,
                          ptr);
+    } else if (new_slot) {
+      // A new slot still holds uninitialized memory, or the vector of the
+      // record last removed from the tail. Zero it so this record scores 0.
+      std::memset(ptr, 0, vector_byte_size_);
     }
     std::memcpy(ptr + vector_byte_size_, &label, sizeof(uint64_t));
   }
