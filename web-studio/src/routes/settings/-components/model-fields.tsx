@@ -134,12 +134,14 @@ export function ModelFields({
   onChange,
   readOnly = false,
   prefix = 'model',
+  inheritedModel,
 }: {
   fields: FieldSpec[]
   value: ModelConfig
   onChange: (next: ModelConfig) => void
   readOnly?: boolean
   prefix?: string
+  inheritedModel?: unknown
 }) {
   const { t } = useTranslation('settings')
   const [visible, setVisible] = React.useState<Record<string, boolean>>({})
@@ -155,7 +157,10 @@ export function ModelFields({
     <>
       {fields.map((field) => {
         const id = `${prefix}-${field.key}`
-        const current = value[field.key]
+        const current =
+          field.key === 'model'
+            ? value.model || inheritedModel
+            : value[field.key]
         const change = (next: unknown) =>
           onChange({ ...value, [field.key]: next })
         const label = t(`models.fields.${field.key}`)

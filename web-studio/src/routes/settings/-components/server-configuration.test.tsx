@@ -487,6 +487,57 @@ it('keeps readonly viewing and edit transition separate from applying and saving
   expect(screen.queryByText('models.unsaved')).toBeNull()
   expect(state.save).not.toHaveBeenCalled()
 })
+it.each(['vlmType', 'embeddingType'])(
+  'shows the inherited model ID in view and edit without creating an override for %s',
+  async (kind) => {
+    const payload = structuredClone(data)
+    const config =
+      kind === 'vlmType'
+        ? payload.models.vlm.config
+        : payload.models.embedding.config.dense
+    delete (config.credentials[0] as { model?: string }).model
+    mount(payload)
+    await screen.findByText(config.model)
+    fireEvent.click(
+      section(kind).getAllByRole('button', { name: 'models.view' })[0],
+    )
+    let dialog = within(screen.getByRole('dialog'))
+    const model = dialog.getByLabelText<HTMLInputElement>('models.fields.model')
+    expect(model.value).toBe(config.model)
+    expect(model.readOnly).toBe(true)
+    fireEvent.click(dialog.getByRole('button', { name: 'models.edit' }))
+    dialog = within(screen.getByRole('dialog'))
+    expect(
+      dialog.getByLabelText<HTMLInputElement>('models.fields.model').value,
+    ).toBe(config.model)
+    fireEvent.change(dialog.getByLabelText('models.fields.api_key'), {
+      target: { value: 'rotated-key' },
+    })
+    await apply()
+    const changes = state.preview.mock.calls[0][1]
+    const binding =
+      kind === 'vlmType'
+        ? changes.vlm.credentials[0]
+        : changes.embedding.dense.credentials[0]
+    expect(binding.model).toBeUndefined()
+    expect(binding.api_key).toBe('rotated-key')
+
+    fireEvent.click(
+      section(kind).getAllByRole('button', { name: 'models.edit' })[0],
+    )
+    fireEvent.change(screen.getByLabelText('models.fields.model'), {
+      target: { value: 'explicit-model' },
+    })
+    await apply()
+    const updated = state.preview.mock.lastCall![1]
+    expect(
+      (kind === 'vlmType'
+        ? updated.vlm.credentials[0]
+        : updated.embedding.dense.credentials[0]
+      ).model,
+    ).toBe('explicit-model')
+  },
+)
 it('allows embedding policy edits without exposing identity fields', async () => {
   mount()
   await screen.findByText('model-a')
@@ -561,6 +612,38 @@ it('retains server diagnostics alongside the localized load failure', async () =
   fireEvent.click(screen.getByRole('button', { name: 'models.reloadFile' }))
   expect(await screen.findByText('Startup file unavailable')).toBeTruthy()
   expect(screen.getByText('models.loadFailed')).toBeTruthy()
+})
+it('retains unfinished dialog JSON through a failed background refresh', async () => {
+  const client = mount()
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('embeddingType').getByRole('button', { name: 'models.parameters' }),
+  )
+  const input = screen.getByLabelText<HTMLTextAreaElement>(
+    'models.fields.circuit_breaker',
+  )
+  fireEvent.change(input, { target: { value: '{unfinished' } })
+  state.get.mockRejectedValue(new Error('temporary read failure'))
+  await act(async () => {
+    await client.refetchQueries({
+      queryKey: ['server-configuration', 'default'],
+    })
+  })
+  expect(screen.getByRole('dialog')).toBeTruthy()
+  expect(
+    screen.getByLabelText<HTMLTextAreaElement>('models.fields.circuit_breaker')
+      .value,
+  ).toBe('{unfinished')
+  state.get.mockResolvedValue({ ...structuredClone(data), content })
+  await act(async () => {
+    await client.refetchQueries({
+      queryKey: ['server-configuration', 'default'],
+    })
+  })
+  expect(
+    screen.getByLabelText<HTMLTextAreaElement>('models.fields.circuit_breaker')
+      .value,
+  ).toBe('{unfinished')
 })
 it('uses localized validation text for invalid JSON', async () => {
   mount()
@@ -850,22 +933,57 @@ it('does not restart after a save failure and preserves the draft', async () => 
   expect(state.restart).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'models.discardAll' })).toBeTruthy()
 })
-it('keeps saved state when restart is rejected and permits retry without saving again', async () => {
-  mount()
-  await screen.findByText('model-a')
-  await menuAction(section('vlmType'), 0, 'models.moveDown')
-  state.restart.mockRejectedValue(new Error('restart unavailable'))
-  fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
-  await screen.findByText(/models.restartFailed/)
-  expect(screen.getByRole('alert').textContent).toContain('restart unavailable')
-  expect(screen.queryByRole('button', { name: 'models.discardAll' })).toBeNull()
-  expect(
-    screen
-      .getByRole('button', { name: 'models.restartService' })
-      .hasAttribute('disabled'),
-  ).toBe(false)
-  expect(state.save).toHaveBeenCalledTimes(1)
-})
+it.each([false, true])(
+  'keeps saved state and retry revision after restart rejection (refresh fails: %s)',
+  async (refreshFails) => {
+    mount()
+    await screen.findByText('model-a')
+    await menuAction(section('vlmType'), 0, 'models.moveDown')
+    const recovered = {
+      ...structuredClone(data),
+      content,
+      revision: 'saved-revision',
+    }
+    if (refreshFails)
+      state.get.mockRejectedValue(new Error('temporary read failure'))
+    else state.get.mockResolvedValue(recovered)
+    state.restart.mockRejectedValue(new Error('restart unavailable'))
+    fireEvent.click(
+      screen.getByRole('button', { name: 'models.saveAndRestart' }),
+    )
+    await screen.findByText(/models.restartFailed/)
+    expect(screen.getByText(/models.restartFailed/).textContent).toContain(
+      'restart unavailable',
+    )
+    expect(
+      screen.queryByRole('button', { name: 'models.discardAll' }),
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole('button', { name: 'models.restartService' })
+        .hasAttribute('disabled'),
+    ).toBe(false)
+    expect(state.save).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByText('models.saved').length).toBeGreaterThan(0)
+    state.get.mockResolvedValue(recovered)
+    state.restart.mockResolvedValue({
+      supported: true,
+      instance_id: 'old',
+      restarting: true,
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'models.restartService' }),
+    )
+    await waitFor(() => expect(state.restart).toHaveBeenCalledTimes(2))
+    expect(state.restart.mock.calls[1]).toEqual(['saved-revision'])
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'models.restartService' }),
+      ).toBeNull(),
+    )
+    expect(state.save).toHaveBeenCalledTimes(1)
+  },
+)
 
 it('keeps environment objects read-only in the form and offers file editing', async () => {
   const payload = {

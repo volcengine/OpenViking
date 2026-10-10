@@ -191,6 +191,60 @@ def test_partial_credentials_preserve_inherited_fields_and_environment_reference
     assert current["extra_headers"] == {"X-Keep": "yes"}
 
 
+def test_first_vlm_connection_does_not_keep_an_empty_preferred_binding(config_file):
+    path, raw = config_file
+    raw.pop("vlm")
+    path.write_text(json.dumps(raw))
+    loaded = read_config_file()
+    model = loaded["models"]["vlm"]["config"]
+    assert model["credentials"] == []
+    model["model"] = "gpt-4o"
+    model["credentials"].append(
+        {"id": "first", "provider": "openai", "api_key": "test-key", "model": "gpt-4o"}
+    )
+    draft = preview_config_file(loaded["content"], {"vlm": model})
+    save_config_file({}, loaded["revision"], draft["content"])
+    config = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert len(config.vlm.credentials) == 1
+    assert config.vlm.credentials[0].id == "first"
+    assert config.vlm.is_available()
+
+
+@pytest.mark.parametrize("provider_name", ["openai", " OpenAI ", "${STUDIO_PROVIDER}"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_partial_credentials_use_the_effective_legacy_provider(
+    config_file, monkeypatch, provider_name, existing
+):
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_PROVIDER", "openai")
+    monkeypatch.setenv("STUDIO_TEST_URL", "https://legacy.example/v1")
+    legacy = {
+        "model": "gpt-4o",
+        "providers": {
+            provider_name: {"api_key": "${STUDIO_TEST_KEY}", "api_base": "${STUDIO_TEST_URL}"},
+            "litellm": {"api_key": "backup-key"},
+        },
+    }
+    if existing:
+        raw["vlm"] = legacy
+    else:
+        raw.pop("vlm")
+    path.write_text(json.dumps(raw))
+    loaded = read_config_file()
+    changes = {"credentials": [{"model": "gpt-4o-mini"}]}
+    if not existing:
+        changes = {**legacy, **changes}
+    save_config_file({"vlm": changes}, loaded["revision"])
+    stored = json.loads(path.read_text())["vlm"]
+    assert "providers" not in stored
+    assert stored["credentials"][0]["api_key"] == "${STUDIO_TEST_KEY}"
+    assert stored["credentials"][0]["api_base"] == "${STUDIO_TEST_URL}"
+    config = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert config.vlm.is_available()
+    assert config.vlm.credentials[0].provider == "openai"
+    assert config.vlm.credentials[0].model == "gpt-4o-mini"
+
+
 def test_provider_switch_does_not_reuse_legacy_headers_or_endpoint(config_file):
     path, raw = config_file
     raw["vlm"].update(

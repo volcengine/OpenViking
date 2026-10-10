@@ -46,6 +46,18 @@ def _dump(value, **kwargs) -> str:
     return content
 
 
+def _provider_source(original: dict, provider: str | None) -> dict:
+    return next(
+        (
+            config
+            for name, config in (original.get("providers") or {}).items()
+            if os.path.expandvars(name).strip().lower()
+            == os.path.expandvars(provider or "").strip().lower()
+        ),
+        {},
+    )
+
+
 def _binding_values(binding, parent, embedding: bool, original: dict, index: int) -> dict:
     values = (
         {
@@ -68,14 +80,7 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
     if original.get("provider") is None:
         original["provider"] = original.get("backend") or original.get("default_provider")
     provider = values.get("provider")
-    provider_config = next(
-        (
-            config
-            for name, config in (original.get("providers") or {}).items()
-            if os.path.expandvars(name).strip().lower() == provider
-        ),
-        {},
-    )
+    provider_config = _provider_source(original, provider)
     for key, value in values.items():
         # Follow the source of this field only. Matching expanded values globally
         # loses identity when independent environment references have equal values.
@@ -193,7 +198,9 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
             ]
         if kind != "rerank":
             for section, original_section, section_model in sections:
-                bindings = section_model.credentials or [section_model]
+                bindings = section_model.credentials
+                if kind == "embedding" and not bindings:
+                    bindings = [section_model]
                 section["credentials"] = [
                     _binding_values(
                         binding, section_model, kind == "embedding", original_section, index
@@ -275,9 +282,12 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     if not embedding:
         providers = result.get("providers") or {}
         provider = result.get("provider") or result.get("backend") or result.get("default_provider")
-        if not provider and len(providers) == 1:
-            provider = next(iter(providers))
-        defaults.update(providers.get(provider) or {})
+        if not provider and providers:
+            legacy = VLMConfig.model_validate(
+                json.loads(os.path.expandvars(_dump({**result, "credentials": []})))
+            )
+            _, provider = legacy.get_provider_config()
+        defaults.update(_provider_source(result, provider))
         if provider:
             defaults["provider"] = provider
     defaults.update({key: value for key, value in result.items() if key in fields})

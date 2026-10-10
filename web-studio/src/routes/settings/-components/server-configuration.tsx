@@ -438,6 +438,16 @@ export function ServerConfigurationEditor() {
     mutationFn: ({ content }: { content: string; restart?: boolean }) =>
       api.save(content, (baseline ?? query.data)!.revision),
     onSuccess: async (result, variables) => {
+      queryClient.setQueryData<ConfigFileConfiguration>(queryKey, (previous) =>
+        previous
+          ? {
+              ...previous,
+              ...result,
+              content: variables.content,
+              models: document?.models ?? previous.models,
+            }
+          : previous,
+      )
       await queryClient.invalidateQueries({ queryKey })
       setDraft(null)
       setEditor(null)
@@ -583,20 +593,24 @@ export function ServerConfigurationEditor() {
         {t('models.rootRequired')}
       </p>
     )
-  if (query.isError)
-    return (
-      <div role="alert" className="grid gap-3">
-        <p>{t('models.loadFailed')}</p>
-        {query.error instanceof Error && (
-          <p className="break-all text-sm text-muted-foreground">
-            {query.error.message}
-          </p>
-        )}
-        <Button variant="outline" onClick={() => void query.refetch()}>
-          {t('models.retry')}
-        </Button>
-      </div>
-    )
+  const loadError = query.isError ? (
+    <div role="alert" className="grid gap-3">
+      <p>{t('models.loadFailed')}</p>
+      {query.error instanceof Error && (
+        <p className="break-all text-sm text-muted-foreground">
+          {query.error.message}
+        </p>
+      )}
+      <Button
+        variant="outline"
+        disabled={pending}
+        onClick={() => void query.refetch()}
+      >
+        {t('models.retry')}
+      </Button>
+    </div>
+  ) : null
+  if (query.isError && !query.data) return loadError
   const hasOverrides = Boolean(
     query.data?.overrides?.cluster.length ||
     query.data?.overrides?.account.length,
@@ -623,6 +637,7 @@ export function ServerConfigurationEditor() {
     <TooltipProvider>
       <div className="grid min-w-0 gap-8">
         <div className="grid gap-3 border-b pb-5 text-sm">
+          {loadError}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <FileTextIcon className="size-4 text-muted-foreground" />
@@ -1047,6 +1062,14 @@ export function ServerConfigurationEditor() {
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
                   fields={fields}
                   value={editor.value}
+                  inheritedModel={
+                    editor.settings
+                      ? undefined
+                      : (editor.mode
+                          ? object(current(editor.kind)[editor.mode])
+                          : current(editor.kind)
+                        ).model
+                  }
                   readOnly={editor.readonly || pending}
                   onChange={(value) => {
                     if (pending) return
