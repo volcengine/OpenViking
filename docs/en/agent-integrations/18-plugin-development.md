@@ -213,6 +213,8 @@ The session-start skill catalog (`<available-skills>`) is part of `buildProfileB
 
 Automatic recall must carry the correct session and peer, and honor input filters, bypass, and switches. Keep empty results empty instead of injecting a server's no-relevant-memory sentinel. Compression failure may fall back to the existing uncompressed result, but must not invent a digest. Compressed `viking://` URIs must remain readable. Capture must distinguish the user's input, recalled context, and host wrappers so injected old memories are not captured again.
 
+The shared local compressor validates citations against the retrieved URIs before applying its 500-character bullet body and 4,000-character digest limits, including when reusing cached digests. It shortens fact text before the citation suffix; if the complete suffix cannot fit, it drops the whole bullet. If no valid bullet fits, compression fails and the caller keeps its existing uncompressed fallback. A missing served-URI set retains the legacy passthrough behavior and cannot establish citation validity.
+
 When using a host CLI for compression, isolate that auxiliary invocation from automatic memory hooks, bound its execution time, and reuse the existing compressor interface. Do not launch an agent that recursively invokes the same recall/capture hooks. Model selection and invocation belong to the host adapter; common compression result handling belongs to shared code.
 
 ### 5.4 Capture data and acknowledgement rules

@@ -91,10 +91,16 @@ export function repairDigestUris(digest, validUris = []) {
       if (/\s/.test(uri)) tokenized = tokenized.split(uri).join(encodeURI(uri));
     }
     let dropped = false;
-    const repaired = tokenized.replace(/viking:\/\/[^\s<>"')\]]+/g, (uri) => {
+    const repaired = tokenized.replace(/viking:\/\/[^\s<>"')\]]*/g, (uri) => {
       let decoded = uri;
       try { decoded = decodeURI(uri); } catch { /* keep the original candidate */ }
       if (validSet.has(decoded)) return decoded;
+      // A bare scheme is not a near-miss path. Exact served URIs, including
+      // those containing this substring, have already matched above.
+      if (decoded === "viking://") {
+        dropped = true;
+        return uri;
+      }
       const nearest = nearestUri(decoded, valid);
       if (nearest) return nearest;
       dropped = true;
@@ -112,10 +118,41 @@ export function normalizeCompressedContext(raw, maxChars = 4000, maxBullets = 6)
   const bullets = text.split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => /^[-*]\s+/.test(line) && line.includes("viking://"))
-    .slice(0, Math.max(1, maxBullets))
-    .map((line) => `- ${line.replace(/^[-*]\s+/, "").slice(0, 500).trim()}`);
+    .slice(0, Math.max(1, maxBullets));
   if (!bullets.length) return null;
-  return (`${DIGEST_HEADER}\n${bullets.join("\n")}`).slice(0, Math.max(100, maxChars));
+  const limit = Math.trunc(Math.max(100, maxChars));
+  if (Number.isNaN(limit)) return "";
+  let digest = DIGEST_HEADER;
+  for (const line of bullets) {
+    const body = line.replace(/^[-*]\s+/, "");
+    const sourceAt = body.indexOf("viking://");
+    // Keep the entire citation suffix atomic, including paths with spaces and
+    // multiple references. Only the fact text before it may be shortened.
+    const sources = body.slice(sourceAt).trim();
+    const available = Math.min(500, limit - digest.length - 3);
+    if (sources.length > available) continue;
+    if (body.length <= available) {
+      digest += `\n- ${body.trim()}`;
+      continue;
+    }
+    const fact = body.slice(0, sourceAt)
+      .slice(0, Math.max(0, available - sources.length - 1)).trimEnd();
+    digest += `\n- ${fact ? `${fact} ` : ""}${sources}`;
+  }
+  return digest === DIGEST_HEADER ? null : digest;
+}
+
+function finalizeDigest(raw, validUris, maxBullets) {
+  const text = String(raw || "").trim();
+  if (text.toUpperCase() === NO_RELEVANT_MEMORY) return "";
+  // Normalize accepted bullet markers without truncation before every-URI
+  // validation. Both fresh output and legacy cache entries use this path.
+  const bullets = text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+/.test(line) && line.includes("viking://"))
+    .slice(0, Math.max(1, maxBullets))
+    .map((line) => line.replace(/^[-*]\s+/, "- "));
+  return normalizeCompressedContext(repairDigestUris(bullets.join("\n"), validUris), 4000, maxBullets);
 }
 
 export function recallDigestCacheKey({
@@ -178,9 +215,11 @@ export async function compressRecallContext({
     maxInputChars,
     maxBullets,
   });
+  const entryUris = entries.map((entry) => entry?.uri).filter(Boolean);
+  const validUris = entryUris.length ? entryUris : (input.match(/viking:\/\/[^\s<>"']+/g) || []);
   const cached = await readCache(cachePath);
   if (cached?.key === key && typeof cached.digest === "string") {
-    const digest = normalizeCompressedContext(cached.digest, 4000, maxBullets);
+    const digest = finalizeDigest(cached.digest, validUris, maxBullets);
     if (digest) return { status: COMPRESS_OK, context: digest };
   }
 
@@ -190,16 +229,9 @@ export async function compressRecallContext({
     maxBullets,
   });
   const raw = await runCompressor(prompt);
-  const normalized = normalizeCompressedContext(raw, 4000, maxBullets);
-  if (normalized === null) return { status: COMPRESS_FAILED, context: "" };
-  if (!normalized) return { status: COMPRESS_EMPTY, context: "" };
-
-  const validUris = entries.map((entry) => entry?.uri).filter(Boolean);
-  const repaired = repairDigestUris(normalized, validUris.length
-    ? validUris
-    : (input.match(/viking:\/\/[^\s<>"']+/g) || []));
-  const digest = normalizeCompressedContext(repaired, 4000, maxBullets);
-  if (!digest) return { status: COMPRESS_FAILED, context: "" };
+  const digest = finalizeDigest(raw, validUris, maxBullets);
+  if (digest === null) return { status: COMPRESS_FAILED, context: "" };
+  if (!digest) return { status: COMPRESS_EMPTY, context: "" };
 
   await writeCache(cachePath, { key, digest, updatedAt: now || 0 });
   return { status: COMPRESS_OK, context: digest };
