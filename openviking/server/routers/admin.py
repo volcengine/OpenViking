@@ -868,6 +868,8 @@ async def restart_server(
             if config["revision"] != body.revision:
                 raise ValueError("ov.conf changed; reload before restarting")
             await asyncio.to_thread(preview_config_file, config["content"], {}, server_overrides)
+            if controller.recovery is not None and not controller.requested:
+                await asyncio.to_thread(controller.recovery.prepare, body.revision)
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         except OSError as exc:

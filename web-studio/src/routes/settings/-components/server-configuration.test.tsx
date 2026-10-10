@@ -918,6 +918,29 @@ it('saves before requesting restart and waits for a new service instance', async
     screen.queryByRole('button', { name: 'models.saveAndRestart' }),
   ).toBeNull()
 })
+it('reports a recovered instance as a rollback rather than applying the draft', async () => {
+  mount()
+  await screen.findByText('model-a')
+  await menuAction(section('vlmType'), 0, 'models.moveDown')
+  state.restart.mockImplementation(async () => {
+    state.get.mockResolvedValue({
+      ...structuredClone(data),
+      restart: {
+        supported: true,
+        instance_id: 'recovered',
+        restarting: false,
+        rolled_back: true,
+      },
+    })
+    return { supported: true, instance_id: 'old', restarting: true }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
+  expect(await screen.findByText('models.restartRolledBack')).toBeTruthy()
+  expect(screen.queryByText('models.restarting')).toBeNull()
+  expect(
+    screen.queryByRole('button', { name: 'models.restartService' }),
+  ).toBeNull()
+})
 it('does not restart after a save failure and preserves the draft', async () => {
   mount()
   await screen.findByText('model-a')

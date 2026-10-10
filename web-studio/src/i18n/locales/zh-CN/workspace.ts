@@ -855,8 +855,10 @@ const workspace = {
       restartService: '重启服务',
       restarting: '正在重启服务，等待连接恢复…',
       restarted: '服务已重启，配置已重新加载。',
+      restartRolledBack:
+        '新配置启动失败，已自动恢复此前运行的配置并重新启动服务。',
       restartFailed:
-        '未能确认服务重启成功。配置已保存在文件中；请检查服务状态。如修改了地址、端口或 ROOT 凭证，请更新连接设置后重试。',
+        '未能确认服务重启成功，请检查服务状态和当前配置。如修改了地址、端口或 ROOT 凭证，请更新连接设置后重试。',
       restartUnsupported:
         '当前启动方式不支持页面重启，请通过部署平台重启服务。',
       saveFailed: '保存失败，请检查模型参数及权限后重试。',

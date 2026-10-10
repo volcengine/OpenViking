@@ -7,6 +7,7 @@ import re
 import stat
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from openviking_cli.utils.config.embedding_config import EmbeddingCredential
@@ -281,9 +282,9 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
             raise ValueError("Model configuration must be an object")
 
 
-def save_config_file(content: str, revision: str, server_overrides: dict | None = None) -> dict:
-    """Save one startup-file revision; never update the running configuration."""
-    path = _path()
+@contextmanager
+def _config_file_lock(path: Path):
+    """Serialize Studio writes and restart recovery across processes."""
     lock_fd = os.open(path.with_name(f".{path.name}.studio.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(lock_fd, "r+b") as lock:
         if sys.platform == "win32":
@@ -294,6 +295,13 @@ def save_config_file(content: str, revision: str, server_overrides: dict | None 
             import fcntl
 
             fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def save_config_file(content: str, revision: str, server_overrides: dict | None = None) -> dict:
+    """Save one startup-file revision; never update the running configuration."""
+    path = _path()
+    with _config_file_lock(path):
         data, _, _ = _read(path, server_overrides)
         if not revision or revision != _revision(data):
             raise ValueError("ov.conf changed; reload before saving")

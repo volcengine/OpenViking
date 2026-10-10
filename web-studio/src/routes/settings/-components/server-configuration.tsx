@@ -355,7 +355,9 @@ export function ServerConfigurationEditor() {
     onSuccess: (result) => {
       queryClient.setQueryData(queryKey, result)
       setSaved(false)
-      toast.success(t('models.restarted'))
+      if (result.restart?.rolled_back)
+        toast.error(t('models.restartRolledBack'))
+      else toast.success(t('models.restarted'))
     },
   })
   const mutation = useMutation({
@@ -629,6 +631,11 @@ export function ServerConfigurationEditor() {
               {restartMutation.error instanceof Error
                 ? restartMutation.error.message
                 : ''}
+            </p>
+          )}
+          {query.data?.restart?.rolled_back && (
+            <p role="alert" className="text-destructive">
+              {t('models.restartRolledBack')}
             </p>
           )}
           {query.data?.restart?.supported === false && (

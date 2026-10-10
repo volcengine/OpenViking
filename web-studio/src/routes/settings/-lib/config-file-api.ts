@@ -25,6 +25,7 @@ export type RestartStatus = {
   supported: boolean
   instance_id: string
   restarting: boolean
+  rolled_back?: boolean
 }
 export async function waitForServerRestart(
   load: () => Promise<ConfigFileConfiguration>,

@@ -632,6 +632,7 @@ class OpenVikingConfigSingleton:
     _initializing: bool = False
     _config_file: Optional[Path] = None
     _config_file_revision: Optional[str] = None
+    _config_file_content: Optional[bytes] = None
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
@@ -690,6 +691,7 @@ class OpenVikingConfigSingleton:
                     cls._instance = OpenVikingConfig.from_dict(config_dict)
                     cls._config_file = None
                     cls._config_file_revision = None
+                    cls._config_file_content = None
                 else:
                     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
                     if path is not None:
@@ -729,6 +731,7 @@ class OpenVikingConfigSingleton:
             config = OpenVikingConfig.from_dict(config_data)
             cls._config_file = config_path.resolve()
             cls._config_file_revision = hashlib.sha256(data).hexdigest()
+            cls._config_file_content = data
             return config
         except json.JSONDecodeError as e:
             raise ValueError(f"Config file JSON format error: {e}")
@@ -750,6 +753,12 @@ class OpenVikingConfigSingleton:
             cls._instance = None
             cls._config_file = None
             cls._config_file_revision = None
+            cls._config_file_content = None
+
+    @classmethod
+    def get_config_file_content(cls) -> Optional[bytes]:
+        """Return the exact startup bytes for recovery, even after subsequent saves."""
+        return cls._config_file_content
 
     @classmethod
     def get_config_file_revision(cls) -> Optional[str]:

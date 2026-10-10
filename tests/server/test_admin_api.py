@@ -3523,8 +3523,10 @@ async def test_server_restart_requires_root_and_valid_revision(
     monkeypatch,
     cli_host,
 ):
+    import os
+
     from openviking.config.config_file import read_config_file
-    from openviking.server.restart import RestartController
+    from openviking.server.restart import RestartController, RestartRecovery
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
     account_id, admin_headers = template_account
@@ -3536,7 +3538,9 @@ async def test_server_restart_requires_root_and_valid_revision(
     assert user.status_code == 200
     user_headers = {"X-API-Key": user.json()["result"]["user_key"]}
     stopped = Mock()
-    controller = RestartController(stopped)
+    monkeypatch.delenv("OPENVIKING_RESTART_RECOVERY", raising=False)
+    monkeypatch.delenv("OPENVIKING_RESTART_ROLLED_BACK", raising=False)
+    controller = RestartController(stopped, RestartRecovery())
     lightweight_admin_app.state.restart_controller = controller
     path = tmp_path / "ov.conf"
     server = {}
@@ -3554,6 +3558,7 @@ async def test_server_restart_requires_root_and_valid_revision(
         )
     )
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file_content", path.read_bytes())
     revision = read_config_file(server_overrides)["revision"]
     url = "/api/v1/admin/restart"
     for headers in [admin_headers, user_headers, {}]:
@@ -3585,6 +3590,10 @@ async def test_server_restart_requires_root_and_valid_revision(
     assert accepted.json()["result"]["instance_id"] == controller.instance_id
     assert accepted.json()["result"]["restarting"]
     stopped.assert_called_once()
+    recovery = json.loads(os.environ["OPENVIKING_RESTART_RECOVERY"])
+    assert recovery["revision"] == revision
+    with open(recovery["backup"], "rb") as backup:
+        assert backup.read() == original
     assert path.read_bytes() == original
     blocked = await lightweight_admin_client.patch(
         "/api/v1/admin/configuration",

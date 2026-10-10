@@ -892,8 +892,10 @@ const workspace = {
       restartService: 'Restart service',
       restarting: 'Restarting the service, waiting for the connection…',
       restarted: 'Service restarted and configuration reloaded.',
+      restartRolledBack:
+        'Startup with the new configuration failed. The previous running configuration was restored and the service restarted.',
       restartFailed:
-        'Could not confirm the restart. Configuration is saved in the file; check the service status. If the address, port or ROOT credential changed, update connection settings and retry.',
+        'Could not confirm the restart. Check the service status and current configuration. If the address, port or ROOT credential changed, update connection settings and retry.',
       restartUnsupported:
         'This launch mode does not support remote restart. Restart through your deployment platform.',
       saveFailed:

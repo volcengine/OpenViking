@@ -585,6 +585,24 @@ acceptance, not successful recovery: poll the file configuration endpoint until
 prevent startup. If the address, port, or ROOT credential changes, update the
 client connection before polling. See [server configuration](../configuration/01-server.md).
 
+Before accepting a restart, the CLI saves the exact file bytes loaded by the
+running process in a separate private recovery backup (0600, containing sensitive
+configuration). If the new process fails while loading configuration, starting
+the Bot, initializing the application, or binding its port, it atomically restores
+the previous running configuration and starts again once. The recovered instance
+returns `result.restart.rolled_back: true`; Studio reports the rollback.
+The recovery backup is deleted after application startup and socket binding succeed.
+Subsequent runtime failures do not trigger rollback. Remote restart cannot switch
+to multiple workers; use the deployment platform for that change.
+
+This recovery backup differs from `.studio.bak`, which only contains the file
+before the most recent save and may never have started successfully. Recovery
+only restores the configuration file, not storage or external side effects.
+It does not handle stalled startup, forced process termination, or machine failure.
+External file changes after restart prevent automatic restoration. If the restored
+configuration also fails to start, no further retry occurs; an administrator must
+recover the service on the server.
+
 #### Account Configuration Reference
 
 Initialize Account configuration through `settings` on the create endpoint,
