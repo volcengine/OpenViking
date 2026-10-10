@@ -7,12 +7,14 @@ on:
       - 'examples/hermes-plugin/**'
       - '.github/workflows/hermes-plugin-tests.yml'
       - 'scripts/check-hermes-plugin-install.py'
+      - 'scripts/check-hermes-quick-local.py'
   push:
     branches: [main, develop]
     paths:
       - 'examples/hermes-plugin/**'
       - '.github/workflows/hermes-plugin-tests.yml'
       - 'scripts/check-hermes-plugin-install.py'
+      - 'scripts/check-hermes-quick-local.py'
   workflow_dispatch:
 
 permissions:
@@ -35,7 +37,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: NousResearch/hermes-agent
-          ref: 58d146e961108e84f41bfed59f586121ecb3372c
+          ref: 7951ddd7297a284d6da48804241ee05a8a0c621c
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -88,4 +90,82 @@ jobs:
           path: |
             ${{ runner.temp }}/hermes-plugin-install/*.log
             ${{ runner.temp }}/hermes-plugin-install/evidence.json
+          if-no-files-found: ignore
+
+  quick-local-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2025]
+        host: [main]
+        include:
+          - os: ubuntu-24.04
+            host: release
+            python: '3.13'
+            hermes_ref: v2026.9.24
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: .ci/hermes-agent
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ matrix.hermes_ref || '7951ddd7297a284d6da48804241ee05a8a0c621c' }}
+          path: .ci/hermes-agent
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python || '3.14' }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.3'
+          enable-cache: true
+          cache-dependency-glob: |
+            .ci/hermes-agent/uv.lock
+            examples/hermes-plugin/local_packages.py
+      - name: Install the reviewed host and test dependencies
+        run: |
+          if [ '${{ matrix.host }}' = release ]; then
+            uv sync --frozen --extra dev --no-install-project
+          else
+            uv sync --frozen --group dev --no-install-project
+          fi
+          PYTHON=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
+          uv pip install --python "$PYTHON" PyYAML==6.0.3
+      - name: Check process ownership and installer failures
+        run: |
+          uv run --no-sync python -m pytest \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_local_lifecycle.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Run the complete provider suite on the release host
+        if: matrix.host == 'release'
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
+        run: |
+          HERMES_PYTHON=$(uv run --no-sync python -c 'import sys; print(sys.executable)') \
+            scripts/run_tests.sh "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Install and run real Quick Local services
+        run: |
+          ARGS=()
+          if [ '${{ matrix.host }}' = release ]; then ARGS+=(--legacy-uv); fi
+          uv run --no-sync python "$GITHUB_WORKSPACE/scripts/check-hermes-quick-local.py" \
+            --hermes-root "$PWD" --output-dir "$RUNNER_TEMP/quick-local" "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-local-${{ matrix.os }}-${{ matrix.host }}
+          path: |
+            ${{ runner.temp }}/quick-local/evidence.json
+            ${{ runner.temp }}/quick-local/*/logs/openviking-server.log
           if-no-files-found: ignore

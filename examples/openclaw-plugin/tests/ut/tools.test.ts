@@ -531,6 +531,50 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
   });
 
+  it("returns a tool-visible failure when commit extracts zero memories", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: {},
+          trace_id: "trace-zero",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-zero", {
+      text: "Remember this important thing",
+    });
+
+    expect(result.content[0].text).toContain("created or updated no memory");
+    expect(result.content[0].text).toContain("no new memory was created");
+    expect(result.content[0].text).toContain("trace_id=trace-zero");
+    expect(result.content[0].text).not.toContain("Stored");
+    expect(result.details).toMatchObject({
+      action: "failed",
+      error: "no_memories_extracted",
+      memoriesCount: 0,
+      archived: true,
+      traceId: "trace-zero",
+    });
+  });
+
   it("uses a temporary session by default instead of the current tool session", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {

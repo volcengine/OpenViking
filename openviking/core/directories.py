@@ -427,3 +427,11 @@ class DirectoryInitializer:
         if scope in {"user", "session"}:
             return user_space_fragment(ctx)
         return ""
+
+
+def preset_directory_uris(ctx: RequestContext) -> frozenset[str]:
+    """URIs of the preset directories whose boilerplate L0/L1 is vectorized for ``ctx``."""
+    account_roots, account_children = DirectoryInitializer._account_directory_targets(ctx)
+    user_root, user_children = DirectoryInitializer._user_directory_targets(ctx)
+    targets = (*account_roots, *account_children, user_root, *user_children)
+    return frozenset(target.uri for target in targets)

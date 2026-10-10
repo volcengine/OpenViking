@@ -1,4 +1,4 @@
-# 快速开始
+# 导入并检索第一份文档
 
 OpenViking 以服务端运行。用独立的 `ov` CLI 连接服务，导入一份小文档，再检索其中的内容。使用托管服务或他人部署的服务时，只需安装 CLI。
 
@@ -52,7 +52,7 @@ ov config
 
 在交互配置中，火山托管服务选择 **OpenViking Service**，自建服务选择 **自定义（Custom）**。填写 API Key，自建服务还需填写 URL。默认本地服务的密钥留空。保存并激活配置。
 
-CLI 将当前连接保存到 `~/.openviking/ovcli.conf`，它与服务端的 `ov.conf` 是两个文件。脚本化配置和多服务切换见 [CLI 配置](05-cli-setup.md)。
+CLI 将当前连接保存到 `~/.openviking/ovcli.conf`，它与服务端的 `ov.conf` 是两个文件。多服务切换和让 Agent 配置见 [CLI 配置](05-cli-setup.md)。
 
 检查连接：
 
@@ -64,34 +64,32 @@ ov health
 
 ## 3. 导入文档
 
-在当前目录创建 `quickstart.md`，内容如下：
+本例导入一条真实的团队信息：OpenViking 每周发布由哪四位 GitHub 用户轮流负责。在当前目录创建 `ov-release-rotation.md`，内容如下：
 
 ```markdown
-# Atlas 项目
+# OpenViking 发布轮值
 
-Atlas 项目每周五备份文档。
-Maya 负责备份流程，每份备份保留 30 天。
+OpenViking 每周五发布一个新版本。
+发布负责人按顺序轮换：qin-ctx、zhoujh01、ZaynJarvis、t0saki。
 ```
 
 将它导入新的资源目录：
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
 ```
 
 CLI 会自动上传本地文件。`--wait` 等待处理完成，命令成功后再继续。若省略该参数，保存返回的 `task_id`，用 `ov task status <task_id>` 查询到 `completed` 后再使用结果。详见[后台任务](../api/17-tasks.md)。
 
-本例使用尚未使用的目标 URI。重复运行示例时，换一个新目标，并同步替换下方命令中的 URI。
-
 ## 4. 浏览与检索
 
 ```bash
-ov tree viking://resources/quickstart-demo
-ov overview viking://resources/quickstart-demo
-ov find "谁负责备份流程？" --uri viking://resources/quickstart-demo
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "谁负责 OpenViking 的每周发布？" --uri viking://resources/ov-release-rotation
 ```
 
-`tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。读取某条命中时，把返回的 URI 传给 `ov read`：
+`tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。这个问题的答案就在导入的文件中，所以该文件排在结果第一位。读取某条命中时，把返回的 URI 传给 `ov read`：
 
 ```bash
 ov read "<returned-file-uri>"
@@ -102,3 +100,7 @@ ov read "<returned-file-uri>"
 ## 使用 SDK
 
 OpenViking 也提供 Python、TypeScript/JavaScript 和 Go SDK，均连接同一个服务端。客户端示例见 [API 概览](../api/01-overview.md)。
+
+## 下一步
+
+先确认你已经读到示例原文，再按[用你的任务验证效果](06-evaluate.md)换成自己的资料或会话。接入日常工具时，选择[Agent 接入方式](../agent-integrations/01-overview.md)；自己写应用时，进入[应用开发路径](../workflows/01-overview.md)。

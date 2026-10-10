@@ -4,7 +4,9 @@
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
+from openviking_sdk.client import ERROR_CODE_TO_EXCEPTION
 
 SDK_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -71,3 +73,44 @@ def test_legacy_sync_http_client_shim_points_to_sdk():
 
     client = LegacySyncHTTPClient(url="http://localhost:1933")
     assert client._async_client._url == "http://localhost:1933"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("code", ERROR_CODE_TO_EXCEPTION)
+async def test_legacy_clients_preserve_server_error_details(sync, code):
+    from openviking_cli.client.http import AsyncHTTPClient
+    from openviking_cli.client.sync_http import SyncHTTPClient
+    from openviking_cli.exceptions import OpenVikingError
+
+    details = {
+        "resource": "viking://resources/demo",
+        "uri": "viking://resources/demo",
+        "retryable": True,
+        "upstream_status_code": 503,
+        "provider": {"retry_after": 2},
+    }
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                409,
+                json={
+                    "status": "error",
+                    "error": {"code": code, "message": "busy", "details": details},
+                },
+            )
+        ),
+    )
+    try:
+        with pytest.raises(OpenVikingError) as raised:
+            if sync:
+                client.stat("viking://resources/demo")
+            else:
+                await client.stat("viking://resources/demo")
+        assert raised.value.code == code
+        assert {key: raised.value.details[key] for key in details} == details
+    finally:
+        await async_client.close()

@@ -1,499 +1,286 @@
-# OpenViking CLI Setup
+# Install and use the CLI
 
-This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
+`ov` is the command-line client for OpenViking. OpenViking stores the context of your agents as a file system: resources, memories, and skills are directories and files under `viking://`. With `ov`, you can browse, read, search, and write this content. Agents use the same commands.
 
-`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) first.
+`ov` connects to an existing OpenViking server. If you do not have a server yet, do step 1 of the [Quick Start](02-quickstart.md) first.
 
-Use this page in either of two ways:
+## Set up with an agent
 
-- If you are setting up `ov` yourself, follow [Manual Setup](#manual-setup).
-- If you are asking an agent to set it up for you, give the agent this page and ask it to follow [Agent-Assisted Setup](#agent-assisted-setup).
+Click **Copy** below and paste the prompt into your coding agent, for example Claude Code, Codex, or Cursor. The agent installs `ov`, asks you which server to use, and then saves the config and checks the connection.
 
-The CLI evolves quickly. Use `ov --help` and `ov <command> --help` as the source of truth for the commands available in your installed version.
+<AgentPrompt>
 
-## What This Configures
+````markdown
+# openviking-cli
 
-The CLI defaults to `~/.openviking/ovcli.conf`. When `OPENVIKING_CLI_CONFIG_FILE` is set, normal commands read that file. Named configuration management still operates on the default directory, so check the effective path after switching.
+> `ov` is the command-line client for OpenViking, a context database for AI agents. It connects to an existing OpenViking server or to OpenViking Service on Volcengine.
 
-When you create named configs, `ov` stores them next to the active file as `~/.openviking/ovcli.conf.<name>`. Switching configs copies the chosen saved config into `~/.openviking/ovcli.conf`.
+I want you to install and configure the OpenViking CLI (`ov`) for me. Execute all the steps below autonomously. Stop and ask me only where a step says ASK.
 
-`ov config` is the human-friendly interactive manager. It can add, edit, delete, validate, and switch configs.
+OBJECTIVE: Install `ov`, save a named connection to my OpenViking server, and make it the active config.
 
-`ov config add`, `ov config edit`, `ov config list`, `ov config switch <name>`, and `ov config delete` are deterministic commands for scripts and agents.
+DONE WHEN: `ov config validate` shows every check as passed (config file valid, server reachable, auth accepted, healthy), and `ov health -o json` returns `"healthy": true`.
 
-## Choose a Target
+## TODO
 
-Choose the OpenViking target before running setup commands.
+- [ ] Install `ov` and set its display language
+- [ ] Find out which server to connect to
+- [ ] Save and activate a named config
+- [ ] Verify the connection
 
-Agents should ask the user which target they want unless it has already been specified. Existing configs, active configs, local files, default ports, and running services can inform follow-up questions, but they are not consent for the agent to choose a target, switch or replace configs, probe local services, start servers, or write data.
+## Rules
 
-### OpenViking Service (VolcEngine Cloud)
+- You must not guess the target. Existing configs, local files, open ports, and running services are not my consent.
+- You must ASK before you switch, replace, or delete a config, probe or start a local server, or write data.
+- You must keep API keys out of command text, shell history, logs, memory, and printed config files. Pass a key only through stdin or through an environment variable that already exists.
+- If you cannot pass a key that way, ASK me to run `ov config` and type the key myself.
+- You must pass `--name` to `ov config add`, so that a retry updates the same config.
+- You must add `-o json` to `ov config add|edit|list|switch|delete`. Branch on the exit code and `error.code`, not on prose.
+- If the installed `ov --help` differs from this file, follow the installed help and tell me the difference.
 
-Choose this when you want OpenViking hosted as a managed service on VolcEngine Cloud.
+## Step 1: Install ov
 
-- Server endpoint used by `ov`: `https://api.vikingdb.cn-beijing.volces.com/openviking`
-- Console page for API keys: https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing
-- In the console, go to User Management → API Key to view and copy your key.
-- API key is required.
-- Standard setup only needs the API key. Do not ask for `--account` or `--user` unless the user's administrator specifically provides identity override values.
-
-### Remote Custom
-
-Choose this when you connect to a custom OpenViking server hosted somewhere other than the current machine.
-
-- Server URL is provided by the user or server administrator.
-- API key may be required.
-- Root-key-only data access requires a `trusted` server and explicit `--account` and `--user`; `api_key` servers require a user/admin key for data access.
-
-### Local Custom
-
-Choose this only when the user wants to connect to a custom OpenViking server on the current machine.
-
-- Default local URL: `http://127.0.0.1:1933`
-- API key is usually not needed for a local unauthenticated server.
-- Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local custom setup.
-
-> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. In the current source, help requests, `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` bypass this gate, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks below.
-
-## Before You Start
-
-You need:
-
-- A way to install the CLI:
-  - Node.js and npm for the standalone `@openviking/cli` package, or
-  - Python tooling if you install the full `openviking` package.
-- A reachable OpenViking target:
-  - OpenViking Service (VolcEngine Cloud), or
-  - a custom OpenViking server.
-- An API key if your target requires authentication.
-
-API keys are sensitive. Prefer entering them through the interactive `ov config` prompt when you configure `ov` yourself. Only provide API keys to an agent through a channel you intentionally trust. The agent should pass the key through stdin and must not put it in shell commands, logs, long-term memory, or raw config output. Use an environment variable only when the key is already present in the shell environment.
-
-## Install `ov`
-
-Check whether `ov` is already installed:
+You need Node.js and npm.
 
 ```bash
-command -v ov
+command -v ov || npm i -g @openviking/cli
+ov language en
 ov --version
 ```
 
-If `ov --version` or any other `ov` command says OpenViking needs a display language, choose one and retry:
+Use `ov language zh-CN` instead if I write to you in Chinese. Most `ov` commands exit with code 2 in a non-interactive shell until a display language is saved.
+
+If `ov` is not found after the install, add `$(npm prefix -g)/bin` to `PATH`. Do not use `sudo npm`. If npm is not available, ASK me before you build from source with `cargo install --git https://github.com/volcengine/OpenViking ov_cli`.
+
+Read the help for the commands you will use:
 
 ```bash
-ov language en
-# or
-ov language zh-CN
+ov config add ov-service --help
+ov config add custom --help
 ```
 
-Install or upgrade the npm package:
+## Step 2: Find out the target
+
+Run `ov config list -o json`. If a saved config already matches the target, ASK me before you activate it with `ov config switch <NAME> -o json`.
+
+Otherwise ASK me which target to use, unless I already told you:
+
+| Target | URL | API key |
+|---|---|---|
+| OpenViking Service (Volcengine) | Fixed. Do not pass `--url`. | Required. I get it in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) under User Management → API Key. |
+| Remote custom server | ASK me. | ASK me. |
+| Local custom server | `http://127.0.0.1:1933` | Usually none. |
+
+For a local custom server only, check that it runs: `curl -fsS http://127.0.0.1:1933/health`. If the check fails, ASK me to start the server. See https://docs.openviking.ai/en/guides/03-deployment.
+
+Do not ask for `--account` or `--user` unless my administrator gave me these values.
+
+## Step 3: Save and activate the config
+
+Replace `<NAME>`, `<URL>`, and `<ENV_VAR>` with confirmed values. Remove the angle brackets. `$OV_API_KEY` stands for a trusted runtime source of the key, not the literal key.
+
+OpenViking Service:
+
+```bash
+printf '%s' "$OV_API_KEY" | ov config add ov-service --name <NAME> --api-key-stdin --activate -o json
+```
+
+Remote custom server with an API key:
+
+```bash
+printf '%s' "$OV_API_KEY" | ov config add custom --name <NAME> --url <URL> --api-key-stdin --activate -o json
+```
+
+Local custom server without authentication:
+
+```bash
+ov config add custom --name <NAME> --url http://127.0.0.1:1933 --activate -o json
+```
+
+Special key cases:
+
+- If the key is already in an environment variable, use `--api-key-env <ENV_VAR>` instead of `--api-key-stdin`.
+- Root key only, on a server in `trusted` mode: use `--root-api-key-stdin --account <ACCOUNT> --user <USER>`. On a server in `api_key` mode, a root key cannot read data. ASK me for a user or admin key.
+- User key and root key together: use `--api-key-stdin --root-api-key-env <ENV_VAR>`. A command has only one stdin, so the second key must come from an existing environment variable.
+
+Exit codes of `ov config` subcommands:
+
+| Code | Meaning | Your action |
+|---|---|---|
+| `0` | Success, or already in the target state | Continue. |
+| `2` | Bad input, missing argument, or no display language | Fix the input, or run `ov language <code>`. |
+| `3` | A config with this name exists with different content | ASK me before you add `--force`. |
+| `4` | Server unreachable, or validation failed | ASK me to confirm the URL and that the server runs. |
+| `5` | Authentication failed, or wrong key role | ASK me to confirm the key and key type. |
+| `6` | Operation refused, for example deleting the active config | ASK me how to continue. |
+
+Do not retry with guessed values.
+
+## Step 4: Verify
+
+```bash
+ov config validate
+ov health -o json
+```
+
+Read the output. Exit code 0 alone does not prove that the server is healthy. To inspect the config, use `ov config show`, which hides secrets. Do not print `~/.openviking/ovcli.conf`.
+
+Do not import data as a demo unless I ask.
+
+After setup, I may ask you to browse, search, add, or organize content with `ov`. OpenViking content is a directory tree under `viking://`. To read, first use `ov abstract` or `ov overview` to read the directory summary. Then use `ov read` to read only the files you need. Run `ov --help` to see the command groups. Run `ov <command> --help` before you use a command.
+
+EXECUTE NOW: Complete the above TODO list to achieve: `ov config validate` shows every check as passed, and `ov health -o json` returns `"healthy": true`.
+
+For more context, read https://docs.openviking.ai/llms.txt.
+````
+
+</AgentPrompt>
+
+The rest of this page describes manual setup.
+
+## Before you start
+
+You need Node.js and npm.
+
+You also need connection details. They depend on the server type:
+
+| Server type | Server URL | API key |
+|---|---|---|
+| OpenViking Service (Volcengine) | Fixed. You do not enter it. | Required. Get it in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) under **User Management → API Key**. |
+| Remote self-hosted server | Get it from your administrator. | Get it from your administrator. |
+| Self-hosted server on this machine | `http://127.0.0.1:1933` | Not needed for the default setup. |
+
+## 1. Install `ov`
 
 ```bash
 npm i -g @openviking/cli
+ov language en
+ov --version
 ```
 
-Or build the Rust CLI from source:
+`ov language` sets the display language. Use `zh-CN` for Chinese. Most commands do not run until you set a language.
 
-```bash
-cargo install --git https://github.com/volcengine/OpenViking ov_cli
-```
+A machine that runs the OpenViking server already has `ov`. On that machine, skip `npm i` and only set the language.
 
-The npm package is the simplest standalone CLI install. The Python SDK is a separate package — install `openviking-sdk` only where Python code imports it; it does not provide the `ov` command. If the machine already runs the server (`uv tool install openviking`), that install ships `ov` as well, so no extra CLI install is needed there.
-
-Verify:
-
-```bash
-ov --help
-```
-
-If `ov` is still not found, close and reopen the shell, or check the npm global prefix:
-
-```bash
-npm prefix -g
-```
-
-On macOS and Linux, the global npm binary directory is usually `$(npm prefix -g)/bin`. Make sure that directory is on `PATH`.
-
-## Key Types
-
-OpenViking CLI configs can hold a user key, a root key, or both.
-
-- User key: use this for normal data commands such as `ov add-resource`, `ov find`, and `ov tree`. The server derives the identity from the key, so you usually do not pass `--account` or `--user`. This is what most users want.
-- Root key: use this for admin work and commands that require `--sudo`. In `api_key` mode, root keys cannot access tenant data, even with `--account` and `--user`. Only a `trusted` server accepts those identity headers for root-key-authenticated data access.
-- User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key. Do not add `account` or `user` settings in API key mode.
-
-## Manual Setup
-
-Use this path when you are reading the guide and configuring `ov` yourself.
-
-Run:
+## 2. Add a connection
 
 ```bash
 ov config
 ```
 
-Then choose:
+Follow the prompts:
 
-1. `Add config`
-2. `OpenViking Service (VolcEngine Cloud)` or `Custom`
-3. A config name, or leave it empty to generate one
-4. The required URL and API key values for the target you chose above
-5. Save the config after validation
+1. Select **Add Config**.
+2. Select the server type. For OpenViking Service, select **OpenViking Service (VolcEngine Cloud)**. For a self-hosted server, select **Custom**.
+3. Enter a name for the config. If you leave it empty, `ov` generates a name.
+4. Enter the server URL and the API key that the prompts ask for.
+5. After validation passes, select **Save and activate**.
 
-If you manage more than one OpenViking target, use:
-
-```bash
-ov config switch
-```
-
-to choose the active config later.
-
-After setup, continue to [Verify The Setup](#verify-the-setup).
-
-## Agent-Assisted Setup
-
-Use this path when an agent is setting up `ov` for a user. The agent should read this whole page. The manual setup path above is the fallback when deterministic commands do not fit the user's environment.
-
-### Agent Checklist
-
-1. Ask which target the user wants unless it has already been specified: OpenViking Service (VolcEngine Cloud), remote custom, or local custom.
-2. Do not infer the intended setup from existing configs, active configs, local files, default ports, or running services.
-3. Ask before switching configs, replacing configs, probing local services, starting servers, or writing data.
-4. Run `ov --help`, `ov config --help`, and the relevant config subcommand help before choosing commands. Select a display language with `ov language <code>` if none is saved.
-5. If you have long-term memory and the user permits it, store a short summary of the current `ov --help` command surface. Do not store API keys or other secrets.
-6. Use non-interactive `ov config` commands when the required values are known.
-7. Always pass `--name` for agent setup so retries target the same saved config.
-8. If the agent already holds the API key through a trusted channel, pass it with `--api-key-stdin` or `--root-api-key-stdin` and write only the key bytes to stdin. Use `--api-key-env` or `--root-api-key-env` only when that environment variable already exists. Do not ask the user to open a separate shell just to export a key for the agent.
-9. Use `-o json` and branch on the JSON result plus the process exit code.
-10. Validate the active config with `ov config validate`, then check `ov health` and `ov status`. Inspect the result contents; a zero exit code alone does not mean the service is healthy.
-11. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
-
-### Inspect the Installed CLI
-
-Run:
+## 3. Check the connection
 
 ```bash
-ov --help
-ov config --help
-ov config add --help
-ov config add ov-service --help
-ov config add custom --help
-ov config edit --help
-```
-
-Use the installed CLI help as the source of truth. If this page and the installed help disagree, follow the installed help and tell the user what changed.
-
-If a help command says OpenViking needs a display language, run `ov language en`, or `ov language zh-CN` if the user wants Chinese, then retry. Non-interactive config subcommands such as `ov config add`, `ov config list`, `ov config edit`, `ov config switch <name>`, and `ov config delete` can run before the display language is set.
-
-### Use Stable Names for Retries
-
-Always pass `--name` when an agent creates a config. If you omit it, `ov` generates a random name; a retry can create a second saved config instead of updating the intended one.
-
-`ov config add` is safe to run again with the same `--name` when the values are identical. It exits `0`, and `--activate` will make that saved config active again. If the same name already exists with different values, the command exits `3` and asks for `--force`.
-
-In the examples below, replace placeholders such as `<CONFIG-NAME>` and `<REMOTE-OPENVIKING-URL>` with user-approved values before running commands. Do not include the angle brackets.
-
-### Reading Results
-
-When you use `-o json` with the non-interactive config commands, successful results are printed to stdout:
-
-```json
-{"status":"ok","result":{"action":"add","name":"<CONFIG-NAME>"}}
-```
-
-The result object depends on the subcommand. `add` and `edit` also include fields such as `kind`, `url`, `saved_path`, `active_path`, `activated`, and `validation`, so agents should not assume that only `action` and `name` are present.
-
-Errors are printed to stderr:
-
-```json
-{"status":"error","error":{"code":"bad_input","message":"..."}}
-```
-
-Agents should branch on the process exit code and the JSON `error.code`, not on human-readable prose.
-
-| Exit code | Meaning |
-|-----------|---------|
-| `0` | Success, or already in the desired state |
-| `2` | Bad input, missing value, invalid name, unreadable secret source, or no display language selected in a non-interactive shell (run `ov language <code>` first) |
-| `3` | A config with that name already exists with different values; pass `--force` only if replacement is intended |
-| `4` | Server unreachable or config validation failed |
-| `5` | Authentication or key-role mismatch, such as passing a root key where a user key is expected |
-| `6` | Refused operation, such as deleting the active config |
-
-### List Existing Configs
-
-```bash
-ov config list -o json
-```
-
-The list output shape is:
-
-```json
-{"status":"ok","result":[{"name":"<CONFIG-NAME>","kind":"OpenViking Service","url":"https://api.vikingdb.cn-beijing.volces.com/openviking","active":true}]}
-```
-
-For an existence check, inspect `result[].name`. To decide whether a config already needs switching, inspect the matching entry's `active` flag.
-
-If a suitable saved config already exists, activate it by name:
-
-```bash
-ov config switch <CONFIG-NAME> -o json
-```
-
-Then run the verification commands.
-
-### Add OpenViking Service
-
-If the agent already holds the API key through a trusted channel, run:
-
-```bash
-ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
-```
-
-A shell pipe has this shape:
-
-```bash
-printf '%s' "$API_KEY" | ov config add ov-service --name <CONFIG-NAME> --api-key-stdin --activate -o json
-```
-
-`$API_KEY` stands for a trusted runtime secret source, not the literal key. Use stdin when the agent can supply the key without putting it in the command text, shell history, logs, or a long-lived exported environment variable.
-
-Write only the API key bytes to stdin. Do not place the key in the shell command. This writes an OpenViking Service config using the fixed endpoint `https://api.vikingdb.cn-beijing.volces.com/openviking`. The `ov-service` target does not take a custom server URL.
-
-Use an environment variable only if it already exists in the shell:
-
-```bash
-ov config add ov-service --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --activate -o json
-```
-
-Do not pass `--account` or `--user` for standard OpenViking Service setup. Use them only when the user or their OpenViking administrator provides identity override values.
-
-### Add a Local Custom Server
-
-Use this path only after the user chooses local custom setup.
-
-For a local unauthenticated server:
-
-```bash
-ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
-```
-
-If the local server is not running, guide the user to start it first. See the [Deployment Guide](../guides/03-deployment.md).
-
-### Add a Remote Custom Server
-
-For a hosted custom server with a normal API key:
-
-```bash
-ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
-```
-
-The stdin pipe form is:
-
-```bash
-printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --activate -o json
-```
-
-Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
-
-For a custom server in `trusted` mode, a root-only config must include the target account and user. For an `api_key` server, obtain a user/admin key for normal data commands instead:
-
-```bash
-ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
-```
-
-Write the trusted deployment's root API key to stdin. The account and user identify the caller for trusted data requests.
-
-For a custom server where the user has both a user key and a root key, store both in one config:
-
-```bash
-ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --api-key-stdin --root-api-key-env <ROOT-API-KEY-ENV-VAR> --activate -o json
-```
-
-This keeps normal commands on the user key and lets `--sudo` commands use the root key. Because one command has only one stdin stream, the second key must come from an existing environment variable. If neither key is already available in the environment, use `ov config` and guide the user through the interactive flow.
-
-### Edit or Replace a Config
-
-List configs first:
-
-```bash
-ov config list -o json
-```
-
-Rename and activate a saved config:
-
-```bash
-ov config edit <CONFIG-NAME> --new-name <NEW-CONFIG-NAME> --activate -o json
-```
-
-Replace an API key:
-
-```bash
-ov config edit <CONFIG-NAME> --api-key-stdin --activate -o json
-```
-
-Write the replacement API key to stdin.
-
-Replace a custom server URL:
-
-```bash
-ov config edit <CONFIG-NAME> --url <CUSTOM-OPENVIKING-URL> --activate -o json
-```
-
-Use `--force` only when you intentionally want to replace an existing saved config name.
-
-### Delete a Saved Config
-
-Delete only non-active saved configs:
-
-```bash
-ov config delete <OLD-CONFIG-NAME> -o json
-```
-
-If the config is active, switch to another config first:
-
-```bash
-ov config switch <CONFIG-NAME> -o json
-ov config delete <OLD-CONFIG-NAME> -o json
-```
-
-## Verify the Setup
-
-Run:
-
-```bash
-ov config show
-ov config list -o json
 ov config validate
-ov health
-ov status
 ```
 
-Use `ov config show` for inspection because it redacts secrets.
+The connection works when all items under **Checks** pass: Config file `valid`, Server `reachable`, Auth `accepted`, and Health `healthy`.
 
-Do not print the raw config file unless you understand that it may contain secrets.
+Setup is complete. Next, you can [import and retrieve your first document](02-quickstart.md#_3-import-a-document). To learn more, read on.
 
-If a verification command says OpenViking needs a display language, run `ov language en`, or `ov language zh-CN` if the user wants Chinese, then rerun verification.
+## What you can do with `ov`
 
-`ov status` includes broader server and data diagnostics. Confirm that `ov config validate` succeeds and inspect the `healthy` value from `ov health`. Currently, `ov health` and table-mode `ov status` can exit 0 while reporting an unhealthy state, so automation must inspect the result. A status warning unrelated to connectivity does not necessarily mean CLI setup failed.
+OpenViking content is a directory tree. Run `ov ls` to list the root, `viking://`:
 
-## Learn the Rest of the CLI
+- `viking://resources/`: imported documents, code repositories, and web pages. Shared in the account.
+- `viking://user/<user-id>/`: your memories, private resources, skills, and sessions. `viking://~/` points to this directory.
+- `viking://agent/`: skills and agent configuration, shared in the account.
 
-After the config is working, use the built-in help to explore the rest of `ov`:
+Each directory has an L0 abstract and an L1 overview. The full text of a file is L2. Read the L0 and L1 of a directory first to decide if it is relevant. Then read only the L2 files that you need. For details, see [Viking URI](../concepts/04-viking-uri.md) and [Context Layers](../concepts/03-context-layers.md).
+
+| Task | Commands |
+|---|---|
+| Browse | `ov ls`, `ov tree`, `ov stat`. `ov tui` opens an interactive browser. |
+| Read by layer | `ov abstract` (L0), `ov overview` (L1), `ov read` (L2). `ov get` downloads a file to your machine. |
+| Search | `ov find` (semantic search), `ov grep` (match content), `ov glob` (match paths) |
+| Import documents and skills | `ov add-resource`, `ov add-skill`, `ov skills` |
+| Write and organize | `ov write`, `ov mkdir`, `ov mv`, `ov cp`, `ov rm` |
+| Extract memories from a conversation | `ov session new`, `ov session add-message`, `ov session commit`. `ov add-memory` does these three steps in one command. |
+| Wait for background processing | `ov task list`, `ov task status`, `ov wait` |
+| Save and roll back versions | `ov snapshot` |
+| Back up and move data | `ov export`, `ov import`, `ov backup`, `ov restore` |
+| Rebuild indexes (`viking://resources` needs an admin key) | `ov reindex` |
+| Manage users (admin or root key) | `ov admin list-users`, `ov admin register-user`, `ov admin regenerate-key` |
+| Check the server | `ov health`, `ov status` |
+
+After you import content or commit a session, the server processes it in the background: it parses content, extracts memories, generates L0 and L1, and builds indexes. Until processing is complete, `ov find` does not return the new content.
+
+Run `ov <command> --help` to see the options of a command. You can also ask your agent to do any of these tasks.
+
+::: warning Caution
+`ov rm -r` deletes a directory and all of its content. The delete runs on the server, so other agents that use the same server also lose this content. Before you delete, use `ov ls` to check the URI.
+:::
+
+## Manage several connections
 
 ```bash
-ov --help
-ov config --help
-ov add-resource --help
+ov config list     # list saved configs
+ov config switch   # select the active config
+ov config show     # show the active config, with secrets hidden
 ```
 
-Check the relevant help before unfamiliar commands, especially ingestion targets, asynchronous waiting, and deletion options.
+To edit or delete a config, run `ov config` and select the action. To add a config from a script, use `ov config add`. Run `ov config add --help` for the options.
 
-## Credential Safety
+The active config is `~/.openviking/ovcli.conf`. Each saved config is `~/.openviking/ovcli.conf.<name>`. If you set `OPENVIKING_CLI_CONFIG_FILE`, `ov` uses that file as the active config, and saved configs are in the same directory as that file. For all fields, see [Client Configuration](../configuration/02-client.md).
 
-- API keys may grant access to your OpenViking data.
-- Prefer the interactive `ov config` prompt for manual setup.
-- For agent-assisted setup, provide API keys only through a channel you intentionally trust.
-- Agents should pass keys through stdin. Use environment variables only when they already exist in the shell.
-- Do not include API keys directly in shell commands that may be saved in shell history.
-- Do not print raw `~/.openviking/ovcli.conf`.
-- Do not share screenshots that reveal API keys.
-- Use temporary or revocable keys for demos and trials.
+## API keys
+
+When the server uses API key authentication, a key has one of three roles:
+
+- **User key**: for data commands, such as `ov add-resource` and `ov find`. Most users need only this key.
+- **Admin key**: for data commands, and for managing the users of its account.
+- **Root key**: for managing the whole server, for example to create accounts. In `api_key` mode, a root key cannot read or write account data.
+
+One config can hold a user key and a root key. Normal commands use the user key. `ov admin`, `ov system`, `ov reindex`, `ov task status`, and `ov task list` use the root key when you add `--sudo`. For details, see [Authentication](../guides/04-authentication.md).
+
+To keep API keys safe:
+
+- Type the key in the `ov config` prompt. Do not put a key in a command, because the shell history keeps it.
+- Use `ov config show` to look at a config. It hides secrets. Do not share the content or screenshots of `~/.openviking/ovcli.conf`.
+- For demos and trials, use a temporary key that you can revoke.
+- If an agent sets up `ov` for you, do not paste the key into the chat. Put the key in an environment variable, or run `ov config` yourself and type the key when the agent asks.
 
 ## Troubleshooting
 
-### `ov` Is Not Found
+### `ov` is not found
 
-Run:
+Open a new terminal. If `ov` is still not found, add the npm global binary directory to `PATH`. On macOS and Linux, this directory is usually `$(npm prefix -g)/bin`.
 
-```bash
-npm i -g @openviking/cli
-npm prefix -g
-```
+### npm reports a permission error
 
-Then reopen the shell or add the global npm binary directory to `PATH`. On macOS and Linux, that directory is usually `$(npm prefix -g)/bin`.
+Fix the permissions in the way you usually manage Node.js, for example with nvm. Do not run `sudo npm i -g` unless you always manage global packages that way.
 
-### npm Global Install Fails
+### A command asks for a display language
 
-If npm reports a permission error, use your normal Node.js setup policy. Avoid `sudo npm i -g` unless you intentionally manage global npm packages with sudo.
+Run `ov language en` or `ov language zh-CN`. Then run the command again.
 
-### Local Server Is Not Running
+### The local server does not respond
 
-Use this only when the user chose local custom setup. Then verify the server:
+Check the server:
 
 ```bash
 curl http://127.0.0.1:1933/health
 ```
 
-If it fails, start the server before configuring `ov`. See the [Deployment Guide](../guides/03-deployment.md).
+If this fails, start the server first. See [Deployment](../guides/03-deployment.md).
 
-### API Key Validation Fails
+### API key validation fails
 
-Run `ov config` again and edit the config. For OpenViking Service, confirm the key came from the OpenViking console URL above. For custom servers, confirm whether the server requires authentication.
+Run `ov config`, select **Edit Config**, and enter the key again. For OpenViking Service, copy the key from the console. For a self-hosted server, ask your administrator for the correct key and key type. In `api_key` mode, data commands need a user key or an admin key.
 
-Agents should not keep retrying unknown keys. Ask the user to confirm the target type, server URL, key type, account, and user.
+### The wrong config is active
 
-### The Wrong Config Is Active
+Run `ov config list` to see which config is active. Run `ov config switch` to select another one.
 
-Inspect and switch:
+## Next steps
 
-```bash
-ov config show
-ov config list
-ov config switch
-ov config validate
-```
-
-Agents can switch by name:
-
-```bash
-ov config list -o json
-ov config switch <CONFIG-NAME> -o json
-```
-
-### Non-Interactive Setup Does Not Fit
-
-Use the interactive wizard:
-
-```bash
-ov config
-```
-
-This is the right fallback when a secret should be typed directly by the user, when the target is unclear, or when validation needs human judgment.
-
-### Old Setup Commands
-
-Use `ov config`. Do not use old or removed setup commands such as `ov config setup-cli`.
-
-## Next Steps
-
-Once the CLI is configured, use `ov --help` and `ov <command> --help` to learn the rest of the CLI.
-
-Adding a resource writes data into the active OpenViking server. If you want a small demo, use a resource you are comfortable storing. Agents must ask the user for permission before running this kind of demo command. Connection verification alone does not require writing a resource.
-
-```bash
-ov add-resource https://github.com/volcengine/OpenViking
-# Use the returned task_id; search after its status reaches completed
-ov task status TASK_ID
-ov find "what is OpenViking"
-ov tree viking://resources/ -L 2
-```
-
-For all commands:
-
-```bash
-ov --help
-ov config --help
-ov add-resource --help
-```
-
-## Rebuilding Indexes
-
-`ov reindex <uri>` validates and repairs indexes for already-imported content. Three modes are available. Resource and skill records whose MD5 fingerprints already match are skipped by default:
-
-- `--mode vectors_only` — refresh vectors only.
-- `--mode semantic_and_vectors` — regenerate semantic artifacts (`.abstract.md`, `.overview.md`) before refreshing vectors.
-
-Both rebuild modes process the full subtree by default; add `--recursive=false` to process only the target itself. Add `--force` to bypass MD5 comparison and rebuild all resource/skill semantic and vector data in scope.
-
-There is no `semantic` or `full` mode alias.
+- Import and retrieve your first document: [Quick Start](02-quickstart.md).
+- Connect OpenViking to the agent you use every day: [Agent integrations](../agent-integrations/01-overview.md).

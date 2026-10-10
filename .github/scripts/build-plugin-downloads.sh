@@ -37,15 +37,18 @@ bash "${SCRIPTS}/stamp-installer-version.sh" "${SHARED}/install.sh" "${VERSION}"
 cp "${SHARED}/bootstrap.sh" "${OUT}/memory-plugin-shared/bootstrap.sh"
 
 # The git marketplace is committed before the zips are built: zipping resets
-# the staged files' times.
+# the staged files' times. Like the zips, the repository keeps its bytes until
+# the plugins change: a new commit and pack name on every deploy leaves the CDN
+# serving refs and packs of different deploys for a while, failing git clients.
 SRC="${WORK}/memory-plugins-src"
 cp -R "${STAGE}" "${SRC}"
 git -C "${SRC}" init -q -b main
 git -C "${SRC}" add -A
-git -C "${SRC}" -c user.email=release@openviking.org -c user.name="OpenViking Release" \
-  commit -qm "plugins ${VERSION}"
+GIT_AUTHOR_DATE="2000-01-01T00:00:00Z" GIT_COMMITTER_DATE="2000-01-01T00:00:00Z" \
+  git -C "${SRC}" -c user.email=release@openviking.org -c user.name="OpenViking Release" \
+  commit -qm "OpenViking memory plugins"
 git clone -q --bare "${SRC}" "${OUT}/plugins/memory-plugins.git"
-git -C "${OUT}/plugins/memory-plugins.git" repack -adq
+git -C "${OUT}/plugins/memory-plugins.git" -c pack.threads=1 repack -adq
 git -C "${OUT}/plugins/memory-plugins.git" update-server-info
 # Static hosts serve files only; the sample hooks are of no use to a client.
 rm -rf "${OUT}/plugins/memory-plugins.git/hooks"

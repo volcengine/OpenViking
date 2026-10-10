@@ -1,4 +1,4 @@
-# DeepSeek Harness 记忆插件
+# DeepSeek Harness
 
 为 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)（`dsh`）接入跨项目、跨会话的长期记忆。安装后每次对话都会自动召回相关记忆并捕获新内容，模型也会直接拿到 OpenViking 工具以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory` 三个技能，无需额外配置。
 
@@ -52,7 +52,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 工作方式
 
-插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`；每个模型步骤前用当前输入做语义检索，把结果作为持久消息追加到同一步骤——因此注入会随会话重放，也对压缩可见。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，待同步 token 超过阈值即 commit，并保留最近十条消息在本地上下文中。写入失败会进入待写队列，在下次会话开始时重放。
+插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`；模型步骤带有新的用户输入时，用用户输入的文本做语义检索，把结果作为持久消息追加到同一步骤，因此注入会随会话重放，也对压缩可见。DSH 或其他插件注入的上下文（例如 `time-context`、job 通知）和工具结果既不触发召回，也不拼进检索文本。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，并跳过注入的上下文，待同步 token 超过阈值即 commit，每次 commit 都归档全部已捕获的消息。写入失败会进入待写队列，在下次会话开始时重放。
 
 每个 DSH 会话映射为 OpenViking 中的 `dsh-<session-id>`，子 agent 各自拥有独立会话。
 
@@ -104,7 +104,8 @@ patch 中写的凭证优先于环境变量。行为配置按优先级从高到�
 |------|----------|
 | 没有注入，也没有 OpenViking 工具 | `dsh --profile web --dump-config` 里应能看到 `openviking-memory-runtime`；重新运行安装器或 `dsh plugin --profile web add …` |
 | 装到了错误的 profile | 安装器默认 `web`；用 `--dsh-profile <name>` 重新运行 |
-| 安装时报 `ERESOLVE` | 使用受支持的 `@deepseek-ai/dsh` 版本：`0.1.0-rc.6`、`0.1.5-rc.1`、`0.1.5-rc.2`、`0.1.7-rc.2` 或稳定版 `0.1.x`（peer 范围 `>=0.1.0-rc.6 <0.2.0 \|\| ^0.1.5-rc.1 \|\| ^0.1.7-rc.2`），并让所有 `@deepseek-ai/dsh-*` 宿主包保持同一版本。 |
+| DSH 提示插件与当前 dsh 版本不兼容 | 插件接受 `0.1.0-rc.6` 起的所有 `@deepseek-ai/dsh` 0.x 版本（peer 范围 `>=0.1.0-rc.6 <1.0.0-0`），出现这个提示说明 DSH 已是 1.0 或更高；升级插件，或者确认风险后用 `dsh plugin allow-version` 放行。所有 `@deepseek-ai/dsh-*` 宿主包要保持同一版本。 |
+| 升级 DSH 后插件启动失败 | 已验证的版本：`0.1.0-rc.6`、`0.1.5-rc.1`、`0.1.5-rc.2`、`0.1.7-rc.2`、`0.2.0-rc.2`、`0.2.1-alpha.1`。更新的 0.x 版本不经预先验证就会被接受；请把 DSH 固定到已验证的版本，并提 issue。 |
 | 安装时报包「不在 npm registry 中」 | 检查该 profile 的 pnpm 是否设置了 24 小时的最小发布年龄（`minimumReleaseAge`）。等一等，或把该精确版本加进 profile 的 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` |
 | 召不回任何内容 | `curl "<OpenViking 服务地址>/health"`；检查端点配置，以及 prompt 是否长于最小查询长度（3 个字符） |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；可信模式部署还要检查 `OPENVIKING_ACCOUNT` 与 `OPENVIKING_USER` |

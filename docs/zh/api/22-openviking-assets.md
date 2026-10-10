@@ -1,4 +1,4 @@
-# OpenViking Assets Resolver
+# Assets
 
 OpenViking Assets Resolver 用于解析并校验
 [`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest。支持在

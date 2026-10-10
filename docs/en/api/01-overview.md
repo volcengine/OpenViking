@@ -1,4 +1,4 @@
-# API Overview
+# SDK, HTTP and CLI conventions
 
 This page covers how to connect to OpenViking and the conventions shared across all API endpoints.
 
@@ -68,7 +68,7 @@ tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
 It does not implement legacy `agent_id` compatibility.
-See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
+See [`sdk/go/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
 
@@ -93,7 +93,7 @@ const results = await client.search("deployment guide", {
 ```
 
 It uses the same identity headers and response envelope as the Python and Go
-HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
+HTTP clients. See [`sdk/typescript/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/typescript/README.md)
 for package-level examples.
 
 The Python HTTP client reads connection information from `ovcli.conf`; explicit constructor values override the corresponding settings. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
@@ -531,6 +531,15 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
+### [OpenViking Gateway Management](25-gateway.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/admin/gateway/{path}` | Read gateway overview, logs, upstreams, context profiles, keys or tools for the caller's account |
+| POST | `/api/v1/admin/gateway/{path}` | Issue a gateway key, test an upstream or reset conversation saving |
+| PUT | `/api/v1/admin/gateway/{path}` | Create or replace an upstream or context profile |
+| DELETE | `/api/v1/admin/gateway/{path}` | Delete an upstream or context profile, revoke a key or delete a user's gateway data |
+
 ### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 
 | Method | Path | Description |
@@ -545,6 +554,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |

@@ -257,6 +257,8 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         effective_model = model or self._default_model
 
@@ -287,13 +289,23 @@ class VLMProviderAdapter(LLMProvider):
             # An explicit empty list asks VLM backends for a structured response
             # without exposing tools, so per-response usage is preserved.
             response_tools = tools if tools is not None else []
+            # Effort overrides are scoped to the native Ark backend, not compatible APIs.
+            completion_overrides = (
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None and self._vlm.provider == "volcengine"
+                else {}
+            )
             while True:
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
-                        thinking=getattr(self._vlm, "thinking", None),
+                        thinking=thinking
+                        if thinking is not None
+                        else getattr(self._vlm, "thinking", None),
                         tools=response_tools,
                         tool_choice="auto" if response_tools else None,
+                        max_tokens=max_tokens,
+                        **completion_overrides,
                     )
                     break
                 except Exception as e:
@@ -590,9 +602,7 @@ class VLMProviderAdapter(LLMProvider):
     ) -> dict[str, Any]:
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
-        effective_max_tokens = (
-            configured_max_tokens if configured_max_tokens is not None else max_tokens
-        )
+        effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
         # A wrapped credential owns its model.  The model passed by AgentLoop is
         # the outer/default model and must not overwrite a backup credential.
         effective_model = (
@@ -629,10 +639,13 @@ class VLMProviderAdapter(LLMProvider):
         kwargs["model"] = effective_model
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
-        if effective_max_tokens is not None and not (
-            "max_tokens" in kwargs or "max_completion_tokens" in kwargs
-        ):
-            token_key = "max_completion_tokens" if "reasoning_effort" in kwargs else "max_tokens"
+        if effective_max_tokens is not None:
+            token_key = (
+                "max_completion_tokens"
+                if "max_completion_tokens" in kwargs
+                or ("max_tokens" not in kwargs and "reasoning_effort" in kwargs)
+                else "max_tokens"
+            )
             kwargs[token_key] = effective_max_tokens
         return kwargs
 
@@ -714,7 +727,12 @@ class VLMProviderAdapter(LLMProvider):
             content=result.content,
             tool_calls=tool_calls,
             finish_reason=result.finish_reason,
-            usage=result.usage,
+            usage={
+                k: v
+                for k, v in (result.usage if isinstance(result.usage, dict) else {}).items()
+                if isinstance(v, int)
+            }
+            | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
         )
 

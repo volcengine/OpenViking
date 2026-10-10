@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import re
+from collections import Counter
 from types import SimpleNamespace
 
 from openviking.retrieve.context_assembler import pipeline as pipeline_module
@@ -11,7 +12,7 @@ from openviking.retrieve.context_assembler.budget import (
     per_entry_cap,
     plan_entries,
 )
-from openviking.retrieve.context_assembler.gather import Candidate, category_for
+from openviking.retrieve.context_assembler.gather import Candidate, category_for, category_targets
 from openviking.retrieve.context_assembler.models import AssembledEntry
 from openviking.retrieve.context_assembler.params import (
     OTHER_MEMORY_CATEGORY,
@@ -129,7 +130,7 @@ def test_render_neutralizes_forged_memory_tags():
     assert rendered.endswith("</memory>")
 
 
-def test_coding_purpose_uses_absolute_cross_domain_quotas():
+def test_coding_purpose_uses_cross_domain_quotas():
     assert normalize_quotas(None, "coding") == {
         "events": 1,
         "entities": 2,
@@ -756,6 +757,34 @@ async def test_excluding_a_package_drops_a_hit_on_any_file_inside_it():
     assert result.stats["excluded"] == 1
 
 
+async def test_exclude_uris_directory_prefix_excludes_subtree():
+    """Passing a directory URI to exclude_uris should exclude all files under it."""
+    hits = [
+        {
+            "uri": f"{USER_ROOT}/memories/events/old.md",
+            "score": 0.8,
+            "abstract": "old event",
+        },
+        {
+            "uri": f"{USER_ROOT}/memories/preferences/lang.md",
+            "score": 0.7,
+            "abstract": "language pref",
+        },
+    ]
+    result = await assemble_context(
+        service=_service(hits=hits, bodies={}),
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="test",
+            exclude_uris=[f"{USER_ROOT}/memories/events"],
+        ),
+    )
+
+    uris = [e.uri for e in result.entries]
+    assert f"{USER_ROOT}/memories/events/old.md" not in uris
+    assert f"{USER_ROOT}/memories/preferences/lang.md" in uris
+
+
 async def test_a_pinned_detail_reads_the_package_skill_md():
     """A package entry is a file, not a directory: `detail` reaches its SKILL.md."""
     service = _skill_service(
@@ -931,3 +960,159 @@ async def test_flat_retrieval_collapses_skills_and_leaves_other_hits_alone():
     assert result.stats["candidates"] == 3
     assert [entry.uri for entry in result.entries] == [f"{DEPLOY}/SKILL.md", events_dir]
     assert result.stats["deduped"] == 1
+
+
+def _hit(uri, score, abstract=None):
+    return {"uri": uri, "score": score, "abstract": abstract or uri, "level": 2}
+
+
+def _bucket_service(hits_by_target, finds=None):
+    """Answers each target from ``hits_by_target`` and honours the requested limit."""
+
+    async def fake_find(**kwargs):
+        if finds is not None:
+            finds.append(kwargs)
+        hits = hits_by_target.get(kwargs["target_uri"], [])[: kwargs["limit"]]
+        return _FakeFindResult(memories=list(hits), resources=list(hits))
+
+    async def fake_find_skills(**kwargs):
+        del kwargs
+        return _FakeFindResult()
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        return f"# Summary\n{uri}"
+
+    return SimpleNamespace(
+        search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=fake_read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+
+async def test_preset_scope_directories_are_not_served():
+    project = "viking://resources/proj"
+    doc = f"{USER_ROOT}/resources/doc.md"
+    hits = [
+        _hit("viking://resources/.overview.md", 0.6, "Resource storage root"),
+        _hit(f"{USER_ROOT}/resources/.abstract.md", 0.6, "User resources"),
+        _hit(f"{USER_ROOT}/.overview.md", 0.6, "User root"),
+        _hit(f"{USER_ROOT}/privacy/.abstract.md", 0.6, "Privacy"),
+        _hit(f"{project}/.overview.md", 0.5, "project overview"),
+        _hit(doc, 0.4, "doc"),
+    ]
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult(resources=list(hits))
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        return f"overview of {uri}"
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="q", quotas={"resources": 3}, peer_scope="actor"),
+    )
+
+    assert [entry.uri for entry in result.entries] == [project, doc]
+
+
+async def test_flat_retrieval_skips_preset_directories():
+    memory = f"{USER_ROOT}/memories/preferences/lang.md"
+    hits = [
+        _hit(f"{USER_ROOT}/memories/.overview.md", 0.7, "Memory root"),
+        _hit("viking://agent/tools/.abstract.md", 0.7, "Tools"),
+        _hit(memory, 0.5, "prefers Python"),
+    ]
+    service = _service(hits=hits, bodies={})
+
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="q", limit=5, peer_scope="actor"),
+    )
+
+    assert [entry.uri for entry in result.entries] == [memory]
+
+
+async def test_unused_bucket_slots_backfill_with_the_best_remaining_hits():
+    preferences = f"{USER_ROOT}/memories/preferences"
+    service = _bucket_service(
+        {
+            preferences: [
+                _hit(f"{preferences}/nickname.md", 0.75, "call me Z"),
+                _hit(f"{preferences}/style.md", 0.67, "terse answers"),
+            ]
+        }
+    )
+
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="my preferences", purpose="coding", peer_scope="actor"),
+    )
+
+    assert [entry.uri for entry in result.entries] == [
+        f"{preferences}/nickname.md",
+        f"{preferences}/style.md",
+    ]
+
+
+async def test_backfill_never_exceeds_the_quota_total_or_reaches_zero_quota_buckets():
+    finds = []
+    preferences = f"{USER_ROOT}/memories/preferences"
+    entities = f"{USER_ROOT}/memories/entities"
+    service = _bucket_service(
+        {
+            preferences: [_hit(f"{preferences}/{i}.md", 0.9 - i * 0.1) for i in range(3)],
+            entities: [_hit(f"{entities}/e.md", 0.95)],
+        },
+        finds=finds,
+    )
+
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="q",
+            quotas={"preferences": 1, "events": 1, "entities": 0},
+            peer_scope="actor",
+        ),
+    )
+
+    assert [entry.uri for entry in result.entries] == [
+        f"{preferences}/0.md",
+        f"{preferences}/1.md",
+    ]
+    assert all("/entities" not in call["target_uri"] for call in finds)
+
+
+async def test_full_buckets_keep_their_quotas_when_one_bucket_scores_highest():
+    quotas = {"events": 1, "entities": 2, "preferences": 1, "experiences": 1, "resources": 3}
+    hits_by_target = {}
+    for bucket, base in (
+        ("events", 0.9),
+        ("entities", 0.5),
+        ("preferences", 0.5),
+        ("experiences", 0.5),
+        ("resources", 0.5),
+    ):
+        target = category_targets(bucket, _ctx())[0]
+        hits_by_target[target] = [_hit(f"{target}/{i}.md", base - i * 0.01) for i in range(8)]
+
+    result = await assemble_context(
+        service=_bucket_service(hits_by_target),
+        ctx=_ctx(),
+        params=AssembleParams(query="q", quotas=quotas, max_tokens=8000, peer_scope="actor"),
+    )
+
+    assert Counter(entry.category for entry in result.entries) == quotas

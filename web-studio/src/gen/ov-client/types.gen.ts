@@ -264,6 +264,10 @@ export type BodyTempUploadApiV1ResourcesTempUploadPost = {
  */
 export type CommitRequest = {
     /**
+     * Override only Working Memory generation for this commit; null inherits policy.
+     */
+    enable_working_memory?: boolean | null;
+    /**
      * Keep Recent Count
      *
      * Number of most-recent messages to keep live after commit. Plugin's afterTurn path typically passes its configured value (default 10); compact path passes 0 to archive everything.

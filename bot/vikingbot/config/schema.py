@@ -433,6 +433,45 @@ class ChannelsConfig(BaseModel):
         return None
 
 
+class CompileConfig(BaseModel):
+    """Per-task Compile batching and worker limits; unset concurrency inherits vlm.max_concurrent.
+
+    Limits apply to direct model jobs and agent jobs. Model calls across Compile
+    tasks also share the service-wide capacity from vlm.max_concurrent.
+    """
+
+    map_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Maximum concurrent Map jobs per task; None inherits vlm.max_concurrent.",
+    )
+    shuffle_batch_size: int = Field(
+        default=4,
+        ge=1,
+        strict=True,
+        description="Maximum primary records per Shuffle routing request, independent of concurrency.",
+    )
+    shuffle_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description=(
+            "Maximum concurrent Shuffle routing jobs and embedding batches per task; "
+            "None inherits vlm.max_concurrent."
+        ),
+    )
+    reduce_concurrency: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description=(
+            "Maximum concurrent Reduce jobs per task, also used for same-path merges; "
+            "None inherits vlm.max_concurrent."
+        ),
+    )
+
+
 class AgentsConfig(BaseModel):
     """Agent configuration."""
 
@@ -475,7 +514,7 @@ class AgentsConfig(BaseModel):
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
     subagent_max_concurrency: int = Field(
-        default=4,
+        default=8,
         ge=1,
         description="Maximum number of background subagents running at once.",
     )
@@ -760,7 +799,7 @@ class DirectBackendConfig(BaseModel):
     """Direct backend configuration."""
 
     restrict_to_workspace: bool = False  # If true, restrict file access to workspace directory
-    allow_compile_exec: bool = True
+    allow_compile_exec: bool = False
 
 
 class SrtBackendConfig(BaseModel):
@@ -865,6 +904,7 @@ class Config(BaseSettings):
 
     inherits_root_vlm_state: SkipJsonSchema[bool] = Field(default=False, repr=False)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    compile: CompileConfig = Field(default_factory=CompileConfig)
     channels: list[Any] = Field(default_factory=list)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

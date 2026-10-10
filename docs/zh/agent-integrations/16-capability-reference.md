@@ -1,725 +1,742 @@
-# 集成能力参考
+<a id="agent-集成能力对照"></a>
 
-**Hermes 范围**：表中的 Hermes 描述其[内置 provider](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)，
-核对版本为 Hermes main `989798cd5e`。[OpenViking 维护的外部插件](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
-另有提交、召回和镜像改进。内置副本仍在时优先加载；正常使用请按
-[配置指南](./05-hermes.md)操作。
+# Agent 集成能力
 
-## 导读
+本页对比各 OpenViking Agent 集成安装后的实际行为。依赖某个集成之前，可以先用本页回答三个问题：
 
-| 你想知道 | 去哪里 |
+- Agent 能自己调用哪些 OpenViking 工具？
+- 哪些事情不需要 Agent 请求就会发生：每次提问前的召回、会话开场注入的上下文、对话捕获，以及把对话变成长期记忆的提交？
+- Agent 退出、崩溃、压缩上下文或连不上服务端时，哪些内容会保留，哪些会丢失？
+
+安装请从[选择 Agent 接入方式](./01-overview.md)开始。下文的对比基于[源码依据](#源码依据)中列出的实现；一个集成能用哪些 MCP 工具，由所连的服务端决定。
+
+## 两类能力
+
+**Agent 可调用的工具**由模型决定是否调用，例如 `search`、`read`、`remember`。模型不调用，就不会发生任何事。只接 MCP 时，只有这一类能力。
+
+**自动生命周期行为**由宿主事件触发，不需要模型请求，包括：提问到达模型前的召回、会话开场注入的 profile 和 skill 上下文、把每轮对话捕获到 OpenViking 会话，以及提交。hook、插件和原生扩展提供这类能力。
+
+长期记忆只在**提交**（commit）之后才会从会话中抽取。已捕获但未提交的消息留在服务端会话里，要等之后的某次提交才会变成记忆。[捕获与提交](#捕获与提交)说明每个集成何时提交，以及退出时可能留下什么。
+
+<a id="导读"></a><a id="_1-能力总览"></a><a id="_1-2-自动-hook-面-通过-harness-自动实现"></a><a id="_1-3-形态分组"></a>
+
+## 一览
+
+### 可调用工具
+
+“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 20 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
+
+| 集成 | 接入方式 | Agent 可调用的工具 |
+|---|---|---|
+| [Claude Code](#claude-code) | 插件：hook + MCP 代理 | 服务端 MCP 工具 |
+| [Codex、TraeCode CLI 2.0](#codex-与-traecode-cli-2-0) | Codex 插件：hook + MCP 代理 | 服务端 MCP 工具 |
+| [Cursor](#cursor) | hook 与 MCP 配置，外加一条 rule | 服务端 MCP 工具 |
+| [TRAE、TRAE CN](#trae-与-trae-cn) | hook 与 MCP 配置 | 服务端 MCP 工具 |
+| [ZCode](#zcode) | hook 与 MCP 配置 | 服务端 MCP 工具 |
+| [Kimi Code](#kimi-code) | Kimi Code 插件：hook + MCP 代理 | 服务端 MCP 工具 |
+| [OpenCode](#opencode) | npm 插件，自动添加 MCP 条目 | 服务端 MCP 工具，名为 `openviking_<tool>` |
+| [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
+| [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
+| [OpenClaw](#openclaw) | context-engine 插件 | 15 个原生工具，默认启用 14 个 |
+| [Hermes](#hermes) | Hermes memory provider | 6 个原生 `viking_*` 工具 |
+| [MCP 客户端、Agent Plugins](#其他集成) | 仅 MCP | 服务端 MCP 工具 |
+| [ov CLI](#ov-cli) | 命令行客户端 | 每个操作都是显式命令，不经过 Agent |
+
+### 自动行为
+
+| 集成 | 每次提问前召回 | 会话开场上下文 | 会话中的提交 | 正常退出时提交 | 宿主压缩 |
+|---|---|---|---|---|---|
+| Claude Code | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 是 | 先提交，再由宿主摘要 |
+| Codex | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | Codex 0.145+；否则下次启动时 | 先提交，再由宿主摘要 |
+| TraeCode CLI 2.0 | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 仅当版本带 `SessionEnd`；否则下次启动时 | 同 Codex |
+| Cursor | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 否 | 先提交，再由宿主摘要 |
+| TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
+| ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
+| Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 每捕获 8 条消息 | 仅当 `SessionEnd` 捕获到新消息 | 提交新捕获的消息 |
+| OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 20,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
+| DSH | 是，带会话 | profile、记忆索引、skill，每个会话一次 | 待提交 token 达到 20,000 | 是，预算 3 秒 | 未观察到 |
+| pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：20,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
+| OpenClaw | 是，带会话 | profile，每轮 | token 预算的一半（默认 64,000） | 否 | 插件接管压缩 |
+| Hermes（内置） | 是，带会话，有回退路径 | profile 与记忆清单 | 否；只在会话边界 | 是，前提是待上传内容在 10 秒内完成 | fork 型压缩时提交 |
+| ov CLI | 否 | 否 | 只有 `ov session commit` | 不适用 | 不适用 |
+
+标为 **Hermes（内置）** 的行描述旧版 Hermes 中固定提交的内置 provider。
+使用目录插件的版本会加载外部插件，其不同的生命周期行为见 [Hermes](#hermes)。
+
+表格说明：
+
+- **带会话的召回**会发送会话 ID，服务端借助对话内容理解查询。共享插件的 context 模式还会扩写查询，并记录最近注入过的记忆，避免重复注入。Hermes 用 list 模式，没有注入台账。OpenClaw 用 context search 并发送会话 ID，但关闭去重，因为它注入的上下文每轮重建，不写入历史。请求路径和回退见[召回请求如何到达服务端](#召回请求如何到达服务端)。
+- **待提交 token** 是服务端统计的、已捕获但未提交的消息量。多数阈值是客户端设置，见[各集成何时提交](#各集成何时提交)。
+- **正常退出时提交**指集成会发出提交请求。网络错误、宿主的退出时限或进程被终止仍可能打断它。Ctrl+C、信号和崩溃见[退出时会发生什么](#退出时会发生什么)。
+
+<a id="_1-1-主动工具面-agentic-调用能力"></a><a id="_2-公共能力核"></a>
+
+## Agent 可调用的工具
+
+<a id="_2-1-服务端-mcp-工具面"></a>
+
+### 服务端 MCP 工具
+
+所有基于 MCP 的集成都暴露同一组由服务端定义的工具，自己不维护工具目录。本地代理（pi 则是内置 MCP 客户端）读取 `~/.openviking/ovcli.conf`，连接服务端的 `/mcp`，原样转发 `tools/list` 的结果。服务端升级可以直接增加工具，不需要插件发版；客户端重新连接后即可看到。各工具的参数见 [MCP 工具与协议](../guides/06-mcp-integration.md#可用的-mcp-工具)。
+
+| 分组 | 工具 |
 |---|---|
-| 特定 harness 下，agent 可主动调用的工具列表 | [§1.1](#_1-1-主动工具面-agentic-调用能力) 主动工具面 + [§2.1](#_2-1-服务端-mcp-工具面)（MCP 面）+ 各档案卡 |
-| 不同关闭方式下，记忆归档的时机 | **[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) 关闭方式 × harness 终局矩阵** |
-| 自动召回是否携带 session_id 及其影响 | [§3.2.2](#_3-2-2-判定矩阵) / [§3.2.3](#_3-2-3-profile-开场注入) |
-| 如何开启召回再摘要，以及服务端与客户端的职责划分 | [§3.2.5](#_3-2-5-召回再摘要) |
-| `forget` 操作与删除功能的类型边界 | [§3.5](#_3-5-写入与删除的类型边界) |
-| 特定环境变量在不同 harness 下的生效情况 | [§3.1.4](#_3-1-4-配置体系分层) 配置体系分层 + 各档案卡"配置" |
-| 服务端是否具备自动 commit 兜底机制 | [§2.3](#_2-3-服务端会话与-commit-语义) |
-| ov CLI 命令全集 | [§5](#_5-ov-cli-命令参考) |
-| 自定义 agent 如何接入 OpenViking | [§6](#_6-自定义-agent-接入指南) |
-| 某个集成怎么安装、怎么配、怎么排障 | 该集成的单独页面（[§4](#_4-harness-档案卡) 各档案卡首行给出链接） |
+| 检索与浏览 | `find`、`search`、`read`、`list`、`tree`、`grep`、`glob` |
+| 写入 | `remember`、`write`、`edit`、`add_resource`、`add_skill` |
+| 删除 | `forget` |
+| 监听资源 | `list_watches`、`cancel_watch`（商业版暂不支持） |
+| 账户与权限 | `list_users`、`list_groups`、`get_acl`、`set_acl` |
+| 状态 | `health` |
 
----
+使用前需要了解的行为：
 
-# 1. 能力总览
+- **`remember`** 会创建一个名为 `mcp-store-<id>` 的一次性会话，写入消息后立即提交。它是唯一会提交的 MCP 工具。提交被接受后它立刻返回，结果里带后台记忆提取任务的 `task_id`；提取过程再决定新建或更新哪些记忆。没有任何 MCP 工具会提交 Agent 当前的对话，那是自动 hook 的工作。
+- **`find` 与 `search`**：`find` 是不带会话上下文的快速检索。`search` 可以传 `session_id`，并做意图分析（`retrieval.enable_intent`，默认开启）。`find` 传 `context_type="skill"` 时，每个 skill 包只返回一条命中，指向它的 `SKILL.md`，范围包括用户自己的和账户共享的 skill。
+- **`write` 与 `edit`** 只能写 `viking://resources`、`viking://user` 和 `viking://agent`。新文件的扩展名必须是 `.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js` 或 `.ts`。用户的 `skills/`、`peers/`、`privacy/` 和 `sessions/` 目录只读。写入 `viking://agent/skills` 不会被拒绝，但会跳过 skill 安装流程，skill 请用 `add_skill`。
+- **`add_resource` 传本地路径**时返回一个签名上传 URL（默认 600 秒有效）。模型需要把文件上传到这个 URL，例如用一条 shell 命令；上传后自动开始入库。远程 URL 会直接入库。
+- **`forget`** 删除传入的任意 URI，默认不递归。它不检查 URI 是记忆、资源还是 skill，见[写入与删除限制](#写入与删除限制)。
+- **Schema** 在服务端启动时被展平，只接受 OpenAPI 3.0 子集的客户端（如 Gemini）也能加载。校验仍按原始签名进行，例如 `read` 也接受单个字符串。所有客户端拿到的 schema 相同。
+- **身份**的解析方式与 REST 请求相同，见[认证](../guides/04-authentication.md)。
 
-## 1.1 主动工具面（Agentic 调用能力）
+各宿主的差异：
 
-- **MCP 型 harness（claude-code、codex/trae-cli、cursor、trae/trae-cn、zcode、kimicode、opencode、dsh、pi）的主动工具面完全一致，共 20 个工具**：这些工具由服务端统一定义，各插件读取 `~/.openviking/ovcli.conf` 并连接服务端 MCP 工具；pi 在扩展中使用官方 MCP 客户端，再把发现的工具注册成 pi 原生工具。
+- **OpenCode** 给工具加 `openviking_` 前缀；**DSH** 把工具命名为 `mcp__openviking__<tool>`。
+- **DSH** 每个 DSH profile 只运行一个 MCP 代理，所以工具调用带的是进程级 actor peer，`remember` 也不绑定 DSH 会话。召回、捕获和提交仍按会话解析 peer。
+- **pi** 只在以下条件都满足时注册工具：会话未被 bypass、健康检查通过、OpenViking 会话存在、`/mcp` 握手返回了工具列表。握手失败时，本次会话没有 OpenViking 工具，但召回、同步和 takeover 照常进行，后续轮次会重试握手。`mcpEnabled: false` 会关闭这条桥接。root API key 访问 `/mcp` 会得到 403，所以凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时，会话里没有工具。
+- **Codex** 只把 `.mcp.json` 的 `env_vars` 中列出的环境变量传给 MCP 服务。
 
-- trae-cli 指 TraeCode CLI 2.0（仅支持 2.0），经 codex 插件别名安装，插件与 codex 格式兼容，下文矩阵并入 codex 行。
+### OpenClaw 工具
 
-| harness | 工具面形态 | 工具数（默认开） | 搜 memory | 搜 resource | 搜 skill | 写 memory | 写 resource | 写 skill | 删除类型边界 |
-|---|---|---|---|---|---|---|---|---|---|
-| claude-code | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| codex / trae-cli | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| cursor | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| trae / trae-cn | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| zcode | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| kimicode | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| opencode | MCP 透传（宿主加 `openviking_` 前缀） | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| dsh | MCP 透传 | 20 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| pi | MCP 镜像（官方客户端；扩展加 `openviking_` 前缀） | 20，即 `tools/list` 返回什么就是什么（注册有前置条件³） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `add_skill`¹ | 无类型区分² |
-| openclaw | 原生注册（15 个 `memory_*`/`ov_*` 等） | 15（默认开 14⁴） | ✅ `memory_recall` | ✅ `ov_search`（默认双 scope） | ✅ `ov_search` | ✅ `memory_store` | 默认关⁴ | ✅ `add_skill` | memory-only 白名单 + 单候选 score≥0.85 才自动删 |
-| hermes | 原生注册（6 个 `viking_*`） | 6（provider 激活即全开） | ✅ | ✅ | ✅ | ✅ `viking_remember`（独立会话提交，异步抽取） | ✅ 多协议摄取（HTTP/Git/SSH/本地文件/目录 zip） | ❌ | memory-only + `.md` 叶子校验 |
-| ov CLI | CLI 命令 | ~40 命令组 | ✅ `ov find` | ✅ `ov find` | ✅ `ov find` | ✅ `ov add-memory` | ✅ `ov add-resource` | ✅ `ov add-skill` | `ov rm` 直接执行（TUI 删除有确认 + root/scope 禁删） |
+OpenClaw 注册自己的工具，不转发 MCP 工具。
 
-¹ MCP `write` 拒绝写用户自己的 `skills/` 子树；写 `viking://agent/skills` 时会生成一个绕过 skill 安装流程的普通文件（没有 frontmatter abstract，也不做 privacy 抽取），所以共享 skill 同样要走 `add_skill`。skill 的新建、安装和替换走 MCP `add_skill` 工具（内联 SKILL.md 文本、Git URL，或本地目录/zip 的签名上传），它和 REST `POST /api/v1/skills` 共用同一套安装实现。
-² MCP `forget` 不区分 memory/resource/skill 类型；存储层保留了命名空间根保护机制（裸 `viking://`、`viking://user`、`viking://agent` 根拒删），详见 [§3.5](#_3-5-写入与删除的类型边界)。
-³ pi 工具注册前置：需未命中 `bypassSessionPatterns`、`client.health()` 通过、`ensureSession` 成功，且 `/mcp` 握手取回工具清单（`index.ts:150-205`）；共享键 `mcpEnabled: false` 则整个桥接都不发起，不算失败。握手失败只让本次会话没有 OpenViking 工具，召回、会话同步与 takeover 照常，`before_agent_start` 会在后续轮次重试（`index.ts:252-255`），因此 pi 启动之后才拉起的 server 不必重启 pi 就能接上。详见 [§3.6](#_3-6-降级与容错)。
-⁴ openclaw 的 `add_resource` 需经过双重 opt-in 后方可开启。
+| 分组 | 工具 | 说明 |
+|---|---|---|
+| 记忆 | `memory_recall`、`memory_store`、`memory_forget` | `memory_recall` 检索记忆；`memory_store` 通过临时会话提交 |
+| 资源与 skill | `ov_search`、`ov_read`、`ov_multi_read`、`ov_list`、`add_skill`、`add_resource` | `ov_search` 默认检索资源和用户的 skill。`add_resource` 默认关闭，还需要开启 `enableAddResourceTool` |
+| 会话归档 | `ov_archive_search`、`ov_archive_expand` | 检索并展开已归档的历史 |
+| 大块工具输出 | `openviking_tool_result_read`、`openviking_tool_result_search`、`openviking_tool_result_list` | 读取服务端单独存放的工具输出 |
+| 诊断 | `ov_recall_trace` | 查看自动召回是如何构建的 |
 
-**skill 的增删边界**：新增入口包含 MCP `add_skill`、openclaw `add_skill`（默认开）、`ov add-skill` 与 REST；删除边界分四档，详见 [§3.5](#_3-5-写入与删除的类型边界)。
+### Hermes 工具
 
-## 1.2 自动 hook 面（通过 Harness 自动实现）
+Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。内置 provider 与外部插件的区别见 [Hermes](#hermes)。
 
-| harness | 接入方式 | 自动召回 | 召回带 session_id | 再摘要（客户端）* | profile 注入 | 接管宿主压缩 | 离线补偿 | statusline |
-|---|---|---|---|---|---|---|---|---|
-| claude-code | 9 hook + MCP 代理 + slash + statusline + skill | ✅ | ✅ | ✅ 本地 `claude -p` / 服务端 rewrite（默认 auto） | ✅（10000）+ `<available-skills>`（1200） | ❌（PreCompact 只 commit） | ✅ | ✅ |
-| codex / trae-cli | 6 hook + MCP 代理 + skill | ✅ | ✅ | ✅ 本地 `codex exec`（默认开） | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ transcript + 游标 | ❌ |
-| cursor | 6 hook + MCP 代理 + rule + skill | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ | ❌ |
-| trae / trae-cn | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ | ❌ |
-| zcode | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ | ❌ |
-| kimicode | 7 个原生 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），首次成功 prompt 加载 | ❌（PreCompact 只捕获/commit） | ✅ | ❌ |
-| opencode | v1/v2 双栈 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） + repo 列表进 system prompt | ❌（只在压缩完成后 commit） | ✅ | ❌ |
-| dsh | Cordis 原生插件（同进程）+ MCP 代理 + skill | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），每 session 一次 | ❌ | ✅ | ❌ |
-| pi | 原生扩展（9 事件） | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），进 systemPrompt 每轮重拼 | ✅ **takeover**（默认开） | ✅ | ✅ |
-| openclaw | context-engine 插件（`ownsCompaction:true`） | ✅ | ❌（走 `/find`，该接口无 session_id 字段） | ❌ | ❌ | ✅ **ContextEngine 全接管** | ❌ 失败轮次不重放 | ❌ |
-| hermes | MemoryProvider 原生插件 | ✅ | 部分（仅 `search/search` 首选路径；降级 `/find` 不带） | ❌ | ✅（会话开场记忆预算默认 6000 token） | ❌ | ✅ 进程内上传；待提交标记落盘 | ❌ |
-| ov CLI | 一次性命令 | ❌（`ov find/search` 是显式命令） | —（`ov search --session-id` 为显式参数） | ❌ | ❌ | ❌ | ❌ | ❌ |
+<a id="_3-5-写入与删除的类型边界"></a><a id="_3-5-1-写入边界"></a><a id="_3-5-2-删除边界"></a>
 
-\* 此列指客户端是否内建了针对召回结果的本地压缩；服务端则在 context 检索面上，统一为所有调用方提供 digest 能力（`rewrite` 参数，[§3.2.5](#_3-2-5-召回再摘要)）。
+### 写入与删除限制
 
-profile 注入列里，第一个数字是 `profileTokenBudget` 的默认值，`<available-skills>` 后面的数字是它单独的 `skillCatalogTokenBudget` 默认值（[§3.2.3](#_3-2-3-profile-开场注入)）。
+无论删除来自哪个工具或命令，服务端都做同样的检查：
 
-**session_id 携带现状**：除 openclaw（其调用的 `/find` 接口无该字段）与 hermes 的降级路径外，其余所有 harness 的自动召回均显式携带 session_id，并有跨插件回归测试钉死（`examples/memory-plugin-shared/recall-session-wiring.test.mjs:16-39`）。
+- 调用方需要对该 URI 有 manage 权限；正在被删除的用户会被拒绝。
+- `viking://`、`viking://user` 和 `viking://agent` 不能删除。删除 `viking://resources` 或整个用户根（如 `viking://user/<id>`）需要 ROOT 角色。非 root 调用方不能写 `viking://temp` 根。
+- 调用方的 actor-peer 视图中不可见的 URI 会被拒绝。
 
-## 1.3 形态分组
+这些检查保护的是命名空间，不区分内容类型。按类型的限制来自客户端：
 
-- **全家桶型**（hook 自动化 + MCP 工具面 + 周边 UX 齐全）：claude-code、codex（trae-cli 经别名安装同属此档）。
-- **瘦 hook 型**（共享 agent-hook-runtime，核心行为基本一致，差异仅体现在宿主事件、transcript 解码与阈值上）：cursor、trae/trae-cn、zcode、kimicode。
-- **plugin 事件型**：opencode（宿主事件面最丰富，dispose 覆盖关闭）。
-- **同进程原生型**：dsh（Cordis）、pi（扩展 + takeover 压缩接管）、openclaw（context-engine 全接管）、hermes（MemoryProvider）。
-- **工具型**：ov CLI（所有操作均为显式调用，不存在任何自动行为）。
-- **非 coding**：Open WebUI（工具服务器）、LangChain（SDK 库）、Agent Plugins 便携包（MCP+skill 规范包）、通用 MCP 直连、log ingestion（日志反向导入）、Helper（桌面端）。
+| 入口 | 能删除 | 客户端限制 |
+|---|---|---|
+| MCP `forget`（所有 MCP 集成，含 DSH 与 pi） | 传入的任意 URI | 除非 `recursive=true`，否则不递归；不检查类型或分数 |
+| `ov rm` | 任意 URI | 不确认；`-r` 递归删除 |
+| `ov tui` 的 `d` 键 | 根目录和 scope 目录以外的任意 URI | 需要确认 |
+| OpenClaw `memory_forget` | 只能删记忆文件 | URI 必须匹配用户、peer 或 agent 的记忆路径。按搜索删除时，只有唯一候选且分数不低于 0.85 才执行，否则列出候选。始终不递归 |
+| Hermes `viking_forget` | 一个用户记忆 `.md` 文件 | 拒绝目录、非 `.md` 文件、自动生成的 `.abstract.md` 和 `.overview.md`，以及带 query 或 fragment 的 URI |
+| LangChain `viking_forget` | 任意 URI | 只在 `profile="admin"` 或 `allow_forget=True` 时提供；`recursive` 由模型决定 |
+| Open WebUI | 无 | 没有删除工具 |
 
----
+skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` 工具、OpenClaw 的 `add_skill`、`ov add-skill` 或 `POST /api/v1/skills`；`add_resource` 拒绝 skill URI。删除 skill 用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}`。MCP `forget` 和 `ov rm` 也能删掉 skill 目录，但会留下该 skill 的 privacy 配置。见[技能](../api/04-skills.md)。
 
-# 2. 公共能力核
+<a id="_3-维度详解"></a><a id="_3-2-自动召回与注入"></a>
 
-per-harness 章节（档案卡）只写差异；所有共享事实均在本章一次性说明完毕。
+## 自动召回与会话开场上下文
 
-## 2.1 服务端 MCP 工具面
+<a id="_3-2-1-机制底座-一条共享管线-两条服务端路径"></a>
 
-工具定义来自服务端的 `tools/list`。插件代理读取本地 `~/.openviking/ovcli.conf` 中的连接配置，再连接服务端发现工具；服务端增加工具后，客户端需重新连接或刷新工具列表。本页的工具数量对应当前仓库实现，实际以所连服务端返回的列表为准。
+### 召回请求如何到达服务端
 
-| # | 工具名 | 功能 | 参数要点（定义行号） |
+除 OpenClaw 和 Hermes 外，所有集成都使用共享插件代码，最多依次尝试三种请求：
+
+1. **context 检索**。`POST /api/v1/search/search`，带 `mode: "context"`、`purpose: "coding"` 和会话 ID。预算、配额、查询扩写和摘要选项只在你配置后才发送；否则使用服务端默认值，包括 1,600 token 的注入预算（`max_tokens`）。
+2. **旧版 recall**。服务端版本较旧、拒绝 context 模式时，插件在 `~/.openviking/state/context-face.json` 中记录这一结果，有效 6 小时，并改调 `/api/v1/search/recall`。这个文件由本机所有集成共享，一个集成的判断对所有集成生效。
+3. **普通 find**。最后一步，插件对 `viking://~/memories` 和 `viking://~/skills` 执行 `find`，在本地排序，并按自己的 token 预算装填。`recallTokenBudget`、`recallMaxContentChars` 和 `recallPreferAbstract` 只在这一步生效。
+
+共享插件的召回不包含资源；资源文档由模型自己调用 `search` 检索。Hermes 开启资源召回选项后可以包含资源。
+
+服务端对会话 ID 有两种处理方式：
+
+- **context 模式**（context 检索和旧版 recall）根据对话扩写查询，并为每个会话维护一份已注入记忆的台账。扩写需要同时满足：`retrieval.enable_intent` 开启（默认开启）、会话中已有消息、存在归档概览或当前消息。原始查询始终排第一，后面最多追加三条规划出的查询。
+- **list 模式**（不传 `mode` 时的默认值）由意图分析替换查询，原始查询不一定保留，也不使用台账。Codex 的第二级回退、Hermes 的 `viking_search(mode="deep")` 以及 Hermes 召回的首选路径都走这里。它们会发送会话 ID，但得不到扩写和去重。
+
+跨轮去重（`dedup_turns`）：
+
+- 服务端在 context 模式下的默认值是 **0**，即关闭。共享插件发送 5（`recallDedupTurns`）。直接调用 API 时必须自己发送 `dedup_turns`，只带会话 ID 不会开启去重。
+- 窗口按消息条数计算，不按对话轮。同时捕获用户和助手消息时，5 大约覆盖两轮。
+- 关闭自动捕获但开启召回时，消息数不会增长，已注入过的记忆会在整个会话里一直被抑制。设置 `OPENVIKING_RECALL_DEDUP_TURNS=0` 可以关闭去重。
+
+<a id="_3-2-2-判定矩阵"></a>
+
+### 各集成的召回方式
+
+下表是默认路径。开启[召回摘要](#召回摘要)后，请求会有变化。
+
+| 集成 | 触发时机 | 查询内容 | 上下文放在哪里 |
 |---|---|---|---|
-| 1 | `find` | 不依赖会话上下文的快速语义检索 | `query, target_uri="", limit=10, min_score=0.35, level, context_type, read_content`；只传 `context_type="skill"` 时改调 `SearchService.find_skills`（包级检索，`skill_package_retriever.py`）：一个 skill 包一条命中，URI 改写为 `<包根>/SKILL.md`，摘要取包自身的 abstract，`read_content` 也读这个文件；不传 `target_uri` 时同时检索 `viking://~/skills` 与 `viking://agent/skills`。其它 `context_type` 组合，以及不带 query 只给 filter 的调用，仍走通用检索路径；渲染时的 URI 改写和「一个包一条」合并照常生效（`:262`） |
-| 2 | `search` | 深检索，可带 `session_id` + 意图分析 | `session_id` 仅在服务端 `retrieval.enable_intent`（默认 true）开启时才会加载会话（`:315`）。这里按条目检索 skill，只在渲染时合并，所以一个包在多个文件上命中会占掉多个 `limit` 名额，摘要也取自实际命中的文件 |
-| 3 | `read` | 读取单个或多个 `viking://` 文件全文 | 并发信号量 10；单条失败返回 `(nothing found at <uri>)` 不抛错（`:643`） |
-| 4 | `list` | 列目录（函数名 `ls`，注册名显式改写为 `list`） | `recursive=False`（`:784`） |
-| 5 | `tree` | 递归目录树 | `level_limit=3, node_limit=1000, include_abstract=False`；`include_abstract=true` 时打印每个目录的 abstract（最长 1024 字符），因此 `tree(uri="viking://~/skills", level_limit=1, include_abstract=true)` 能列出全部 skill 及其描述（`:862`） |
-| 6 | `remember` | 写长期记忆 | 内部建一次性会话 `mcp-store-<uuid12>` 并立即 `commit_async`（`:940`）——这是 MCP 面唯一的 commit 入口；MCP 没有显式 commit 工具 |
-| 7 | `write` | 写 `viking://` 文件 | `mode=replace\|append\|create`：replace 覆盖或在缺失时创建，append 追加或在缺失时创建，create 仅创建缺失文件且已存在时返回冲突；显式 create 的文件扩展名白名单为 `.md .txt .json .yaml .yml .toml .py .js .ts`；可写域 `resources/user/agent`；用户根下 `skills/ peers/ privacy/ sessions/` 只读；已存在的 `.abstract.md/.overview.md` sidecar 可改正文，但公共 API 不能创建；写 `viking://agent/skills` 不会被拒绝，但会绕过 skill 安装流程，skill 请改用 `add_skill`，详见 [§3.5](#_3-5-写入与删除的类型边界)（`:965`；`content_write.py:60-81`） |
-| 8 | `edit` | 精确字符串替换 | `old_string` 空/0 命中/多命中且非 replace_all 均报错，且文件内容不变；编辑 skill 包内的文件不会重新触发 skill 安装流程，详见 [§3.5](#_3-5-写入与删除的类型边界)（`:1005`） |
-| 9 | `add_resource` | 资源摄取（远程 URL / 本地文件签名上传 / Connector） | `watch_interval` 单位为分钟（0=不 watch）；本地路径分支返回签名上传 URL（TTL 默认 600s），上传后自动入库，无需二次调用（`:1161`） |
-| 10 | `add_skill` | 新建、安装或替换 skill | `data`（完整 SKILL.md 文本）或 `path`（Git URL / GitHub tree URL，或本地 SKILL.md、目录、zip——本地分支和 `add_resource` 一样返回签名上传 URL）；`skills=[...]` 从多 skill 源里挑选，`list_only=true` 只预览；`target_uri="viking://agent/skills"` 表示账户共享。与 REST `POST /api/v1/skills` 共用安装代码。工具描述里写明它是新建和更新 skill 的唯一入口，删除请走 `ov skills remove` 或 Studio（`:1452`） |
-| 11 | `list_watches` | 列 watch 订阅，商业版尚未支持 | scheduler 未运行时返回错误串（`:1621`） |
-| 12 | `cancel_watch` | 按 `to_uri` 取消，商业版尚未支持 | 刻意不暴露 pause/resume/trigger/update（`:1653`） |
-| 13 | `grep` | 正则内容检索 | 多 pattern 并发（信号量 10），`node_limit=10`（`:1696`） |
-| 14 | `glob` | 文件名 glob | `node_limit=100`（`:1765`） |
-| 15 | `forget` | 永久删除 URI（不可恢复） | 默认 `recursive=False`；类型边界详见 [§3.5](#_3-5-写入与删除的类型边界)（`:1791`） |
-| 16 | `health` | 健康检查 | 无参（`:1808`） |
-| 17 | `list_users` | 列出账户内用户 ID；凭据需显式请求并具有 ADMIN/ROOT 权限，trusted 模式禁用 | `query`、`limit`、`page`、`include_credentials`（`mcp_endpoint.py:356`） |
-| 18 | `list_groups` | 列出账户内组 ID，不返回成员 | 无用户参数（`mcp_endpoint.py:394`） |
-| 19 | `get_acl` | 读取资源 ACL；需 manage 权限或账户 ADMIN | `uri`（`mcp_endpoint.py:408`） |
-| 20 | `set_acl` | 设置资源 ACL；需 manage 权限或账户 ADMIN | `uri`、`acl`（`mcp_endpoint.py:418`） |
+| Claude Code | 每次 `UserPromptSubmit` | 去掉首尾空白的提问 | `additionalContext` 中的 `<openviking-context>` |
+| Codex、TraeCode CLI 2.0 | 每次 `UserPromptSubmit`；整个 hook 有 120 秒截止时间 | 提问 | `<openviking-context source="auto-recall">` |
+| Cursor | `beforeSubmitPrompt` | 提问；500 ms 内的重复事件复用上次结果 | `additional_context` |
+| TRAE、TRAE CN | `UserPromptSubmit` | 去掉之前注入块的提问 | `additionalContext` |
+| ZCode | `UserPromptSubmit` | 去掉三类注入块（含 `<system-reminder>`）的提问 | `additionalContext`，严格 JSON |
+| Kimi Code | `UserPromptSubmit` | 提问 | 纯文本上下文，不是 JSON |
+| OpenCode | v1：每次 `chat.message`；v2：每次提问 | 消息的文本部分 | v1 在消息前插入一个合成 part。v2 把结果存进消息 metadata，每个模型 step 在该消息前注入，不发新请求 |
+| DSH | `agent/pre-step` | 本批认领的所有消息，去掉自身注入的内容 | 追加为一条用户消息 |
+| pi | 在 `before_agent_start` 排队，在 `context` 事件中执行 | 提问 | 前置到最后一条真实用户消息，本轮提问拿到本轮的记忆 |
+| OpenClaw | 上下文组装时 | 传入的提问，清洗后截到 4,000 字符 | `<relevant-memories>`，放在 system prompt 中，每轮重建。宿主不传提问时前置到最后一条用户消息 |
+| Hermes | 每次模型调用前 | 5 个字符及以上的用户输入，去掉 skill 脚手架 | `<memory-context>`，只追加到本次请求中的当前用户消息，不写入存储 |
 
-配套机制：
+<a id="_3-2-3-profile-开场注入"></a>
 
-- **可移植 schema 重写**（`:1149-1218`）：模块导入时把所有工具的 `anyOf`/`$ref` 折成扁平类型，以兼容 Gemini 等 OpenAPI 3.0 子集客户端；运行时校验仍用原始 Python 签名（例如 `read` 广播的 schema 是 array，但仍接受裸字符串）。所有 MCP 客户端拿到的 schema 都由服务端统一产出，客户端无差异。
-- **身份中间件**（`:149-233`）：与 REST 共用 `resolve_identity`，按认证模式解析凭据和身份：API key 模式从 key 确定账户与用户，trusted 模式接受可信网关传入的账户/用户头，dev 模式接受账户/用户头，缺省字段使用 `default`。actor peer 另行解析，不能覆盖认证身份。见[认证指南](../guides/04-authentication.md)。
+### 会话开场上下文
 
-## 2.2 memory-plugin-shared 共享层
+使用共享插件代码的集成会在会话开始时注入一个 `<openviking-context>` 块，包含用户 profile（`viking://user/<space>/memories/profile.md`）、`preferences/` 和 `entities/` 记忆的索引，以及 `<available-skills>` skill 清单：
 
-`examples/memory-plugin-shared/lib/` 下共 25 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
+```text
+<openviking-context source="startup">
+<user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
+<available-memories>...</available-memories>
+<available-skills>
+  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
+  viking://user/default/skills/
+    - pr-review — Review a pull request against the team checklist.
+  viking://agent/skills/
+    - deploy-runbook — Shared deployment runbook for the payments service.
+</available-skills>
+</openviking-context>
+```
 
-1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1）。分发清单不再手写：每个目标拿的是自身代码实际 import 的传递闭包。claude-code、codex、agent-plugins 由宿主直接指向仓库目录安装，openclaw 的 `ov-install` 可以按 git ref 逐个文件下载插件，所以这四个的生成副本提交进 git，并由 main 上的推送重新生成；opencode、dsh 以 npm 包发布，pi 由安装脚本打包，这三个在打包时生成副本，git 中不保留。
-2. **相对路径直接 import（不复制）**：cursor / trae / trae-cn / zcode 直接 `import "../../memory-plugin-shared/lib/..."`；安装器把包与这些 hook 传递 import 到的共享模块一起复制到 `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`，保持相对层级。这份安装集合对 import 闭合，包括 hook 运行时所需的 workspace 配置层。运行期几个 harness 共用该目录，任一重装都会整体覆盖。
+各集成的注入时机：
 
-核心模块速览（细节在各维度章展开）：
+| 集成 | 时机 |
+|---|---|
+| Claude Code | `SessionStart`，所有 source |
+| Codex | `SessionStart` 的 startup、clear 和 resume |
+| Cursor、TRAE、TRAE CN、ZCode | `SessionStart` |
+| Kimi Code | 首次提问时；失败后在后续提问中重试，直到成功 |
+| OpenCode | 每个会话的第一条消息；失败后不重试，子代理会话跳过。已索引仓库的列表同时进入 system prompt |
+| DSH | 每个会话一次；压缩后不再发送 |
+| pi | 放在 system prompt 中，每轮重建 |
+| OpenClaw | 放在 system prompt 中，每轮重建：`<user-profile>` 包含用户的 profile，设置了 `peer_role` 时还包含当前 actor peer 的 profile。不注入记忆索引和 skill 清单 |
+| Hermes | 用自己的读取逻辑加载 profile 及 preferences、entities 清单，默认预算 6,000 token |
 
-| 模块 | 职责 | 消费方 |
-|---|---|---|
-| `recall-core.mjs` | 召回请求构造 + 三级降级 + 本地兜底排序注入 | 全部 JS 系 harness |
-| `agent-hook-runtime.mjs` | "瘦 hook"一体化运行时（配置经共享 schema 解析、session id 派生、跨进程锁、fetch、commit） | cc / codex / cursor / trae / trae-cn / zcode |
-| `mcp-proxy-core.mjs` | stdio↔streamable-HTTP MCP 代理内核 | 使用子进程通信的 MCP 集成与 agent-plugins；pi 直接使用官方客户端 |
-| `ov-http.mjs` | hook 到 OpenViking 服务端的唯一出网路径：请求头、AbortController、信封解析 | 全部 JS 系 + agent-plugins |
-| `pending-queue.mjs` | 磁盘离线队列 + 会话启动重放 | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `batch-send.mjs` | 100 条/批写入 + 404/405 逐条降级 + 连续前缀入队 | cc / codex / opencode + agent-hook 系 |
-| `profile-inject.mjs` | session-start 的 profile + 可用记忆清单 + `<available-skills>` skill 清单注入 | 9 个 harness（openclaw / hermes 除外） |
-| `recall-compress-core.mjs` | 召回压缩 prompt + URI 编辑距离修复 + 缓存 | claude-code |
-| `capture-utils.mjs` | 消息归一 + 注入回流防护 + 内置捕获启发式（应答语、slash 命令、信息量下限） | cc / codex / opencode / dsh / pi / zcode / cursor / trae×2 |
-| `input-filters.mjs` | 编译并执行操作员自己配的 sed 风格规则 —— `s` 替换、`d` 丢弃、`k` 仅保留，可限定角色 —— 作用于召回 query 与每个被捕获的回合；解析失败的规则会被报告并跳过，不抛异常（[语法](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#输入过滤器)） | 所有 hook 插件；`recallQueryFilters` / `captureFilters` 两个 knob 目前由 claude-code / codex 提供 |
-| `credentials.mjs` | 凭据解析链（详见 [§3.1.3](#_3-1-3-凭据体系)） | 全部 JS 系 |
-| `session-model.mjs` | 会话 id 前缀派生 + bypass glob | 全部 JS 系 |
-| `async-writer.mjs` | 写路径 detach（drain stdin → spawn → approve → write → unref；spawn 失败回落同步） | cc / codex / zcode |
-| `workspace-peer.mjs` | 按 `peer.source` 解析 actor peer（预设 / 模板 / 保留用于双读的旧 peer id，详见 [§3.1.3](#_3-1-3-凭据体系)） | 全部 JS 系 |
-| `workspace-identity.mjs` | workspace 根目录 + git 身份（归一化 `origin`、仓库根路径、worktree/submodule 类型），纯文件系统上溯、不起 `git` 子进程，按 cwd 缓存 | 全部 JS 系 |
-| `workspace-config.mjs` | 分层 workspace 配置：读 `<root>/.openviking/config.json` 与 `config.local.json`，带来源（provenance）合并各层，剥离连接与凭据类 key | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `workspace-registry.mjs` | 每机注册表 `~/.openviking/workspaces/<slot>.json`——一个 workspace 一个文件，由人工创建、插件只读，优先级高于任何已提交的文件 | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `uri-guard.mjs` | 文件工具的路径参数是 `viking://` URI 时拒绝调用；shell 命令带 `viking://` URI 时照常执行，并给模型附加提示；grep 的 `pattern` 是搜索文本，不当作路径；目标是 skill URI（`isSkillUri()`）时，write 与 edit 的提示改为 `add_skill`，不再指向 `write` / `edit` | 拒绝：各 harness 的 PreToolUse/tool.execute.before 类 hook；提示：PreToolUse，或执行后的 hook（dsh `tools/post-execute`、pi `tool_result`、opencode `tool.execute.after`） |
-| `config-schema.mjs` | 全部配置项的唯一声明：规范名、类型、默认值、取值范围、`OPENVIKING_*` 变量、可接受的旧拼写、workspace 键。doctor 的已知键集合与 workspace 文件的点分键映射都是它的投影 | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `plugin-config.mjs` | 按层解析全部已声明配置项：env → workspace 各层 → ovcli.conf `plugin.<harness>` → ovcli.conf `plugin` → ov.conf 的 harness 段 → 默认值 | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `setup-wizard.mjs` | 交互式写 ovcli.conf | cc / codex / opencode / pi 暴露入口 |
-| `retryable.mjs` | 可重试判定：status 0/408/429/≥500，或 409 且 `error.details.retryable===true`；4xx（含 401/403）不重试 | 全部 JS 系 |
+预算与限制：
 
-## 2.3 服务端会话与 commit 语义
+- `profileTokenBudget`（默认 10,000 token）覆盖 profile 和记忆索引，profile 占一半。profile 超长时保留前 8 行和结尾；清单超长时以 `... +N more` 结尾。token 估算中，CJK 字符按 1.5 token 计，其他文本按每 4 个字符 1 token 计。
+- `skillCatalogTokenBudget`（默认 1,200 token，`OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）是 skill 清单的独立预算。`skillCatalog`（`OPENVIKING_SKILL_CATALOG`）或把预算设为 0 都会关闭清单。
+- 清单来自一次 `GET /api/v1/skills` 请求。用户自己的 skill 排在前面，与用户 skill 同名的账户 skill 不再列出。每条描述截到约 40 token。描述放不下时只列名称；名称也放不下时以 `... +N more` 结尾，或缩成一行数量。服务端没有该接口时不注入清单。
+- `sessionStartMaxBytes` 按 UTF-8 字节限制整个块：Claude Code 和 Codex 为 9,500，因为这两个宿主会把超过约 10,000 字符的 hook 输出存成文件，只显示预览；ZCode 为 20,000，因为它会丢弃超过 32 KB 的输出；其他集成不设上限。超出上限时，先去掉记忆索引，再去掉 skill 清单。
 
-- **会话隐式创建**：插件普遍不显式调用 `POST /sessions`（dsh 例外，它会发一个只含 `session_id` 的 create）；首次 `POST /sessions/{id}/messages(/batch)` 时由服务端 `auto_create=True` 建会话。召回侧 `mode="context"` 的 `_load_session(auto_create=True)` 也会建（第一次召回即在服务端创建会话）。
-- **commit 两阶段**：`POST /sessions/{id}/commit` 的 Phase 1（归档 archive）同步完成后才返回，Phase 2（记忆抽取）作为后台任务返回 `task_id`。`keep_recent_count` 服务端默认 **0**（全量归档，不留 live tail）。
-- **服务端自动 commit 默认关闭，除非显式策略或部署级默认策略将其启用**：
-  - `memory.session_auto_commit.enabled = false`（`memory_config.py`）；无存储 policy 的会话自动 commit 关闭（`session_service.py`）；idle 扫描器在 `enabled=false` 时根本不创建（`core.py`），构成双重门控。
-  - `POST /messages` 的 auto_create 不接受 policy 参数，但配置后会继承 `server.user_config_defaults.auto_commit_policy`；`POST /sessions`（create）与 `PATCH /sessions/{id}/config` 仍是显式的 Session 级控制面。
-  - 当前记忆插件不主动下发 `auto_commit_policy`。可通过 Python SDK 的 `create_session` / `update_session_config`、HTTP API 或 **ov CLI** 设置（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
-  - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
-- **由此**：插件可通过 `server.user_config_defaults.auto_commit_policy` 继承新 Session 的 token/message 阈值；idle timeout 兜底还需开启 `memory.session_auto_commit.enabled=true`。未配置该 fallback 时，客户端仍需自行安排 commit 路径（[§3.3](#_3-3-会话与-commit-生命周期)）。
-- **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
-- **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。
+恢复会话时，部分集成还会注入上一次归档的摘要，预算 32,000 token：Claude Code 在 resume 和 compact 时，Codex 在本地会话已清空后的 resume 时，OpenCode 在会话开始时，pi 在 takeover 关闭时。Claude Code 和 Codex 遇到与本会话已注入内容相同的 profile 块时会跳过。
 
----
+<a id="_3-2-4-超时与预算链"></a>
 
-# 3. 维度详解
+### 超时与预算
 
-## 3.1 接入形态、安装与配置体系
+服务端的查询扩写在 5 秒后停止（`retrieval.recall_intent_timeout_s`），摘要改写在 30 秒后停止（`retrieval.recall_rewrite_timeout_s`）。共享插件在开启扩写时把 context 请求超时提高到至少 15 秒，请求摘要时至少 45 秒，让客户端能等完服务端的每个阶段。宿主的截止时间仍可能先结束 hook。修改这些值见[调整召回延迟](./19-recall-tuning.md#请求超时)。
 
-### 3.1.1 判定矩阵
+| 集成 | 召回超时 |
+|---|---|
+| Claude Code | 15 秒，hook 上限 60 秒 |
+| Codex | 整个 hook 120 秒截止，包括最长 110 秒的本地压缩器 |
+| Cursor、TRAE、TRAE CN、ZCode | 15 秒，宿主上限 20 秒 |
+| OpenCode | 30 秒 |
+| DSH | 10 秒，开启查询扩写时至少 15 秒。召回会阻塞 pre-step |
+| pi | 15 秒 |
+| OpenClaw | context search 默认 15 秒（`autoRecallTimeoutMs`），之前有一次 500 ms 健康检查 |
+| Hermes | 总计 4 秒，单请求 3 秒；可配置 |
 
-| harness | 集成形态 | 安装通道 | 会话 id 前缀/格式 | 配置来源 | 独立 setup 向导 |
-|---|---|---|---|---|---|
-| claude-code | CC 插件（marketplace）：包含 9 hook + MCP 代理 + slash + statusline + skill | 一键 `install.sh --harness claude`（Claude Code 2.0+）/ 手动 marketplace | `cc-<CC session_id 原文>`；subagent 格式为 `…__subagent-<agent_id>` | env + ovcli.conf `plugin.claude_code` + ov.conf `claude_code` | ✅ `scripts/setup.mjs` |
-| codex | Codex 插件（marketplace）：包含 6 hook + MCP 代理 + skill | 一键 `--harness codex` / `codex plugin marketplace add`（TOS 走 dumb-HTTP git 以保留远程更新能力） | `cx-<safeId>`（确定性推导，不读取 state） | env + ovcli.conf `plugin.codex` + ov.conf `codex` | ✅ |
-| trae-cli | **codex 插件别名安装**（TraeCode CLI 2.0，仅支持 2.0；Codex 系：binary `traecli`、配置 `~/.trae/traecli.toml`；能力面与 codex 一致） | 一键 `--harness trae-cli`（复用 codex 安装流程；marketplace 命令会随指向的 binary 执行，如 `traecli plugin marketplace add`） | 与 codex 的派生规则一致 | 与 codex 一致（env + ovcli.conf `plugin.codex` + ov.conf） | ✅（同 codex） |
-| cursor | 配置驱动（写入 `~/.cursor/hooks.json`+`mcp.json`）+ rule + skill | 一键 `--harness cursor` | `cu-<conversation_id>` | env + ovcli.conf `plugin.cursor` | ❌（共用安装器 TUI） |
-| trae / trae-cn | 配置驱动（`~/.trae{,-cn}/hooks.json` + 平台相关 mcp.json） | 一键 `--harness trae,trae-cn` | `tr-` / `trcn-` | env + ovcli.conf `plugin.trae` / `plugin.trae_cn` | ❌ |
-| zcode | 配置驱动（合并进 `~/.zcode/cli/config.json`，并强制 `hooks.enabled=true`） | 一键 `--harness zcode` | `zc-<sess_…>` | env + ovcli.conf `plugin.zcode` | ❌ |
-| kimicode | Kimi Code 原生插件（`kimi.plugin.json`，managed copy + `installed.json`） | 一键 `--harness kimicode` | `kc-<session_id>` | env + ovcli.conf `plugin.kimicode` + workspace 文件 | ❌ |
-| opencode | npm 插件 `@openviking/opencode-plugin`（config hook 自注入 MCP 条目） | 一键 `--harness opencode`（复制为 `~/.config/opencode/plugins/` 下的本地文件插件）/ 手动 npm / 源码 | `oc-<id>`；subagent 格式为 `oc-<parent>__subagent-<child>` | env + ovcli.conf `plugin.opencode` | ✅ |
-| dsh | Cordis 同进程插件（`cordis.patch.yml` 条目） | 统一安装器（默认装到 `web` profile，可用 `--dsh-profile` 指定），或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id 原样>`；subagent 各自独立会话 | env + ovcli.conf `plugin.dsh` + cordis patch config（行为旋钮的最低层；凭据仍以 patch 优先） | ❌ |
-| pi | pi 原生扩展（目录装载，jiti 直译 TS） | 一键 `--harness pi`（复制到自动发现目录，无需 `pi install`） | `pi-<piSessionId>` | env + ovcli.conf `plugin.pi`（凭据字段由凭据链统一解析） | ✅ |
-| openclaw | context-engine 插件（`ownsCompaction:true`）+ 15 工具 + 5 slash + 4 hook + HTTP 路由 | ClawHub 执行 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 搭配 `openclaw openviking setup` / npm 安装器 / TOS 离线包 | UUID 原样小写，否则 `sha256(sessionKey)`；`memory_store` 临时会话 `memory-store-<ts>-<rand>` | `openclaw.json` 的 `plugins.entries.openviking.config`（严格校验：存在未知键/非法值时插件进入 setup-only 模式）+ 少量 env | ✅ `openclaw openviking setup`（交互/非交互 + key 角色探测 + 版本兼容检查） |
-| hermes | Hermes bundled MemoryProvider（随 Hermes 发布，无需装插件） | 执行 `hermes memory setup openviking`（curses 向导）或手动 `hermes config set memory.provider openviking` + `.env` | 由 Hermes 生成，插件原样使用 | `.env`（`OPENVIKING_*`）或 ovcli.conf 联动（`use_ovcli_config` 模式会清空 .env 里的 5 个对应变量）+ config.yaml | ✅（多层菜单） |
-| ov CLI | Rust 原生二进制 | npm `@openviking/cli` / `uv tool install openviking` / cargo / GitHub Releases | 无自有会话（`ov chat` 默认使用 machine-uid） | `ovcli.conf`（多 profile）+ 少量 env | ✅ `ov config`（TUI 向导） |
+OpenClaw 和 Hermes 把注入的召回内容限制在 4,000 字符，放不下的条目整条跳过，不截断。
 
-### 3.1.2 统一安装器
+<a id="_3-2-5-召回再摘要"></a>
 
-统一安装脚本 `examples/memory-plugin-shared/install.sh` 覆盖 11 个 harness id：`claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh`（其中 openclaw 走自有渠道；`trae-cli` 则复用 codex 安装流程，[§3.1.1](#_3-1-1-判定矩阵)）。要点如下：
+### 召回摘要
 
-- 安装源与交互：全部从 OpenViking 文档站提供的下载安装；在仓库 checkout 中运行时改用该 checkout（`--source archive|dev`）。以 `curl … | bash` 方式执行时会从 `/dev/tty` 读取输入，从而保留交互。
-- 官方 docs 的规范一键命令是不带 `--harness` 的裸命令（执行后进入 TUI 多选）；而各插件自带的 setup-helper 转发脚本在调用时会自动补 `--harness`。
-- 幂等合并：hooks/mcp 条目按 `OPENVIKING_INTEGRATION_ID` 标记识别自有条目，做到剔旧追新的同时不动第三方；写入采用原子操作——先备份 `.bak`，写 tmp 后 rename 覆盖，权限 0600。
-- 凭据向导写 `~/.openviking/ovcli.conf`：三选一（本地 `http://127.0.0.1:1933` / 火山云 `https://api.vikingdb.cn-beijing.volces.com/openviking` / 自定义），已有配置先展示当前值再问"沿用/重配"，API key 掩码。
-- 卸载：`--uninstall` 覆盖 cursor / trae / trae-cn / zcode / kimicode，并顺带清理 trae-cli 遗留的旧 hook 配置；其他 Codex 格式或宿主托管插件通过各自宿主的插件管理卸载。
-- 安装后自检：grep 配置 + `node --check` + 一次 `OPENVIKING_MEMORY_ENABLED=0` 的 smoke run。
-- Node 门槛：安装器检查 18+。
+召回摘要让模型先把召回结果改写成一份带引用的简短要点，再交给 Agent。
 
-### 3.1.3 凭据体系
+**服务端**。context 检索接受 `rewrite`（`false`、`true` 或 `"auto"`，默认 `false`）和 `rewrite_max_bullets`（默认 6，范围 1–20）。服务端使用 `query_planner` 模型；`rewrite=true` 且未配置 `query_planner` 时回退到主 `vlm`，`"auto"` 只在配置了 `query_planner` 时执行。摘要以 `OpenViking memory digest:` 开头，每个要点一行 `- `。每个要点最多 500 字符，必须引用结果中的一个 `viking://` URI；没有有效引用的要点会被丢弃。模型判断没有相关内容时，服务端返回 `stats.rewrite="no_relevant"` 和空块，这一轮不记入去重台账。超过 30 秒时，服务端返回未改写的块。
 
-代码中并存着四套并行的凭据解析体系，env 变量名与认证头各不相同，排障时先分清对象：
-
-| 家族 | 消费者 | URL env | Key env | 身份 env | 认证头 |
-|---|---|---|---|---|---|
-| **A. JS 共享核**（`credentials.mjs`） | claude-code / codex（含 trae-cli）/ cursor / trae×2 / zcode / opencode / pi / dsh / agent-plugins | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_PEER_ID` | 只发 `Authorization: Bearer`；本家族任何 harness 都不发 `X-API-Key` |
-| **B. openclaw**（自有 `config.ts`） | openclaw | `OPENVIKING_BASE_URL` → `OPENVIKING_URL` | `OPENVIKING_API_KEY`（支持 SecretRef env/file） | `OPENVIKING_ACCOUNT_ID` / `OPENVIKING_USER_ID`（注意此处带 `_ID`） | `X-API-Key`（指向 OV Cloud 时注意其实际采用 Bearer 认证） |
-| **C. hermes**（Python） | hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT`（=actor peer） | `X-API-Key` + `Bearer` 双发；有 key 时默认不发租户头（被服务端以 trusted 报错拒绝时会自动补头重试一次） |
-| **D. ov CLI**（Rust） | ov | conf 文件为主 | conf | `--account/--user/--actor-peer-id` | `X-API-Key`；LDAP Basic / OIDC Bearer 按 `auth_mode` 切换；api_key 含 ≥2 个 `.` 时自动附加 Bearer（JWT 兜底） |
-
-家族 A 的解析链如下（其余家族见档案卡）：
-
-1. 模式由 `OPENVIKING_CREDENTIAL_SOURCE`（别名 `_CREDENTIALS_SOURCE`）控制，取值 ∈ `env|cli|auto`（默认 auto）。强制为 `env` 时，连接不读两个文件：没设的变量就是空，URL 默认 `http://127.0.0.1:1933`。`peerId` 配置仍按它自己的分层解析。
-2. **auto 语义是 env 优先**：只要任一 env 凭据字段（`URL`、`BASE_URL`、`MCP_URL`、`BEARER_TOKEN`、`API_KEY`、`ACCOUNT`、`USER`、`PEER_ID`）存在，就从环境变量开始往下解析；只有这些全空、且 ovcli.conf 存在并含凭据字段时，链条才钉在这个文件上：跳过环境变量里的凭据，`apiKey` 仍会依次回落到 `plugin` 键和 ov.conf `<harness>.apiKey`（Claude Code 与 agent-plugins 再回落到 `server.root_api_key`），`account` / `user` 只回落到 `plugin` 键。`OPENVIKING_AUTH_MODE` 不算凭据字段，单独设置不会解除钉定。
-3. baseUrl：env → ovcli `url` → ov.conf `server.url` → `http://{server.host|127.0.0.1}:{server.port|1933}`（其中 `0.0.0.0` 归一为 `127.0.0.1`）；兜底 `http://127.0.0.1:1933`。
-4. apiKey：嵌入宿主传入的值（dsh 的 Cordis patch）排在所有层之上，URL、account、user、auth mode 同理；其后是 `BEARER_TOKEN` → `API_KEY` → ovcli `api_key` → ovcli `plugin.<harness>.apiKey` → ovcli `plugin.apiKey` → ov.conf `<harness>.apiKey` → `server.root_api_key`。`<harness>` 是调用方 harness 自己的那段（snake_case，如 `trae_cn`；`claude-code` 与 `claude_code` 指向同一段）；account / user / peerId 在各自链条的同一位置读同一段。
-5. mcpUrl：`OPENVIKING_MCP_URL`（非 cli 模式）→ `${baseUrl}/mcp`。
-6. 统一请求头：`Authorization: Bearer` + `X-OpenViking-Account/User`（仅 trusted 模式）+ `X-OpenViking-Actor-Peer` + `User-Agent: openviking-memory-<harness>/<version>`。`api_key` 模式的服务端从 key 里取身份、忽略这两个头，所以那里不发，免得把身份报给链路上的每一层代理。模式解析顺序：`OPENVIKING_AUTH_MODE`（任何模式下都读）→ `ovcli` `plugin.<harness>.authMode` → `plugin.authMode` → `ov.conf` `<harness>.authMode` → `ov.conf` `server.auth_mode` → 只要解析出了 account 或 user 就算 trusted。
-7. **hook 与 MCP 共用一份连接**：以上规则都由 `credentials.mjs` 的 `resolveConnection()` 实现。hook 的 loader（`buildPluginConfig()`）和每个 MCP proxy（经各自 harness 的 loader，agent-plugins 经 `buildProxyConnection()`）都调用它，而且它不读当前目录，所以从插件目录启动的 proxy 与 hook 解析结果相同。跨进程边界只有两种做法：Codex 只把 `.mcp.json` `env_vars` 列出的变量交给 MCP 进程，这份名单必须包含 `MCP_PROXY_ENV_VARS`；dsh 直接转发解析好的连接，每个凭据变量都显式写出（空值也写），并带上 `OPENVIKING_CREDENTIAL_SOURCE=env`，所以文件和子进程继承到的变量都改变不了它。`mcp-hook-parity.test.mjs` 断言两边发出的 URL、key 和身份一致。
-
-**workspace peer**（家族 A 各 harness 均适用；agent-plugins 包既不派生 workspace peer，也不转发任何 peer——它没有能把 `recallPeerScope` 设成 `actor` 的配置项层，代理始终不发这个头）：无显式 peerId 且 `OPENVIKING_WORKSPACE_PEER≠0` 时由 workspace 派生，随 `X-OpenViking-Actor-Peer` 发送（服务端会对该头校验，含 `/` 或 `\` 返回 400）。派生规则由 `peer.source` 决定，**默认 `git`**：先取归一化后的 `origin` URL，取不到回落到仓库根路径；不在仓库中则什么都不发送，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。例如在 `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` 下、origin 为 `git@github.com:volcengine/OpenViking.git` 时，peer 是 `github.com-volcengine-openviking`——任意子目录、任意 worktree、任意机器、任意 clone 都是同一个值。`peer.source` 的读取层为 env `OPENVIKING_PEER_SOURCE`、ovcli.conf `plugin.peerSource` / `plugin.<harness>.peerSource`、workspace 文件的 `peer.source`；家族 A 的每个 harness 都会读这几层。
-
-| `peer.source` | 展开为 | 得到的 peer |
-|---|---|---|
-| `git`（默认） | `["{git_remote}", "{git_root}"]` | 归一化 origin → 仓库根路径；不在仓库中则什么都不发送，预设一律不加前缀 |
-| `cwd` | `["{cwd}"]` | 旧行为，逐字节等价：路径中所有非字母数字字符替换成 `-`（`/Users/x/Dev/OpenViking` → `-Users-x-Dev-OpenViking`） |
-| `none` | `[]` | 完全不发 peer；`OPENVIKING_WORKSPACE_PEER=0` 仍是同一含义 |
-| 模板串（如 `"git-{git_remote}"`、`"team-{dir}"`） | 自身 | 自由形式；也可给一组模板（如 `["team-{dir}", "{cwd}"]`）按顺序尝试，变量为空的模板跳过、落到下一个 |
-
-| 变量 | 取值 | 何时为空 |
-|---|---|---|
-| `{git_remote}` | 归一化后的 `origin`，形如 `github.com-org-repo`；host 与 path 转小写，`.git` 后缀与 userinfo 一并丢弃，因此同一仓库的 ssh / https 两种写法结果一致，且 URL 里内嵌的 token 不可能进入 peer id | 非 git 仓库，或未配 `origin` |
-| `{git_root}` | 仓库根路径，按上述旧 sanitation 处理 | 不在 git 仓库中。仓库内某个子目录放了标记文件时，它仍然是仓库自己的根，因此标记子目录不会拆散默认 peer |
-| `{cwd}` | 当前工作目录，按上述旧 sanitation 处理 | 从不为空——它也不在任何默认链里，裸路径只有在你明确要求时才会成为 peer |
-| `{dir}` | 工作区根目录的目录名：仓库根，或放着 `.openviking/config.json` 的那个目录 | 该目录不是工作区 |
-| `{harness}` | 当前 agent 的名字，与 User-Agent 里那个一致 | 从不为空——但 MCP proxy 不参与推导（它的 cwd 不是可靠身份），只走 proxy 的读路径解析不出它 |
-
-要让一个不是仓库的目录拥有独立 peer，在该目录下创建 `.openviking/config.json`，写上 `{"version": 1, "peer": {"id": "my-project"}}`，或者为它设置显式的 `OPENVIKING_PEER_ID`。
-
-**身份语义**：同一仓库的所有 clone 共用一个 peer，项目记忆跟着项目走而非跟着 checkout 走。fork 的 `origin` 不同，因此默认就是另一个 peer；用 `gh pr checkout` 评审外部 PR 不改 `origin`，身份也就不受影响。派生是纯文件系统操作（`workspace-identity.mjs`），不起 `git` 子进程，因此能塞进最紧的 hook 预算，也能在 `git` 不在 `PATH` 上、或因 dubious ownership 拒绝该仓库时照常工作。worktree 经 `commondir` 收敛回主仓库，submodule 保留自己的身份，`$HOME` 与 `/` 永远不会被当作 workspace 根。
-
-**迁移**（无需用户操作）：旧 peer id 是 cwd 的纯函数，客户端随时可以本地重算，召回仍能覆盖到写在它名下的记忆。默认 `peer_scope: "all"` 下，服务端本就有的跨 peer 扫描零成本地把它包含在内；`peer_scope: "actor"` 下插件会另外向该 peer 发一次召回并拼接结果。此事没有截止期限。
-
-openclaw 的 peer 由 `peer_role`/`peer_prefix` 推导（`peer_role=sender` 时需保证 sender 信息可用，否则工具调用报错；旧值 `person` 作为别名兼容）；Hermes 的助手 peer 可由 `OPENVIKING_AGENT`、关联的 OpenViking 配置或 YAML `agent` 指定；默认不设置。
-
-### 3.1.4 配置体系分层
-
-| 配置层 | 生效范围 | 备注 |
-|---|---|---|
-| env `OPENVIKING_*` | 各家族见上；行为配置项见各档案卡 | 唯一横跨所有 JS 系的层 |
-| workspace 层：每机注册表 `~/.openviking/workspaces/<slot>.json` > `<repo-root>/.openviking/config.local.json`（私有，gitignore）> `<repo-root>/.openviking/config.json`（提交进仓库、团队共享） | claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi | schema v1，必须写 `version: 1`，声明其他版本的文件会被跳过并告警。可用 key：`peer.source`、`peer.id`、`recall.{enabled,peer_scope,dedup_turns,max_items,score_threshold}`、`capture.{enabled,commit_token_threshold}`、`bypass.session_patterns`、`labels`。列表类跨层取并集，首元素写 `"!reset"` 可清空继承来的内容；不认识的 key 原样保留但不生效。hook 是非交互的，这些文件因此无提示直接信任，换来的是结构性的拒绝：连接与凭据类 key（`url`、`api_key`、`account`、`user`、`extra_headers` 等）一律剥离并告警，这些文件里的 `${VAR}` 永不展开。注册表目前没有写入方：条目由人工创建，`ov-memory-doctor` 会打印该放到哪个 slot 路径。提交进仓库的文件关掉了什么，由 `ov-memory-doctor` 播报而不是拦截 |
-| ovcli.conf `plugin` 段（共享标量，可被 `plugin.<harness>` 对象覆盖） | claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi | 每个 harness 键两种写法都认——`claude_code` 或 `claude-code`、`trae_cn` 或 `trae-cn`。`ov config` 编辑和重命名会保留 `plugin` 等额外顶层字段；切换时以新配置显式提供的字段为准，缺省的额外字段沿用 active 文件 |
-| ov.conf harness 段（`<harness>.*`，legacy） | 每个 harness 读与自己同名的那段 | 凭据字段（`apiKey`/`accountId`/`userId`/`peerId`）与调优配置项都按调用方 harness 取自己的段。两种写法指向同一段 |
-| harness 自有配置文件 | dsh cordis patch（会被 `plugin` 段压过）、openclaw `openclaw.json`、hermes `config.yaml`+`.env` | |
-
-**配置项生效范围速查**（这些配置项只在列出的 harness 上生效）：
-
-- `OPENVIKING_COMMIT_TURN_THRESHOLD`：仅 cursor（trae×2/zcode 每 Stop 必 commit，不走该阈值）。
-- `OPENVIKING_WRITE_PATH_ASYNC`：claude-code / codex / zcode。
-- 召回再摘要：`OPENVIKING_RECALL_COMPRESS` 的 `server` 模式适用于各记忆集成，本地 `client` 模式仅 Claude Code / Codex 支持。默认值和模式见 [§3.2.5](#_3-2-5-召回再摘要)。
-- `OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE`、`OPENVIKING_SKILL_CATALOG`、`OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`、workspace 配置文件与 ovcli.conf `plugin` 段：经共享加载器解析配置的每个 harness——claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi；openclaw 与 hermes 各有自己的配置体系。
-
-## 3.2 自动召回与注入
-
-### 3.2.1 机制底座：一条共享管线，两条服务端路径
-
-JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处理：
-
-1. **context face**：调用 `POST /api/v1/search/search`，参数设定为 `mode:"context"` 且 `purpose:"coding"`。其核心设计原则为"只声明意图，机制交服务端"：对于 `quotas`/`max_tokens`/`query_expansion`/`rewrite_max_bullets` 等参数，仅在用户显式配置时（带有 configured 哨兵字段）才会发送，否则直接采用服务端的默认设定。
-2. **legacy `/recall`**：若 context face 请求返回 400/422 错误，且响应报文包含 `extra`/`mode`/`unexpected` 等特征字段，则判定对接了旧版服务端。此时会在本地写入 6 小时的负缓存（路径为 `~/.openviking/state/context-face.json`，该文件全机共享，一旦被任一 harness 标记，同机所有 JS 系 harness 均会跳过 context face 阶段）。随后降级调用已弃用的 `/api/v1/search/recall` 接口；若 `peer_scope` 被拒，则去掉该参数重试一次。
-3. **raw find 兜底**：并发请求 `viking://~/memories` 与 `viking://~/skills`，调用两次 `POST /search/find`（注意：resources 被刻意排除在自动召回之外，资源类文档由模型主动调用 `search` 获取）。客户端收到结果后进行本地重排（权重规则为：leaf +0.12 / 时间意图 +0.10 / 偏好意图 +0.08 / 词面重叠 ≤0.2）、去重，最后按客户端 token 预算装填。`recallTokenBudget`、`recallMaxContentChars` 与 `recallPreferAbstract` 三个配置项只在这一级生效；而在 context face 下，注入预算由服务端 `max_tokens`（默认 1600）决定。
-
-服务端在处理 session_id 时，分为两条截然不同的执行路径：
-
-- **路径 A：`mode="context"`**（适用于 context face 与 `/recall` preset）。此路径负责 query expansion 与跨轮去重台账。expansion 设有三重闸门：`retrieval.enable_intent` 需开启（默认 true） → 会话必须已物化（即 `messages.jsonl` 文件存在） → `latest_archive_overview` 或 `current_messages` 不能为空。扩写后原 query 永远排第一，追加的 planned queries 上限为 3。台账（`.recall_log.json`）按 `dedup_turns` 冷却已发正文的 URI；若"当轮只发了 URI 没发正文"，该记录则不参与冷却；digest 判定 no_relevant 时亦不记账。
-- **路径 B：`mode="list"`**（不写 mode 时的默认行为）。此路径下，IntentAnalyzer 会整体替换 typed_queries（原 query 不保证保留），无台账、无原-query 保底。实际落在这条路径上的调用方包括：codex 的第二级降级 `searchScope`、hermes 的 `viking_search(mode="deep")` 以及 prefetch 的首选路径。尽管它们带了 session_id，但拿不到 context 面的 expansion 与去重机制。
-
-**`dedup_turns` 的三点说明**：① 服务端 context 面的默认值是 **0**，常见的"5"实则源自客户端 `recall-core.mjs` 兜底与 `/recall` preset（后者仅当带 session_id）——不经共享库直接打 API 的第三方即使带了 session_id，也要显式发 `dedup_turns` 才有跨轮去重；② "turn"的计数单位是消息条数而非对话轮（`_resolve_turn` 用 `total_message_count`），对同时推 user+assistant 的 harness，默认 5 ≈ 1-2 个真实对话轮；③ 注意：`autoCapture=0` 且 `autoRecall=1` 时消息数恒 0 → 台账时钟不走 → 已发过正文的 URI 在本会话内持续冷却；可用 `OPENVIKING_RECALL_DEDUP_TURNS=0` 关闭去重。
-
-### 3.2.2 判定矩阵
-
-下表描述默认召回路径。显式开启服务端压缩后，请求路径按 §3.2.5 调整。
-
-| harness | 触发点 | query 构造 | session_id | 服务端路径 | 注入格式 / 位置 | 再摘要（客户端）* |
-|---|---|---|---|---|---|---|
-| claude-code | 每轮 `UserPromptSubmit` | prompt 原文 trim | ✅ `cc-` | A（context face） | `<openviking-context>` → `hookSpecificOutput.additionalContext` | ✅ 本地/服务端（默认 auto，[§3.2.5](#_3-2-5-召回再摘要)） |
-| codex / trae-cli | 每轮 `UserPromptSubmit`（整 hook 120s 硬截止） | prompt 原文 | ✅ `cx-`（确定性推导，不读 state） | A；二级降级 searchScope 落入 B | `<openviking-context source="auto-recall" format="digest">` | ✅ 本地 `codex exec`（[§3.2.5](#_3-2-5-召回再摘要)） |
-| cursor | `beforeSubmitPrompt` | prompt 原文；基于事件 id 与 500ms 窗口去重，同 promptHash 复用缓存块 | ✅ `cu-` | A | `additional_context` | ❌ |
-| trae / trae-cn | `UserPromptSubmit` | 剥离历史注入块后的 prompt（只认 `input.prompt`） | ✅ `tr-`/`trcn-` | A | `additionalContext` | ❌ |
-| zcode | `UserPromptSubmit` | 剥离三类注入块（含 `<system-reminder>`） | ✅ `zc-` | A | `additionalContext`（严格 JSON） | ❌ |
-| opencode | v1：每条 `chat.message`；v2：每条 `prompt` | v1 拼接非 synthetic text part；v2 直接读取 prompt text | ✅ `oc-` | A（timeoutMs=30000） | v1 合成 synthetic part；v2 写入消息 metadata，并在 context hook 中插到该 user message 前 | ❌ |
-| dsh | `agent/pre-step` waterfall（先 await next 再 append） | claimed batch 全部消息（过滤自身注入的内容） | ✅ `dsh-` | A | 借由 `createUserMessage` append 到 `decision.messages` 尾部（source: plugin/openviking-memory） | ❌ |
-| pi | `before_agent_start` 阶段排队；在 `context` 事件内检索（当前轮 prompt 拿当前轮记忆） | prompt 原文 | ✅ `pi-`（会话未建立时不带） | A | 前置到最后一条真实 user 消息（通过 `<openviking-context` 幂等检测） | ❌ |
-| openclaw | context-engine transformContext assemble（设有 7 道 passthrough 门） | 最后一条 user 消息纯 text，清洗后截 4000 字符 | ❌（`/find` 无该字段） | `/find` | 以 `<relevant-memories>` + `Source: openviking-auto-recall` 格式前置进最后一条 user 消息 | ❌ |
-| hermes | 每轮 API 调用前同步执行 `prefetch` | 原始用户输入，双层剥 skill 脚手架；<5 字符跳过 | 部分携带（仅 `search/search` 首选路径，落 B；降级 `/find` 时不带） | B / find | `<memory-context>` fenced 块追加到当轮 user 消息（只进 API 请求体，不写回持久化） | ❌ |
-
-\* 本表的再摘要列描述本地压缩能力。各集成都可显式开启服务端压缩；开启后会使用 context-search rewrite，见 [§3.2.5](#_3-2-5-召回再摘要)。`ov` CLI 不提供自动召回。
-
-### 3.2.3 profile / 开场注入
-
-- **实现**：`profile-inject.mjs`——读 `viking://user/<space>/memories/profile.md` 全文 + `preferences/`、`entities/` 递归清单（abs_limit=512）。预算估算引入 CJK 感知（≥U+3000 记 1.5 token/字，其余 chars/4）；profile 占一半预算，超限则采用"头 8 行 + 尾部"的中段省略；清单超限时会再撤掉几条，直到放得下 `... +N more` 提示。
-- **谁注入、何时、预算**：claude-code（SessionStart 全部 source，10000）；codex（SessionStart startup/clear/resume，10000）；cursor/trae×2/zcode（SessionStart，10000，2s 去抖）；opencode（每会话首条 chat.message 一次，10000，进程内 Set 去重，subagent 会话跳过；注意开场注入每会话只尝试一次，失败后本进程内不重试）；dsh（每 session 投一次 `profileDelivered`，10000；compaction 之后不重投）；pi（进 systemPrompt，每个 prompt 重拼，10000 常驻）。openclaw 无 profile 注入。Hermes 使用独立的开场读取逻辑，注入用户 profile 及 preferences/entities 清单，`profile_token_budget` 默认 6000。
-- **skill 清单**（`<available-skills>`）：由 `buildProfileBlock()` 追加在同一个 `<openviking-context>` 信封里，排在 `<user-profile>` 和 `<available-memories>` 之后，所以上述使用共享 profile 加载器的 harness 都会随 profile 一起注入它（codex 覆盖 trae-cli）。数据来自一次 `GET /api/v1/skills?node_limit=200`，包含用户自己的 skill 和账户共享的 `viking://agent/skills`：自己的排在前面，和自己某个 skill 同名的共享 skill 不再列出。每条描述按同一套 CJK 感知估算截到约 40 token，描述里出现的信封标签会被转义。
-  - **预算与开关**：`skillCatalogTokenBudget`（默认 1200 token，取值 0-20000，env `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）是这一块自己的预算，不占 `profileTokenBudget`。`skillCatalog`（默认 true，env `OPENVIKING_SKILL_CATALOG`）控制开关，预算设为 0 同样关闭。两者都在 `config-schema.mjs` 中声明，因此和其他旋钮一样，也能在 ovcli.conf 的 `plugin` / `plugin.<harness>` 段里设置。
-  - **降级**：放得下时每条都带描述；放不下就只列名称，名称也列不全时以 `... +N more, search OpenViking skills to find the rest` 收尾；连一个名称都放不下时，只剩一行 `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`。没有任何 skill，或服务端没有 `GET /api/v1/skills` 时，整块省略。
-  - **总量上限**：`sessionStartMaxBytes`（env `OPENVIKING_SESSION_START_MAX_BYTES`）按 UTF-8 字节限制整个会话开场注入：claude-code 和 codex 为 9500，因为这两个宿主会把超过约 10,000 字符或字节的 hook 上下文存成文件、只给模型看预览；zcode 为 20000，因为它会丢弃超过 32 KB 的 stdout；其余不设上限。在上限内各项预算相应收缩，仍放不下时先去掉记忆索引，再去掉 skill 清单。resume/compact 时会话归档最多占一半，截断处附 `viking://~/sessions/<id>/history/` 指针；resume 时 claude-code 和 codex 若 profile 块与本会话上次注入的相同就不再重复注入。
-  - **示例**（claude-code，`source="startup"`）：
-    ```text
-    <openviking-context source="startup">
-    <user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
-    <available-memories>...</available-memories>
-    <available-skills>
-      OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
-      viking://user/default/skills/
-        - pr-review — Review a pull request against the team checklist.
-      viking://agent/skills/
-        - deploy-runbook — Shared deployment runbook for the payments service.
-    </available-skills>
-    </openviking-context>
-    ```
-- **archive 注入**（resume 场景把上次归档摘要拉回来）：claude-code（source=resume/compact，`token_budget=32000`）；codex（resume 且本地 ovSessionId 已清时，32000/截 6000 字符）；opencode（开场注入 B 部分，32000）；pi 非 takeover 模式（32000）。
-- **repo 上下文注入**：opencode 独有——通过 `experimental.chat.system.transform` 把已索引仓库列表放进 system prompt。
-
-### 3.2.4 超时与预算链
-
-- 家族 A 客户端推导：带 rewrite → `max(timeoutMs, 45000)`；带 expansion → `max(timeoutMs, 15000)`；对应服务端熔断 5s（expansion）/30s（rewrite）——设计上让客户端预算覆盖服务端各阶段，防止客户端提前 abort 丢掉整个响应。
-- 实际值：cc 15s（hook 预算 60s）；codex 召回整 hook 120s 硬截止 + 压缩子进程 110s；cursor/trae×2/zcode 15s（宿主 hook 预算 20s）；opencode 30s；dsh HTTP 默认 10s，context expansion 请求至少 15s（阻塞 pre-step）；pi 15s；openclaw 整个召回流程外层 5s 硬超时（500ms health precheck；默认 `recallPreferAbstract=false` 时每条 leaf 记忆多一次 read，预算内最多 1 find + 6 read + 1 health）；hermes 总预算 4s / 单请求 3s（可配）。
-- 注入体预算：服务端 `max_tokens` 默认 1600（家族 A 默认不发、由服务端决定）；openclaw / hermes 用字符预算 4000（两家都是"装不下整条跳过"而非截断）。
-
-### 3.2.5 召回再摘要
-
-**服务端实现（对所有调用方可用）**：context 检索面（涵盖 REST 的 `mode="context"` 与 legacy 的 `/recall`）支持传入 `rewrite` 参数——可选值为 `false | true | "auto"`，默认为 `false`；并配套提供 `rewrite_max_bullets`（默认 6，1-20）。开启后，服务端会用 `query_planner` 模型（`rewrite=true` 时未配置则回落主 `vlm`；`"auto"` 仅在显式配置了 `query_planner` 时生效）把召回结果改写成带引用的 digest：`OpenViking memory digest:` 头 + `- ` bullets，每条 ≤500 字符且必须引用一条本次命中的 `viking://` URI（无引用或引用越界的 bullet 被丢弃）；判定无相关记忆时输出哨兵并清空注入块（该轮不记入去重台账）。模型调用受 `retrieval.recall_rewrite_timeout_s=30s` 熔断，超时回落未改写的 rendered 块（`rewrite.py:78-141`、`pipeline.py:122-130`、`search.py:195-196`）。
-
-**客户端配置**：自动召回统一使用 `OPENVIKING_RECALL_COMPRESS`，共享配置文件中对应 `recallCompress`（`recallRewrite` 为兼容别名）。
+**插件**。`OPENVIKING_RECALL_COMPRESS` 或共享配置中的 `recallCompress` 选择模式，`recallRewrite` 仍可作为别名使用。
 
 | 模式 | 行为 |
 | --- | --- |
-| `off` | 不请求再摘要。 |
-| `server` | 发送 `rewrite: true`，优先使用服务端 digest。 |
-| `client` | 仅 Claude Code 和 Codex 支持，使用本地压缩器。 |
-| `auto` | Claude Code 和 Codex 优先使用可用的本地压缩器，否则发送 `rewrite: "auto"`；没有本地压缩器的集成直接请求服务端自动判断。 |
+| `off` | 不生成摘要 |
+| `server` | 发送 `rewrite: true`，优先使用服务端摘要 |
+| `client` | 使用本地压缩器；仅 Claude Code 和 Codex |
+| `auto` | Claude Code 和 Codex 有本地压缩器时使用它，否则发送 `rewrite: "auto"`。其他集成发送 `rewrite: "auto"` |
 
-Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。Claude Code、Codex、OpenCode、DSH、Pi、Cursor、TRAE、TRAE CN、ZCode、OpenClaw 和 Hermes 均可显式启用服务端压缩；旧布尔值 `1` / `0` 分别对应 `auto` / `off`。`stats.rewrite="no_relevant"` 表示本轮不注入，不能再回退到原始块。
+Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端摘要的有 Claude Code、Codex、OpenCode、DSH、pi、Cursor、TRAE、TRAE CN、ZCode、OpenClaw 和 Hermes 外部插件，且需要服务端支持 context-search rewrite。Hermes 内置 provider 不支持召回摘要。旧值 `1` 和 `0` 分别等同于 `auto` 和 `off`。`no_relevant` 结果会取消本轮注入，插件不能回退到原始块。
 
-本地压缩器细节：
+本地压缩器：
 
-- **claude-code**：用 `claude --version` 探测本地压缩器（结果缓存 7 天）。可用时执行 `claude -p --model sonnet --effort low --strict-mcp-config`，子进程默认超时 110s（`recallTimeoutMs - 10s`；宿主 60s prompt-hook 预算可提前结束它）；输入少于 1500 字符时跳过（`recallCompressMinInputChars`）；按 digest 缓存；引用的 URI 按编辑距离修正为本次命中的有效 URI，无法修复的 bullet 会被丢弃。子进程失败时回退到本地格式化的召回条目；没有条目时使用 rendered 块。
-- **codex**：从 `~/.codex/models_cache.json` 选模型（先 `gpt-5.3-codex-spark`，其次 `gpt-5.6-luna` + low，缓存 7 天），执行 `codex --sandbox read-only --ask-for-approval never exec --ephemeral --ignore-user-config --skip-git-repo-check --output-last-message <tmp> -`，默认超时为 `recallTimeoutMs - 10s`（110s）。运行失败后本会话不再做本地压缩，下次 `SessionStart` 重新探测。输出经规范化并截断到 4000 字符；本地压缩失败时使用本地格式化的召回条目，没有条目时使用 rendered 块；关闭压缩时直接使用服务端 digest 或 rendered 块。
+- **Claude Code** 用 `claude --version` 检测 `claude`（结果缓存 7 天），执行 `claude -p --model sonnet --effort low --strict-mcp-config`。子进程超时默认 110 秒（`recallCompressTimeoutMs`），但 60 秒的提问 hook 可能更早结束它。少于 1,500 字符的输入不压缩。引用的 URI 按编辑距离匹配回真实的结果 URI，无法匹配的要点会被丢弃。失败时注入本地格式化的结果，或注入渲染好的块。
+- **Codex** 从 `~/.codex/models_cache.json` 选择模型（优先 `gpt-5.3-codex-spark`，其次低 effort 的 `gpt-5.6-luna`；缓存 7 天），在只读的临时沙箱中执行 `codex exec`，默认超时 110 秒。运行失败一次后，本地压缩停用到下一次 `SessionStart`。输出上限 4,000 字符；失败时的回退方式与 Claude Code 相同。
 
-这些设置只控制自动召回，显式 MCP 调用使用调用方传入的参数。服务端需支持 context-search rewrite；旧服务回退行为、压缩器探测和宿主时间预算见 [共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)及各集成页。
+这些设置只作用于自动召回。模型显式调用 MCP `search` 时，使用它自己传入的参数。旧服务端的回退和宿主时间预算见[共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)和[调整召回延迟](./19-recall-tuning.md)。
 
-### 3.2.6 注入回流防护
+<a id="_3-2-6-注入回流防护"></a>
 
-为防止注入内容被二次捕获，注入时会加确定性包装（`<openviking-context>` 等），捕获时再机械剥离：capture-utils 的 `sanitizeCapturedText` 剥注入块、digest 块、元数据围栏与时间戳前缀。各端的特殊处理包括：trae/zcode 用各自的 clean 函数（其中 zcode 剥三类注入块）；openclaw 在 afterTurn 写回与下轮 query 构造时各剥一次 `<relevant-memories>`；hermes 则更彻底，直接把三个召回类工具的 tool_call/result 从 sync batch 里整条剔除（写类工具保留）。
+### 避免注入内容被重复捕获
 
-## 3.3 会话与 commit 生命周期
+注入的上下文用固定标签包裹，例如 `<openviking-context>`。捕获时先去掉这些块再发送，召回的记忆就不会被当成新对话再次存储。共享捕获代码还会去掉摘要块、元数据围栏和时间戳前缀。TRAE 和 ZCode 使用各自的清理函数，ZCode 的清理函数会去掉三类注入块。OpenClaw 在捕获一轮对话和构造下一次召回查询时都会去掉 `<relevant-memories>`。Hermes 从捕获批次中丢弃三个只读工具的调用和结果，保留写入类工具的调用。
 
-### 3.3.1 机制底座
+<a id="_3-3-会话与-commit-生命周期"></a>
 
-- **写入路径**：JS 系统一通过 `batch-send.mjs` 处理（对应接口 `POST /messages/batch`，每批最多 100 条，与服务端的 `max_length=100` 限制保持一致；若遇 404/405 错误则降级为逐条发送）。增量游标由各家自行实现（cc 按 transcript turn 序号计算，codex 机制相同；cursor 采用 `sha256(index+role+content)`；zcode 基于 rollout 的 `turn_id`；opencode v1 依赖事件流 Map，v2 在 execution 结束时读取 context 并按 message id 推进游标；dsh 基于事件白名单；pi 依据 branch 条目水位；hermes 则按当前轮切片）。
-- **commit 是客户端触发的**（详见 [§2.3](#_2-3-服务端会话与-commit-语义)）：服务端默认不自动 commit。下表所有的"阈值/触发"条件，均指客户端逻辑。
-- **keep_recent_count 差异**（即 commit 后给宿主留多少 live tail）：服务端默认值为 0。各家传参如下：cc/codex 阈值提交传 10；cursor、trae×2、zcode 发空 body `{}`，即传 0（每次均为全量归档）；opencode 传 10；dsh 传 10；pi 在非 takeover 模式传 10，takeover 模式传 3（本地含义是"保留 3 个用户轮"，而服务端按消息条数解释，实际保留更少）；openclaw 在 afterTurn 阈值触发时传 10，在 compact/reset/memory_store 操作时传 0；hermes 恒定传 0。
-- **写路径 detach**（`async-writer.mjs`，cc/codex/zcode 的 Stop 默认开）：drain stdin → spawn detached worker → approve → write payload → unref（注：spawn 失败时尚未 approve，回落同步恰好只输出一次）。detached worker 自成进程组，可在终端退出后继续处理已交给它的写入。但 worker 必须已经启动，网络错误、系统终止或服务端失败仍可能导致写入未完成。附带效果：执行 detach 后，Stop 的 `appended N turn(s)` 提示将不再展示（设置 `OPENVIKING_WRITE_PATH_ASYNC=0` 可恢复该提示）。
+## 捕获与提交
 
-### 3.3.2 常规 commit 触发条件
+<a id="_2-3-服务端会话与-commit-语义"></a><a id="_3-3-1-机制底座"></a>
 
-| harness | 轮内阈值触发 | 显式/边界触发 | 压缩触发 |
+### 服务端会话与提交机制
+
+- **会话隐式创建**。服务端收到某个会话的第一条消息时创建该会话；带该会话 ID 的第一次 context 模式召回也会创建。DSH 是唯一显式创建会话的集成。
+- **提交分两个阶段**。`POST /api/v1/sessions/{id}/commit` 在第一阶段归档消息后返回。响应中带有第二阶段（记忆抽取）的 `task_id`，抽取在后台运行。提交请求成功不代表抽取已经完成。
+- **`keep_recent_count`** 决定提交后会话中保留多少条最近的消息。服务端默认 0，即全部归档。Claude Code、Codex、OpenCode、DSH、Cursor、TRAE、TRAE CN、ZCode 和 Hermes 发送 0；pi 在 takeover 模式下发送最近 3 个用户轮对应的确切消息数，其他情况发送 0；OpenClaw 在阈值提交时发送 10，在 reset、`memory_store` 和压缩时发送 0。
+- **服务端自动提交默认关闭**。`memory.session_auto_commit.enabled` 默认 `false`，关闭时空闲扫描器不会启动。新会话仍可以从 `server.user_config_defaults.auto_commit_policy` 获得策略，也可以通过 `POST /api/v1/sessions`、`PATCH /api/v1/sessions/{id}/config`、SDK，或 `ov session new --auto-commit-policy-json` 与 `ov session config set` 显式设置。策略的默认值是：待提交 token 150,000（严格大于）、100 条消息、86,400 秒空闲超时、`keep_recent_count` 0、无最小间隔。空闲超时还需要 `memory.session_auto_commit.enabled=true`。记忆插件不发送策略，所以没有上述设置时，只有客户端会提交。
+- **批量写入**。共享插件每次 `POST /messages/batch` 最多发送 100 条消息，与服务端上限一致；批量接口返回 404 或 405 时改为逐条发送。
+- **大块工具输出单独存放**。服务端把超过 20,000 字符的工具输出移到单独的记录中，留下 `tool_output_ref`。插件把自己的上限（`captureToolMaxChars`）提高到 1,000,000，只作为兜底。
+- **部分写入在后台运行**。Claude Code、Codex 和 ZCode 默认把 `Stop` 的写入交给一个分离的 worker（`OPENVIKING_WRITE_PATH_ASYNC`），宿主不用等待。worker 启动后，关闭终端不影响它，但网络错误或进程被终止仍可能打断它。开启这项设置时，`Stop` 不再输出 `appended N turn(s)` 提示。
+
+<a id="_3-3-2-常规-commit-触发条件"></a>
+
+### 各集成何时提交
+
+表中的阈值都在客户端判断；除非另有说明，读取的是服务端的待提交 token 数。
+
+| 集成 | 会话中 | 显式操作或会话边界 | 压缩前后 |
 |---|---|---|---|
-| claude-code | Stop：`pending_tokens ≥ 20000`（读服务端值），keep 10 | SessionEnd：无条件触发；SubagentStop：无条件触发（无阈值）；SessionStart：重放 pending | PreCompact：无条件触发（同步执行，不 detach） |
-| codex / trae-cli | Stop：同上，20000 / keep 10 | SessionEnd（Codex ≥ 0.145）：无条件触发，先补齐 Stop 漏掉的轮次再 commit——父 hook 只写 `.ended` 标记并 detach worker（Codex 默认给 1s，`timeout` 上限 3s）；SessionStart(startup\|clear)：兜底扫描，提交带 `.ended` 标记或闲置超过 30min 的 state。trae-cli 若无 `SessionEnd` 则只走扫描 | PreCompact：全量 commit（发空 body `{}`），随后置 `ovSessionId=null` |
-| cursor | stop：`capturedSinceCommit ≥ 8`（按消息条数计算，≈4 轮问答；纯客户端计数），keep 0 | sessionEnd：已注册该事件（但实践中不触达，见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | preCompact：无条件触发 |
-| trae / trae-cn | 每个有内容的 Stop 都 commit（无阈值），keep 0 | — | 无（上游无 PreCompact 事件） |
-| zcode | 同 trae（每 Stop 都 commit，keep 0；rollout 增量游标保守推进，若有漏掉的轮次，将在同会话的下个 Stop 补齐） | — | 无（上游无 PreCompact 事件） |
-| opencode | v1 `session.idle` / v2 execution 结束：flush 后 `pending_tokens ≥ 20000` 才 commit，keep 10 | `session.deleted` / v1 `session.error`：强制 commit；v1 dispose / v2 cleanup：强制 commit | v1 在 compacting 前与 compacted 后触发；v2 只在 `session.compaction.ended` 后触发 |
-| dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 10 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | 无（不监听 compaction 事件） |
-| pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000` 且 `lastSeenUserTurns > 3` 时，执行 commitAndAdvance（keep 3；overview 15×2s 轮询，拿不到则边界不推进，但 pendingTokens 会清零，重新累计后重试） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
-| pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 10 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
-| openclaw | afterTurn：`pending_tokens ≥ floor(tokenBudget × 0.5)`（ratio 默认 0.5，tokenBudget 缺省 128000，即阈值 ~64000），wait=false，keep 10 | `before_reset`（执行 `/new` `/reset`）：wait=true，keep 0；`memory_store` 工具：wait=true，keep 0 | `compact()`：wait=true，keep 0（Phase2 轮询上限 5 分钟） |
-| hermes | 无阈值 commit——触发面全是会话边界：`on_session_end`（drain 10s，drain 不净则本次不 commit）、`on_session_switch`（涉及 `/new`、`/resume`、`/branch` 或压缩 fork，异步 drain 预算 65s）、gateway 缓存驱逐；`/undo` 与原地压缩不 commit。用幂等集合防二次 commit；keep 0 | atexit 兜底 | fork 型压缩边界 commit；原地压缩不 commit |
-| ov CLI | 无 | `ov session commit`；`ov add-memory` 第三步固定 commit | — |
-| ingest | `pending ≥ 6000` 或 idle 5s，keep 0；backfill 在每个会话结束时执行 `commit_if_needed` | 退出时执行 `_flush_all()` | — |
-| LangChain | `CommitPolicy.mode` 默认 `never`；`pending_tokens` 模式阈值为 8000；`always` 模式每次 record 均触发 | 调用方自理 | — |
+| Claude Code | `Stop` 时待提交 token 达到 20,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 总是同步提交 |
+| Codex | `Stop` 时待提交 token 达到 20,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
+| TraeCode CLI 2.0 | 同 Codex | 同 Codex；没有 `SessionEnd` 时只有启动时的扫描 | 同 Codex |
+| Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
+| TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
+| ZCode | 每个 `Stop`；漏掉的 `Stop` 对应的轮次，在下一个 `Stop` 从 rollout 文件补齐 | 无 | 没有压缩前事件 |
+| Kimi Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 和 `Interrupt` 捕获到新消息时提交 | `PreCompact` 捕获到新消息时提交 |
+| OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 20,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
+| DSH | `turn/end` 时待提交 token 达到 20,000 | Cordis teardown 提交每个会话 | 无 |
+| pi，takeover 开（默认） | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
+| pi，takeover 关 | 每次同步后待提交 token 达到 20,000 | `session_shutdown` 和 `/viking commit` | `session_before_compact` |
+| OpenClaw | 每轮结束后达到 `tokenBudget × commitTokenThresholdRatio`（默认 128,000 × 0.5） | `/new`、`/reset` 和 `memory_store` 提交并等待 | `compact()` 提交，并最多等待 5 分钟完成抽取 |
+| Hermes（内置） | 无 | 会话结束、会话切换（`/new`、`/resume`、`/branch`、fork 型压缩）、gateway 缓存驱逐，以及退出处理器；`/undo` 和原地压缩不提交 | 只在 fork 型压缩时 |
+| ov CLI | 无 | `ov session commit`；`ov add-memory` 会创建、写入并提交自己的会话 | 不适用 |
 
-### 3.3.3 关闭方式 × harness 终局矩阵
+<a id="_3-3-3-关闭方式-×-harness-终局矩阵"></a>
 
-图例：**C** = 对应退出事件会尝试触发 commit；**C\*** = 还需满足表中前提；**—** = 该事件不触发 commit；**n/a** = 不适用。触发不代表归档和记忆抽取完成：网络错误、宿主退出预算或进程终止都可能中断请求。已成功写入的消息仍在服务端 live 区，等待后续提交。本表假设服务端自动提交未启用；配置了自动提交策略时，还需计入[服务端行为](#_2-3-服务端会话与-commit-语义)。
+### 退出时会发生什么
 
-| harness | 正常退出 | Ctrl+C | SIGTERM | SIGHUP/关终端/关窗口·tab | kill -9/崩溃 | 补救路径 |
+“提交”指退出路径会发出提交请求，“视情况”取决于最后一列的说明。已经写入的消息留在服务端会话中，由同一会话的下一次提交归档。本表假设服务端自动提交关闭。
+
+| 集成 | 正常退出 | Ctrl+C | SIGTERM | 关闭终端或窗口 | `kill -9` 或崩溃 | 剩余内容如何回收 |
 |---|---|---|---|---|---|---|
-| claude-code | **C**（SessionEnd → detach 子进程 commit，用户不等待） | **C** | **C** | **C**（detached worker 自成进程组，不受 SIGHUP 波及） | **—** | 下次 Stop 越阈值 / `/compact` / 下次 SessionEnd |
-| codex | **C**（SessionEnd → detach worker commit，用户不等待；需 Codex ≥ 0.145） | **C\*** | **—** | **—** | **—** | C\* 前提：连按两次 `Ctrl-C` 属于正常退出、会触发 SessionEnd，单次不会。未 commit 的一律由下次 `SessionStart(startup\|clear)` 回收：标记仍在则 `ended_retry`，否则等 30min idle-TTL 扫描 |
-| trae-cli | **—**（除非 TraeCode CLI 版本已带 `SessionEnd`） | **—** | **—** | **—** | **—** | 下次 `SessionStart(startup\|clear)` 的 30min idle-TTL 扫描 |
-| cursor | **—**（chat 关闭 / new-chat 无事件） | **—** | **—** | **—**（`sessionEnd` 已注册且仅 window_close 触发，但此时宿主已销毁 shell-exec host，hook 在 spawn 前中止） | **—** | 结束在 <8 条消息水位的会话，尾部依赖同一会话的后续消息触发 commit |
-| trae / trae-cn | **—**（无 session-end 类事件） | **—** | **—** | **—** | **—** | 每 Stop 已 commit，最大待归档量 = 最后一轮 in-flight |
-| zcode | **—**（无 session-end 类事件） | **C\*** | **—** | **—** | **—** | C\* 前提：Ctrl+C 时该轮 Stop 已触发（detached worker 照常写完）；每 Stop 已 commit，漏掉的轮次靠 rollout 游标在同一会话的下个 Stop 补回 |
-| opencode | **C\***（v1 ≥1.15.11 的 `dispose` 或 v2 cleanup → `flushAll({commit:true})`） | **C\*** | **C\*** | **C\*** | **—** | C\* 前提：宿主给 cleanup 的时间有限，慢请求或多个会话串行提交可能被截断；v2 会在无活动 60 分钟、服务停止和本地插件热重载时触发 cleanup |
-| dsh | **C**（Cordis teardown → 每 session 一次 3s 超时 commit，无阈值） | **C**（第一次；第二次 Ctrl+C 强退 → —） | **C** | **—**（无 SIGHUP 监听） | **—** | teardown commit 与阈值 commit 共享同一条串行写链，5s 进程 grace 内前方有慢请求时可能挤不进；web 形态关浏览器 tab 不触发 teardown |
-| pi（takeover 默认） | **—**（正常退出路径会 await `session_shutdown`，handler 持久化本地 takeover 状态，不 commit） | **—** | **—** | **—** | **—** | 下次续跑攒满 30000，或手动 `/viking commit` |
-| pi（takeover off） | **C**（`await sync.commit()`，失败入 pending 队列） | **C** | **C** | **C** | **—** | — |
-| openclaw | **—**（上游发 awaited `session_end(reason=shutdown\|restart)`，handler 缓存 agentId 后返回，不触发 commit；`gateway_stop` 未注册；无信号处理） | **—** | **—** | **—** | **—** | 显式 `/new` `/reset` 与 ~50% 阈值；低于阈值的会话依赖这两条路径归档 |
-| hermes | **C\***（atexit `_run_cleanup` → flush 10s → on_session_end） | **C\***（交互与非交互最终都走 atexit） | **C\***（`_signal_handler`，grace 默认 1.5s → 干净退出 → atexit） | **C\***（SIGHUP 同 SIGTERM 路径） | **—**（atexit 不执行） | drain 不净时本次不 commit（避免提交半截数据）；Hermes 退出看门狗可能中断慢 commit |
-| ov CLI | n/a（一次性命令） | n/a | n/a | n/a | n/a | 无 pending queue；命令失败重跑即可 |
-| ingest | **C**（`finally _flush_all`） | **C**（SIGINT → stop） | **C** | **—**（无 SIGHUP handler） | **—** | 通过游标库恢复：`needs_commit` 持久化在游标库，下次运行 reconcile 补 commit |
-| LangChain / Open WebUI / Agent Plugins / 通用 MCP | **—**（无会话生命周期挂钩；MCP 代理退出时的 `DELETE /mcp` 只释放协议会话，与记忆 commit 无关） | — | — | — | — | LangChain 靠调用方 `close()`；进程内 pending-commit 集合随进程消失 |
+| Claude Code | 提交 | 提交 | 提交 | 提交 | 否 | `SessionEnd` 把提交交给自成进程组的分离 worker，SIGHUP 不会终止它。否则等下次阈值、`/compact` 或 `SessionEnd` |
+| Codex | 提交 | 视情况 | 否 | 否 | 否 | 连按两次 Ctrl+C 属于正常退出，会触发 `SessionEnd`；只按一次不会。漏掉的内容在下一次 startup 或 clear 的 `SessionStart` 提交：结束标记还在就立即提交，否则等空闲 30 分钟后提交 |
+| TraeCode CLI 2.0 | 否，除非版本带 `SessionEnd` | 否 | 否 | 否 | 否 | 下一次 `SessionStart` 的 30 分钟空闲扫描 |
+| Cursor | 否 | 否 | 否 | 否 | 否 | 关闭或切换对话不触发任何事件。`sessionEnd` 只在关闭窗口时触发，而此时宿主已停止执行 hook 命令。不足 8 条消息阈值的部分要等同一会话的后续消息 |
+| TRAE、TRAE CN | 否 | 否 | 否 | 否 | 否 | 每个 `Stop` 已经提交，最多丢失正在进行的那一轮 |
+| ZCode | 否 | 视情况 | 否 | 否 | 否 | 按 Ctrl+C 时如果该轮的 `Stop` 已触发，分离的 worker 会写完。每个 `Stop` 都提交，漏掉的轮次在下一个 `Stop` 补齐 |
+| Kimi Code | 视情况 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 只在捕获到新消息时提交；已被 `Stop` 捕获的尾部等待下一次提交 |
+| OpenCode | 视情况 | 视情况 | 视情况 | 视情况 | 否 | v1 1.15.11+ 的 `dispose` 和 v2 cleanup 会提交所有会话，但宿主留给清理的时间有限，慢请求或会话较多时可能被截断。v2 cleanup 还会在空闲 60 分钟和插件热重载时运行 |
+| DSH | 提交 | 提交 | 提交 | 否 | 否 | teardown 给每个会话一次 3 秒的提交，排在慢写入之后，整体处于 5 秒的进程宽限期内。第二次 Ctrl+C 会强制退出，跳过提交。Web 形态下关闭浏览器标签页不会触发 teardown |
+| pi，takeover 开 | 否 | 否 | 否 | 否 | 否 | `session_shutdown` 保存 takeover 状态但不提交。等下次运行达到阈值，或执行 `/viking commit` |
+| pi，takeover 关 | 提交 | 提交 | 提交 | 提交 | 否 | 失败的提交进入离线队列 |
+| OpenClaw | 否 | 否 | 否 | 否 | 否 | `session_end` 处理器不提交。归档依赖 `/new`、`/reset` 和阈值 |
+| Hermes（内置） | 视情况 | 视情况 | 视情况 | 视情况 | 否 | 退出处理器最多用 10 秒等待上传完成，然后提交；上传没有完成就跳过提交，不提交半个会话。SIGTERM 和 SIGHUP 默认有 1.5 秒宽限期，Hermes 的退出看门狗可能中断较慢的提交 |
+| LangChain、Open WebUI、Agent Plugins、MCP 客户端 | 否 | 否 | 否 | 否 | 否 | 没有会话 hook。MCP 代理退出时发送的 `DELETE /mcp` 只关闭协议会话。LangChain 依赖调用方的 `close()` |
 
-**三点阅读提示**：
+这张表的实际含义：
 
-1. 正常退出时尝试 commit 的有五家：claude-code、opencode(≥1.15.11)、dsh、pi(takeover off)、hermes；其余各家均依赖表中"补救路径"列的回收机制。
-2. kill -9 场景所有集成都不触发 commit——已提交的消息保留在服务端 live 区，后续同一会话再触发 commit 时一并归档；服务端提供 per-session idle 兜底能力（[§2.3](#_2-3-服务端会话与-commit-语义)），当前插件默认不下发该 policy。
-3. 每轮必 commit 的 trae×2 / zcode 关闭语义最简单（即最大待归档量 = 最后一个未走到 Stop 的回合），代价是每个 Stop 都触发一次全量归档 + 记忆抽取（keep 0）。
+- **正常退出时会提交**：Claude Code、Codex 0.145+、OpenCode、DSH、takeover 关闭的 pi，以及 Hermes。其他集成依赖最后一列的回收方式。
+- **`kill -9` 之后没有任何集成会提交**。已写入的消息保持未提交，直到该会话的下一次提交。带空闲超时的服务端自动提交策略是唯一的服务端兜底，而插件不会配置它。
+- **TRAE、TRAE CN 和 ZCode** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
 
-### 3.3.4 pending queue / 离线补偿对照
+<a id="_3-3-4-pending-queue-离线补偿对照"></a>
 
-| harness | 机制 | 要点 |
-|---|---|---|
-| cc / cursor / trae×2 / zcode / opencode / dsh / pi | 磁盘队列 `~/.openviking/pending`（0700/0600） | 仅可重试的失败入队（4xx 含 401/403 判为不可重试，不入队，debug 日志可见）；重放在会话启动时执行：≤50 条/次、≤3 次/条、TTL 7 天；`.processing` 原子认领，10min 陈旧回收；addMessage 失败即 break 保序 |
-| codex / trae-cli | transcript + 持久化游标 | 新捕获的消息不进入 pending queue；成功发送多少条，游标才推进多少条，后续捕获或 SessionStart 扫描补发未发送的尾部。SessionStart 仍会重放已有的共享 pending 条目。 |
-| openclaw | 无本地队列 | addSessionMessage 失败被 catch，该轮消息不重放 |
-| hermes | 进程内上传线程；`$HERMES_HOME/openviking/pending_sessions/` 保存待提交标记 | POSIX 上启动时可提交已退出进程遗留的待提交会话；未上传消息不会从磁盘重放。 |
-| LangChain | 进程内 `_pending_commit_sessions` 集合 | commit 失败下次 record 自动重试；不落盘。部分成功时抛 `OpenVikingPartialWriteError`（携带 `messages_written`、`input_messages_consumed`、`context_attached`，调用方可按位置切片重试后缀）——全部集成里唯一的部分成功上报协议 |
-| ingest | SQLite 游标库 + 单实例锁 | append 前持久化意图，崩溃后 reconcile 按服务端消息数判定该批是否落地——可恢复部分落地的批次 |
+### 离线重试
 
-### 3.3.5 subagent 会话对照
-
-| harness | 处理方式 |
+| 集成 | 写入失败时 |
 |---|---|
-| claude-code | 隔离最完整：SubagentStart 派生 `cc-<sid>__subagent-<agent_id>` 独立会话，SubagentStop 读 subagent transcript 推送后无条件 commit 并清 state |
-| codex / trae-cli | 不单独建会话：subagent 输出（`agent_message` / `sub_agent_activity`）折叠进主会话的 assistant/tool part |
-| opencode | `oc-<parent>__subagent-<child>` 挂在父命名空间下；开场注入跳过 subagent（召回不跳过）；v2 从 `session.created` 的 `parentID` 建立映射，再在 execution 结束时读取 context |
-| dsh | 每个 subagent = 独立 `dsh-<id>` 会话，父子关系不保留；N 个 subagent = N 份 profile 注入 + N 个独立会话 |
-| hermes | `delegate_task` 传 `skip_memory=True` → subagent 不接 OV（无会话/召回/工具面）；子任务产出不回灌 |
-| cursor / trae×2 / zcode / pi / openclaw | 无 subagent 处理（有独立会话 id 就各自成会话，否则混入主会话；openclaw 可用 `bypassSessionPatterns` 屏蔽） |
-| ingest | claude_code 适配器跳过 `isSidechain` / `isMeta` 记录——subagent 对话不入库 |
+| Claude Code、Cursor、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条，每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
+| Codex、TraeCode CLI 2.0 | 新捕获的内容不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分。`SessionStart` 仍会重放已排队的条目 |
+| OpenClaw | 没有队列，失败的轮次不会重发 |
+| Hermes（内置） | 上传在进程内线程中运行，不从磁盘重放。`$HERMES_HOME/openviking/pending_sessions/` 下的待提交标记让之后的启动能提交已退出进程留下的会话（仅 POSIX） |
+| LangChain | 提交失败时在下一次 record 时重试，只保存在内存中。部分写入会抛出 `OpenVikingPartialWriteError`，附带计数，调用方可据此重试剩余消息 |
+| 日志导入 | SQLite 游标库在发送前记录每批数据。崩溃后，下次运行根据服务端的消息数判断这批数据是否已送达 |
 
-## 3.4 压缩 / compaction 接管
+<a id="_3-3-5-subagent-会话对照"></a>
 
-### 3.4.1 判定矩阵
+### 子代理
 
-| harness | 对宿主压缩的姿态 | 压缩前动作 | 压缩后动作 |
+| 集成 | 子代理处理 |
+|---|---|
+| Claude Code | 每个子代理有自己的会话 `cc-<id>__subagent-<agent_id>`。`SubagentStop` 发送它的 transcript 并提交 |
+| Codex、TraeCode CLI 2.0 | 子代理输出并入主会话 |
+| OpenCode | 子代理使用 `oc-<parent>__subagent-<child>` 会话。会话开场上下文对它们跳过，召回不跳过 |
+| DSH | 每个子代理是单独的 `dsh-<id>` 会话，与父会话没有关联，各自获得会话开场上下文 |
+| Hermes | 委派任务以 `skip_memory=True` 运行，子代理没有 OpenViking 会话、召回或工具，输出也不会被捕获 |
+| Cursor、TRAE、ZCode、Kimi Code、pi、OpenClaw | 没有特殊处理。有独立会话 ID 的子代理有自己的会话，否则消息并入主会话。OpenClaw 可以用 `bypassSessionPatterns` 排除会话 |
+| 日志导入 | Claude Code 适配器跳过 sidechain 和 meta 记录，子代理对话不会导入 |
+
+<a id="_3-4-压缩-compaction-接管"></a><a id="_3-4-1-判定矩阵"></a>
+
+## 宿主压缩
+
+宿主缩减上下文时，多数集成只确保被丢弃的消息已经提交，摘要由宿主生成。pi 和 OpenClaw 可以用 OpenViking 的归档替换宿主的摘要。
+
+| 集成 | 方式 | 压缩前 | 压缩后 |
 |---|---|---|---|
-| claude-code | 不接管 | PreCompact 同步 commit（唯一不 detach 的写路径，因为 CC 随后立刻重写 transcript） | `source="compact"` 的 SessionStart 会把 OV 的 `latest_archive_overview` + ≤5 条 abstracts 重新注回 |
-| codex / trae-cli | 不接管 | PreCompact 补齐未捕获轮次 → 全量 commit → `ovSessionId=null`（补齐不全时不 commit，留待重试）；无 PostCompact 接线，依靠 Stop 的转录收缩做防御性纠偏 | resume 时注入 archive digest |
-| cursor / trae×2 / zcode | 不接管 | cursor：preCompact 无条件 commit（trae×2/zcode 上游无该事件） | — |
-| opencode | 不接管 | v1 compacting 前 flush+commit；v2 在压缩前捕获对话 | v1 `session.compacted` 再提交一次；v2 `session.compaction.ended` 后提交一次 |
-| dsh | 不感知（不监听 compaction 事件；注入走 pre-step user 消息，随宿主压缩一起收缩，profile 不重投） | — | — |
-| pi | **takeover 双层接管**（默认开，[§3.4.2](#_3-4-2-pi-takeover)） | `session_before_compact`：flush → commit → pollOverview。成功则返回自定义 compaction 摘要覆盖 pi 的；失败则 fail-open 回退到 pi 默认压缩 | 成功后 resetBoundary |
-| openclaw | **全接管**：`ownsCompaction: true`，宿主不再跑自己的摘要（[§3.4.3](#_3-4-3-openclaw-contextengine)） | `compact()` = commit(wait=true, keep 0) → 读回 overview 当 summary | 主 assemble 用 `[Session History Summary]` 重建上下文 |
-| hermes | 不接管（`on_pre_compress` 接口预留，当前不参与压缩摘要） | fork 型压缩边界会触发旧会话 commit；原地压缩不动 | — |
+| Claude Code | 宿主摘要 | `PreCompact` 同步提交；这是唯一不在后台运行的写入，因为宿主紧接着就会重写 transcript | `source="compact"` 的 `SessionStart` 注入归档概览和最多 5 条摘要 |
+| Codex、TraeCode CLI 2.0 | 宿主摘要 | `PreCompact` 补齐未捕获的轮次，提交全部内容，并开始一个新的 OpenViking 会话。补齐不完整时不提交，稍后重试 | resume 时注入归档摘要 |
+| Cursor | 宿主摘要 | `preCompact` 提交 | 无 |
+| TRAE、TRAE CN、ZCode | 宿主摘要 | 没有压缩前事件 | 无 |
+| Kimi Code | 宿主摘要 | `PreCompact` 提交新捕获的消息 | 无 |
+| OpenCode | 宿主摘要 | v1 刷新并提交；v2 捕获 transcript | v1 在 `session.compacted` 时再提交一次；v2 在 `session.compaction.ended` 后提交 |
+| DSH | 未观察到 | 无。注入的上下文是一条用户消息，随宿主压缩一起缩减；profile 不再发送 | 无 |
+| pi | takeover，默认开启 | 提交并等待归档概览 | 用概览替换 pi 的摘要；失败时 pi 照常压缩 |
+| OpenClaw | 插件接管压缩 | `compact()` 提交并等待 | 下一次上下文组装从服务端重建历史 |
+| Hermes（内置） | 宿主摘要 | fork 型压缩提交旧会话；原地压缩不做任何处理 | 无 |
 
-### 3.4.2 pi takeover
+<a id="_3-4-2-pi-takeover"></a>
 
-- 接管面是 `context` 事件的 messages 改写，不接管 pi 的历史存储。触发是 token 压力（30000 + 保留 3 轮），而非 pi 的压缩事件。
-- 替换动作：先定位边界，再把边界前的全部消息替换成一条合成 user 消息 `[OpenViking Session Context]`。其中 overview 按 3000 token 截断；timestamp 取保留首条 -1，以稳定 provider payload 吃 prompt cache。
-- 数据源是 `GET /sessions/{id}/context` 的 `latest_archive_overview`（轮询 15×2s）；状态持久化在 pi 自己的 branch custom entry `ov-takeover`。
-- 失败姿态 = fail-open 回完整历史（指纹不匹配 / 历史短于边界 / overview 拿不到三重回退）。
-- 与 pi 原生压缩的关系：`session_before_compact` 成功时返回 `{compaction:{summary, firstKeptEntryId, …, details:{source:"openviking"}}}` 覆盖 pi 摘要；缺 `firstKeptEntryId` 时走 pi 默认压缩。
+### pi takeover
 
-### 3.4.3 openclaw ContextEngine
+- **改变了什么**。pi 自己的历史不会被修改。扩展改写每次 `context` 事件中发送的消息：边界之前的内容合并成一条合成用户消息 `[OpenViking Session Context]`，内容是截到 3,000 token 的归档概览。它的时间戳取第一条保留消息之前的时刻，让发给 provider 的请求保持稳定，prompt 缓存继续生效。
+- **何时运行**。由 token 压力触发，而不是 pi 的压缩事件：约 30,000 token，保留最近 3 个用户轮。提交时把这 3 轮对应的确切消息数作为 `keep_recent_count` 发送。
+- **摘要来源**。该次提交产生的归档概览，每 2 秒轮询一次，最多 15 次。边界作为 `ov-takeover` 条目存在 pi 的 branch 中，重启后仍然有效。
+- **何时回退**。指纹不匹配、历史短于边界或缺少概览时，pi 使用完整历史。如果概览一直为空，边界不移动，待提交计数归零，重新累积后再试。
+- **pi 自己的压缩**。takeover 成功时，`session_before_compact` 把 OpenViking 摘要返回给 pi。没有 `firstKeptEntryId` 时，pi 执行默认压缩。
 
-- 实现宿主 `ContextEngine` 接口，`assemble()` 分两个分支：transformContext（只做召回前置注入，5 道 passthrough 守卫）与 main-assemble（`getSessionContext(tokenBudget)` → 用服务端返回替换宿主 live 历史，四层预算切分，3 道 passthrough 保护 + provider 消息 sanitize 管线）。
-- `compact()` = `commit(wait=true, keep 0)`（500ms 轮询，Phase2 上限 5 分钟）→ `latest_archive_overview` 当 summary、`archive_uri` 末段当 `firstKeptEntryId`。`customInstructions`/`compactionTarget` 保留接口，当前不参与压缩产物。
-- `ingest()/ingestBatch()` 是刻意 no-op，写入全走 `afterTurn`。
-- 有归档时额外注入 20 行 "Session Context Guide" systemPromptAddition，指示模型在说"没有信息"之前先重读摘要，并用 `ov_archive_search` 尝试至少 2 组关键词。
+<a id="_3-4-3-openclaw-contextengine"></a>
 
-### 3.4.4 pi 与 openclaw 接管方式对照
+### OpenClaw 上下文引擎
 
-| 维度 | pi takeover | openclaw ContextEngine |
+- OpenClaw 把插件注册为上下文引擎，并设置 `ownsCompaction: true`，宿主不再自己生成摘要。
+- 上下文组装分两部分。`transformContext` 只添加召回，前面有五道 passthrough 检查。主组装调用 `getSessionContext(tokenBudget)`，用服务端的返回替换宿主的实时历史，按四档预算切分，前面有三道 passthrough 检查和一个消息清洗步骤。
+- `compact()` 以 `keep_recent_count` 0 提交，每 500 ms 轮询一次，最多 5 分钟，然后把归档概览作为摘要返回。
+- `ingest()` 和 `ingestBatch()` 有意不做任何事；对话在每轮结束后捕获。
+- 存在归档时，system prompt 会加入一段简短指引，要求模型在回答“没有相关信息”之前先重读摘要，并用 `ov_archive_search` 至少尝试两组关键词。
+
+<a id="_3-4-4-pi-与-openclaw-接管方式对照"></a>
+
+### pi 与 OpenClaw 接管对比
+
+| | pi takeover | OpenClaw 上下文引擎 |
 |---|---|---|
-| 宿主契约 | 一个 context 钩子的 messages 改写 | 注册 ContextEngine，`ownsCompaction: true` |
-| 历史真相源 | 仍是 pi 本地 branch | OV 服务端 getSessionContext |
-| 触发 | 客户端 token 阈值 30000 + 保留 3 轮 | 宿主调用 assemble/compact |
-| 压缩产物 | 一条合成 user 消息（3000 token 截断） | 重建后的整个 messages 数组 + compaction summary |
-| 失败姿态 | fail-open 回完整历史 | passthrough 回宿主 live 消息 |
-| 召回与 session | context face 带 session_id | `/find` 不带（expansion/台账不参与） |
+| 宿主契约 | 在 `context` 事件中改写消息 | 上下文引擎，`ownsCompaction: true` |
+| 历史来源 | pi 本地的 branch | 服务端的会话上下文 |
+| 触发 | 客户端 token 阈值（30,000，保留最近 3 个用户轮） | 宿主每次调用 assemble 或 compact |
+| 结果 | 一条合成用户消息，最多 3,000 token | 重建的消息列表，加上压缩摘要 |
+| 失败时 | 完整历史 | 宿主的实时消息 |
+| 召回 | 带会话 ID 的 context 检索 | 不带会话 ID 的 `/find`，没有扩写和去重 |
 
-## 3.5 写入与删除的类型边界
+<a id="_3-6-降级与容错"></a><a id="_3-6-1-判定矩阵"></a>
 
-### 3.5.1 写入边界
+## 服务端不可用时
 
-MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可写域限 `viking://resources|user|agent`；新建文件扩展名需符合白名单 `.md .txt .json .yaml .yml .toml .py .js .ts`；用户根下 `skills/ peers/ privacy/ sessions/` 四个托管子树只读（`_USER_MANAGED_SUBTREES`）。已存在的 `.abstract.md/.overview.md` sidecar 可以改正文，但公共写入 API 不能创建它们。
+召回出错时，宿主可以在没有注入记忆的情况下继续。但请求仍可能让提问一直等到请求结束或到达截止时间；出错后能继续，不代表不用等待。
 
-### 3.5.2 删除边界
+| 集成 | 服务端不可达 | 缓存的失败状态 | 等待与错误传递 |
+|---|---|---|---|
+| Claude Code | 每个 hook 捕获错误并让宿主继续；会话开始时跳过队列重放 | context 检索标记 6 小时，本地 CLI 检测 7 天，健康状态 5 秒 | 召回等到请求结束或截止时间后再继续。URI guard 的拒绝是有意设计，与召回失败无关 |
+| Codex、TraeCode CLI 2.0 | 每个 hook 捕获错误，不做任何处理 | context 检索标记；本地压缩器失败后停用到下次启动 | 召回等到请求结束或截止时间，然后提问继续 |
+| Cursor、TRAE、TRAE CN、ZCode | 请求错误被吞掉，不注入任何内容。5 秒内拿不到锁的 hook 静默跳过 | 只有 context 检索标记，所以每轮都要等满 15 秒召回超时 | 每轮最多等到召回超时 |
+| OpenCode | 召回、捕获和清理的错误被捕获并记录日志 | context 检索标记；健康检查不缓存 | 召回会等待网络请求；清理也可能等到截止时间 |
+| DSH | 插件吞掉错误。会话初始化失败不缓存，所以每个 pre-step 会发两次 5 秒的健康检查 | context 检索标记；用户空间查询结果在进程生命周期内缓存 | pre-step 依次执行 profile 和召回，会话 flush 会阻塞 |
+| pi | 启动时健康检查失败则不注册工具，之后的提问静默重试。只有 MCP 握手失败时，召回、同步和 takeover 不受影响；状态栏显示 `tools ✗`，`/viking` 打印错误 | context 检索标记。MCP 握手每轮重试一次，召回开始前可能用掉 5 秒的握手预算 | 召回等到请求结束或截止时间。不开 takeover 时 `session_shutdown` 最多等 30 秒；`turn_end` 遇到网络错误时每条消息等 10 秒 |
+| OpenClaw | 500 ms 健康检查失败时跳过召回 | 无；每轮一次健康检查 | 只有 `memory_store` 的错误会返回给模型；`compact()` 最多可能等 5 分钟 |
+| Hermes（内置） | 失败的连接在 30 秒内不重试，除非连接设置改变 | 记住失败的设置 | 召回在 4 秒总预算内等待，然后不带上下文继续 |
+| ov CLI | 多数命令以状态码 1 退出；表格模式的 `ov status` 和 `ov health` 即使不健康也退出 0 | 无 | 不适用 |
 
-**第一档：服务端通用防线（所有删除入口共享）**。`VikingFS.rm` 第一句 `_ensure_delete_access`（`_access.py:182-229`）实施 5 道检查：命名空间可访问性；用户删除进行中 → FailedPrecondition；actor-peer 隐藏视图 → PermissionDenied；命名空间根保护：裸 `viking://`、`viking://user` 根、`viking://agent` 根一律拒删；非 ROOT 删 `viking://temp` 拒。这一档按命名空间根设防，不区分 memory/resource/skill 类型——类型级差异由后三档在客户端实施。
+<a id="_3-6-2-通用超时"></a>
 
-**第二档：客户端零附加（MCP 面——dsh 与 pi 现在也走它——外加 langchain/ov rm）**。差异只在参数面：MCP `forget` 按给定 URI 删除，`recursive` 默认 false，没有任何分数门槛；dsh 与 pi 都已经把自己手写的 `viking_forget` 撤下工具面（旧实现把 `recursive` 固定为 false，按 query 删除还要求匹配分 >0.8），这一档因此不再有客户端附加。LangChain `viking_forget` 的 `recursive` 是模型可控参数（但默认不在工具面）；`ov rm -r` 则显式开递归、无确认提示（TUI 的 `d` 键有 y/n 确认 + root/scope 目录禁删）。
+### 共享超时与锁
 
-**第三档：memory-only 的两个删除面**。
+共享插件的 HTTP 超时为 15 秒（最小 1 秒）。MCP 代理请求 15 秒超时，退出时发送的 `DELETE /mcp` 为 2 秒。跨进程锁等待 5 秒，60 秒后视为过期；正在重放的队列条目 10 分钟后被回收。MCP 代理不处理 SIGHUP，关闭终端时不会发送 `DELETE /mcp`；服务端以无状态方式运行 MCP，不会留下残留状态。
 
-- openclaw `memory_forget`：三条白名单正则只放行 `viking://user/[…/]memories`、`viking://user/<u>/peers/<p>/memories`、`viking://agent/[…/]memories`；显式 uri 不匹配直接拒绝；搜索路径候选先过同一 guard，且只有在候选唯一且 score≥0.85 时才自动删，否则列出候选让 agent 指名；底层 URL 固定 `recursive=false`。
-- Hermes `viking_forget` 拒绝空输入、非 `viking://` URI、query/fragment、目录、非 `.md` 文件及 `.abstract.md`/`.overview.md` 摘要。内置校验器允许用户记忆路径，包括直接位于 `memories/` 下的 `profile.md`。请使用服务端返回的、带明确用户 ID 的 URI。外部插件还支持 `viking://~/...`，拒绝已废弃的无用户 ID 路径，并在删除明确用户路径前验证归属。
+<a id="_3-1-接入形态、安装与配置体系"></a><a id="_3-1-1-判定矩阵"></a>
 
-**第四档：默认不提供删除（LangChain / Open WebUI）**。LangChain `viking_forget` 需配置 `profile="admin"` 或 `allow_forget=True` 才加入工具面；Open WebUI 则完全不提供删除工具。
+## 安装、会话与配置
 
-**skill 的增删边界**：新增入口是 MCP `add_skill`、openclaw `add_skill`（默认开）、`ov add-skill` 与 REST；`add_resource` 拒绝 skill URI，MCP `write` 拒绝用户自己的 `skills/` 子树（`_USER_MANAGED_SUBTREES`）；`viking://agent/skills` 下的 `write` 目前没有拦截，但会绕过 skill 安装流程。对 skill 完全只读（不增不删）的删除面是 openclaw `memory_forget` 与 hermes `viking_forget`。MCP `forget`、dsh、pi、`ov rm` 能删掉 skill 目录，因为删除路径不检查该集合，但只有 `ov skills remove` 和 REST `DELETE /api/v1/skills/{name}` 会同时清理该 skill 的 privacy 配置。
+从会话 ID 前缀可以看出服务端上的会话由哪个集成写入。
 
-## 3.6 降级与容错
+| 集成 | 安装方式 | 会话 ID | 配置来源 |
+|---|---|---|---|
+| Claude Code | 统一安装器（`--harness claude`）或插件市场 | `cc-<session id>`；子代理 `cc-<id>__subagent-<agent_id>` | 共享配置，`plugin.claude_code` |
+| Codex | 统一安装器（`--harness codex`）或 `codex plugin marketplace add` | `cx-<id>`，由 Codex 会话推导 | 共享配置，`plugin.codex` |
+| TraeCode CLI 2.0 | 统一安装器（`--harness trae-cli`），对 `traecli` 执行 Codex 的安装流程 | 同 Codex | 同 Codex |
+| Cursor | 统一安装器；写入 `~/.cursor/hooks.json` 和 `mcp.json` | `cu-<conversation id>` | 共享配置，`plugin.cursor` |
+| TRAE、TRAE CN | 统一安装器；写入 `~/.trae/` 或 `~/.trae-cn/` 下的 hook 与 MCP 文件 | `tr-` 或 `trcn-` | 共享配置，`plugin.trae` 或 `plugin.trae_cn` |
+| ZCode | 统一安装器；合并进 `~/.zcode/cli/config.json` 并开启 hook | `zc-<id>` | 共享配置，`plugin.zcode` |
+| Kimi Code | 统一安装器；Kimi Code 托管插件 | `kc-<id>` | 共享配置，`plugin.kimicode` |
+| OpenCode | 统一安装器、npm（`@openviking/opencode-plugin`）或源码 | `oc-<id>`；子代理 `oc-<parent>__subagent-<child>` | 共享配置，`plugin.opencode` |
+| DSH | 统一安装器或 `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
+| pi | 统一安装器，装入 pi 的扩展目录 | `pi-<id>` | 共享配置，`plugin.pi` |
+| OpenClaw | ClawHub、npm 安装器或离线包；之后运行 `openclaw openviking setup` | 会话 UUID，或会话 key 的 SHA-256 | `openclaw.json` 和少量环境变量 |
+| Hermes（内置） | 随 Hermes 发布；运行 `hermes memory setup openviking` | Hermes 自己的会话 ID | `.env`、关联的 `ovcli.conf` 和 Hermes `config.yaml` |
+| ov CLI | npm、`uv tool install`、cargo 或 GitHub Releases | 不管理 | `ovcli.conf` profile |
 
-### 3.6.1 判定矩阵
+“共享配置”指[配置与工作区文件](#配置与工作区文件)中分层的插件配置。
 
-| harness | 服务端不可达时 | 负缓存 | HTTP 重试 | 失败阻塞宿主 |
+<a id="_3-1-2-统一安装器"></a>
+
+### 统一安装器
+
+`examples/memory-plugin-shared/install.sh` 安装 Claude Code、Codex、TraeCode CLI 2.0、Cursor、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、pi 和 DSH。OpenClaw 和 Hermes 有各自的安装渠道。需要知道的几点：
+
+- 不带 `--harness` 时显示多选菜单。各插件自带的 setup 脚本会替你传入 `--harness`。通过 `curl` 管道执行时，从 `/dev/tty` 读取输入。
+- 从文档站下载；在仓库 checkout 中运行时，使用本地 checkout。
+- hook 和 MCP 条目带有 `OPENVIKING_INTEGRATION_ID` 标记，重新运行只替换自己的条目，不动其他工具的条目。每个被修改的文件先备份为 `.bak`，再以 `0600` 权限原子替换。
+- 凭据步骤为本地服务端、OpenViking Service 或自定义 URL 写入 `~/.openviking/ovcli.conf`。已有配置会先显示当前值（API key 打码），再让你选择保留或修改。
+- `--uninstall` 支持 Cursor、TRAE、TRAE CN、ZCode 和 Kimi Code。其他集成通过宿主自己的插件管理卸载。
+- 需要 Node.js 18 或更高版本。
+
+<a id="_3-1-3-凭据体系"></a>
+
+### 凭据来源
+
+一共有四套凭据体系，各自使用不同的变量名和请求头。连接失败时，先确认集成用的是哪一套。
+
+| 使用方 | 服务端 URL | API key | 身份 | 认证头 |
 |---|---|---|---|---|
-| claude-code | 各 hook catch→approve，不阻塞；session-start 时连 pending 重放都跳过 | context-face 6h + host-cli 探测 7d + health 5s | 无（靠 pending 重放）；peer_scope 降级 1 次；batch→逐条 | 否（uri-guard deny 是设计意图） |
-| codex / trae-cli | 各 hook catch→noop | context-face 6h + 压缩器 runtime_failed（至下次启动） | 捕获失败靠 transcript/游标补发；SessionStart 也重放已有 pending 条目 | 否 |
-| cursor/trae×2/zcode | fetch 吞成 status:0，catch 返回空注入；锁 5s 拿不到则静默跳过 | context-face 6h（服务端整体不可达时无负缓存，每轮等满 15s） | 无 | 否 |
-| opencode | recall、context、after-tool、事件循环与 cleanup 失败均 catch→WARN；URI guard 的预期拒绝仍会返回给模型 | 仅 context-face 6h；`/health` 无缓存 | 无同步重试；MCP 代理 401/403、400/404 各一次 | 否（URI guard deny 是设计意图） |
-| dsh | client 全吞异常；`ensureState` 失败不缓存（服务端不可达时每 pre-step 两次 health 各 5s） | context-face 6h + user-space 缓存进程内不过期 | 无；pending 跨进程重放 3 次 | 是（pre-step 串行 profile+recall；session/flush 阻塞） |
-| pi | health 失败时 start() 提前返回，本轮也不注册工具，此后每 prompt 静默重试连接；`/mcp` 握手单独失败（401/403、超时、server 无 `/mcp`）不影响启动：召回、同步、takeover 照常，状态栏显示 `tools ✗`，`/viking` 打印完整错误 | context-face 6h；握手没有负缓存，一直失败就每轮重试一次，最多占满 5s 握手预算才轮到排队召回 | hook 侧无，只有 pending queue；传输失败后丢弃当前 MCP 连接，下次调用重新连接；失败的工具调用不会自动重放 | 部分（session_shutdown 被 await：takeover 近 0、非 takeover 最坏 30s，外加关闭 MCP 客户端；turn_end 网络异常时逐条各等 10s） |
-| openclaw | client 构造永不失败；health 吞异常；召回 500ms precheck 失败跳过 | 无负缓存（每轮一次 500ms health 预检） | 无（单次 fetch）；commit/afterTurn 的 Phase2 轮询 | 否（`memory_store` 重抛例外；`compact()` 最长阻塞 5 分钟） |
-| hermes | 未变化的失败连接配置冷却 30s；配置变化触发新探测 | `_failed_refresh` 记录失败配置 | trusted 身份补发及 sync client 重试；启动时恢复已退出进程的待提交会话（POSIX） | 否 |
-| ov CLI | 多数 exit 1；`ov status` 表格模式始终退 0；`ov health` 即使 unhealthy 也退 0 | 无 | 仅网关 401 挑战重试 1 次 | n/a（无宿主） |
+| 共享插件代码：Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、OpenCode、DSH、pi、Agent Plugins | `OPENVIKING_URL`，其次 `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`，其次 `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID` | 只有 `Authorization: Bearer` |
+| OpenClaw | `OPENVIKING_BASE_URL`，其次 `OPENVIKING_URL` | `OPENVIKING_API_KEY` 或 SecretRef | `OPENVIKING_ACCOUNT_ID`、`OPENVIKING_USER_ID` | `X-API-Key` |
+| Hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT` | 同时发送 `X-API-Key` 和 `Bearer`。有 key 时不发租户头，服务端要求时补发并重试一次 |
+| ov CLI | `ovcli.conf` | `ovcli.conf` | `--account`、`--user`、`--actor-peer-id` | `X-API-Key`；按 `auth_mode` 使用 Basic 或 Bearer。含两个及以上点号的 key 也会以 Bearer 发送 |
 
-### 3.6.2 通用超时
+共享插件代码的规则：
 
-通用 HTTP 15000ms（下限 1000）；MCP 代理请求 15000ms、DELETE 固定 2000ms；跨进程锁等待 5s、陈旧 60s；pending `.processing` 陈旧回收 10min。需注意 MCP 代理未注册 SIGHUP（关终端不发 `DELETE /mcp`；但服务端 `stateless_http=True`，影响有限）。
+- `OPENVIKING_CREDENTIAL_SOURCE`（`env`、`cli` 或 `auto`，默认 `auto`）决定凭据来源。`auto` 下，环境中只要有任一凭据变量就以环境为准；只有一个都没设、且 `ovcli.conf` 中有凭据时，插件才改用该文件。`env` 不读任何文件，URL 默认为 `http://127.0.0.1:1933`。
+- hook 和 MCP 代理用同一个函数解析连接，且都不读取工作目录，所以从插件目录启动的代理与 hook 连到同一个服务端，使用同一身份。
+- `X-OpenViking-Account` 和 `X-OpenViking-User` 只在 trusted 模式下发送。使用 API key 时，服务端从 key 中读取身份。
 
-## 3.7 附加 UX 对照
+完整的解析顺序见[客户端配置字段](../configuration/02-client.md#连接与鉴权)和[插件开发指南](./18-plugin-development.md#_4-2-凭据不是普通-workspace-配置)。
 
-| harness | statusline | slash command | rule/skill | setup 向导 | 其他 |
-|---|---|---|---|---|---|
-| claude-code | ✅ 独立进程写 settings.json（段位丰富，1min TTL） | ✅ `/openviking-memory:ov`（服务状态 + 身份 + 注入溯源） | 4 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor`） | ✅ 行式问答 | uri-guard 不受插件开关门控 |
-| codex / trae-cli | ❌ | ❌ | 与 claude-code 相同的 4 个 skill | ✅ | README.md Testing 一节的 live 检查 |
-| cursor | ❌ | ❌ | rule（alwaysApply）+ 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`） | ❌（共用安装器 TUI） | 独立 uri-guard，不受插件开关控制 |
-| trae/trae-cn | ❌ | ❌ | 无 | ❌ | — |
-| zcode | ❌ | ❌ | 无 | ❌ | — |
-| opencode | ❌ | ❌ | 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`），仅随 MCP server 提供 | ✅ | v1 有 toast；v2 只写日志 |
-| dsh | ❌ | ❌ | 3 个 skill：`openviking-memory`、`openviking-skills` 与 `ov-experience-memory`（独立的 `ctx.skills` provider） | ❌ | `ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发 |
-| pi | ✅ `ctx.ui.setStatus` | ✅ `/viking` `/viking commit` | 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`），经 `resources_discover` 加入 | ✅ | e2e-live.sh |
-| openclaw | ❌ | ✅ 5 个（/add-resource /add-skill /ov-search /ov-query-config /ov-recall-trace） | 3 skill 随插件分发 | ✅（key 角色探测 + 版本兼容检查 + `status` 命令） | Gateway HTTP 路由做 recall trace 可视化；feature-gate RPC；健康检查脚本 |
-| hermes | ❌ | ❌ | 无 | ✅ curses 多层菜单 | `hermes memory status`（含 env 覆盖列表）；`hermes backup` 收集 `$HOME` 下默认或环境变量指定的 `ovcli.conf`；YAML 关联的命名文件需单独备份 |
-| ov CLI | ❌ | ❌（自身即命令） | 无 | ✅ TUI 向导 | 完整 help 系统（63 条 curated）；语言门禁；`ov tui` 全屏文件浏览器（含终端内图片预览） |
+<a id="_3-1-4-配置体系分层"></a>
 
----
+### 配置与工作区文件
 
-# 4. Harness 档案卡
+基于共享插件代码的集成按以下优先级（从高到低）读取行为配置：`OPENVIKING_*` 环境变量、每机工作区注册表、仓库的 `.openviking/config.local.json` 和 `.openviking/config.json`、`ovcli.conf` 的 `plugin.<harness>`、`ovcli.conf` 的 `plugin`，以及 `ov.conf` 中旧的 harness 段。工作区文件不能设置 URL、key 或其他凭据。见[插件配置](../configuration/02-client.md#插件配置)和[工作区配置](../configuration/02-client.md#工作区配置)。OpenClaw 读取 `openclaw.json`，Hermes 读取自己的 `.env` 和 `config.yaml`。
 
-每卡都是检索入口，只写该 harness 的独有事实与差异，共享机制回链维度章。统一字段：形态 / 能力亮点 / 行为要点 / 配置 / 维度索引。
+**工作区 peer**。这些集成默认用仓库规范化后的 `origin` URL 推导一个 peer 来标记记忆，所以同一仓库的所有 clone 共用一个 peer。不在仓库中时不发送 peer，记忆进入用户自己的空间。可以用 `peer.source` 和 `.openviking/config.json` 修改，见[工作区 peer](../configuration/02-client.md#工作区-peer)。OpenClaw 根据 `peer_role` 和 `peer_prefix` 推导 peer；`peer_role=sender` 时，如果宿主没有提供发送者，工具调用会失败。Hermes 默认不设助手 peer，除非由 `OPENVIKING_AGENT`、关联的 OpenViking peer 或 YAML 的 `agent` 键设置。Agent Plugins 不发送 peer。
 
-## claude-code
+只对部分集成生效的设置：
 
-- **集成文档**：[Claude Code 记忆插件](./02-claude-code.md)
-- **形态**：CC 插件（marketplace），采用四合一架构：9 hook + MCP 代理（20 工具透传）+ slash command + statusline + 4 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor`）。版本 0.6.1。
-- **能力亮点**：hook 覆盖最全的 harness——SessionStart(120s) / UserPromptSubmit(60s) / PostToolUse:Read(5s，默认关的 skill-experience) / PreToolUse:Read\|Glob\|Grep\|Edit\|Write\|Bash(5s，uri-guard：文件工具的路径是 `viking://` URI 时拒绝，针对 skill URI 的 Write/Edit 会被引导到 `add_skill`；Bash 命令带 `viking://` URI 时附加提示) / Stop(45s) / PreCompact(30s) / SessionEnd(30s) / SubagentStart(10s) / SubagentStop(45s)；默认启用召回再摘要（本地 `claude -p`，本地不可用时自动回落服务端 rewrite，[§3.2.5](#_3-2-5-召回再摘要)）；支持 SubagentStart/Stop 的完整子会话隔离（[§3.3.5](#_3-3-5-subagent-会话对照)）；statusline + slash + uri-guard；关闭链路除 kill -9 外全部 commit（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
-- **行为要点**：session id 为 `cc-<CC session_id 原文>`，subagent 为 `…__subagent-<agent_id>`；Stop 阈值 commit 20000/keep 10，PreCompact 同步 commit；自动召回排除 resources（[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；增量游标存于 `/tmp`（被系统清理后，同一会话会整段重推）。
-- **配置**：env + ovcli.conf `plugin.claude_code` + ov.conf `claude_code`（[§3.1.4](#_3-1-4-配置体系分层)），约 70 个配置项；压缩器默认使用 `claude`/`sonnet`/`low`；超时来自 `recallCompressTimeoutMs`（默认 110s），仍受宿主 hook 预算约束。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜压缩 [§3.4](#_3-4-压缩-compaction-接管) ｜降级 [§3.6](#_3-6-降级与容错) ｜UX [§3.7](#_3-7-附加-ux-对照)。
+- `OPENVIKING_COMMIT_TURN_THRESHOLD`：Cursor 和 Kimi Code。TRAE、TRAE CN 和 ZCode 每轮都提交。
+- `OPENVIKING_WRITE_PATH_ASYNC`：Claude Code、Codex 和 ZCode。
+- `OPENVIKING_RECALL_COMPRESS=client`：Claude Code 和 Codex。`server` 和 `auto` 适用于[召回摘要](#召回摘要)中列出的所有集成。
+- 工作区文件、`ovcli.conf` 的 `plugin` 段、`OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE` 和 skill 清单相关设置：所有基于共享插件代码的集成，不包括 OpenClaw 和 Hermes。
 
-## codex
+<a id="_3-7-附加-ux-对照"></a>
 
-- **集成文档**：[Codex 记忆插件](./04-codex.md)
-- **形态**：Codex 插件（marketplace），6 hook（SessionStart 70s / UserPromptSubmit 130s / Stop 30s / SessionEnd 3s / PreCompact 60s / PreToolUse:Bash 5s）+ MCP 代理 + 与 claude-code 相同的 4 个 skill。版本 0.10.1。
-- **能力亮点**：本地召回压缩管线（`codex exec`，[§3.2.5](#_3-2-5-召回再摘要)）；SessionEnd（Codex ≥ 0.145）在正常退出时补齐 Stop 漏掉的轮次并 commit，SessionStart 的兜底扫描回收那些没触发 SessionEnd 的退出所遗留的未归档消息（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；PreToolUse:Bash（uri-guard）放行带 `viking://` URI 的 shell 命令，并附加提示，建议改用 OpenViking MCP 工具；Codex 通过 `apply_patch` 编辑文件，输入里没有路径参数，因此 guard 不会拒绝任何调用。
-- **行为要点**：session id 为 `cx-<safeId>`（确定性推导，不读 state）；SessionEnd 只在正常退出、且 Codex 0.145+ 时触发，信号、崩溃、旧版本以及 `codex app-server` 延后的场景都落到扫描路径；新捕获的消息不进入磁盘 pending queue（离线靠 transcript/游标补发，SessionStart 仍重放已有 pending 条目，[§3.3.4](#_3-3-4-pending-queue-离线补偿对照)）；idle-TTL 1800000ms、锁等待 120000ms（env 配置）；Stop 与 SessionEnd 默认 detach（`appended N turn(s)` 提示默认不展示）；单会话 mkdir 锁串行化 Stop worker、PreCompact、SessionEnd worker 与扫描。新增的 hook 在 Codex 侧没有信任记录，升级后需在 `/hooks` 中批准这次升级新增的 hook（SessionEnd、PreToolUse）。
-- **配置**：env + ovcli.conf `plugin.codex` + ov.conf `codex`；hooks 只用 `Authorization: Bearer` 认证（[§3.1.3](#_3-1-3-凭据体系)）。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
+## 其他宿主功能
 
-## trae-cli（TraeCode CLI 2.0）
+| 集成 | 状态栏 | 命令 | 附带的 skill | 配置向导 |
+|---|---|---|---|---|
+| Claude Code | 有 | `/openviking-memory:ov` 显示服务端状态、身份和注入内容的来源 | `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`ov-memory-doctor` | 有 |
+| Codex、TraeCode CLI 2.0 | 无 | 无 | 与 Claude Code 相同的四个 | 有 |
+| Cursor | 无 | 无 | 一条常驻 rule，加上 `openviking-memory`、`openviking-skills`、`ov-experience-memory` | 安装器菜单 |
+| TRAE、TRAE CN、ZCode | 无 | 无 | 无 | 安装器菜单 |
+| OpenCode | 无 | 无 | 与 Cursor 相同的三个，仅在插件注册自己的 MCP 服务时提供 | 有 |
+| DSH | 无 | 无 | 与 Cursor 相同的三个 | 无 |
+| pi | 有 | `/viking`、`/viking commit` | 与 Cursor 相同的三个，`mcpEnabled` 为 `false` 时不提供 | 有 |
+| OpenClaw | 无 | `/add-resource`、`/add-skill`、`/ov-search`、`/ov-query-config`、`/ov-recall-trace` | 三个插件 skill | 有；检查 key 的角色和版本兼容性 |
+| Hermes（内置） | 无 | 无 | 无 | 有；`hermes memory status` 列出环境变量覆盖项 |
+| ov CLI | 无 | CLI 本身 | 无 | `ov config` |
 
-- **集成文档**：[TRAE 记忆集成](./13-trae.md)
-- **形态**：TraeCode CLI 2.0 是 Codex 系 CLI（binary `traecli`，用户配置 `~/.trae/traecli.toml`，TUI 支持 `/plugins` `/skills` `/mcp`）。OpenViking 经 **codex 插件别名安装**接入：`--harness trae-cli` 复用 codex 安装流程，仅安装参数（binary / home / 配置路径）指向 TraeCode CLI。
-- **能力面**：与 codex 同一套插件——6 个已注册 hook + MCP 代理 + 同样的 4 个 skill、本地召回压缩、idle-TTL commit 回收、resume archive 注入等，详见 codex 档案卡。若 TraeCode CLI 所基于的 Codex 版本没有 `SessionEnd`，该 hook 会被忽略，关闭时的 commit 全部依赖 idle-TTL 扫描。
-- **版本支持**：仅支持 TraeCode CLI 2.0。1.0 与 2.0 不是同一套 CLI，2.0 才是 Codex 系、才能走 codex 插件别名安装；早期面向 1.0 的独立插件（`~/.trae/cli/hooks.json` + `[mcp_servers."openviking-memory"]` 方案）已随仓库移除；安装器仍保留 `--harness trae-cli --uninstall`，用于清掉旧安装留在磁盘上的那份。
-- **维度索引**：同 codex 卡。
+Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安装 **URI guard**：文件工具的路径是 `viking://` URI 时，调用会被拒绝，并提示改用 OpenViking 工具；shell 命令中包含这种 URI 时照常执行，但附带一条提示。各宿主检查哪些工具不同，见[各集成说明](#各集成说明)。
 
-## cursor
+<a id="_4-harness-档案卡"></a>
 
-- **集成文档**：[Cursor 记忆集成](./12-cursor.md)
-- **形态**：配置驱动（写 `~/.cursor/hooks.json`+`mcp.json`）+ MCP 代理 + always-on rule + 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`）。6 hook：sessionStart(30s) / beforeSubmitPrompt(20s) / beforeReadFile(5s) / stop(30s) / preCompact(30s) / sessionEnd(30s)。相对 import 共享 lib（不 vendoring）。版本 0.5.0。
-- **能力亮点**：beforeReadFile 上的 uri-guard 拒绝读取 `viking://` 路径（不受插件开关控制）；shell 命令不做检查，升级时会移除旧版本注册的 beforeShellExecution 条目；rule 与三个 skill 随装；捕获只有文本，因此 `ov-experience-memory` 只检索和应用 Experience，读取不会关联回所用的 Experience。
-- **行为要点**：session id 为 `cu-<conversation_id>`；stop 每 8 条消息 commit（`commitTurnThreshold=8`，消息条数计数，keep 0）；`sessionEnd` 仅 window_close 触发，且此时宿主已销毁 shell-exec host，实践中不执行（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——结束在 <8 条消息水位的会话，尾部依赖后续同会话消息触发归档（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；服务端不可达时，每轮等满 15s 召回超时。
-- **配置**：env + ovcli.conf `plugin.cursor` + workspace 文件（[§3.1.4](#_3-1-4-配置体系分层)）。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
+## 各集成说明
 
-## trae / trae-cn（IDE 版）
+这里只写每个集成特有的内容，共享行为见上文各节。
 
-- **集成文档**：[TRAE 记忆集成](./13-trae.md)
-- **形态**：配置驱动（`~/.trae{,-cn}/hooks.json` + 平台相关 mcp.json）+ MCP 代理。4 hook：SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep\|Bash\|RunCommand(5s) / Stop(30s)。PreToolUse 对路径是 `viking://` URI 的 Read/Glob/Grep 直接拒绝；Bash/RunCommand 命令带 `viking://` URI 时照常执行，并附加提示。相对 import 共享 lib。MCP server 名为 `openviking`。版本 0.5.0。
-- **能力亮点**：行为最简单直接的一档——每个有内容的 Stop 都 commit（keep 0），关闭场景下最大待归档量只有最后一轮 in-flight（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）。
-- **行为要点**：trae 与 trae-cn 的差异是 session id 前缀 `tr-` / `trcn-` 与安装路径——同一份记忆在两个客户端落到两组不同 session，跨客户端共享靠服务端抽取后的记忆空间而非 session 复用；无 PreCompact/statusline/skill/subagent 处理。
-- **配置**：env + ovcli.conf `plugin.trae` / `plugin.trae_cn` + workspace 文件。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)。
+### Claude Code
 
-## zcode
+[Claude Code](./02-claude-code.md)。插件市场插件，包含 9 个 hook、一个 MCP 代理、一个斜杠命令、状态栏和 4 个 skill。
 
-- **集成文档**：[社区插件 → ZCode](./08-community-plugins.md)
-- **形态**：配置驱动（合并进 `~/.zcode/cli/config.json`，强制 `hooks.enabled=true`）+ MCP 代理。4 hook：SessionStart(30s) / UserPromptSubmit(20s) / PreToolUse:Read\|Glob\|Grep(5s) / Stop(30s)。自身不 vendoring 任何共享模块：安装器按 cursor / trae 同样的方式为它拼装共享运行时。版本 0.5.0。
-- **能力亮点**：以 rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl` 为增量真相源（`lastTurnId` 差集补齐漏掉的 Stop）；Stop 默认 detach；已启动的 worker 可在终端收到 Ctrl+C 后继续写入，仍可能因网络错误或进程被终止而失败。
-- **行为要点**：每 Stop commit（keep 0）；捕获路径仅剥离三类注入块（不做额外文本清洗，[§3.2.6](#_3-2-6-注入回流防护)）；首次捕获会一次性读取整个 rollout（长会话首装时单次推送量大）。
-- **配置**：env + ovcli.conf `plugin.zcode` + workspace 文件；`OPENVIKING_WRITE_PATH_ASYNC` 对 zcode 生效。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)。
+- 注册的 hook 比其他集成都多：`SessionStart`、`UserPromptSubmit`、`PostToolUse:Read`（skill 经验 hook，默认关闭）、作用于 Read、Glob、Grep、Edit、Write 和 Bash 的 `PreToolUse`（URI guard）、`Stop`、`PreCompact`、`SessionEnd`、`SubagentStart` 和 `SubagentStop`。
+- 召回摘要默认通过本地 `claude -p` 生成，服务端摘要作为回退。
+- 除 `kill -9` 外，所有退出方式都会发出提交。
+- 捕获游标保存在 `/tmp` 下。系统清理后，整个会话会重新发送。
+- 插件自身的开关关闭时，URI guard 仍然运行。
 
-## kimicode
+<a id="codex"></a><a id="trae-cli-traecode-cli-2-0"></a>
 
-- **集成文档**：[社区插件 → Kimi Code](./08-community-plugins.md)
-- **形态**：原生 managed plugin，包含 7 个 hook 和 MCP 代理。安装器在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory` 下组装一份自包含副本，不向仓库提交 Kimi 的共享运行时副本。版本 0.5.0；已在 Kimi Code CLI 0.43.1 契约上验证。
-- **能力亮点**：`wire.jsonl` 作为稳定的增量回合来源；profile 在 prompt hook 上重试，直到首次成功。Stop、PreCompact 和 SessionEnd 可 detached；Interrupt 保持同步，所有 OpenViking 请求共用 2 秒总预算。
-- **行为要点**：UserPromptSubmit 输出原始上下文文本，不输出 JSON 字符串。只有在发送成功或已持久化入队后才推进增量游标。安装时保留其他插件记录，不修改旧式 `config.toml` 或 `mcp.json`。
-- **配置**：env + ovcli.conf `plugin.kimicode` + workspace 文件。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
+### Codex 与 TraeCode CLI 2.0
 
-## opencode
+[Codex](./04-codex.md)、[TRAE](./13-trae.md)。插件市场插件，包含 6 个 hook（`SessionStart`、`UserPromptSubmit`、`PreToolUse:Bash`、`Stop`、`SessionEnd`、`PreCompact`）、一个 MCP 代理，以及与 Claude Code 相同的 4 个 skill。
 
-- **集成文档**：[OpenCode 插件](./10-opencode.md)
-- **形态**：npm 插件 `@openviking/opencode-plugin` 0.5.0，同一入口支持 OpenCode v1 ≥1.15.7 与 v2 ≥2.0.15。v1 保留原有 hooks；v2 使用 `setup(ctx)`、prompt/context/tool hooks 和结构化生命周期事件。MCP 工具保持 `openviking_*` 前缀，v2 显式设置 `codemode:false`。附带 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`）：v1 在 `config` hook 里把插件的 `skills/` 目录加进 `skills.paths`，v2 用 `skill.transform` 注册；两者都只在插件注册自己的 OpenViking MCP server 时加入（hook-only 模式或关闭 `mcp.openviking` 时不加）。
-- **能力亮点**：v2 在 prompt hook 只召回一次并把上下文存进用户消息 metadata，后续每个模型 step 注入同一份内容，避免重复请求和 prompt cache 失效；execution 结束后通过 `session.context()` 捕获完整的用户、助手和工具消息。repo 列表继续进入 system prompt（[§3.2.3](#_3-2-3-profile-开场注入)）。
-- **行为要点**：`commitTokenThreshold=20000`，commit 超时 30000ms。v2 在每次 execution 结束（succeeded、failed、interrupted）后按阈值提交，session 删除、compaction ended 和 cleanup 时强制提交；failed 与 interrupted 都保留状态。v2 只处理本 location 的 session，捕获游标存放在插件 storage 中。v2 cleanup 会在 60 分钟无活动、服务停止和本地插件热重载时触发；v2 没有 toast API，只写日志。开场注入每会话尝试一次（[§3.2.3](#_3-2-3-profile-开场注入)）。
-- **配置**：env + ovcli.conf `plugin.opencode` + workspace 文件。
-- **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜subagent [§3.3.5](#_3-3-5-subagent-会话对照)。
+- `SessionEnd` 只在干净退出且 Codex 0.145 及以上时触发。信号、崩溃、旧版本和 `codex app-server` 延后的情况都交给启动时的扫描，扫描使用 30 分钟空闲超时。
+- `Stop` 和 `SessionEnd` 在分离的 worker 中写入。每个会话一把锁，按顺序处理 `Stop` worker、`PreCompact`、`SessionEnd` worker 和扫描。
+- Codex 用 `apply_patch` 编辑文件，它没有路径参数，所以 Bash 上的 URI guard 只附加提示，从不拒绝。
+- Codex 为每个 hook 保存信任记录。升级新增 hook 后，需要在 `/hooks` 中批准新的 hook。
+- TraeCode CLI 2.0（可执行文件 `traecli`，配置 `~/.trae/traecli.toml`）是 Codex 系 CLI，安装同一个插件。只支持 2.0；早期面向 1.0 的独立插件已移除，`--harness trae-cli --uninstall` 仍可删除旧安装留下的副本。不带 `SessionEnd` 的版本会忽略该 hook。
 
-## dsh（DeepSeek Harness）
+### Cursor
 
-- **集成文档**：[DSH 插件](./17-dsh.md)
+[Cursor](./12-cursor.md)。hook 与 MCP 配置，包含 6 个 hook（`sessionStart`、`beforeSubmitPrompt`、`beforeReadFile`、`stop`、`preCompact`、`sessionEnd`）、一条常驻 rule 和 3 个 skill。
 
-- **形态**：唯一同进程 Cordis 原生插件（`export function apply`），工具面就是服务端的 MCP 面，经 `@deepseek-ai/dsh-mcp-client` 与共享 stdio 代理接入（以 `mcp__openviking__*` 发布），hook 侧 REST 直连。6 事件：agent/session-start（emit）/ agent/pre-step（waterfall）/ session/event / session/flush / tools/pre-execute / tools/post-execute。版本 0.5.1。
-- **能力亮点**：`ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发；pre-step 注入走 user 消息，适配 DSH persona 的 `complete:true` 渲染模式。
-- **行为要点**：统一安装器已覆盖 dsh，默认装到 `web` profile，可用 `--dsh-profile` 指定其他 profile；npm 是该插件唯一的分发渠道，因此除 `dev` 外的模式一律装已发布的包；`dev` 会先把 checkout 打包再装——`dsh plugin` 转发给 pnpm，link 一个源码目录无法解析插件 import 的 dsh peer；teardown commit 3s 无阈值，SIGHUP/二次 Ctrl+C 不触发（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；compaction 不感知（注入内容随宿主压缩收缩，profile 不重投）；subagent 各自独立会话（[§3.3.5](#_3-3-5-subagent-会话对照)）；工具面即服务端自身的 MCP 面，经与其他集成同一个 stdio 代理接入、以 `mcp__openviking__*` 发布，服务端升级即可增加工具而无需发版；代价是代理每个 profile 只起一个进程，因此工具调用带的是进程级 actor peer、`remember` 也不绑当前会话（召回/捕获/commit 仍按会话解析 peer）；另随包附带共享的 `openviking-memory`、`openviking-skills` 与 `ov-experience-memory` 三个 skill，默认捕获工具结果（`captureToolResults: true`），因此 `ov-experience-memory` 能跑完整 Experience 闭环，关闭后只检索和应用；uri-guard 先把工具名转成小写再匹配，tools/pre-execute 拒绝路径是 `viking://` URI 的文件工具（针对 skill URI 的 write/edit 会被引导到 `mcp__openviking__add_skill`），bash 命令带 `viking://` URI 时由 tools/post-execute 附加提示（`form: "notice"`）。
-- **配置**：env + ovcli.conf `plugin.dsh` + workspace 文件 + cordis patch（行为旋钮的最低层）；凭据是例外，patch 里写的 endpoint / key / account / user / peer 仍然压过凭据链。
-- **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜降级 [§3.6](#_3-6-降级与容错)。
+- URI guard 只在 `beforeReadFile` 运行，不受插件开关影响。shell 命令不检查，升级会移除旧版本注册的 `beforeShellExecution` 条目。
+- 只捕获文本，所以 `ov-experience-memory` 能检索和应用 Experience，但无法把读取关联回所用的 Experience。
+- `sessionEnd` 只在关闭窗口时触发，此时 Cursor 已停止执行 hook 命令，因此实际不会提交。
+- 服务端不可达时，每轮都要等满 15 秒召回超时。
 
-## pi（pi Coding Agent Extension）
+<a id="trae-trae-cn-ide-版"></a>
 
-- **集成文档**：[pi Coding Agent 扩展](./11-pi.md)
-- **形态**：pi 原生扩展（目录装载，jiti 直译 TS）。扩展使用 `@modelcontextprotocol/client`，把服务端 `tools/list` 的每个描述符注册成名为 `openviking_<tool>` 的 pi 工具，当前 20 个（[§2.1](#_2-1-服务端-mcp-工具面)）。扩展里没有任何工具目录，服务端增删工具，pi 下一次会话即跟上，不需要发插件版本。召回、会话同步、profile 注入与 takeover 仍走 REST。9 事件 + `/viking` 命令；tool_call 拦截路径是 `viking://` URI 的 read/grep/find/ls/write/edit，bash 命令带 `viking://` URI 时，tool_result 在结果末尾追加提示。经 `resources_discover` 附带 3 个 skill（`openviking-memory`、`openviking-skills`、`ov-experience-memory`），`mcpEnabled` 为 `false` 时不加入。版本 0.4.1。
-- **能力亮点**：takeover 压缩接管（默认开，[§3.4.2](#_3-4-2-pi-takeover)）；两段式召回（before_agent_start 排队 + context 事件同步检索，当前轮 prompt 拿当前轮记忆）；statusline；支持的正常退出路径会 await `session_shutdown`；`kill -9` 等强制终止不会执行 handler。
-- **行为要点**：默认 takeover 下退出不 commit（handler 持久化本地状态，归档靠下次续跑攒满阈值或 `/viking commit`，[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；takeover 阈值 30000 token + 保留 3 轮（keep 3，服务端按消息条数解释）；非 takeover 阈值 20000/keep 10、退出无条件 commit；工具注册需 health、ensureSession 与 `/mcp` 握手三项前置（[§1.1](#_1-1-主动工具面-agentic-调用能力)），ROOT 角色的 API key 访问 `/mcp` 会被 403 拒绝，凭据链最终落到 `ov.conf` 的 `server.root_api_key` 时本次会话就没有工具——0.4.0 之前是 REST 工具照常注册、每次调用静默返回 "No results found."；`openviking_remember` 走 MCP 面，即自建一次性会话并立即提交，不再并入 pi 的会话（[§2.1](#_2-1-服务端-mcp-工具面)）；`openviking_add_resource` 可直接摄取远端 URL，本地路径则由服务端返回一条上传指引，需要模型用 `bash` 把文件 POST 上去，与其他 MCP harness 一致；`openviking_read` 读取文件正文，支持按行分页（`offset`/`limit`），目录 URI 会得到 `Cannot render …: URI points to a directory`，旧的 `level="abstract"/"overview"` 两档在 MCP 面没有对应工具，替代路径是 `openviking_search(mode="context", detail="overview")` 或 `openviking_tree(include_abstract=true)`，takeover 的归档 overview 仍由扩展自己经 REST 注入；单次工具调用受共享的 `timeoutMs` 约束（15000ms，`OPENVIKING_TIMEOUT_MS` 可调），`write`/`edit` 带 `wait=true` 或 `add_resource` 同步 ingest 有可能超过，而超时或 ESC 只让本地调用失败，已经发出的请求会跑完，写入仍可能已经生效；从 0.3.x 升级时全部工具改名且没有别名期，`--tools` / `--exclude-tools` 白名单里写死的 `viking_*` 必须手工替换，否则工具会静默消失；非 takeover 模式下 `pi -c` 续跑会重新上报整条 branch。
-- **配置**：env + ovcli.conf `plugin.pi` + workspace 文件（凭据统一走凭据链，[§3.1.3](#_3-1-3-凭据体系)）；bypass 走共享 `isBypassed` 的 glob 匹配，键名 `bypassSessionPatterns`（旧名 `bypassPatterns` 仍可读）；共享键 `mcpEnabled: false` 现在对 pi 也生效：不发起桥接、不注册工具，`/viking` 标注成配置而非故障。
-- **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜takeover [§3.4.2](#_3-4-2-pi-takeover) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)。
+### TRAE 与 TRAE CN
 
-## openclaw
+[TRAE](./13-trae.md)。hook 与 MCP 配置，包含 4 个 hook：`SessionStart`、`UserPromptSubmit`、`PreToolUse` 和 `Stop`。MCP 服务名为 `openviking`。
 
-- **集成文档**：[OpenClaw 插件](./03-openclaw.md)
-- **形态**：唯一 context-engine 全接管型（`ownsCompaction:true`）。15 原生工具（默认开 14）+ 5 slash + 4 hook + Gateway HTTP 路由 + feature-gate RPC。remote-only。版本 2026.6.18。
-- **能力亮点**：检索拆两个默认不重叠入口——`memory_recall` 默认搜 memory、`ov_search` 默认搜 resource+user skills（都可显式参数越界）；`add_skill` 默认开；`memory_forget` memory-only 白名单（[§3.5](#_3-5-写入与删除的类型边界)）；三个 tool-result 工具读服务端外置输出（跨会话 guard）；ContextEngine 全接管（[§3.4.3](#_3-4-3-openclaw-contextengine)）；setup 向导带 key 角色探测与版本兼容检查。
-- **行为要点**：召回走 `/find` 不带 session_id（expansion/去重台账不参与，长会话中同一记忆可能重复注入）；关闭不触发 commit，归档依赖显式 `/new`/`/reset` 与 ~50% 阈值（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；无本地 pending queue（失败轮次不重放）；`compact()` 最长阻塞 5 分钟；召回默认对每条 leaf 记忆多一次 read（`recallPreferAbstract=false`）；配置严格校验，存在未知键/非法值时插件进入 setup-only 模式。
-- **配置**：`openclaw.json` 的 `plugins.entries.openviking.config` + 少量 env；认证头 `X-API-Key`（[§3.1.3](#_3-1-3-凭据体系)）；commit 阈值由 `commitTokenThresholdRatio` 控制（默认 0.5）；召回字符预算 4000。
-- **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜ContextEngine [§3.4.3](#_3-4-3-openclaw-contextengine) ｜删除 [§3.5](#_3-5-写入与删除的类型边界) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)。
+- `PreToolUse` 拒绝对 `viking://` 路径执行 Read、Glob 和 Grep；Bash 和 RunCommand 命令中包含这种路径时附加提示。
+- 每个有内容的 `Stop` 都会提交，退出时最多丢失正在进行的那一轮。
+- TRAE 和 TRAE CN 只有会话前缀和安装路径不同。同样的工作在两个客户端中会产生不同的会话，要等抽取完成后才共享记忆。
+- 不处理压缩，没有状态栏和 skill，也不单独处理子代理。
 
-## hermes（Nous Research）
+### ZCode
 
-- **集成文档**：[Hermes Agent](./05-hermes.md)
-- **形态**：通过 HTTP 连接的内置 `MemoryProvider`，提供 6 个 `viking_*` 工具。OpenViking 运行于独立服务端环境。外部插件独立维护；范围区别见本文开头。
-- **记忆写入**：`viking_remember` 将原始事实送入独立会话并提交，触发异步抽取；返回 `status: submitted`，最终可能新增、合并或跳过。内置 provider 只镜像原生记忆新增；外部插件还支持按 URI 映射替换和删除，详见其 README。
-- **召回**：同步 query 召回优先使用带 session_id 的 `search/search`，降级至 `/find`。`queue_prefetch` 不做预热。会话开场注入用户 profile 和 preferences/entities 清单，默认预算 6000 token。Query 召回默认 6 条、阈值 0.15、4000 字符、总超时 4s／单请求 3s，均可配置。
-- **生命周期**：commit 保留 0 条消息。上传线程不落盘，但待提交标记支持 POSIX 上的崩溃恢复。正常退出和信号会尝试 drain 与 commit，网络故障或强制终止仍可中断。`skip_memory=True` 的委派子代理不加载 provider；无 statusline 或 provider slash 命令。
-- **路径与配置**：记忆写入 `viking://user/<uid>/memories/...`，设置 peer 时写入 `viking://user/<uid>/peers/<peer>/memories/...`。默认不设置助手 peer。连接读取 `OPENVIKING_ENDPOINT`、profile 凭据、关联的 `ovcli.conf` 和 Hermes YAML；关联 OpenViking profile 时会清除 Hermes `.env` 中的 5 个连接变量。
-- **维度索引**：工具面 [§1.1](#_1-1-主动工具面-agentic-调用能力) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜删除 [§3.5](#_3-5-写入与删除的类型边界)。
+[社区插件：ZCode](./08-community-plugins.md#zcode-记忆集成)。hook 与 MCP 配置，包含 4 个 hook：`SessionStart`、`UserPromptSubmit`、作用于 Read、Glob 和 Grep 的 `PreToolUse`，以及 `Stop`。
 
-## ov CLI
+- 捕获的轮次来自 rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl`；漏掉的 `Stop` 对应的轮次在下一个 `Stop` 补齐。
+- 第一次捕获读取整个 rollout，所以在长时间运行的会话中安装会产生一次大上传。
+- 捕获只去掉注入块，不做其他文本清理。
+- `Stop` 默认在分离的 worker 中写入。
 
-- **集成文档**：[部署指南 → CLI](../guides/03-deployment.md#cli)
-- **形态**：Rust 原生二进制，把服务端 REST 包成命令行；无宿主事件、无自动召回、不接管压缩。
-- **能力亮点**：提供 `auto_commit_policy` 的命令行入口（`ov session new --auto-commit-policy-json`、`ov session config set`）；提供多 profile、admin、privacy、snapshot、TUI 等插件面没有的能力（详见 [§5.3](#_5-3-cli-独有于插件面的能力)）。
-- **维度索引**：完整命令参考请见 [§5](#_5-ov-cli-命令参考)。
+<a id="kimicode"></a>
 
----
+### Kimi Code
 
-# 5. ov CLI 命令参考
+[社区插件：Kimi Code](./08-community-plugins.md#kimi-code-记忆集成)。Kimi Code 托管插件，包含 7 个 hook（`SessionStart`、`UserPromptSubmit`、作用于 Read、Glob 和 Grep 的 `PreToolUse`、`Stop`、`PreCompact`、`SessionEnd`、`Interrupt`）和一个 MCP 代理。安装器在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory` 下构建一份自包含的副本。
 
-`ov`（clap 内部名 `openviking`）是 Rust HTTP 客户端，大多数数据操作通过服务端 REST API 完成；CLI 还负责本地打包上传、配置校验、密钥生成、输出渲染与多 profile 管理。它不是 harness 集成——没有宿主事件、不自动召回、不接管压缩；本章覆盖它作为"人/脚本直接使用 OV"的完整命令面，以及它独有于插件面的能力（TUI、多 profile、admin、`--sudo`、privacy、snapshot 等）。
+- 捕获的轮次来自 `wire.jsonl`。一轮对话只有在发送成功或存入离线队列后才会推进游标。
+- 会话开场上下文在首次提问时注入，失败后在后续提问中重试，直到成功。
+- `Stop`、`PreCompact` 和 `SessionEnd` 可以在后台写入。`Interrupt` 保持同步，请求预算 2 秒。
+- `UserPromptSubmit` 返回纯文本上下文，不是 JSON。
+- 安装时保留其他插件记录，不修改旧的 `config.toml` 或 `mcp.json`。
 
-> 版本说明：以 HEAD 源码为准（HEAD tag 已到 `cli@0.4.14`），0.4.10 等旧版本的差异处已标注。需要注意的是，`ov doctor` 不在 Rust 二进制里——pip 装的 Python wrapper 会拦截 `argv[1]=="doctor"` 并走 `openviking_cli.doctor`，读取的是服务端 `ov.conf` 而非 `ovcli.conf`；npm/cargo 装的纯 Rust `ov` 无该子命令。
+### OpenCode
 
-## 5.1 命令树
+[OpenCode](./10-opencode.md)。npm 插件 `@openviking/opencode-plugin` 用同一个入口支持 OpenCode v1（1.15.7 及以上）和 v2（2.0.15 及以上）。
 
-命令 doc-comment 前缀 `[Data]`/`[Interactive]`/`[Admin]`/`[Experimental]` 等只影响 help 渲染，不影响运行时——即使是 `[Experimental]` 命令，默认也可用。
+- v2 每次提问只召回一次，把结果存进用户消息的 metadata；后续模型 step 直接复用，不发新请求，prompt 缓存因此保持稳定。每次执行结束时，v2 读取完整的用户、助手和工具消息用于捕获。
+- v2 在每次执行结束后检查提交阈值，包括失败和被中断的执行，这些执行会保留状态。v2 只处理本 location 的会话，游标存在插件 storage 中。v2 没有 toast API，改为写日志。
+- MCP 工具保留 `openviking_` 前缀；v2 设置 `codemode: false`。3 个 skill 只在插件注册自己的 MCP 服务时加入，hook-only 模式或关闭 `mcp.openviking` 时不加入。
+- 提交超时 30 秒。
 
-**数据写入**：`add-resource`（支持本地文件/目录/URL/Git/sitemap/RSS；目标 `--to`/`--parent`/`-p` 三选一；manifest 模式 `-m`；Connector `--add-type`；注意本地路径 + watch>0 会报错）｜`add-skill`｜`write`（`--content`/`--from-file` 互斥）｜`mkdir`｜`rm`（别名 del/delete，无确认提示，`-r` 显式递归）｜`mv`（别名 rename）｜`set-tags`（顶层隐藏，用 `attrs set-tags`）｜`add-memory`（实验性；执行逻辑为建 session → 批量 add → commit 三步串行）
+<a id="dsh-deepseek-harness"></a>
 
-**读取/检索**：`ls`（别名 list）｜`tree`（`-L` 默认 3）｜`stat`／`attrs get`｜`read`／`abstract`／`overview`（分别对应 L2/L0/L1）｜`get`（下载）｜`find`（query 或 `--image` 至少一个非空；`--image` 支持本地路径、data URI、http、viking://）｜`search`（实验性，比 find 多一个 `--session-id`）｜`grep`｜`glob`
+### DSH
 
-**Skills**：`skills add`（支持本地路径、git 及 GitHub tree URL，`-s` 选装、`*` 全装，有交互确认）｜`skills list/find/show/update/remove`｜`skills validate`（本地校验，不请求服务端）
+[DeepSeek Harness](./17-dsh.md)。唯一的同进程 Cordis 插件。hook 直接调用 REST API；工具通过 `@deepseek-ai/dsh-mcp-client` 和共享的 stdio 代理接入。
 
-**会话/记忆**：`session new`（`--auto-commit-policy-json` 与 `--no-auto-commit` 互斥；SDK 和 HTTP API 也支持设置 policy）｜`session list/get/delete`｜`session get-session-context`（`--token-budget` 默认 128000）｜`session get-session-archive`｜`session add-message(s)`｜`session config set`（改可变配置）｜`session commit`
+- 监听 `agent/session-start`、`agent/pre-step`、`session/event`、`session/flush`、`tools/pre-execute` 和 `tools/post-execute`。
+- `ctx.provide("openvikingMemory")` 让其他 Cordis 插件可以在它之上构建功能。
+- 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。除 `dev` 外的所有模式都安装已发布的 npm 包。
+- 默认捕获工具结果（`captureToolResults: true`），所以 `ov-experience-memory` 能完整运行；关闭捕获后，只能检索和应用 Experience。
+- URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令附加提示。
+- Cordis patch 中写明的凭据优先于其他所有来源；对行为配置来说，patch 是优先级最低的一层。
 
-**导入导出/快照**：`export`／`backup`／`import`／`restore`（.ovpack）｜`snapshot commit/restore/show/log/diff/ignore-*`（工作区快照，前向 commit 回滚）
+<a id="pi-pi-coding-agent-extension"></a>
 
-**隐私**：`privacy categories/list/get/versions/version/activate/upsert`（`--key-<name>` 语法糖）
+### pi
 
-**状态/可观测**：`health`（healthy=false 时仍退 0）｜`status`（表格模式始终退 0）｜`observer {queue,vikingdb,models,retrieval,filesystem,system}`｜`wait`｜`task status/cancel/list`｜`task watch {ls,show,rm,pause,resume,update,trigger}`｜`version`（独立 3s 超时探服务端）
+[pi](./11-pi.md)。原生扩展，包含 9 个事件处理器和 `/viking` 命令。召回、同步、会话开场上下文和 takeover 使用 REST；工具使用 pi 内置的 MCP 客户端。
 
-**配置/交互**：`config`（TUI 向导，5 项菜单含 User Management）｜`config show`（固定 json+compact 输出）｜`config validate`｜`config list/switch/add/edit/delete`（面向 Agent，退出码 2-6 语义化）｜`config add ov-service`（云）／`config add custom`｜`language`（别名 lang）｜`tui`（全屏文件浏览器 + 终端内图片预览 + 向量视图 + 删除确认）｜`chat`（VikingBot，300s 超时）｜`compile`（用 Skill 整理素材，`--wait` 本地轮询）
+- 工具就是服务端 `tools/list` 返回的内容，重命名为 `openviking_<tool>`。服务端增删工具后，pi 在下一个会话生效，不需要扩展发版。
+- 从 0.3.x 升级时，所有工具都从 `viking_*` 改了名，没有别名过渡期。请更新 `--tools` 或 `--exclude-tools` 列表，否则工具会静默消失。
+- `openviking_read` 返回文件内容，支持 `offset` 和 `limit`。目录 URI 会返回错误。旧的 `level="abstract"` 和 `"overview"` 读取在 MCP 中没有对应工具，可改用 `openviking_search(mode="context", detail="overview")` 或 `openviking_tree(include_abstract=true)`。
+- 工具调用 15 秒超时（`OPENVIKING_TIMEOUT_MS`）。超时或按 ESC 只让本地调用失败，已发出的请求会继续执行，写入仍可能生效。
+- `tool_call` 拒绝对 `viking://` 路径执行 read、grep、find、ls、write 和 edit；`tool_result` 为包含这种路径的 `bash` 输出附加提示。
+- takeover 关闭时，用 `pi -c` 恢复会话会重新发送整个 branch。
+- bypass 使用 `bypassSessionPatterns`；旧的 `bypassPatterns` 仍然有效。
 
-**管理（多为 ROOT/`--sudo`）**：`admin create-account/list-accounts/delete-account/set-role/migrate/register-user/list-users/remove-user/regenerate-key`｜`system wait/status/health/consistency`｜`system crypto init-key`（纯本地生成 32 字节 root key，权限 0600）｜`system backend sync-status/sync-retry`｜`reindex`（`--mode` 默认 vectors_only；`--wait` 默认 true，全 CLI 唯一）｜`doctor`（仅 Python wrapper）
+### OpenClaw
 
-## 5.2 全局选项与独有机制
+[OpenClaw](./03-openclaw.md)。接管压缩的 context-engine 插件，包含 15 个工具、5 个斜杠命令、生命周期 hook、Gateway HTTP 路由，以及受功能开关控制的 RPC 方法。
 
-- `-o/--output table|json`（默认取 conf `output`）｜`-c/--compact`（默认 true）｜`--account`/`--user`/`--actor-peer-id`｜`--sudo`（用 root_api_key，只允许 admin/system/reindex/task status/task list）｜`--profile`（隐藏）
-- **多 profile**：active 为 `~/.openviking/ovcli.conf`，命名配置为 `ovcli.conf.<name>`。编辑和重命名保留 `plugin` 等额外顶层字段。切换时替换连接配置；新配置若显式提供 `plugin`，则采用该段，否则保留 active 文件原有的 `plugin`。
-- **语言门禁**：跑任何命令前要求先存显示语言（未存 + 非交互 → exit 2）；HEAD 起 `--help` 在门禁前豁免（0.4.10 尚无此豁免），但 `--version` 仍需先过门禁。
-- **三种 JSON 输出格式（按命令组不同）**：普通命令 compact 下输出 `{"ok":true,"result":…}`，`-c false` 输出裸 payload，失败输出 `{"ok":false,"error":…}`；config 系为 `{"status":"ok","result":…}`；带 profile 时追加 `"profile":[…]`。脚本解析时需注意；此外 `echo_command` 默认 true 且不受 `-o json` 抑制（stdout 第一行是 `cmd: …`）。
-- **env**：`OPENVIKING_CLI_CONFIG_FILE`、`OPENVIKING_UPLOAD_MODE`（local/shared）、`OPENVIKING_ASSETS_CREDENTIALS_FILE`、`OPENVIKING_LANG`/`LC_*`/`LANG`，以及 chat 用的 `VIKINGBOT_ENDPOINT`/`VIKINGBOT_API_KEY`/`OPENVIKING_URL`。
+- `memory_recall` 检索记忆，`ov_search` 检索资源和用户的 skill；通过显式参数，两个工具都能查另一类内容。
+- 召回通过 `/find` 进行，不带会话 ID，所以没有查询扩写和去重，长会话中同一条记忆可能被重复注入。默认每条召回的记忆多一次 read（`recallPreferAbstract=false`）。
+- 退出不提交。归档依赖 `/new`、`/reset` 和阈值。没有离线队列，失败的轮次不会重发。
+- `compact()` 最多可能阻塞 5 分钟。
+- 配置严格校验：有未知键或非法值时，插件进入 setup-only 模式。
+- 提交阈值是 `tokenBudget`（默认 128,000）乘以 `commitTokenThresholdRatio`（默认 0.5）。
 
-## 5.3 CLI 提供的其他能力 {#_5-3-cli-独有于插件面的能力}
+<a id="hermes-nous-research"></a>
 
-相比记忆插件，CLI/TUI 还提供以下操作入口；其中服务端能力也可通过相应的 HTTP API 或 SDK 调用：多 profile 切换与向导、`admin` 全套账号/用户管理、`--sudo` root 操作、`privacy` 隐私策略 CRUD + 版本、`snapshot`/`backup`/`restore`/`export`/`import` 数据搬运、`reindex` 重建索引、`system crypto init-key` 生成 root key、`ov tui` 交互浏览、依赖 VikingBot 能力的 `ov chat`／`ov compile`，以及 `ov session config set` 显式设 `auto_commit_policy`。SDK 和 HTTP API 也支持设置该策略。
+### Hermes
 
----
+[Hermes](./05-hermes.md)。Hermes 通过两种分发方式提供名为 `openviking` 的
+memory provider：
 
-# 6. 自定义 agent 接入指南
+- **目录插件**在本仓库的
+  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
+  中维护。先运行 `hermes plugins install openviking --enable`，再运行
+  `hermes memory setup openviking`。
+- **内置 provider** 存在于旧版 Hermes 的 `plugins/memory/openviking` 中，
+  无需安装。本页的 Hermes 行描述
+  [Hermes 提交 `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)
+  时的内置 provider。
 
-如果你使用的 agent/harness 不在上面 11 家里，可以参考以下三条接入路径（按投入成本从低到高排列）。
+仍包含内置 provider 的版本会优先加载内置副本。当更新移除内置副本时，已配置
+OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置和已存数据均保持不变。
 
-## 6.1 接入路径 × 能获得的能力
+两者是独立的代码库。行为差异如下：
 
-| 路径 | 投入 | agent 主动工具面 | 自动召回/捕获 hook | 会话/commit | 压缩接管 |
-|---|---|---|---|---|---|
-| ① [通用 MCP 直连](./06-mcp-clients.md) | 分钟级：配置连接地址、凭据与传输方式 | ✅ 20 工具全量 | ❌ 由模型主动调用 | 仅 `remember` 建临时会话 | ❌ |
-| ② HTTP API / SDK / [LangChain](./07-langchain-langgraph.md) | 小时级：编写调用代码和生命周期处理 | 自选（按需调 REST） | 自己实现 | 自己实现（或用 LangChain middleware） | ❌ |
-| ③ 复用 shared-core | 天级：适配并验证宿主生命周期事件 | ✅ 20 工具（经 MCP 代理） | ✅ 召回/捕获/commit/pending 全套 | ✅ | 视接入哪些事件而定 |
-| [Agent Plugins 便携包](./15-agent-plugins.md) | 分钟级：安装 MCP 与 skill 配置 | ✅ 服务端 MCP 工具 | ❌ 依赖模型按 skill 调工具 | 仅 `remember` 建临时会话 | ❌ |
+| | 内置 provider（Hermes `989798c`） | 外部插件（本仓库） |
+|---|---|---|
+| 会话中的提交 | 无，只在会话边界 | 待提交 token 达到 20,000 时后台提交（`commit_token_threshold`） |
+| 召回摘要 | 不支持 | 可选的服务端摘要（`recall_compress`） |
+| 镜像 Hermes 内置记忆 | 只同步新增 | 同步新增、替换和删除，用 URI 注册表跟踪 |
+| `viking_forget` | 带明确用户 ID 的用户记忆文件 | 还接受 `viking://~/`，拒绝不带用户 ID 的路径，删除前检查归属 |
+| cron、子代理和 flush 上下文 | 该提交中没有说明 | 召回可用；跳过自动写入和镜像 |
 
-## 6.2 路径①：通用 MCP 直连（推荐起步）
+上述固定提交中内置 provider 的行为：
 
-支持 Streamable HTTP 的 MCP 客户端可以连接服务端 `/mcp`。下面展示使用 `mcpServers`、`url` 和 `headers` 字段的客户端配置；其他客户端的字段和格式见 [MCP 客户端](./06-mcp-clients.md)。连接后可发现服务端提供的工具（[§2.1](#_2-1-服务端-mcp-工具面)）。
+- 每次模型调用前召回，走带会话的 `search/search`，以 `/find` 作为回退。默认值：6 条结果、分数阈值 0.15、4,000 字符、总计 4 秒、单请求 3 秒。
+- `viking_remember` 把事实原样通过独立会话发送并提交，返回 `status: submitted`。
+- 提交不保留消息（`keep_recent_count` 0）。上传不持久化，但在 POSIX 上，待提交标记让之后的启动能提交已退出进程留下的会话。
+- 记忆写入 `viking://user/<uid>/memories/`；设置了 peer 时写入 `viking://user/<uid>/peers/<peer>/memories/`。
+- 关联 OpenViking 的 `ovcli.conf` profile 会清除 Hermes `.env` 中的 5 个连接变量。`hermes backup` 会包含 `$HOME` 下默认或由环境变量指定的 `ovcli.conf`；通过 YAML 关联的文件需要单独备份。
+
+<a id="_5-ov-cli-命令参考"></a><a id="_5-1-命令树"></a><a id="_5-2-全局选项与独有机制"></a><a id="_5-3-cli-独有于插件面的能力"></a>
+
+### ov CLI
+
+[安装与使用 CLI](../getting-started/05-cli-setup.md)。`ov` 是 REST API 的 Rust 客户端，没有宿主事件、自动召回或压缩处理；每个动作都是由你或脚本执行的命令。运行 `ov --help` 查看命令列表，JSON 输出见 [CLI 输出格式](../api/01-overview.md#cli-输出格式)。
+
+CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用户管理（`ov admin`）、用 `--sudo` 执行 root 操作、隐私策略管理（`ov privacy`）、快照、备份与恢复、导出与导入、`ov reindex`、在本地生成 root key（`ov system crypto init-key`）、`ov tui` 文件浏览器，以及会话自动提交策略（`ov session new --auto-commit-policy-json`、`ov session config set`）。其中的服务端操作也可以通过 HTTP API 和 SDK 完成。
+
+在脚本中需要注意：
+
+- `ov rm` 不确认就删除；`-r` 递归删除。
+- 服务端报告不健康时 `ov health` 仍退出 0，表格模式的 `ov status` 始终退出 0。
+- `echo_command` 开启时（默认开启），`find`、`search`、`ls`、`tree`、`grep` 和 `glob` 会先在标准输出打印一行 `cmd: …` 再输出结果，使用 `-o json` 时也是如此。
+- 大多数命令在 compact JSON 模式下输出 `{"ok": true, "result": …}` 或 `{"ok": false, "error": …}`；`ov config` 系列命令输出 `{"status": "ok", "result": …}`。
+- 运行命令前必须配置显示语言；在非交互 shell 中未配置时，CLI 以状态码 2 退出。
+- `ov doctor` 只存在于用 `uv tool install openviking` 安装的 Python 包中，用于检查服务端的 `ov.conf`。npm 和 cargo 安装的二进制不包含它。
+
+<a id="_6-自定义-agent-接入指南"></a><a id="_6-1-接入路径-×-能获得的能力"></a>
+
+## 自建集成
+
+如果你的 Agent 不在上面的列表中，按需要的行为选择工作量最小的方式：
+
+| 方式 | 工作量 | Agent 可用的工具 | 自动召回与捕获 | 提交 |
+|---|---|---|---|---|
+| [通过 MCP 连接](#通过-mcp-连接) | 几分钟 | 服务端 MCP 工具 | 无；由模型自己调用工具 | 只有 `remember`，在它自己的会话中 |
+| [Agent Plugins 插件包](./15-agent-plugins.md) | 几分钟 | 服务端 MCP 工具，外加一个教模型使用这些工具的 skill | 无 | 只有 `remember` |
+| [HTTP API、SDK 或 LangChain](#调用-http-api-或-sdk) | 几小时 | 取决于你调用的接口 | 自己实现，或使用 LangChain 中间件 | 由你决定 |
+| [复用共享插件代码](#复用共享插件代码) | 几天 | 通过代理使用服务端 MCP 工具 | 召回、捕获、提交和离线队列 | 取决于你接入的宿主事件 |
+
+<a id="_6-2-路径1-通用-mcp-直连-推荐起步"></a>
+
+### 通过 MCP 连接
+
+支持 Streamable HTTP 的客户端可以连接服务端的 `/mcp`。下面的示例使用常见的 `mcpServers` 格式；其他客户端的字段见 [MCP 客户端](./06-mcp-clients.md)。
 
 ```json
 {
@@ -734,44 +751,66 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 }
 ```
 
-示例使用用户或管理员 API key，账户和用户身份由服务端根据 key 确定。`X-OpenViking-Account` 与 `X-OpenViking-User` 用于可信身份模式，不能用来覆盖普通 key 的身份。需要 workspace peer 上下文时可另加 `X-OpenViking-Actor-Peer`，具体可见范围见[认证指南](../guides/04-authentication.md)。仅支持 stdio 的客户端可用 [Agent Plugins 便携代理](./15-agent-plugins.md)桥接 Streamable HTTP。直接接入 MCP 不含自动召回、捕获或会话提交；模型调用 `remember` 时会创建并提交一次性会话。
+使用用户或管理员 API key，服务端从 key 中读取账户和用户。`X-OpenViking-Account` 和 `X-OpenViking-User` 只在 trusted 身份模式下生效，不能覆盖普通 key 的身份。需要工作区 peer 上下文时，添加 `X-OpenViking-Actor-Peer`，见[认证](../guides/04-authentication.md)。只支持 stdio 的客户端可以使用 [Agent Plugins 代理](./15-agent-plugins.md)。直接通过 MCP 连接没有自动召回、捕获或提交。
 
-## 6.3 路径②：程序化接入
+<a id="_6-3-路径2-程序化接入"></a>
 
-- **直连 REST**：召回用 `POST /api/v1/search/search`（必须 `mode:"context"` + `session_id` 才有 expansion/去重，[§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)；可传 `rewrite` 获得服务端 digest，[§3.2.5](#_3-2-5-召回再摘要)）；写入用 `POST /api/v1/sessions/{id}/messages/batch`（≤100 条/批，auto_create）；提交用 `POST /api/v1/sessions/{id}/commit`；读取用 `GET /api/v1/content/read` 等。自动 commit policy 可来自 `server.user_config_defaults.auto_commit_policy`、`POST /api/v1/sessions` 或 `PATCH /{id}/config`（[§2.3](#_2-3-服务端会话与-commit-语义)）。
-- **LangChain / LangGraph SDK**（`pip install langchain-openviking`）：`OpenVikingContextMiddleware` 提供 `wrap_model_call`（把召回内容注入 `<openviking_context>`）与 `after_agent`（捕获 + 按 `CommitPolicy` 提交，默认 `never`）。这是本组唯一带 session + token 预算的现成自动召回；容错是"只读方法重试一次、写方法不重试"，部分成功时抛 `OpenVikingPartialWriteError`（可按 `input_messages_consumed` 切片重试）。参考 [§7](#_7-附录-非-coding-集成速览) B。
-- **Open WebUI**（OpenAPI 工具服务器）：`python -m openviking_openwebui` 起独立进程，在 Open WebUI 里添加 Tool Server URL，即可得 7 个工具（无删除、无 hook）。参考 [§7](#_7-附录-非-coding-集成速览) A。
-## 6.4 路径③：要自动 hook 面时复用参考实现
+### 调用 HTTP API 或 SDK
 
-如果希望实现召回、捕获、commit、pending 的全套自动化，完全不必从零开始编写。可按宿主能力选择以下实现；便携包只提供 MCP 和 skill，不包含自动 hook：
+- **REST**。召回用 `POST /api/v1/search/search`；查询扩写和去重需要 `mode: "context"`、`session_id` 和 `dedup_turns`（见[召回请求如何到达服务端](#召回请求如何到达服务端)），`rewrite` 用于请求[召回摘要](#召回摘要)。写入用 `POST /api/v1/sessions/{id}/messages/batch`（最多 100 条，会自动创建会话），提交用 `POST /api/v1/sessions/{id}/commit`，读取用 `GET /api/v1/content/read`。见[会话](../api/05-sessions.md)和[检索](../api/06-retrieval.md)。服务端自动提交见[服务端会话与提交机制](#服务端会话与提交机制)。
+- **LangChain 与 LangGraph**（`pip install langchain-openviking`）。`OpenVikingContextMiddleware` 在模型调用前把召回内容注入 `<openviking_context>`，在 Agent 运行后按 `CommitPolicy`（默认 `never`）捕获并提交。只读调用重试一次，写入从不重试。部分写入会抛出 `OpenVikingPartialWriteError`，附带重试剩余部分所需的计数。见 [LangChain / LangGraph](./07-langchain-langgraph.md)。
+- **Open WebUI**。`python -m openviking_openwebui` 启动一个独立的 OpenAPI 工具服务器，提供 7 个工具，没有删除工具和 hook。见[其他集成](#其他集成)。
 
-- **`examples/memory-plugin-shared/lib/`**（Node）：包含完整的核心功能模块，例如 `recall-core`（三级降级召回）、`profile-inject`、`capture-utils`（消息归一 + 注入回流防护）、`pending-queue`（离线重放）、`batch-send`、`mcp-proxy-core`（stdio↔HTTP 代理）、`session-model`（会话 id 派生）以及 `credentials`。构建新集成时，需要把宿主生命周期事件映射到这些模块，并验证消息顺序、重试、超时和退出行为（例如 `agent-hook-runtime.mjs` 就是 cursor、trae、zcode 共用的现成一体化运行时，可参考其 stdin 事件解析方式）。
-- **Agent Plugins 1.0 便携包**（位于 `agent-plugins/`）：采用 `plugin.json` + `skills/` + `mcp.json`（stdio→HTTP 代理）的规范化便携格式。该方案刻意不含 hooks（召回/沉淀靠 skill 教模型自调工具），非常适合符合 Agent Plugins 规范的客户端直接加载；此外，`plugin.test.mjs` 定义了规范一致性校验（schema URL、name 规则、静态 headers 不含机密、`mcp.json` 引用不逃逸插件根等），可作为自行打包的 lint 依据。
+<a id="_6-4-路径3-要自动-hook-面时复用参考实现"></a><a id="_2-2-memory-plugin-shared-共享层"></a>
 
-**接入时务必对齐的三个约定**（与现有 harness 保持一致的行为）：① 召回调用点必须转发 `session_id`，这样才有服务端 expansion + 跨轮去重（详见 [§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；② 适配器不要用自己的超时压过 helper 下发的 deadline；③ 关闭时要安排一条 commit 路径，否则未达阈值的尾部对话需等待后续触发才能归档（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——若宿主没有关闭事件，需开启 `memory.session_auto_commit.enabled`，并提供 Session 级或部署级默认 policy。`recall-session-wiring.test.mjs` 检查 session ID 和超时传递等接线；退出事件是否触发、写入是否完成，还需在目标宿主中验证。
+### 复用共享插件代码
 
----
+需要自动召回、捕获、提交和离线重试时，复用现有代码，不必重写：
 
-# 7. 附录：非 coding 集成速览
+- **`examples/memory-plugin-shared/lib/`**（Node.js）包含共享模块：带回退的召回、会话开场上下文、捕获清理、离线队列、批量发送、MCP 代理、会话 ID 和凭据。通过 hook 文件配置的宿主可以在 `examples/agent-hook-plugin/hosts/` 下添加适配器，Cursor、TRAE、ZCode 和 Kimi Code 都是这样接入的。
+- **Agent Plugins 插件包**（`agent-plugins/`）由可移植的 `plugin.json`、`skills/` 和 `mcp.json` 组成，带 stdio 到 HTTP 的代理，没有 hook。它的 `plugin.test.mjs` 检查是否符合 Agent Plugins 规范，可以作为你自己插件包的 lint 基线。
 
-| 集成 | 形态 | 工具面 | 会话/commit | 容错 | 默认状态 |
+[插件开发指南](./18-plugin-development.md)介绍模块职责、配置、生成副本、安装器和测试。无论构建什么，都遵守以下三条规则，让它的行为与现有集成一致：
+
+1. 使用带会话 ID 和 `dedup_turns` 的 context 模式召回，让服务端能扩写查询并跨轮去重。
+2. 不要让适配器自己的超时截断共享代码计算出的截止时间。
+3. 在关闭时提交。否则低于阈值的对话尾部会一直未提交，直到其他事件触发提交。如果宿主没有关闭事件，开启 `memory.session_auto_commit.enabled` 并为会话设置策略。完成后，在真实宿主中检查退出事件是否触发、写入是否完成。
+
+<a id="_7-附录-非-coding-集成速览"></a>
+
+## 其他集成
+
+| 集成 | 是什么 | 工具 | 会话与提交 | 失败处理 | 何时生效 |
 |---|---|---|---|---|---|
-| **A. [Open WebUI](./08-community-plugins.md)** | 独立的 FastAPI OpenAPI 工具服务器 | 7 个本地 OpenAPI 路由（`ov_search`/`ov_recall_memories`/`ov_add_memory`/`ov_list_memories`/`ov_read_resource`/`ov_add_resource`/`ov_session_status`），无删除工具 | 无会话概念 | 最薄：裸 httpx，无 retry/负缓存；`/health` 仅回显配置，不探测 OV | 进程不启动即不存在 |
-| **B. [LangChain/LangGraph](./07-langchain-langgraph.md)** | Python SDK 适配层（retriever/tools/store/middleware/recorder） | `create_openviking_tools()` 提供 12 个 StructuredTool（`viking_forget` 默认不在 agent profile 中） | `thread_id`/`session_id` 由调用方给；`CommitPolicy` 默认 `never` | 本组最稳：只读方法自动重试 1 次、写方法不重试（防重复）、部分成功抛结构化异常可切片重试 | 需全部显式构造才生效 |
-| **C. [Agent Plugins 1.0](./15-agent-plugins.md)** | 便携包 `plugin.json` + `skills/` + `mcp.json`（stdio→HTTP 代理） | MCP 透传 20 工具；刻意无 hooks（召回靠 skill 教模型） | 仅 `remember` 建临时会话 | MCP 代理层重试（401/403 换凭据、400/404 重初始化各 1 次） | 客户端加载后工具即用 |
-| **D. [通用 MCP 直连](./06-mcp-clients.md)** | 零本地组件，直连 `/mcp` | 同 C（20 工具） | 同 C | 由客户端自定 | `/mcp` 常驻 |
-| **E. [log ingestion](./09-log-ingestion.md)** | `openviking-server ingest` CLI（跑在日志所在机器，反向导入） | 无（只写不召回） | 会话 id `{prefix}__{harness}__{sanitized native id}`；commit token 6000/idle 5s/keep 0 | 崩溃恢复：SQLite 游标库 + 单实例锁 + reconcile 判定批次落地 | 双重默认关（`ingest.enabled` + 每 harness `enabled` 都 false）；支持 claude_code/codex/hermes/opencode/openclaw/cursor 适配器 |
-| **F. [OpenViking Helper](./14-openviking-helper.md)** | 闭源桌面 App | — | — | — | 不在本文代码基线内 |
+| [Open WebUI](./08-community-plugins.md#open-webui-tool-server) | 独立的 OpenAPI 工具服务器 | 7 个：`ov_search`、`ov_recall_memories`、`ov_add_memory`、`ov_list_memories`、`ov_read_resource`、`ov_add_resource`、`ov_session_status`；没有删除工具 | 没有会话 | 不重试，不缓存失败。它的 `/health` 只回显配置，不连接 OpenViking | 你启动进程后 |
+| [LangChain 与 LangGraph](./07-langchain-langgraph.md) | Python SDK 适配层：retriever、tools、store、middleware、recorder | `create_openviking_tools()` 提供 12 个工具；`viking_forget` 不在默认 agent profile 中 | 会话 ID 和 thread ID 由调用方提供；`CommitPolicy` 默认 `never` | 读取重试一次，写入不重试；部分写入抛出结构化错误 | 你构造它之后 |
+| [Agent Plugins](./15-agent-plugins.md) | 带 stdio 到 HTTP MCP 代理的可移植插件包 | 服务端 MCP 工具；没有 hook，由 skill 告诉模型何时调用 | 只有 `remember` | 代理在 401 或 403 后用新凭据重试一次，在 400 或 404 后用新 MCP 会话重试一次 | 客户端加载后 |
+| [MCP 客户端](./06-mcp-clients.md) | 直连 `/mcp` | 服务端 MCP 工具 | 只有 `remember` | 由客户端决定 | 服务端始终提供 |
+| [日志导入](./09-log-ingestion.md) | `openviking-server ingest`，在日志所在的机器上运行 | 无，只导入 | 会话 ID `{prefix}__{harness}__{id}`；待提交 token 达到 6,000 或空闲 5 秒时提交，`keep_recent_count` 0 | 游标库、单实例锁，崩溃后核对服务端消息数 | 默认关闭；`ingest.enabled` 和各适配器的 `enabled` 都要开启。适配器：Claude Code、Codex、Hermes、OpenCode、OpenClaw、Cursor |
+| [OpenViking Helper](./14-openviking-helper.md) | 闭源桌面应用 | 本页不涉及 | 本页不涉及 | 本页不涉及 | 本页不涉及 |
 
----
+## 源码依据
 
-*各集成的安装、配置与排障以对应的单独集成页面为准；当本页与单独页面不一致时，以单独页面为准。*
+以上对比依据以下位置核对。需要确认某项限制在你的版本中是否成立时，可以查看这些位置。
+
+- 服务端 MCP 工具：`openviking/server/mcp_endpoint.py`，以其中的 `@mcp.tool` 注册为准。
+- 写入与删除检查：`openviking/storage/content_write.py` 和 `openviking/storage/viking_fs/_access.py`。
+- 服务端自动提交：`openviking_cli/utils/config/memory_config.py` 和 `openviking/session/auto_commit_policy.py`。
+- 插件配置与默认值：`examples/memory-plugin-shared/lib/config-schema.mjs`。
+- hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode 和 Kimi Code。
+- pi takeover：`examples/pi-coding-agent-extension/lib/takeover-core.mjs`。
+- OpenClaw 工具和生命周期 hook：`examples/openclaw-plugin/registries/openviking-tools.ts` 和 `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`。
+- Hermes：[Hermes](#hermes) 中链接的旧版内置 provider 固定提交，以及目录插件的
+  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md)。
 
 ## 参见
 
-- [Agent 集成概览](./01-overview.md)
+- [选择 Agent 接入方式](./01-overview.md)
+- [调整召回延迟](./19-recall-tuning.md)
+- [开发与维护 Agent 插件](./18-plugin-development.md)
 - [MCP 客户端](./06-mcp-clients.md)
-- [MCP 集成指南](../guides/06-mcp-integration.md)
+- [MCP 工具与协议](../guides/06-mcp-integration.md)
+- [客户端配置字段](../configuration/02-client.md)
 - [检索 API](../api/06-retrieval.md)
 - [会话 API](../api/05-sessions.md)
-- [鉴权](../guides/04-authentication.md)
+- [认证](../guides/04-authentication.md)

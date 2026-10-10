@@ -660,7 +660,7 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 #### 2. Parameters
 
-**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the per-category quotas are the only candidate ceilings. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
+**L0 retrieval domain**: `query`, `image_url`, `context_type`, `limit`, `score_threshold`, `filter`, `tags`, `since`/`until`, and the optional `events_time_decay_protection` behave as in list mode. `limit` applies only to quota-free retrieval. Once `purpose` or explicit `quotas` enables bucketed retrieval, the sum of the per-category quotas is the candidate ceiling. `target_uri` is not supported in context mode yet (returns 400); `level` is ignored because `detail` governs tiers.
 
 **L1 query understanding**
 
@@ -675,8 +675,8 @@ Injecting context every turn used to mean searching per type, reading each hit b
 |-----------|------|---------|-------------|
 | `limit` | int | 10 | Candidate ceiling for quota-free retrieval only; ignored when `purpose` or `quotas` enables bucketed retrieval |
 | `max_tokens` | int | 1600 | The single budget parameter, estimated with a CJK-aware heuristic (codepoint ≥ 0x3000 counts 1.5 tok/char, otherwise chars/4) |
-| `quotas` | object | None | Absolute per-bucket limits; keys are `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`. Explicit quotas ignore `limit` |
-| `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the absolute preset quotas below. Applies only when `quotas` is not given |
+| `quotas` | object | None | Per-bucket first-pass limits whose sum caps the candidates; slots a bucket leaves unused go to the best remaining hits of the other buckets, and `0` turns a bucket off. Keys are `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`. Explicit quotas ignore `limit` |
+| `purpose` | `chat` \| `coding` | None | Enables six-domain bucket sampling with the preset quotas below. Applies only when `quotas` is not given |
 | `detail` | `abstract` \| `overview` \| `full` \| object | None | Requests one starting/maximum tier for every entry. Entries whose requested tier is unavailable or does not fit step down instead of being truncated. Omitted, each category takes its default tier (below). Also accepts a per-category object such as `{"events":"overview","preferences":"abstract"}`; categories left out keep their default. `"auto"` is a deprecated spelling and behaves as if omitted |
 | `dedup_turns` | int | 0 | Cooldown window in turns; needs `session_id`. Ledger lives at `{session_uri}/.recall_log.json` |
 | `exclude_uris` | string[] | [] | Stateless dedup fallback, up to 200 entries, unioned with `dedup_turns` |
@@ -692,8 +692,8 @@ Injecting context every turn used to mean searching per type, reading each hit b
 
 **Tier rules**
 
-- **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. These are absolute per-category ceilings, not weights. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
-- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Among file entries, only `events` needs a body read at its default tier. Directory hits read `.overview.md`
+- **Purpose presets**: `chat` uses `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`; `coding` uses `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`. Each bucket first takes up to its own quota; when a bucket finds fewer matches, its unused slots go to the best remaining hits of the other buckets, so the total (10 for either preset) is never exceeded. Results are deduplicated and globally sorted after gathering, but are not truncated by a second global `limit`
+- **Default tier per category**: with `detail` omitted, each category lands on the tier below. Among file entries, only `events` needs a body read at its default tier. Directory hits read `.overview.md`. Preset scope directories (`viking://resources`, `viking://agent` and its preset children, the user root and its first-level directories) serve only for navigation and are never returned as entries, even after their `.overview.md` has been regenerated from their contents
 
   | Category | Default tier | Leftover budget may reach | Why |
   |----------|--------------|---------------------------|-----|

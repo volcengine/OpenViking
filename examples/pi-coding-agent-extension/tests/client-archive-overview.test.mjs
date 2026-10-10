@@ -78,10 +78,25 @@ test("getArchiveState reads the server's terminal markers for one archive", asyn
     assert.equal(await client.getArchiveState(archive), "pending");
     files.set(`${archive}/.failed.json`, "{\"error\":\"llm\"}");
     assert.equal(await client.getArchiveState(archive), "failed");
-    files.set(`${archive}/.done`, "{\"working_memory_enabled\":false}");
+    files.set(`${archive}/.done`, "{\"enable_working_memory\":false}");
     assert.equal(await client.getArchiveState(`${archive}/`), "completed");
     assert.equal(await client.getArchiveState("viking://user/u/sessions/broken/history/archive_001"), null);
     assert.equal(await client.getArchiveState(""), null);
     assert.match(calls[0].url, /content\/read\?uri=.*archive_003%2F\.done$/);
   });
 });
+
+for (const enabled of [true, false, undefined]) {
+  test(`commitSessionResponse sends enable_working_memory=${enabled}`, async () => {
+    await withFetch(async () => ({
+      body: { status: "ok", result: { effective_enable_working_memory: enabled ?? false } },
+    }), async (calls) => {
+      const response = await makeClient().commitSessionResponse("s", 3, 5000, enabled);
+      assert.equal(response.result.effective_enable_working_memory, enabled ?? false);
+      assert.deepEqual(JSON.parse(calls[0].init.body), {
+        keep_recent_count: 3,
+        ...(enabled === undefined ? {} : { enable_working_memory: enabled }),
+      });
+    });
+  });
+}

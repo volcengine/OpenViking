@@ -33,6 +33,56 @@ test("wire decoding groups prompt and assistant text under a stable turn id", ()
   ]);
 });
 
+test("host-generated user messages do not replace the prompt", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
+  const wire = join(dir, "wire.jsonl");
+  writeFileSync(wire, [
+    JSON.stringify({
+      type: "context.append_message",
+      message: {
+        role: "user",
+        origin: { kind: "hook_result", event: "UserPromptSubmit" },
+        content: [{
+          type: "text",
+          text: '<hook_result hook_event="UserPromptSubmit">\n<openviking-context source="recall">old</openviking-context>\n</hook_result>',
+        }],
+      },
+    }),
+    JSON.stringify({ type: "turn.prompt", turnId: 0, origin: { kind: "user" }, input: [{ type: "text", text: "Fix release.json." }] }),
+    JSON.stringify({ type: "context.append_message", message: { role: "user", origin: { kind: "user" }, content: [{ type: "text", text: "Fix release.json." }] } }),
+    JSON.stringify({
+      type: "context.append_message",
+      message: {
+        role: "user",
+        origin: { kind: "injection", variant: "reminder" },
+        content: [{ type: "text", text: "<system-reminder>\nhost reminder\n</system-reminder>" }],
+      },
+    }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: 0, part: { type: "text", text: "Done." } } }),
+    JSON.stringify({ type: "turn.ended", turnId: 0, reason: "completed" }),
+  ].join("\n") + "\n");
+
+  assert.deepEqual(extractUnseenKimicodeTurns(wire).turns, [
+    { role: "user", content: "Fix release.json.", turnId: "0" },
+    { role: "assistant", content: "Done.", turnId: "0" },
+  ]);
+});
+
+test("assistant text from consecutive steps is separated", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
+  const wire = join(dir, "wire.jsonl");
+  writeFileSync(wire, [
+    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "question" }] }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: "3", part: { type: "text", text: "Reading files." } } }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: "3", part: { type: "text", text: "Done." } } }),
+  ].join("\n") + "\n");
+
+  assert.deepEqual(extractUnseenKimicodeTurns(wire).turns, [
+    { role: "user", content: "question", turnId: "3" },
+    { role: "assistant", content: "Reading files.\nDone.", turnId: "3" },
+  ]);
+});
+
 test("turn.ended closes an interrupted user-only turn", () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
   const wire = join(dir, "wire.jsonl");

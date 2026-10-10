@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -60,6 +60,8 @@ class BatchWriteOperation(BaseModel):
     content: str | None = None
     content_base64: str | None = None
     mode: Literal["replace", "append", "create", "upsert"] = "replace"
+    # Optional byte revision, checked under the existing file locks before any writes.
+    expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def validate_content_shape(self) -> "BatchWriteOperation":
@@ -76,6 +78,8 @@ class BatchWriteRequest(BaseModel):
     wait: bool = True
     timeout: float | None = None
     telemetry: TelemetryRequest = False
+    # Preserve conflicting target files and return their URI/reason while writing other files.
+    skip_conflicts: bool = False
 
 
 class SetTagsRequest(BaseModel):
@@ -281,6 +285,7 @@ async def batch_write(
             ctx=_ctx,
             wait=request.wait,
             timeout=request.timeout,
+            skip_conflicts=request.skip_conflicts,
         ),
     )
     return Response(

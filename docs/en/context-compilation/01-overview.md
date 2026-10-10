@@ -30,7 +30,7 @@ The command returns a `cmp_...` task ID immediately. Use `ov task status <id>` t
 
 ## Use Web Studio
 
-Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. Playground's terminal also supports `compile` and `task`; it can hand parameters to the form.
+Studio provides a Compile list at `/compile`, a form at `/compile/new`, and task details at `/compile/tasks/<task_id>`. Select and preview a Skill, browse source directories, submit multiple sources, inspect or cancel a task, and open its output directory. The Filesystem terminal also supports `compile` and `task`; it can hand parameters to the form.
 
 Task-list cursors are signed with a process-local key and bound to the caller and filters. Restarting the service invalidates old cursors; refresh the list to start again. A cursor from one replica is not portable to another. Pagination scans stored task records rather than using an index, so read cost grows with retained history.
 

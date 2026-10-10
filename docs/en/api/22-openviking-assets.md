@@ -1,4 +1,4 @@
-# OpenViking Assets Resolver
+# Assets
 
 The OpenViking Assets Resolver parses and validates an
 [`openviking-assets/1`](../guides/18-openviking-assets.md) Manifest — either

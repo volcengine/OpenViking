@@ -2,6 +2,13 @@
 
 These are the same product marks used by the OpenViking website and documentation.
 
+Docs sidebar additions (2026-10-03):
+
+- `claude-code.svg`, `codex.svg`, `cursor.svg`, `trae.svg`, and `opencode.svg`: copied from the image assets rendered by [OpenViking integrations](https://openviking.ai/integrations). Monochrome marks invert in dark mode, matching the website; colored marks retain their colors.
+- DSH reuses the README's `logos/dsh.svg` and `logos/dsh-dark.svg` monochrome marks, switching between black and white with the theme. The blue DeepSeek mark is not used for this entry.
+- `langchain.svg`: the framework's chain-link icon from the [official LangChain product page](https://www.langchain.com/langchain), reused in both themes. The corporate LangChain symbol is a different mark and is not used for this framework entry.
+- The sidebar reuses `openclaw.jpg`, `hermes-agent.png`, and `pi.svg` below. All images are served locally, have empty alt text beside their product names, and keep their aspect ratio.
+
 - `codex.png`: [documentation catalog artwork](https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/codex.png), referenced by `docs/images/agents/en/index.json`.
 - `openclaw.jpg`, `hermes-agent.png`, `pi.svg`: reused from `openviking_playground/src/assets/brand/` (`ca4fb82`). The OpenClaw file contains JPEG data and uses the matching extension here.
 - `pi-dark.svg`: the same monochrome pi mark with a light foreground for dark backgrounds.

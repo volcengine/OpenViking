@@ -64,7 +64,7 @@ function getToolResultsById(parts: MessagePart[]): Map<string, ToolResultPart> {
   )
 }
 
-function stripPlaygroundContextSuffix(text: string): string {
+function stripLegacyContextSuffix(text: string): string {
   return text
     .replace(/\n\n当前选中的上下文资源：\s*viking:\/\/[\s\S]*$/u, '')
     .replace(
@@ -204,7 +204,7 @@ const UserMessage = memo(function UserMessage({
   compact?: boolean
 }) {
   const { t } = useTranslation('sessions')
-  const text = stripPlaygroundContextSuffix(getTextFromParts(message))
+  const text = stripLegacyContextSuffix(getTextFromParts(message))
 
   return (
     <div

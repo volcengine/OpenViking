@@ -648,6 +648,7 @@ async def search(
         limit=limit,
         score_threshold=0.35 if min_score is None else min_score,
         filter=context_filter,
+        context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,
     )
@@ -1164,7 +1165,7 @@ class StoreMessage(BaseModel):
 @_mcp_error_results()
 @mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def remember(messages: list[StoreMessage]) -> str:
-    """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
+    """Submit information for OpenViking long-term memory extraction. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting. Extraction runs in the background and decides which memories to create or update."""
     import uuid
 
     from openviking.message.part import TextPart
@@ -1173,6 +1174,7 @@ async def remember(messages: list[StoreMessage]) -> str:
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
     session = await service.sessions.get(session_id, ctx, auto_create=True)
+    added = 0
     for msg in messages:
         if msg.content:
             add_async = getattr(session, "add_message_async", None)
@@ -1180,8 +1182,17 @@ async def remember(messages: list[StoreMessage]) -> str:
                 await add_async(msg.role, [TextPart(text=msg.content)])
             else:
                 session.add_message(msg.role, [TextPart(text=msg.content)])
-    await service.sessions.commit_async(session_id, ctx)
-    return f"Stored {len(messages)} message(s) and committed for memory extraction."
+            added += 1
+    result = await service.sessions.commit_async(session_id, ctx)
+    task_id = result.get("task_id")
+    if not task_id:
+        reason = result.get("reason") or result.get("status") or "unknown"
+        return f"Nothing was committed for memory extraction (reason: {reason})."
+    return (
+        f"Submitted {added} message(s) for memory extraction (session {session_id}, "
+        f"task_id={task_id}). Extraction runs in the background and decides which memories "
+        "to create or update."
+    )
 
 
 # -- write -----------------------------------------------------------------

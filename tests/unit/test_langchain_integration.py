@@ -796,10 +796,11 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     )
     client.add_message("assembler-session", "user", content="Earlier user turn")
     client.add_message("assembler-session", "assistant", content="Earlier assistant turn")
-    client.commit_session("assembler-session")
+    client.commit_session("assembler-session", enable_working_memory=True)
     client.add_message("assembler-session", "user", content="Active turn")
 
     assembler = OpenVikingSessionContextAssembler(
+        include_session_context=True,
         client=client,
         target_uri="viking://resources",
     )
@@ -850,6 +851,7 @@ def test_session_context_assembler_creates_only_after_not_found():
 
     client = RecordingClient()
     assembler = OpenVikingSessionContextAssembler(
+        include_session_context=True,
         client=client,
         include_recall=False,
     )

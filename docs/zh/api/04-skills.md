@@ -88,7 +88,7 @@ Concrete examples of skill invocation.
 | tags | List[str] | 用于分类的标签 |
 | metadata | object | 原样保留的扩展字段，如 `metadata.vikingbot.requires`；OpenViking 不自动安装这些依赖 |
 
-`SKILL.md` 使用带连字符的 **`allowed-tools`**，解析后的结构化数据和 API 摘要使用 **`allowed_tools`**。不要在 frontmatter 中用下划线拼写替代它。未声明和显式空声明可能在 Harness 中有不同权限含义，摘要里的 `allowed_tools: []` 不能区分二者；执行前应读取完整 `SKILL.md`。正文与扩展字段的消费方式见 [VikingBot Skills](../../../bot/docs/zh/concepts/06-skills.md)。
+`SKILL.md` 使用带连字符的 **`allowed-tools`**，解析后的结构化数据和 API 摘要使用 **`allowed_tools`**。不要在 frontmatter 中用下划线拼写替代它。未声明和显式空声明可能在 Harness 中有不同权限含义，摘要里的 `allowed_tools: []` 不能区分二者；执行前应读取完整 `SKILL.md`。正文与扩展字段的消费方式见 [VikingBot Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/concepts/06-skills.md)。
 
 ### MCP 格式自动转换
 
@@ -617,7 +617,7 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 
 清单包含 `SKILL.md`、摘要和辅助文件/目录，不包含 `.source.json`。完整性 API 上限为 **512 个条目（包含目录）、单文件 16 MiB、总文件字节数 64 MiB**，读取并发为 8；超限返回 `RESOURCE_EXHAUSTED`。正文、清单和 revision 在同一次树锁保护的读取中取得，但后续下载仍可能遇到更新，消费方应校验文件哈希并复查 revision。
 
-检索与 `get_skill` 只返回内容和清单，不会执行脚本或把文件安装到 Agent 沙箱。Harness 可按需远程读文本，在工具需要本地路径时下载资源。VikingBot 的完整流程见 [Skills](../../../bot/docs/zh/concepts/06-skills.md)。MCP 客户端通过 `find` 工具传 `context_type="skill"` 得到同样的包级行为，见 [MCP 集成](../guides/06-mcp-integration.md)。
+检索与 `get_skill` 只返回内容和清单，不会执行脚本或把文件安装到 Agent 沙箱。Harness 可按需远程读文本，在工具需要本地路径时下载资源。VikingBot 的完整流程见 [Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/concepts/06-skills.md)。MCP 客户端通过 `find` 工具传 `context_type="skill"` 得到同样的包级行为，见 [MCP 集成](../guides/06-mcp-integration.md)。
 
 ### 搜索技能
 
@@ -956,4 +956,4 @@ skill = {
 - [上下文类型](../concepts/02-context-types.md) - 技能概念
 - [检索](06-retrieval.md) - 查找技能
 - [会话](05-sessions.md) - 跟踪技能使用情况
-- [VikingBot Skills](../../../bot/docs/zh/concepts/06-skills.md) - 本地/远程 Skill 的激活、metadata 与执行
+- [VikingBot Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/concepts/06-skills.md) - 本地/远程 Skill 的激活、metadata 与执行

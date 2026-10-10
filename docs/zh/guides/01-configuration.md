@@ -1,4 +1,6 @@
-# 配置
+# 配置模型与服务
+
+本文用于选择模型、组合配置示例和理解生效范围。只查字段时，请看[服务端配置字段](../configuration/01-server.md)或[客户端配置字段](../configuration/02-client.md)；首次部署从[部署路径](00-overview.md)开始。
 
 OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支持 Embedding、VLM、Rerank、存储、解析器等多个模块的配置。
 
@@ -14,24 +16,6 @@ openviking-server doctor
 ```
 
 `openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
-
-## Account Embedding 与 VectorDB
-
-ROOT 可在创建 Account 时配置 `settings.embedding` 和 `settings.vectordb`，
-两者使用 Account 专用白名单模型。Account 与 Cluster 配置分别保存，向量业务
-resolver 为 Account 未设置的值应用 Cluster 默认。Provider 连接只能通过完整
-`credentials` binding 提交，不能跨 Account/Cluster 拼接。配置查询只返回
-Account 配置。
-
-VectorDB 创建后不可修改。新旧 Account 均可轮换完整 Embedding
-credentials/deployment binding，并更新重试、并发、failback 和熔断参数；
-外层 model 身份及其他向量空间字段仅创建时可设。兼容 endpoint 更新不打断
-在途调用，也不会自动重建历史向量。
-
-Account 独立配置的 VectorDB 仅支持远端 backend；Account 不能选择 local/cuvs，
-也不能设置本地路径、cuVS 调优或自定义 adapter 参数。未设置 VectorDB 的
-Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制面提前创建。权限与 PATCH 规则见
-[Admin 配置 API](../api/08-admin.md#runtime-configuration)。
 
 ## 快速开始
 
@@ -161,6 +145,24 @@ PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置�
 的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
+
+## Account Embedding 与 VectorDB
+
+ROOT 可在创建 Account 时配置 `settings.embedding` 和 `settings.vectordb`，
+两者使用 Account 专用白名单模型。Account 与 Cluster 配置分别保存，向量业务
+resolver 为 Account 未设置的值应用 Cluster 默认。Provider 连接只能通过完整
+`credentials` binding 提交，不能跨 Account/Cluster 拼接。配置查询只返回
+Account 配置。
+
+VectorDB 创建后不可修改。新旧 Account 均可轮换完整 Embedding
+credentials/deployment binding，并更新重试、并发、failback 和熔断参数；
+外层 model 身份及其他向量空间字段仅创建时可设。兼容 endpoint 更新不打断
+在途调用，也不会自动重建历史向量。
+
+Account 独立配置的 VectorDB 仅支持远端 backend；Account 不能选择 local/cuvs，
+也不能设置本地路径、cuVS 调优或自定义 adapter 参数。未设置 VectorDB 的
+Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制面提前创建。权限与 PATCH 规则见
+[Admin 配置 API](../api/08-admin.md#runtime-configuration)。
 
 ## 配置示例
 
@@ -899,6 +901,32 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
 
 媒体处理会把文件内容发送给所配置的外部 provider。禁用响应存储和 best-effort 删除可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制；上传文件未显式指定过期时间，其保留周期由方舟的默认策略决定。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
 
+### bot.compile
+
+配置单个 Resource Compile 任务各阶段的并发工作数，适用于直接模型调用和 agent 执行：
+
+```json
+{
+  "bot": {
+    "compile": {
+      "map_concurrency": 8,
+      "shuffle_concurrency": 4,
+      "shuffle_batch_size": 4,
+      "reduce_concurrency": 6
+    }
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `map_concurrency` | 继承 `vlm.max_concurrent` | Map 提取工作并发数 |
+| `shuffle_concurrency` | 继承 `vlm.max_concurrent` | Shuffle 路由工作及 embedding 批次并发数 |
+| `shuffle_batch_size` | `4` | 每次 Shuffle 路由请求的主记录数上限；与并发数、字符软预算独立 |
+| `reduce_concurrency` | 继承 `vlm.max_concurrent` | Reduce 工作并发数；同路径候选的最终 merge 复用此值 |
+
+三个并发配置项必须为正整数；省略或设为 `null` 时继承默认值。`shuffle_batch_size` 必须为正整数，省略时为 `4`，不接受 `null`。路由逐条保存合法结果，仅失败记录重新组批重试，最后一次降为单条；每条记录最多尝试三轮。修改后需重启 VikingBot 服务。一个 VikingBot 服务内的所有 Compile 任务仍共享 `vlm.max_concurrent` 限制的模型请求容量，因此提高阶段并发不会突破这一总上限。Embedding 请求另受 embedding 服务的并发限制。恢复任务默认使用相同的 reduce 配置，显式 `--concurrency` 可覆盖恢复并发数。
+
 ### query_planner
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，用于 `search()` 的意图分析、query expansion，以及可选的服务端 recall 摘要重写。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
@@ -1611,7 +1639,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 |------|------|------|--------|
 | `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
-| `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
+| `url` | str | 'http' 类型的远程服务 URL（例如 `http://localhost:5000`） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
 | `distance_metric` | str | 向量相似度搜索的距离度量（例如 'cosine', 'l2', 'ip'） | "cosine" |
 | `dimension` | int | 向量嵌入的维度 | 0 |

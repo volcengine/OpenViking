@@ -59,7 +59,7 @@ for (const [index, files] of localized.entries()) {
       const candidates = [target, `${target}.md`, path.join(target, 'index.md')]
       if (target.endsWith('.html')) candidates.push(target.slice(0, -5) + '.md')
       // VitePress serves public assets from the site root.
-      if (decoded.startsWith('/')) candidates.push(path.join(root, 'public', decoded))
+      if (decoded.startsWith('/')) candidates.push(path.join(root, 'images', decoded))
       linkCount++
       if (!candidates.some((candidate) => fs.existsSync(candidate))) errors.push(`${label}:${lineAt(match.index)}: missing link target ${href}`)
     }

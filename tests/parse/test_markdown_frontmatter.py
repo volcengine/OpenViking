@@ -82,3 +82,25 @@ async def test_frontmatter_title_still_names_the_document_when_kept() -> None:
 
     assert layout.doc_title == "Release Notes"
     assert _written(layout) == [document]
+
+
+@pytest.mark.asyncio
+async def test_nested_frontmatter_title_does_not_rename_document() -> None:
+    document = """---
+date: 2026-10-08
+sources:
+  - id: cited
+    title: "Cited document"
+---
+# Topic
+"""
+
+    layout = await MarkdownParser()._compute_layout(
+        document, "viking://temp/test", source_path="/tmp/topic.md"
+    )
+
+    assert layout.doc_title == "topic"
+    assert layout.meta["frontmatter"] == {
+        "date": "2026-10-08",
+        "sources": [{"id": "cited", "title": "Cited document"}],
+    }

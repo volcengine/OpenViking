@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ class DirectBackend(SandboxBackend):
         # logger.info("Direct backend started")
 
     async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
-        """Execute a command directly on the host."""
+        """Execute a noninteractive host command with stdin closed and a timeout."""
         if not self._running:
             raise RuntimeError("Direct backend not started")
 
@@ -39,35 +40,30 @@ class DirectBackend(SandboxBackend):
 
         cwd = kwargs.get("working_dir", str(self._workspace))
 
-        # Compile sessions opt into read tracing: prepend the readtrace dir to
-        # PYTHONPATH so every python3 in the exec auto-loads the audit hook that
-        # records opened source files into the Compile readlist. Any failure
-        # degrades to "inherit env" so exec is never affected.
-        env = None
-        if str(self.session_key).startswith("compile__"):
-            try:
-                from vikingbot.compile.readtrace import READLIST_REL_PATH, TRACE_DIR
-
-                env = dict(os.environ)
-                env["PYTHONPATH"] = str(TRACE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
-                env["READLIST_FILE"] = str(self._workspace / READLIST_REL_PATH)
-                env["READLIST_WORKSPACE"] = str(self._workspace)
-            except Exception:
-                env = None
-
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-                env=env,
+                start_new_session=os.name == "posix",
             )
 
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                process.kill()
+            except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                # Stop the command and its children before task workspace cleanup.
+                try:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 return f"Error: Command timed out after {timeout} seconds"
 
             output_parts = []

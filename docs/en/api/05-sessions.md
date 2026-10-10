@@ -43,7 +43,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, `working_memory.enabled` defaults to `false` (no archive/checkpoint summaries); explicitly set it to `true` to generate summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 | auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If omitted, the new Session inherits `server.user_config_defaults.auto_commit_policy`, then the existing `memory.session_auto_commit.enabled` behavior. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
@@ -807,7 +807,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 #### 1. API Implementation Introduction
 
-Get the full contents of one completed archive for a session. This endpoint is typically used with `get_session_context()` when you need to view older archive details.
+Get the full contents of one completed archive for a session. A normal WM-disabled archive returns its raw `messages` with empty `abstract` and `overview`; no summary is generated on read. Pending, failed, missing, or corrupt archives retain their existing error behavior. This explicit history read is independent of the bounded `get_session_context()` prompt view.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
@@ -1335,7 +1335,7 @@ Commit a session. Message archiving (Phase 1) completes before the response retu
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1) and extract long-term memories
+- **Phase 2 (Asynchronous)**: Extract long-term memories; generate WM/checkpoint summaries only when the effective WM policy is enabled (default: disabled)
 
 **Notes:**
 - Consecutive commits are accepted; only requests that produce an archive return a separate `task_id`. No-op commits do not create tasks.
@@ -1358,6 +1358,7 @@ Commit a session. Message archiving (Phase 1) completes before the response retu
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
+| enable_working_memory | bool or null | No | null | Override only WM generation for this commit. Omitted/null inherits the resolved policy; true/false leaves self/peer/memory_types and saved policies unchanged. Strings/numbers are rejected. The response includes `effective_enable_working_memory`. |
 | reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
 
 `reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. The SDK and CLI do not expose a dedicated `reset_context` option; use the HTTP API when needed.

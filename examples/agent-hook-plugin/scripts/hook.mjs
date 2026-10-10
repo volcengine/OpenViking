@@ -28,6 +28,7 @@ import {
 import { maybeDetach, readHookStdin } from "../../memory-plugin-shared/lib/async-writer.mjs";
 import { isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { HOSTS } from "../hosts/index.mjs";
+import { withRequestBudget } from "./request-budget.mjs";
 
 // ZCode's detached writer re-enters this file with no arguments at all, so what
 // the first run put in the environment is what tells the worker what it is.
@@ -122,26 +123,6 @@ async function promptSubmit(ctx) {
   });
 }
 
-function withRequestBudget(fetchJSON, budgetMs) {
-  if (!budgetMs) return fetchJSON;
-  const deadline = Date.now() + budgetMs;
-  return (path, init = {}, options = {}) => {
-    const remaining = deadline - Date.now();
-    // ov-http deliberately clamps individual requests to one second. Do not
-    // start one inside that final second or the host-level total can overrun.
-    if (remaining < 1000) {
-      return Promise.resolve({
-        ok: false,
-        status: 0,
-        result: null,
-        error: { name: "AbortError", aborted: true, message: "hook request budget exhausted" },
-      });
-    }
-    const requested = Number(options.timeoutMs) || remaining;
-    return fetchJSON(path, init, { ...options, timeoutMs: Math.min(requested, remaining) });
-  };
-}
-
 async function capture(ctx) {
   if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
   await withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
@@ -180,7 +161,7 @@ async function main() {
       input: payload,
       nativeSessionId: resolveNativeSessionId(payload),
       sessionId: deriveAgentSessionId(host.prefix, payload),
-      fetchJSON: withRequestBudget(baseFetchJSON, host.requestBudgets?.[event]),
+      fetchJSON: withRequestBudget(baseFetchJSON, host.requestBudgets?.[event], cfg.timeoutMs),
       // The peer the actor-peer header already carries, stamped into captured
       // messages because session writes read it from the body only.
       get peerId() { return agent.effectivePeer.peerId; },

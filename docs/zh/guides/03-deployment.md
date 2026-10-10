@@ -298,7 +298,7 @@ docker compose up -d
 启动后可以访问：
 - API 服务：`http://localhost:1933`
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
-- 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
+- Caddy 入口：`http://localhost:1934`。它把请求转发到 1933，主要为已有部署保留；同时运行 OpenViking 网关时，它还把模型 API 路径转发给网关，见[OpenViking 网关部署与运维](22-gateway-operations.md#docker-compose)。
 
 ### 部署到 Railway
 
@@ -398,8 +398,8 @@ docker compose up -d
 
 如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 
-如需自行构建镜像，请显式传入 OpenViking 版本：
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+如需自行构建镜像，请显式传入 OpenViking 版本。把 `<VERSION>` 替换为发布版本号：
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 

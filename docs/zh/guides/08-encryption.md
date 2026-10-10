@@ -96,36 +96,13 @@ test()
 | **文件层** | `encryption.enabled` | AES-GCM | 可逆 | 保护整个存储文件 |
 | **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | 不可逆 | 保护 API key 本身 |
 
-### 从隐式 API Key 哈希配置升级
-
-适用于从 v0.3.12 及更早版本升级到 v0.3.13 及之后版本。
-
-**行为变化**：
-- **之前**：`encryption.enabled = true` 隐式启用 API key Argon2id 哈希
-- **现在**：需要显式配置 `encryption.api_key_hashing.enabled`
-
-**影响**：
-- 升级后，如果 `encryption.enabled = true` 但 `encryption.api_key_hashing.enabled` 未显式配置为 `true`，会在启动时看到以下 INFO 日志片段：
-  ```
-  API key hashing is disabled while file encryption is enabled.
-  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
-  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
-  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
-  ```
-
-**迁移选项**：
-
-| 选项 | 配置 | 行为 |
-|------|------|------|
-| **保持原有行为** | `api_key_hashing.enabled = true` | API key 使用 Argon2id 哈希存储 |
-| **可恢复的 key 存储（默认）** | `api_key_hashing.enabled = false`（默认） | API key 明文存储（文件层仍加密） |
-
 ### 默认行为
 
 **默认情况下，`encryption.api_key_hashing.enabled = false`**：
 - API key 以明文存储在 JSON 文件中
 - 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
 - `ov admin list-users` 可以显示完整的 API key
+- 如果 `encryption.enabled = true` 且未启用 API key 哈希，服务端启动时会输出一条说明此情况的 INFO 日志
 
 ### 启用 Argon2id 哈希
 

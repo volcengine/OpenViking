@@ -208,12 +208,12 @@ function ExperienceDetailRoute() {
                     rel="noreferrer noopener"
                     search={{ file: experienceUri }}
                     target="_blank"
-                    to="/playground"
+                    to="/filesystem"
                   />
                 }
                 nativeButton={false}
-                aria-label={t('detail.openPlayground')}
-                title={t('detail.openPlayground')}
+                aria-label={t('detail.openFilesystem')}
+                title={t('detail.openFilesystem')}
                 size="icon-xs"
                 variant="ghost"
               >

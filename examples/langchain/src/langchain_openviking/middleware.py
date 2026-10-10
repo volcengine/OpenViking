@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ try:
         SystemMessage,
         ToolMessage,
     )
+    from langgraph.config import get_config
 except ImportError as exc:  # pragma: no cover - exercised by optional import path
     from langchain_openviking.client import missing_dependency
 
@@ -72,13 +74,21 @@ class _CapturePlan:
     unchanged: bool = False
 
 
-class OpenVikingContextMiddleware(AgentMiddleware):
+class OpenVikingCaptureState(AgentState):
+    # Persist delivery IDs in the host checkpointer, independently of message
+    # retention, so a compacted tail is not recorded again after a restart.
+    openviking_captured_message_ids: dict[str, list[str]]
+
+
+class OpenVikingContextMiddleware(AgentMiddleware[OpenVikingCaptureState]):
     """Inject OpenViking recall into LangGraph agent model calls.
 
     The middleware mirrors the OpenClaw-style lifecycle at LangGraph's extension
     points: recall before model calls and optional session capture after agent
     execution.
     """
+
+    state_schema = OpenVikingCaptureState
 
     def __init__(
         self,
@@ -104,6 +114,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         commit_on_after_agent: bool = False,
         commit_policy: OpenVikingCommitPolicy | None = None,
         recall_header: str = "Relevant OpenViking context:",
+        include_session_context: bool = False,
         include_active_messages: bool = False,
     ):
         super().__init__()
@@ -153,7 +164,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             limit=limit,
             score_threshold=score_threshold,
             token_budget=token_budget,
-            include_session_context=True,
+            include_session_context=include_session_context,
             include_active_messages=include_active_messages,
             include_recall=True,
             recall_header=recall_header,
@@ -168,6 +179,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             self.commit_policy = OpenVikingCommitPolicy(mode="always")
         self.recall_header = recall_header
         self._captured_signatures: dict[_CaptureKey, tuple[str, ...]] = {}
+        self._captured_message_ids: dict[_CaptureKey, set[str]] = {}
         self._pending_context_parts: dict[_CaptureKey, list[dict[str, Any]]] = {}
 
     async def aclose(self) -> None:
@@ -268,11 +280,39 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             updated_system = SystemMessage(content=f"{content}\n\n{context_block}".strip())
         return request.override(system_message=updated_system)
 
-    def after_agent(self, state: AgentState[Any], runtime: Any) -> dict[str, Any] | None:
+    def before_model(self, state: OpenVikingCaptureState, runtime: Any) -> dict[str, Any] | None:
+        """Place this middleware before the host summarizer to capture its input."""
+        return self._capture(state, runtime, commit=False)
+
+    async def abefore_model(
+        self, state: OpenVikingCaptureState, runtime: Any
+    ) -> dict[str, Any] | None:
+        return await self._acapture(state, runtime, commit=False)
+
+    def _capture_state_update(
+        self, state: OpenVikingCaptureState, plan: _CapturePlan
+    ) -> dict[str, Any]:
+        delivered = dict(state.get("openviking_captured_message_ids") or {})
+        delivered[_stable_json(plan.key)] = sorted(self._captured_message_ids.get(plan.key, set()))
+        return {"openviking_captured_message_ids": delivered}
+
+    def _remember_capture_ids(self, plan: _CapturePlan, end: int | None = None) -> None:
+        delivered = self._captured_message_ids.setdefault(plan.key, set())
+        for message in plan.messages[:end]:
+            message_id = _message_delivery_id(message)
+            if message_id:
+                delivered.add(message_id)
+
+    def after_agent(self, state: OpenVikingCaptureState, runtime: Any) -> dict[str, Any] | None:
+        return self._capture(state, runtime, commit=True)
+
+    def _capture(
+        self, state: OpenVikingCaptureState, runtime: Any, *, commit: bool
+    ) -> dict[str, Any] | None:
         plan = self._capture_plan(state, runtime)
         if plan is None:
             return None
-        self.recorder.commit_policy = self.commit_policy
+        self.recorder.commit_policy = self.commit_policy if commit else None
         if plan.unchanged:
             with self._actor_peer_scope(plan.actor_peer_id):
                 self.recorder.record(plan.session_id, ())
@@ -291,19 +331,23 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             raise
 
         self._complete_capture(plan, context_attached=result.context_attached)
-        return None
+        return self._capture_state_update(state, plan)
 
     async def aafter_agent(
         self,
-        state: AgentState[Any],
+        state: OpenVikingCaptureState,
         runtime: Any,
     ) -> dict[str, Any] | None:
         """Asynchronously capture messages after an agent run."""
+        return await self._acapture(state, runtime, commit=True)
 
+    async def _acapture(
+        self, state: OpenVikingCaptureState, runtime: Any, *, commit: bool
+    ) -> dict[str, Any] | None:
         plan = self._capture_plan(state, runtime)
         if plan is None:
             return None
-        self.recorder.commit_policy = self.commit_policy
+        self.recorder.commit_policy = self.commit_policy if commit else None
         if plan.unchanged:
             with self._actor_peer_scope(plan.actor_peer_id):
                 await self.recorder.arecord(plan.session_id, ())
@@ -327,11 +371,11 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             raise
 
         self._complete_capture(plan, context_attached=result.context_attached)
-        return None
+        return self._capture_state_update(state, plan)
 
     def _capture_plan(
         self,
-        state: AgentState[Any],
+        state: OpenVikingCaptureState,
         runtime: Any,
     ) -> _CapturePlan | None:
         if not self.capture_on_after_agent:
@@ -343,9 +387,18 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         peer_id = self._resolve_peer_id(state, runtime)
         actor_peer_id = self._resolve_actor_peer_id(state, runtime)
         key = _capture_key(session_id, peer_id, actor_peer_id)
+        delivered = self._captured_message_ids.setdefault(key, set())
+        delivered.update(
+            (state.get("openviking_captured_message_ids") or {}).get(_stable_json(key), [])
+        )
+        messages = [
+            message
+            for message in messages
+            if _message_delivery_id(message) not in delivered and not _is_host_summary(message)
+        ]
         previous_signatures = self._captured_signatures.get(key, ())
         signatures = tuple(_message_signature(message) for message in messages)
-        unchanged = signatures == previous_signatures
+        unchanged = not messages or signatures == previous_signatures
         start = 0
         if (
             not unchanged
@@ -374,6 +427,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         if error.input_messages_consumed:
             consumed_end = plan.start + error.input_messages_consumed
             self._captured_signatures[plan.key] = plan.signatures[:consumed_end]
+            self._remember_capture_ids(plan, consumed_end)
         if error.context_attached:
             self._pending_context_parts.pop(plan.key, None)
 
@@ -384,6 +438,7 @@ class OpenVikingContextMiddleware(AgentMiddleware):
         context_attached: bool,
     ) -> None:
         self._captured_signatures[plan.key] = plan.signatures
+        self._remember_capture_ids(plan)
         if context_attached:
             self._pending_context_parts.pop(plan.key, None)
 
@@ -404,6 +459,14 @@ class OpenVikingContextMiddleware(AgentMiddleware):
             resolved = _normalize_session_id(candidate)
             if resolved:
                 return resolved
+        # The framework Runtime does not expose config; its runnable context does.
+        try:
+            config = get_config()
+        except RuntimeError:
+            config = {}
+        resolved = _normalize_session_id(_nested_get(config, "configurable", "thread_id"))
+        if resolved:
+            return resolved
         raise ValueError(_SESSION_ID_ERROR)
 
     def _resolve_peer_id(self, state: Any, runtime: Any) -> str | None:
@@ -534,12 +597,29 @@ def _message_content(message: Any) -> str:
     return extract_message_text(getattr(message, "content", ""))
 
 
+def _is_host_summary(message: Any) -> bool:
+    metadata = (
+        message.get("additional_kwargs", {})
+        if isinstance(message, dict)
+        else getattr(message, "additional_kwargs", {})
+    )
+    return metadata.get("lc_source") == "summarization"
+
+
 def _message_stable_id(message: Any) -> str | None:
     if isinstance(message, dict):
         value = message.get("id")
     else:
         value = getattr(message, "id", None)
     return str(value) if value else None
+
+
+def _message_delivery_id(message: Any) -> str | None:
+    if not _message_stable_id(message):
+        return None
+    # Editing a message with the same ID is a new capture; an unchanged retained
+    # tail must remain deduplicated across host compaction and process restarts.
+    return hashlib.sha256(_message_signature(message).encode()).hexdigest()
 
 
 def _message_signature(message: Any) -> str:

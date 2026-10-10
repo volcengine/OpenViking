@@ -2,8 +2,8 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-dark.png">
-    <img alt="OpenViking" src="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-light.png" width="300" height="56">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/readme-logo-dark.png">
+    <img alt="OpenViking" src="https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/readme-logo-light.png" width="300" height="56">
   </picture>
 </a>
 

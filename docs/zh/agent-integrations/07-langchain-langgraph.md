@@ -1,4 +1,4 @@
-# LangChain 和 LangGraph
+# LangChain / LangGraph
 
 把 OpenViking 接入你的 LangChain 或 LangGraph Agent 作为上下文后端。独立集成包提供
 retriever、chat history、context wrapper、agent tools、LangGraph store 和 middleware，

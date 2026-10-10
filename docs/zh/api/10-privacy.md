@@ -1,4 +1,4 @@
-# 隐私配置（Privacy Configs）
+# 隐私配置
 
 隐私配置用于按 `category + target_key` 管理敏感字段版本（如 skill 的 `api_key`、`base_url`）。
 

@@ -1,4 +1,4 @@
-# Hook + MCP Agent 插件开发与维护规范
+# 开发与维护 Agent 插件
 
 本文规定如何新增和维护通过生命周期 hook 自动读写记忆、通过 MCP 提供工具的 OpenViking Agent 插件，涵盖模块职责、协议、状态、安装、测试和发布。宿主是指承载 Agent 的客户端或运行时，代码中也称 harness。
 

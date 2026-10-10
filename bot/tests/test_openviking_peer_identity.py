@@ -409,6 +409,7 @@ async def test_commit_session_forwards_turn_budget_retention(monkeypatch):
 
     await client.commit_session(
         "session-1",
+        enable_working_memory=True,
         retention_mode="turn_budget",
         keep_recent_turn_count=3,
         retained_message_token_budget=12_000,
@@ -418,6 +419,7 @@ async def test_commit_session_forwards_turn_budget_retention(monkeypatch):
     assert calls["commit"] == {
         "session_id": "session-1",
         "keep_recent_count": 0,
+        "enable_working_memory": True,
         "retention_mode": "turn_budget",
         "keep_recent_turn_count": 3,
         "retained_message_token_budget": 12_000,

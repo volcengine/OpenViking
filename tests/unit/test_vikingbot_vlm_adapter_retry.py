@@ -206,7 +206,6 @@ async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatc
         "prompt_tokens": 13,
         "completion_tokens": 5,
         "total_tokens": 18,
-        "prompt_tokens_details": None,
     }
 
 
@@ -471,3 +470,21 @@ def test_rate_limit_classifier_handles_structured_sdk_errors():
     )
 
     assert is_retryable_rate_limit_error(exc)
+
+
+def test_completion_usage_object_is_normalized():
+    from openai.types.completion_usage import CompletionUsage
+
+    adapter = VLMProviderAdapter(_FakeVLM([]), "test-model", langfuse_client=_DisabledLangfuse())
+    raw = SimpleNamespace(
+        content="ok",
+        tool_calls=[],
+        finish_reason="stop",
+        reasoning_content=None,
+        usage=CompletionUsage(prompt_tokens=12, completion_tokens=3, total_tokens=15),
+    )
+    assert adapter._convert_response(raw).usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }

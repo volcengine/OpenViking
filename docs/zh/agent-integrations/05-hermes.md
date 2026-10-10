@@ -1,37 +1,65 @@
-# Hermes Agent
+# Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) (Nous Research) 内置 OpenViking 记忆提供方。无需安装插件——把 Hermes 指向你的 OpenViking 服务即可，记忆存储、召回和抽取均原生支持。
+为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 配置 OpenViking 长期记忆。
 
-## 隔离 Python 环境
+## 开始使用
 
-Hermes 通过 HTTP 连接 OpenViking，因此无需把 OpenViking 安装到 Hermes 的
-Python 环境中。请在独立的虚拟环境或容器中运行 OpenViking 服务。不要在
-已有 Hermes 的环境中使用 `--force-reinstall` 安装或升级 OpenViking：Hermes
-版本可能会固定与 OpenViking 已支持、已修复安全问题的版本不同的依赖。如果确实要将
-两个应用放在同一环境中，请在同一次依赖求解中安装它们，并在启动任一服务前运行
-`python -m pip check`。
-
-## 配置
+在要使用的 Hermes profile 中运行：
 
 ```bash
+hermes plugins install openviking --enable
 hermes memory setup openviking
+hermes
 ```
 
-- 云：保持 **OpenViking Service (VolcEngine Cloud)**，粘贴 API Key
-- 自托管：填 URL（默认 `http://127.0.0.1:1933`）和 API Key；本地免鉴权可留空
-- 向导若发现已有 `ovcli.conf`，直接复用即可
+安装时接受依赖安装提示。如果当前 Hermes 版本仍内置 OpenViking，请跳过安装命令。
+该版本会使用内置副本，不提供 Quick Local。
 
-## 验证
+对话历史用于理解当前聊天。长期记忆保存有用的信息，供后续聊天使用。
+公共记忆是不属于某个发送者的记忆。
+
+选择 **Personal Agent** 可召回公共记忆和当前发送者的记忆，并保留现有对话历史设置。
+选择 **Shared Agent** 可在每个群组或话题内共享对话历史，并召回同一 OpenViking 用户
+下所有发送者的记忆。Shared Agent 会要求确认。
+
+然后选择连接方式：
+
+- **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
+  LLM 仍可使用远程 API。
+- **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
+  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service)，
+  无需安装服务端或配置本地模型。
+- **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
+
+配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
+请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
+
+Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和已知本地
+embedding 问题见[插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)。
+
+## 查看状态
 
 ```bash
 hermes memory status
 ```
 
-`available` 表示 provider 已配置，不会检查服务端连通性，也不代表记忆已完成抽取。
+`available` 表示 provider 已配置，不代表服务健康，也不代表记忆抽取成功。
 
-## 参见
+## 更新
 
+```bash
+hermes plugins update openviking
+```
+
+更新后重启 Hermes 或 gateway。连接设置和数据会保留。更新 Quick Local 服务时，
+重新运行配置向导并选择 Quick Local。正常聊天使用已安装的服务，不会检查更新。
+
+Hermes 更新移除内置副本时，会为已使用 OpenViking 的 profile 尝试安装目录插件。
+如果失败，请在该 profile 中运行上面的安装命令。
+
+## 更多信息
+
+- [插件指南](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
 - [集成能力参考](./16-capability-reference.md)
-- [Hermes — OpenViking memory provider 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — 完整配置指南
-- [部署指南](../guides/03-deployment.md) — 搭建 OpenViking 服务
-- [鉴权](../guides/04-authentication.md) — 远程访问的 API Key 设置
+- [服务部署](../guides/03-deployment.md)
+- [API Key](../guides/04-authentication.md)

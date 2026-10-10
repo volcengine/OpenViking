@@ -16,6 +16,22 @@ version: "3.8"
 # See docs/en/guides/12-public-access.md for the full walkthrough.
 
 services:
+  gateway:
+    profiles: [gateway]
+    image: ghcr.io/volcengine/openviking:latest
+    entrypoint: [openviking-gateway]
+    command: [--config, /app/.openviking/ov.conf]
+    volumes:
+      - ~/.openviking:/app/.openviking
+    environment:
+      OPENVIKING_GATEWAY_ENCRYPTION_KEY: ${OPENVIKING_GATEWAY_ENCRYPTION_KEY:-}
+      OPENVIKING_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_GATEWAY_ADMIN_TOKEN:-}
+    expose:
+      - "1935"
+    restart: unless-stopped
+    depends_on:
+      - openviking
+
   openviking:
     # Prefer ghcr.io. If it is hard to reach, use the mirror:
     #   image: openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
@@ -28,6 +44,7 @@ services:
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
+      OPENVIKING_GATEWAY_ADMIN_TOKEN: ${OPENVIKING_GATEWAY_ADMIN_TOKEN:-}
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
       OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
     healthcheck:

@@ -21,6 +21,9 @@ class SessionCommitMsg:
     # commit. Already normalized by the producer; empty means "no tags".
     event_search_tags: List[str] = field(default_factory=list)
     auto_commit_policy: Dict[str, Any] = field(default_factory=dict)
+    # Version 1 snapshots explicitly encode WM. Version 0 (before default-off)
+    # omitted true; only queued work, never saved user intent, inherits that value.
+    memory_policy_version: int = 1
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -31,4 +34,9 @@ class SessionCommitMsg:
         if not isinstance(payload, dict):
             raise ValueError("session commit queue payload must be an object")
         known_fields = {item.name for item in fields(cls)}
-        return cls(**{key: value for key, value in payload.items() if key in known_fields})
+        data = {key: value for key, value in payload.items() if key in known_fields}
+        if payload.get("memory_policy_version", 0) == 0:
+            policy = dict(data.get("memory_policy") or {})
+            policy.setdefault("working_memory", {"enabled": True})
+            data["memory_policy"] = policy
+        return cls(**data)

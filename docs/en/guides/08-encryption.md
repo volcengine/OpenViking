@@ -96,36 +96,13 @@ File encryption and API key hashing are independent controls:
 | **File Layer** | `encryption.enabled` | AES-GCM | Yes | Protects entire storage files |
 | **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | No | Protects API keys themselves |
 
-### Upgrading from implicit API key hashing
-
-Applies when upgrading from v0.3.12 or earlier to v0.3.13 or later.
-
-**Behavior Change**:
-- **Before**: `encryption.enabled = true` implicitly enabled API key Argon2id hashing
-- **Now**: You must explicitly configure `encryption.api_key_hashing.enabled`
-
-**Impact**:
-- After upgrade, if `encryption.enabled = true` but `encryption.api_key_hashing.enabled` is not explicitly set to `true`, you will see the following informational log excerpt on startup:
-  ```
-  API key hashing is disabled while file encryption is enabled.
-  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
-  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
-  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
-  ```
-
-**Migration Options**:
-
-| Option | Config | Behavior |
-|--------|--------|----------|
-| **Maintain Previous Behavior** | `api_key_hashing.enabled = true` | API keys stored using Argon2id hashing |
-| **Recoverable key storage (default)** | `api_key_hashing.enabled = false` (default) | API keys stored in plaintext (file layer still encrypted) |
-
 ### Default Behavior
 
 **By default, `encryption.api_key_hashing.enabled = false`**:
 - API keys are stored in plaintext within JSON files
 - If `encryption.enabled = true`, the entire file is protected by AES-GCM encryption
 - `ov admin list-users` can display the full API key
+- If `encryption.enabled = true` and API key hashing stays disabled, the server writes an informational log line about this at startup
 
 ### Enabling Argon2id Hashing
 

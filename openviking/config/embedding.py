@@ -19,6 +19,7 @@ from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_PERMANENT,
     classify_api_error,
 )
 from openviking_cli.utils.logger import get_logger
@@ -218,6 +219,11 @@ class AccountEmbeddingProvider:
         prepared = resource.embedder.prepare_embedding_input(content)
         return account_id, resource.fingerprint, repr(prepared)
 
+    async def supports_multimodal(self, account_id: str) -> bool:
+        """Report the current resource's multimodal capability without borrowing it."""
+        resource = await self._resource_for(account_id)
+        return bool(resource.embedder.supports_multimodal)
+
     async def embed(self, account_id: str, content, *, is_query: bool = False):
         resource = await self._borrow(account_id)
         try:
@@ -251,7 +257,15 @@ class AccountEmbeddingProvider:
                         f"got {len(result.dense_vector)}"
                     )
         except Exception as exc:
-            if classify_api_error(exc) not in {ERROR_CLASS_AUTH, ERROR_CLASS_INPUT_TOO_LARGE}:
+            # The breaker is shared by every call on this account, so only
+            # provider-health failures may trip it. Request-level rejections
+            # (400 / input too large) are specific to one input, and auth
+            # errors are surfaced per call instead.
+            if classify_api_error(exc) not in {
+                ERROR_CLASS_AUTH,
+                ERROR_CLASS_INPUT_TOO_LARGE,
+                ERROR_CLASS_PERMANENT,
+            }:
                 resource.breaker.record_failure(exc)
             raise
         resource.breaker.record_success()
@@ -293,6 +307,9 @@ class AccountBoundEmbedder:
 
     async def query_embedding_cache_key(self, content):
         return await self.provider.query_cache_key(self.account_id, content)
+
+    async def supports_multimodal_async(self) -> bool:
+        return await self.provider.supports_multimodal(self.account_id)
 
     async def embed_async(self, content, is_query=False):
         return await self.embed_compatible(content, is_query=is_query)

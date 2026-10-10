@@ -201,7 +201,7 @@ test("preserves DSH event time so identical offline messages do not deduplicate"
   assert.equal(captured.created_at, "2026-08-14T04:20:34.567Z");
 });
 
-test("builds recall queries from current input while excluding its own context", () => {
+test("builds recall queries from user input only, excluding injected context", () => {
   assert.equal(promptText([
     {
       role: "user",
@@ -218,7 +218,30 @@ test("builds recall queries from current input while excluding its own context",
       content: [{ type: "text", text: "background job completed" }],
       source: { kind: "plugin:job-controller", form: "notice", summary: "done" },
     },
-  ]), "Current question\n\nbackground job completed");
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+      source: { kind: "time-context" },
+    },
+  ]), "Current question");
+
+  // A batch made only of injected context has no user query, so recall is skipped.
+  assert.equal(promptText([
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+      source: { kind: "time-context" },
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "background job completed" }],
+      source: { kind: "plugin:job-controller", form: "notice", summary: "done" },
+    },
+  ]), "");
+
+  assert.equal(promptText([
+    { role: "user", content: [{ type: "text", text: "legacy untagged input" }] },
+  ]), "legacy untagged input");
 
   assert.equal(promptText([
     {

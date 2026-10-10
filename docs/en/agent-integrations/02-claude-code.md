@@ -1,4 +1,4 @@
-# Claude Code Memory Plugin
+# Claude Code
 
 Give [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content without requiring the model to make any tool calls.
 
@@ -110,6 +110,12 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 ## Statusline
 
 The plugin renders an OpenViking status indicator beneath your Claude Code input box, allowing you to check connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for a complete glossary of segments and personalization recipes.
+
+## Source cards
+
+Under each answer, the plugin adds a one-line card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. For example: `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`. Expand a card with its button, or expand and collapse every card with `/openviking-usage expand` and `/openviking-usage collapse`. Cards are collapsed by default.
+
+The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before. See [Source cards](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#source-cards) in the plugin README.
 
 ## Troubleshooting
 

@@ -182,6 +182,11 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
     assert '"preferences": []' in protocol.render_final_instruction(context)
     assert '"delete_ids": []' in protocol.render_final_instruction(context)
 
+    assert protocol.parse('{"memory_operations": [{"type": "edit"}]}', context) == (
+        None,
+        "No expected fields found; got fields: memory_operations",
+    )
+
 
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():
     uri = "viking://user/alice/memories/preferences/editor.md"

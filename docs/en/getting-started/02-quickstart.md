@@ -1,4 +1,4 @@
-# Quick Start
+# Import and retrieve your first document
 
 OpenViking runs as a server. Connect to it with the standalone `ov` CLI, import a small document, and retrieve its content. If you use a managed service or someone else's deployment, you only need the CLI.
 
@@ -52,7 +52,7 @@ ov config
 
 In the interactive configuration, choose **OpenViking Service** for Volcengine or **Custom** for a self-hosted endpoint. Enter the API key and, for a custom service, its URL. Leave the key empty for the default local server. Save and activate the configuration.
 
-The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For scripted setup or multiple endpoints, see [CLI Setup](05-cli-setup.md).
+The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For multiple endpoints or agent-assisted setup, see [CLI Setup](05-cli-setup.md).
 
 Verify the connection:
 
@@ -64,34 +64,32 @@ This checks that the server responds; the import below also exercises model proc
 
 ## 3. Import a document
 
-Save the following as `quickstart.md` in your current directory:
+This example imports a real team fact: the four GitHub users who take turns owning the weekly OpenViking release. Save the following as `ov-release-rotation.md` in your current directory:
 
 ```markdown
-# Project Atlas
+# OpenViking release rotation
 
-Project Atlas backs up its documents every Friday.
-Maya owns the backup process. Keep each backup for 30 days.
+OpenViking ships a new release every Friday.
+Release owners rotate in this order: qin-ctx, zhoujh01, ZaynJarvis, t0saki.
 ```
 
 Import it into a new resource directory:
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
 ```
 
 The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).
 
-Use an unused target URI for this example. If you repeat the example, choose a new target and use that same URI in the commands below.
-
 ## 4. Browse and search
 
 ```bash
-ov tree viking://resources/quickstart-demo
-ov overview viking://resources/quickstart-demo
-ov find "Who owns the backup process?" --uri viking://resources/quickstart-demo
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "Who owns the weekly OpenViking release?" --uri viking://resources/ov-release-rotation
 ```
 
-`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. To read a match, pass its returned URI to `ov read`:
+`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. The imported file answers the question, so it is the top match. To read a match, pass its returned URI to `ov read`:
 
 ```bash
 ov read "<returned-file-uri>"
@@ -102,3 +100,7 @@ Replace `<returned-file-uri>` with a file URI from the results, without the angl
 ## Use an SDK
 
 OpenViking also provides Python, TypeScript/JavaScript, and Go SDKs that connect to the same server. See the [API Overview](../api/01-overview.md) for client examples.
+
+## Next steps
+
+First confirm that you can read the sample source, then [evaluate OpenViking on your tasks](06-evaluate.md) using your own sources or conversations. To use it in a daily tool, [choose an agent integration](../agent-integrations/01-overview.md). To write your own application, follow the [application workflows](../workflows/01-overview.md).

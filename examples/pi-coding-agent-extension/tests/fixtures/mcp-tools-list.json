@@ -334,7 +334,7 @@
     },
     {
       "name": "remember",
-      "description": "Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting.",
+      "description": "Submit information for OpenViking long-term memory extraction. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting. Extraction runs in the background and decides which memories to create or update.",
       "inputSchema": {
         "properties": {
           "messages": {

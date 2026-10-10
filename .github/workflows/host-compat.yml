@@ -1,0 +1,54 @@
+name: Host Compatibility
+
+# Plugin peer ranges admit host releases published after the plugin, so this
+# tries the plugins against what each host's npm dist-tags point at today. It
+# runs on a schedule rather than on pull requests: a new host release is not a
+# change in this repository and must not turn unrelated pull requests red.
+# A failing release gets one issue; later runs leave it alone while it is open.
+# Hosts and the plugins under test are listed in .github/host-compat.json.
+
+on:
+  schedule:
+    - cron: '0 16 * * *'  # Daily at 00:00 SGT (16:00 UTC)
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Host id from .github/host-compat.json (empty for all)
+        required: false
+      version:
+        description: Exact host release to test instead of the dist-tags
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: host-compat
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Generate the shared runtime copies
+        run: node examples/memory-plugin-shared/sync.mjs
+
+      - name: Test plugins against current host releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOST: ${{ inputs.host }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          args=()
+          [ -n "$HOST" ] && args+=(--host "$HOST")
+          [ -n "$VERSION" ] && args+=(--version "$VERSION")
+          # Only the schedule files issues; a manual run reports in its summary.
+          [ "${{ github.event_name }}" = schedule ] && args+=(--report-issues)
+          node .github/scripts/host-compat.mjs "${args[@]}"

@@ -1,4 +1,4 @@
-# API 概览
+# SDK、HTTP 与 CLI 约定
 
 本页介绍如何连接 OpenViking 以及所有 API 端点共享的约定。
 
@@ -64,7 +64,7 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 
 普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导租户身份。只有在 trusted 部署或网关显式透传租户身份时，才需要设置 `Account` 和 `User`。
 
-Go SDK 不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
+Go SDK 不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/go/README_CN.md)。
 
 #### JavaScript/TypeScript SDK 客户端
 
@@ -89,7 +89,7 @@ const results = await client.search("部署文档", {
 ```
 
 它与 Python、Go HTTP Client 使用相同的身份请求头和响应信封。更多示例见
-[`sdk/typescript/README_CN.md`](../../../sdk/typescript/README_CN.md)。
+[`sdk/typescript/README_CN.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/typescript/README_CN.md)。
 
 Python HTTP 客户端从 `ovcli.conf` 读取连接信息，显式传入的构造参数覆盖对应配置。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
 
@@ -526,6 +526,15 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
+### [OpenViking 网关管理](25-gateway.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/gateway/{path}` | 读取调用方账号的网关概览、日志、上游、上下文配置、密钥或工具 |
+| POST | `/api/v1/admin/gateway/{path}` | 签发网关密钥、测试上游或重置对话保存 |
+| PUT | `/api/v1/admin/gateway/{path}` | 创建或替换上游、上下文配置 |
+| DELETE | `/api/v1/admin/gateway/{path}` | 删除上游或上下文配置、吊销密钥或删除用户的网关数据 |
+
 ### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
@@ -540,6 +549,7 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |

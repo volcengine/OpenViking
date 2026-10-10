@@ -1,4 +1,4 @@
-# Cursor Memory Integration
+# Cursor
 
 Give Cursor long-term memory across projects and sessions. After installation, OpenViking Hooks inject relevant context at session start and before each request, then capture new conversation turns after the response. MCP is available for explicit memory search, reading, and management.
 

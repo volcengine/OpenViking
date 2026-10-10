@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from openviking.server.account_user_keys import list_users_with_keys, pick_user_with_key
 from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext, Role
@@ -120,17 +121,16 @@ async def connections(ctx: RequestContext = Depends(manager)):
 
 async def account_users(request, ctx):
     registry = get_api_key_manager_or_raise(request)
-    await registry.refresh_account_users_from_store(ctx.account_id)
-    return registry.get_users(ctx.account_id, limit=None, role_filter="user", expose_key=True)
+    return await list_users_with_keys(registry, ctx.account_id, role="user")
 
 
 async def selected_identity(request, ctx, user_id):
-    rows = await account_users(request, ctx)
-    row = next((row for row in rows if row["user_id"] == user_id), None)
-    if row is None:
-        raise HTTPException(400, "Select an ordinary user in the current account")
-    if not row.get("api_key"):
-        raise HTTPException(409, "This user's credential cannot be bound automatically")
+    row = pick_user_with_key(
+        await account_users(request, ctx),
+        user_id,
+        missing="Select an ordinary user in the current account",
+        unreadable="This user's credential cannot be bound automatically",
+    )
     return {
         "account_id": ctx.account_id,
         "user_id": row["user_id"],

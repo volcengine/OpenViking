@@ -3,23 +3,27 @@ import { createLanguagePreference } from './language-preference.js'
 import { h, defineAsyncComponent } from 'vue'
 import DefaultTheme, { VPButton } from 'vitepress/theme-without-fonts'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import AgentPrompt from './components/AgentPrompt.vue'
 import ArchitectureDiagram from './components/ArchitectureDiagram.vue'
 import IngestionPipelineDiagram from './components/IngestionPipelineDiagram.vue'
 import MemoryExtractionDiagram from './components/MemoryExtractionDiagram.vue'
 import PathLockDiagram from './components/PathLockDiagram.vue'
 import StorageLayersDiagram from './components/StorageLayersDiagram.vue'
 import VikingBotOverviewDiagram from './components/VikingBotOverviewDiagram.vue'
+import SidebarFooter from './components/SidebarFooter.vue'
+import NavScreenFooter from './components/NavScreenFooter.vue'
+import ThemeToggle from './components/ThemeToggle.vue'
 import LocaleSwitch from './components/LocaleSwitch.vue'
-import { useData, withBase } from 'vitepress'
+import { withBase } from 'vitepress'
 import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
-import LlmsTxtLink from './LlmsTxtLink.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
 import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
 import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
 import { trackPageView } from './track'
 import './custom.css'
 import './reading.css'
+import './header.css'
 
 type OpenVikingPreference = {
   theme?: 'light' | 'dark'
@@ -188,7 +192,7 @@ function watchThemePreference() {
   })
 }
 
-function mainSiteUrlWithPreference(href: string) {
+function mainSiteUrlWithPreference(href: string, useLocalPreview = true) {
   const url = new URL(href, window.location.href)
   const isLocalDocs = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   const isMainSite = MAIN_SITE_HOSTS.has(url.host)
@@ -196,7 +200,7 @@ function mainSiteUrlWithPreference(href: string) {
   if (!isMainSite) return undefined
 
   if (
-    isLocalDocs &&
+    useLocalPreview && isLocalDocs &&
     ['www.openviking.ai', 'openviking.ai', 'www.openviking.net', 'openviking.net'].includes(
       url.hostname
     )
@@ -218,7 +222,7 @@ function syncPreferenceToMainSiteLinks() {
       const link = event.target instanceof Element ? event.target.closest('a') : null
       if (!link) return
 
-      const url = mainSiteUrlWithPreference(link.href)
+      const url = mainSiteUrlWithPreference(link.href, !link.closest('.ov-site-switcher'))
       if (!url) return
 
       const preference = mergePreferences(readPersistedPreference(), {
@@ -254,23 +258,19 @@ if (typeof window !== 'undefined') {
 export default {
   extends: DefaultTheme,
   Layout() {
-    const { lang } = useData()
-    const zh = lang.value.startsWith('zh')
     return h(DefaultTheme.Layout, null, {
       'doc-before': () => [h(DocBreadcrumb), h('div', { class: 'doc-page-actions' }, [
-        h(LlmsTxtLink),
         h(CopyMarkdownButton)
       ])],
-      'sidebar-nav-before': () => h('a', { class: 'sidebar-home-link', href: withBase(zh ? '/zh/' : '/en/') }, zh ? '← 文档首页' : '← Documentation home'),
-      'sidebar-nav-after': () => h('a', { class: 'sidebar-font-license-link', href: withBase('/font-licenses.html'), target: '_self' }, zh ? '字体许可' : 'Font licenses'),
+      'sidebar-nav-after': () => h(SidebarFooter),
       'doc-after': () => h(ApiExampleTabsEnhancer),
-      'nav-bar-content-before': () => h(OpenVikingSearch),
-      'nav-bar-content-after': () => h(LocaleSwitch),
-      'nav-screen-content-after': () => h(LocaleSwitch)
+      'nav-bar-content-after': () => [h(OpenVikingSearch), h(LocaleSwitch), h(ThemeToggle)],
+      'nav-screen-content-after': () => h(NavScreenFooter)
     })
   },
   enhanceApp({ app, router }: EnhanceAppContext) {
     app.component('VPButton', VPButton)
+    app.component('AgentPrompt', AgentPrompt)
     app.component('ArchitectureDiagram', ArchitectureDiagram)
     app.component('IngestionPipelineDiagram', IngestionPipelineDiagram)
     app.component('MemoryExtractionDiagram', MemoryExtractionDiagram)

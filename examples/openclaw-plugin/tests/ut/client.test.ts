@@ -674,6 +674,31 @@ describe("OpenVikingClient canonical namespace policy", () => {
     await rejection;
   });
 
+  it("aborts a read at its own request timeout", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const transport = vi.fn((_url: string, init: RequestInit) => {
+      requestSignal = init.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+      });
+    });
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 15000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    const pending = client.read("viking://~/memories/profile.md", undefined, 3000);
+    const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(requestSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestSignal?.aborted).toBe(true);
+    await rejection;
+  });
+
   it("keeps user memory alias unchanged and routes by actor peer by default", async () => {
     const transport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/system/status")) {
@@ -837,4 +862,15 @@ describe("cloud recall compression", () => {
       expect(result.digest).toBe('compressed');
     },
   );
+});
+
+it.each([true, false, undefined])("sends the WM override using the renamed API field (%s)", async (enabled) => {
+  const transport = vi.fn().mockResolvedValue(okResponse({
+    status: "accepted", effective_enable_working_memory: enabled ?? false,
+  }));
+  const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
+  const result = await client.commitSession("s", { enableWorkingMemory: enabled });
+  expect(result.effective_enable_working_memory).toBe(enabled ?? false);
+  const body = JSON.parse(String(transport.mock.calls[0][1].body));
+  expect(body).toEqual(enabled === undefined ? {} : { enable_working_memory: enabled });
 });

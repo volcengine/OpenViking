@@ -1,4 +1,6 @@
-# Configuration
+# Configure models and services
+
+Use this guide to choose models, combine configuration examples and understand configuration scope. For field lookups, see [server configuration](../configuration/01-server.md) or [client configuration](../configuration/02-client.md). For a first deployment, start with [deployment paths](00-overview.md).
 
 OpenViking uses a JSON configuration file (`~/.openviking/ov.conf`) for settings.
 
@@ -14,27 +16,6 @@ openviking-server doctor
 ```
 
 `openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
-
-## Account Embedding and VectorDB
-
-ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
-Account. These sections use Account-specific allowlist schemas. Account and
-Cluster settings remain independent; the vector resolver applies Cluster defaults
-for omitted Account values. Provider connections can only be supplied through a
-complete `credentials` binding. Configuration reads return only Account values.
-
-VectorDB is immutable after Account creation. Existing Accounts may rotate complete
-Embedding credential/deployment bindings and update retry, concurrency, failback, and
-circuit-breaker settings. Outer model identity and other vector-space fields remain
-create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
-historical vectors.
-
-Account-owned VectorDB configurations use remote backends only. Account
-configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
-custom adapter parameters. Accounts with no VectorDB settings continue sharing
-the Cluster connection with Account data filtering. Remote resources must
-already exist.
-See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
 
 ## Configuration File
 
@@ -163,6 +144,27 @@ The request body wraps a PATCH document in `settings`:
 ```
 
 PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
+
+## Account Embedding and VectorDB
+
+ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
+Account. These sections use Account-specific allowlist schemas. Account and
+Cluster settings remain independent; the vector resolver applies Cluster defaults
+for omitted Account values. Provider connections can only be supplied through a
+complete `credentials` binding. Configuration reads return only Account values.
+
+VectorDB is immutable after Account creation. Existing Accounts may rotate complete
+Embedding credential/deployment bindings and update retry, concurrency, failback, and
+circuit-breaker settings. Outer model identity and other vector-space fields remain
+create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
+historical vectors.
+
+Account-owned VectorDB configurations use remote backends only. Account
+configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
+custom adapter parameters. Accounts with no VectorDB settings continue sharing
+the Cluster connection with Account data filtering. Remote resources must
+already exist.
+See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
 
 ## Configuration Examples
 
@@ -904,6 +906,32 @@ For a supported file, OpenViking uploads the media to the Ark Files API without 
 
 Media processing sends file content to the configured external provider. Disabled response storage and best-effort deletion reduce unintended retention but do not replace the provider's own privacy and retention controls; uploaded files do not receive an explicit expiration time, so their retention period is determined by Ark's default policy. Ark Files storage/processing and Responses model tokens can incur provider charges, so review your provider's privacy, retention, and billing terms before enabling this feature. See the official Volcengine Ark documentation for [audio understanding](https://docs.volcengine.com/docs/82379/2377589?lang=zh) and [video understanding](https://docs.volcengine.com/docs/82379/1895586?lang=zh).
 
+### bot.compile
+
+Set the number of concurrent workers per Resource Compile task and stage, for both direct model calls and agent execution:
+
+```json
+{
+  "bot": {
+    "compile": {
+      "map_concurrency": 8,
+      "shuffle_concurrency": 4,
+      "shuffle_batch_size": 4,
+      "reduce_concurrency": 6
+    }
+  }
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `map_concurrency` | Inherits `vlm.max_concurrent` | Concurrent Map extraction jobs |
+| `shuffle_concurrency` | Inherits `vlm.max_concurrent` | Concurrent Shuffle routing jobs and embedding batches |
+| `shuffle_batch_size` | `4` | Maximum primary records per routing request, independent of concurrency and the soft character budget |
+| `reduce_concurrency` | Inherits `vlm.max_concurrent` | Concurrent Reduce jobs; final same-path candidate merges reuse this value |
+
+Concurrency values must be positive integers; omitted or `null` values inherit the default. `shuffle_batch_size` must be a positive integer, defaults to `4`, and does not accept `null`. Routing saves valid decisions individually and re-batches only failed records; the final retry uses single-record requests, with at most three rounds per record. Restart VikingBot after changing these settings. All Compile tasks within one VikingBot service still share the model-request capacity set by `vlm.max_concurrent`, so raising stage concurrency cannot exceed that total limit. Embedding requests also obey the embedding service's own concurrency limit. Recovery uses the same reduce setting by default; an explicit `--concurrency` overrides recovery concurrency.
+
 ### query_planner
 
 Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm` for `search()` intent analysis, query expansion, and optional server recall-digest rewriting. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
@@ -1618,7 +1646,7 @@ Vector database storage configuration
 |-----------|------|-------------|---------|
 | `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
 | `name` | str | VectorDB collection name | "context" |
-| `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
+| `url` | str | Remote service URL for 'http' type (e.g., `http://localhost:5000`) | null |
 | `project_name` | str | Project name (alias project) | "default" |
 | `distance_metric` | str | Distance metric for vector similarity search (e.g., 'cosine', 'l2', 'ip') | "cosine" |
 | `dimension` | int | Vector embedding dimension | 0 |

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { bindLanguageMenu } from '../header-language.js'
+import '../header-language.css'
 import { computed, onMounted, onUnmounted, ref, nextTick } from 'vue'
 import { useData, useRouter, withBase } from 'vitepress'
 import type { LanguagePreference } from '../language-preference.js'
@@ -12,15 +14,17 @@ const policy = docsLanguagePreference
 const preference = ref<LanguagePreference>('auto')
 const menu = ref<HTMLDetailsElement>()
 const locale = computed(() => lang.value.startsWith('zh') ? 'zh' : 'en')
+let unbindMenu: (() => void) | undefined
 let unsubscribe: (() => void) | undefined
 onMounted(() => {
+  if (menu.value) unbindMenu = bindLanguageMenu(menu.value)
   preference.value = policy.read()
   unsubscribe = policy.subscribe(() => { preference.value = policy.read() })
 })
-onUnmounted(() => unsubscribe?.())
+onUnmounted(() => { unsubscribe?.(); unbindMenu?.() })
 
 async function switchLocale(choice: 'auto' | 'en' | 'zh') {
-  if (menu.value) menu.value.open = false
+  if (menu.value) { menu.value.open = false; menu.value.querySelector('summary')?.focus() }
   policy.clearQuery()
   policy.save(choice)
   preference.value = choice
@@ -42,28 +46,16 @@ async function switchLocale(choice: 'auto' | 'en' | 'zh') {
 </script>
 
 <template>
-  <details ref="menu" class="ov-locale-switch"
-    @keydown.esc="() => { if (menu) { menu.open = false; menu.querySelector('summary')?.focus() } }"
-    @focusout="event => { if (menu && !menu.contains(event.relatedTarget as Node)) menu.open = false }">
-    <summary :aria-label="locale === 'zh' ? '语言' : 'Language'">
+  <details ref="menu" class="ov-language ov-locale-switch">
+    <summary :aria-label="locale === 'zh' ? `语言：简体中文${preference === 'auto' ? '（跟随浏览器）' : ''}` : `Language: English${preference === 'auto' ? ' (following browser)' : ''}`">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 5h12M9 3v2m4 0c-1 7-5 10-10 12m2-9c1 4 4 7 8 9m0 4 5-13 5 13m-8-4h6"/></svg>
-      {{ locale === 'zh' ? '中' : 'EN' }}
+      <span>{{ locale === 'zh' ? '中' : 'EN' }}</span>
+      <svg class="ov-language-chevron" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
     </summary>
-    <div class="ov-locale-options">
-      <button type="button" :aria-pressed="preference === 'auto'" @click="switchLocale('auto')">{{ locale === 'zh' ? '跟随浏览器' : 'Follow browser' }}</button>
-      <button type="button" lang="en" :aria-pressed="preference === 'en'" @click="switchLocale('en')">English</button>
-      <button type="button" lang="zh-CN" :aria-pressed="preference === 'zh'" @click="switchLocale('zh')">简体中文</button>
+    <div class="ov-language-options">
+      <button type="button" :aria-pressed="preference === 'auto'" @click="switchLocale('auto')">{{ locale === 'zh' ? '跟随浏览器' : 'Follow browser' }}<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg></button>
+      <button type="button" lang="en" :aria-pressed="preference === 'en'" @click="switchLocale('en')">English<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg></button>
+      <button type="button" lang="zh-CN" :aria-pressed="preference === 'zh'" @click="switchLocale('zh')">简体中文<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg></button>
     </div>
   </details>
 </template>
-
-<style scoped>
-.ov-locale-switch { position: relative; border: 1px solid var(--vp-c-divider); border-radius: 999px; background: var(--vp-c-bg-alt); }
-summary { display: flex; align-items: center; gap: 5px; padding: 5px 8px; font: 11px/1.6 var(--vp-font-family-mono); cursor: pointer; list-style: none; }
-summary::-webkit-details-marker { display: none; }
-.ov-locale-options { position: absolute; right: 0; top: calc(100% + 6px); z-index: 90; min-width: 170px; padding: 5px; border: 1px solid var(--vp-c-divider); border-radius: 10px; background: var(--vp-c-bg); box-shadow: 0 4px 16px #0002; }
-button { display: block; width: 100%; padding: 8px 10px; text-align: left; font-size: 12px; border-radius: 5px; }
-button[aria-pressed=true] { font-weight: 700; }
-button:hover { background: var(--vp-c-bg-alt); }
-button:focus-visible, summary:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 3px; }
-</style>

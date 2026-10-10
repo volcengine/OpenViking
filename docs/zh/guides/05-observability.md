@@ -544,7 +544,7 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 导入成功后，你最终会看到一个以 OpenViking 请求、队列、探针、模型调用和系统状态为主的总览 dashboard。效果示意可以参考：
 
-- [grafana-demo-dashboard.png](../../images/grafana-demo-dashboard.png)
+- [grafana-demo-dashboard.png](/grafana-demo-dashboard.png)
 
 这张图可以帮助你快速确认“导入后的面板布局是不是正常”。如果你的 dashboard 基本结构和它一致，但局部面板没有数据，通常说明是对应指标当前没有产生样本，或者筛选条件与实际流量不匹配。
 

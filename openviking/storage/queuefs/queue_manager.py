@@ -13,6 +13,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -324,6 +325,14 @@ class QueueManager:
                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.run_until_complete(loop.shutdown_default_executor())
+            try:
+                loop.run_until_complete(LoopScopedAsyncClientCache.close_current_loop_clients())
+            except Exception:
+                logger.warning(
+                    "[QueueManager] Failed to close async clients for %s",
+                    queue.name,
+                    exc_info=True,
+                )
             loop.close()
             if queue.name == self.EMBEDDING:
                 # No more deliveries can start and active handlers have exited,

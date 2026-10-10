@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import inspect
 import json
 from dataclasses import fields
@@ -11,8 +12,41 @@ import pytest
 
 from openviking.message import Message, TextPart, ToolPart
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_new_queue_snapshot_preserves_wm_across_worker_reload(enabled):
+    message = SessionCommitMsg(
+        task_id="t",
+        session_id="s",
+        session_uri="viking://user/default/sessions/s",
+        archive_uri="viking://user/default/sessions/s/history/archive_001",
+        user={},
+        memory_policy=MemoryPolicy(enable_working_memory=enabled).to_dict(),
+    )
+    restored = SessionCommitMsg.from_dict(message.to_dict())
+    assert MemoryPolicy.from_dict(restored.memory_policy).enable_working_memory is enabled
+
+
+def test_legacy_queued_work_keeps_old_default_without_migrating_user_policy():
+    policy = {"self": {"enabled": False}, "memory_types": ["profile"]}
+    message = SessionCommitMsg.from_dict(
+        {
+            "task_id": "t",
+            "session_id": "s",
+            "session_uri": "viking://user/default/sessions/s",
+            "archive_uri": "viking://user/default/sessions/s/history/archive_001",
+            "user": {},
+            "memory_policy": policy,
+        }
+    )
+    assert MemoryPolicy.from_dict(message.memory_policy).enable_working_memory is True
+    assert MemoryPolicy.from_dict(policy).enable_working_memory is False
+    assert message.memory_policy["self"] == policy["self"]
+    assert message.memory_policy["memory_types"] == policy["memory_types"]
 
 
 class _TaskStore:
@@ -134,7 +168,54 @@ def test_phase2_auto_commit_policy_parameters_are_appended():
     signature = inspect.signature(Session._run_memory_extraction)
 
     assert list(signature.parameters)[-1] == "auto_commit_policy"
-    assert fields(SessionCommitMsg)[-1].name == "auto_commit_policy"
+    # New snapshot metadata is appended after the existing positional fields.
+    assert fields(SessionCommitMsg)[-2].name == "auto_commit_policy"
+    assert fields(SessionCommitMsg)[-1].name == "memory_policy_version"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation_requested", [False, True])
+async def test_phase2_cancellation_marks_archive_only_when_requested(
+    monkeypatch, cancellation_requested
+):
+    session_uri = "viking://user/default/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    tracker = TaskTracker(_TaskStore())
+    await tracker.create(
+        "session_commit",
+        account_id="default",
+        user_id="default",
+        task_id="task-1",
+    )
+    if cancellation_requested:
+        await tracker.record_cancelled("task-1", account_id="default", user_id="default")
+    else:
+        await tracker.start("task-1", account_id="default", user_id="default")
+
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    files = {}
+    session = Session(
+        viking_fs=_MemoryVikingFS(files),
+        session_id="session-1",
+        session_uri=session_uri,
+    )
+
+    async def cancel_prepare(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(session, "_prepare_phase2_archive_messages", cancel_prepare)
+
+    with pytest.raises(asyncio.CancelledError):
+        await session._run_memory_extraction(
+            task_id="task-1",
+            archive_uri=archive_uri,
+            messages=[],
+            first_message_id="",
+            last_message_id="",
+            memory_policy=None,
+        )
+
+    assert (f"{archive_uri}/.failed.json" in files) is cancellation_requested
 
 
 @pytest.mark.asyncio

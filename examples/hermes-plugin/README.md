@@ -1,78 +1,118 @@
-# OpenViking Memory Provider
+# OpenViking for Hermes
 
-Context database by Volcengine (ByteDance) with filesystem-style knowledge hierarchy, tiered retrieval, and automatic memory extraction.
+OpenViking gives Hermes Agent long-term memory and tools to search your knowledge.
+It captures conversations, extracts useful facts and recalls them in later chats.
 
-This plugin connects Hermes to OpenViking for long-term memory and knowledge
-retrieval. The installation steps below use a reviewed OpenViking commit.
+## Get started
 
-For Hermes releases that still bundle OpenViking, follow the
-[Hermes integration guide](../../docs/en/agent-integrations/05-hermes.md) and run
-`hermes memory setup openviking`. No external plugin installation is needed.
-
-For development and licensing details, see [DEVELOPMENT.md](DEVELOPMENT.md).
-
-## Install
-
-Hermes v2026.9.24 is the tested release baseline.
-
-For a direct installation, replace the placeholder with the reviewed OpenViking
-commit's full 40-character SHA:
+Run these commands in the Hermes profile you want to use:
 
 ```bash
-hermes plugins install 'https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin' \
-  --ref '<full-40-character-commit-SHA>' --no-enable
-hermes plugins enable openviking
+hermes plugins install openviking --enable
 hermes memory setup openviking
-hermes memory status
+hermes
 ```
 
-The equivalent shorthand is `volcengine/OpenViking/examples/hermes-plugin`.
-Hermes installs this directory as `$HERMES_HOME/plugins/openviking/`.
-In this two-step flow, Hermes resolves its `pyproject.toml` dependencies under
-Hermes's dependency constraints when you enable the plugin.
+Accept the dependency prompt during installation. In setup, choose how you
+use Hermes, then choose a connection.
 
-If Hermes still includes the bundled OpenViking provider, that copy takes
-precedence. The external copy becomes active after the bundled copy is removed.
-Keep `memory.provider: openviking` and your existing configuration. No memory
-data needs to move.
+### Personal or Shared
 
-## Upgrade
+Hermes uses conversation history to follow the current chat. OpenViking saves
+extracted facts as long-term memory for use in later chats. These are separate.
 
-For a direct subdirectory installation, use force-reinstallation instead of
-`hermes plugins update openviking`. Hermes does not retain the repository's
-`.git` directory when it installs a subdirectory.
+Common memory is not linked to a sender. Sender memory is linked to the person
+who sent a message through Telegram, Discord or another messaging platform.
+Both modes recall common memory under the same OpenViking user.
 
-Replace the placeholder with the reviewed OpenViking commit's full 40-character
-SHA, and run this command in the same Hermes profile as the original installation:
+| Usage | What it does |
+|-------|--------------|
+| **Personal Agent** | Recalls common memory and the current sender's memory. Keeps your existing conversation history settings. |
+| **Shared Agent** | Shares conversation history within each group or thread. Recalls common memory and all senders' memories under the same OpenViking user. |
+
+Choose Personal for an assistant that recalls memory for the current person.
+Choose Shared for a team that wants to share recalled memories. Shared Agent
+asks for confirmation before changing conversation history settings. Different
+groups keep separate histories, even in Shared mode. Restart the gateway if
+setup changes its session settings.
+
+Personal does not change existing history settings. If a group already shares
+history, choosing Personal leaves that history shared. Neither mode changes
+data access rights. Use separate OpenViking users and keys when people need
+separate access.
+
+### Choose a connection
+
+| Connection | What you need |
+|------------|---------------|
+| **Quick Local** | A language model already configured in Hermes. Setup installs a local server and embedding model. |
+| **OpenViking Service (VolcEngine Cloud)** | A service API key for VolcEngine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service). |
+| **Custom** | Your server URL and credentials. Setup can also reuse a saved `ovcli.conf`. |
+
+For the cloud service, activate it and create an API key in the
+[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
+Open **User Management**, then **API Key**. You do not need to install a server
+or configure local models.
+
+After setup, chat as usual. Memories become available after the captured
+conversation is committed and OpenViking finishes extraction. The plugin
+requests a commit at 20,000 pending tokens by default, at session end and when
+switching sessions.
+
+The plugin sends conversation turns, tool results and edits to `MEMORY.md`
+and `USER.md` to your OpenViking server. Memory extraction can use a remote model.
+
+## Quick Local
+
+Quick Local reuses your Hermes language model for memory extraction. A local
+embedding model prepares text for memory search. The language model must use
+a supported static API key or Hermes's local llama.cpp server. OAuth logins
+are not supported. See [model support](CONFIGURATION.md#quick-local-model-support).
+
+Setup checks the language model, downloads the embedding model and starts the
+server before it finishes. It saves a copy of the model credentials in this
+profile's private server configuration. Downloads need access to PyPI, GitHub
+and Hugging Face.
+The model download is about 46 MB. Other packages add more than 1 GB per profile.
+
+Prebuilt packages are available for Apple Silicon with macOS 14 or newer,
+Linux x86-64 or ARM64 with glibc 2.31 or newer, and Windows x86-64. On other
+platforms, setup asks before building from source. This needs development
+tools and can take several minutes. You can use Custom instead.
+
+Each Hermes profile has its own server, data and port. If the saved port is
+occupied, Quick Local selects a free port. Run setup again after changing the
+Hermes model or API key. Your data and downloaded model are kept.
+
+**Known issue:** OpenViking 0.4.22 and 0.4.23 can crash when local embedding
+calls overlap, such as during indexing and recall. This affects Quick Local
+and Custom servers using that local backend. It does not affect connections
+using remote embedding APIs. The [fix](https://github.com/volcengine/OpenViking/pull/5548)
+is merged and is expected in OpenViking 0.4.24. After that release, run Quick
+Local setup again to upgrade.
+
+The server keeps running after Hermes exits. These commands are optional:
 
 ```bash
-hermes plugins install 'volcengine/OpenViking/examples/hermes-plugin' \
-  --force --ref '<full-40-character-commit-SHA>' --enable
+hermes openviking local status
+hermes openviking local stop
+hermes openviking local start
+hermes openviking local restart
 ```
 
-Existing connection settings and server data are retained. Restart Hermes or
-the gateway after the upgrade. For catalog installations, use
-`hermes plugins update openviking`.
+Stopping keeps the data. A running Hermes session or gateway can start the
+server again when memory is used. Close those sessions or disable OpenViking
+memory if you want it to stay stopped. Turns completed while the server is
+starting or recovering are not captured.
 
-## Requirements
+Switching to OpenViking Service or Custom stops this profile's Quick Local
+server and keeps its data. `local start` and `local restart` work only while
+Quick Local is selected.
 
-- Python 3.11 or newer in the Hermes environment
-- An OpenViking server reachable from Hermes, or OpenViking Service credentials
-- For a self-hosted server, OpenViking installed in its own environment or container
+## Custom server
 
-The plugin connects over HTTP. Do not install the OpenViking server into the
-Hermes environment. For local server start from the setup wizard, make the
-`openviking-server` command available on `PATH`.
-
-OpenViking 0.2.14 or newer is required. Hermes can identify older servers that
-expose the legacy status-only health response, but those releases do not provide
-the authenticated-user identity contract required by this integration.
-The `viking://~` home alias requires OpenViking 0.4.16 or newer for user and
-admin credentials, and OpenViking 0.4.17 or newer for root or local development.
-
-## Setup
-
-For a self-hosted deployment, prepare OpenViking in its server environment:
+Run OpenViking in its own Python environment or container. For a new local
+server, run these commands there:
 
 ```bash
 openviking-server init
@@ -80,315 +120,83 @@ openviking-server doctor
 openviking-server
 ```
 
-Then configure Hermes:
+Then run `hermes memory setup openviking` and choose Custom. For setup to
+start a stopped local server, `openviking-server` must be on `PATH`.
+
+## Check status
 
 ```bash
-hermes memory setup openviking
+hermes memory status
 ```
 
-The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
-connection values into Hermes, or create a minimal `ovcli.conf` when one does
-not exist.
+`available` means the provider is configured. It does not confirm server
+health or successful memory extraction. For Quick Local, use
+`hermes openviking local status` to check the server.
 
-Setup first asks how the Hermes instance is used:
-
-| Preset | Hermes conversation history | OpenViking long-term recall |
-|--------|-----------------------------|-----------------------------|
-| **Personal Agent** | Keeps existing group/thread session settings | Common memory and the current sender's memory (`peer`) |
-| **Shared Agent** | Shares each group or thread session between its participants | Common memory and all sender memories under the same OpenViking user (`shared`) |
-
-Shared Agent requires confirmation before it sets `group_sessions_per_user` and
-`thread_sessions_per_user` to `false`. Different groups still have separate
-conversation histories. Restart the gateway to apply changed session settings.
-Personal Agent does not make an already shared conversation private.
-
-Both presets retain sender attribution during capture. After commit and
-extraction, OpenViking can recall those memories across chats according to the
-chosen scope. Upgrading the plugin alone does not apply a preset or change
-session settings. Rerunning setup preselects the saved recall choice; a new
-setup starts on Personal Agent.
-
-Or manually:
+## Update
 
 ```bash
-hermes config set memory.provider openviking
+hermes plugins update openviking
 ```
 
-Add the connection settings to the active profile's `.env` file. For the
-default profile that is `~/.hermes/.env`; for a named profile use
-`~/.hermes/profiles/<profile>/.env`.
+Restart Hermes or the gateway afterward. Your connection settings and server
+data are kept. Updates use the version reviewed in the Hermes catalog.
+For direct source installs, use the [source update command](CONFIGURATION.md#pinned-source-installation).
 
-```text
-OPENVIKING_ENDPOINT=http://127.0.0.1:1933
-# OPENVIKING_API_KEY=...
-# OPENVIKING_ACCOUNT=default
-# OPENVIKING_USER=default
-```
+To update a Quick Local server, run `hermes memory setup openviking` again and
+choose Quick Local. Setup selects the latest compatible OpenViking 0.4 release
+and restarts the server if needed. Normal chat and recovery use the installed
+server without checking for updates.
 
-## Config
+## Existing users
 
-OpenViking's server config is separate from Hermes:
+If a Hermes update removes its built-in OpenViking provider, it attempts to
+install the catalog plugin for profiles already using OpenViking. Your settings
+and server data are kept. If installation fails, run the install command above
+in that profile.
 
-- `ov.conf` configures OpenViking storage, embedding/VLM models, auth, and
-  server behavior. OpenViking reads it from `--config`,
-  `OPENVIKING_CONFIG_FILE`, or `~/.openviking/ov.conf`.
-- `ovcli.conf` stores client/CLI connection values such as `url`, `api_key`,
-  `account`, and `user`. It is read from `OPENVIKING_CLI_CONFIG_FILE` or
-  `~/.openviking/ovcli.conf`.
-
-Hermes reads provider settings from the initialized profile's `config.yaml`,
-profile secrets, and linked `ovcli.conf`. Connection values resolve in this order:
-profile environment, linked OpenViking config, Hermes YAML, then defaults. API keys
-come from profile secrets or the linked OpenViking config, not Hermes YAML.
-After initialization, the provider keeps that profile for connection, identity,
-and recall settings, including when another profile is active in the same
-process. For the launch profile, process-level `OPENVIKING_*` values fill missing
-`.env` values. Under multi-profile hosting, Hermes uses the process values frozen
-at activation; a messaging gateway without that snapshot does not read them.
-Routed profiles never inherit the launch profile's process values.
-
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `OPENVIKING_ENDPOINT` | `http://127.0.0.1:1933` | Server URL |
-| `OPENVIKING_API_KEY` | (none) | User/admin API key for authenticated servers |
-| `OPENVIKING_ACCOUNT` | `default` | Tenant account for local/trusted mode |
-| `OPENVIKING_USER` | `default` | Tenant user for local/trusted mode |
-| `OPENVIKING_AGENT` | (none) | Optional peer ID for separate assistant context |
-
-User and admin API keys let OpenViking derive account/user identity from the key.
-In local or trusted deployments without an API key,
-Hermes sends `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` as identity headers.
-Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
-OpenViking requests. This standard harness identifier contains the Hermes
-version, but no per-user identifier, and does not add a separate request.
-
-### Optional peer identity
-
-New connections use the OpenViking user's memory directory by default. Setup
-does not ask for a peer ID. Without a configured peer, Hermes sends neither
-`X-OpenViking-Actor-Peer` nor assistant-message `peer_id`.
-
-For separate assistant context, set the existing `agent` field in the active
-profile's `config.yaml`:
-
-```yaml
-memory:
-  openviking:
-    agent: work-assistant
-```
-
-Existing non-empty `OPENVIKING_AGENT`, YAML `agent`, and linked OpenViking
-`actor_peer_id` or legacy `agent_id` values retain their behavior. Resolution
-order remains environment, linked OpenViking config, then Hermes YAML. To use
-no peer, remove the peer value from each configured source and start a new
-Hermes session.
-
-Upgrades do not move or delete existing memories. Installations that relied
-on the old implicit `hermes` peer now use user memory for new writes. Without
-a peer ID, default OpenViking search covers user memory and existing peer
-memories under the same OpenViking user. Old peer memories stay at their
-existing paths and remain searchable. Ranking and result limits determine
-which memories are returned. Keep a peer ID if you need the narrower view.
-
-Set `agent: hermes` to restore peer-scoped writes. Memories written at user
-scope before this change stay there and remain searchable. This setting
-changes future writes, not the location of existing memories.
-
-### Gateway senders and automatic recall
-
-The external provider attaches the current gateway sender to captured user
-messages as a peer, for example `telegram.123456`. The OpenViking account and
-user stay unchanged. Assistant messages keep the configured `agent` peer.
-CLI messages without a gateway sender keep their existing user-level attribution.
-Existing memories are not moved.
-
-The setup presets save the automatic recall scope. You can also set it in the
-active profile's `config.yaml`:
-
-```yaml
-memory:
-  openviking:
-    recall_scope: peer
-```
-
-| Value | Automatic recall |
-|-------|------------------|
-| `shared` | Common memory and all peer memories under the same OpenViking user. |
-| `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
-
-With no scope set, the provider preserves the previous requests: normally
-shared recall, but an explicitly configured assistant peer can narrow list
-recall. Existing compression behavior is also retained. This is compatibility
-handling for existing installations, not a third setup mode. Invalid values
-warn and preserve that behavior.
-
-`OPENVIKING_RECALL_SCOPE` overrides YAML. On successful setup, the wizard removes
-this override from the profile's `.env` so the selected preset takes effect.
-An override supplied again by a service or shell still takes precedence.
-The configuration schema exposes only `shared` and `peer`. A stable
-alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
-to valid peer IDs. Queued captures retain their own sender when another
-participant sends a turn.
-
-The scope applies to automatic query recall, including compression and search
-fallbacks. If an older server cannot confirm sender-scoped compression, the
-provider uses scoped list recall. Enabled resource recall includes common
-resources and, in `peer` mode, the sender's resources.
-
-This is a retrieval setting, not an access-control boundary. It does not filter
-shared conversation history or change explicit `viking_*` tools, native memory
-mirroring, or credentials. Setting `recall_scope` alone does not change gateway
-sessions; the confirmed Shared Agent setup preset applies those settings.
-Explicit tools retain
-the configured assistant view. Use separate OpenViking users and credentials
-when participants require separate access rights.
+Older Hermes releases load their built-in copy first. On those releases,
+keep using `hermes memory setup openviking`. Quick Local and the external
+plugin's changes become available when that copy is removed.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `viking_search` | Semantic search with fast/deep/auto modes |
-| `viking_read` | Read content at a viking:// URI (abstract/overview/full) |
-| `viking_browse` | Filesystem-style navigation (list/tree/stat) |
-| `viking_remember` | Submit a fact through OpenViking session memory extraction |
-| `viking_forget` | Delete one exact `viking://` memory file URI |
-| `viking_add_resource` | Ingest URLs/docs into the knowledge base |
+Hermes calls these tools when needed. You do not need to run them yourself.
 
-## Memory Writes And Deletes
+| Tool | What it does |
+|------|--------------|
+| `viking_search` | Search memories and knowledge. |
+| `viking_read` | Read content at a `viking://` address. |
+| `viking_browse` | List files and directories. |
+| `viking_remember` | Submit a fact for memory extraction. |
+| `viking_forget` | Delete one exact memory file. |
+| `viking_add_resource` | Add a URL or document to the knowledge base. |
 
-`viking_remember` creates a one-shot `hermes-remember-<random>` OpenViking
-session, adds the fact as one message, and commits the session with no retained
-tail. The session remains available in OpenViking for audit. OpenViking then
-classifies the source and can add, merge, or skip a memory through its normal
-extraction pipeline. The tool returns the one-shot session ID and the
-extraction task ID when the server provides one. Extraction continues
-asynchronously after the tool returns.
+## Remove
 
-The tool returns `status: submitted` because extraction can add a memory, merge
-the fact into an existing memory, or produce no memory operation. It does not
-promise that OpenViking created a distinct memory file. The fact is submitted
-as an unchanged `user` message so OpenViking owns the final classification.
-The legacy `category` argument is still accepted from existing callers but is
-not advertised or used. The one-shot session is separate from the live Hermes
-conversation, so an explicit remember does not commit or rotate the active
-conversation session.
+Close Hermes sessions and stop the gateway for this profile. For Quick Local,
+run `hermes openviking local stop`. Select another memory provider or disable
+OpenViking memory, then run:
 
-If the message request or commit fails, the error includes the canonical
-session URI, the failed stage, the observed message status, and an `ov session
-commit <session-id>` recovery command. Inspect the session first. An archive
-means the commit completed. A non-empty live `messages.jsonl` with no archive
-means the message was accepted but still needs a commit. An empty live file
-without an archive is ambiguous and must not trigger an automatic resubmission.
-Use the same OpenViking profile and credentials as Hermes for manual recovery.
-OpenViking server auto-commit is disabled by default, so an accepted message
-whose explicit commit fails normally remains live and unextracted until it is
-manually committed.
-
-Successful Hermes built-in `memory` mutations are mirrored to OpenViking in
-order. The active profile records each mirrored entry's exact URI in
-`$HERMES_HOME/openviking/memory_mirror_registry.json`:
-
-| Hermes action | OpenViking operation |
-|---------------|----------------------|
-| `add` | Create a file under user memory or the configured peer, then record its URI |
-| `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
-| `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
-
-Replacing a mapped entry recreates its file if it was deleted directly in
-OpenViking, for example with `viking_forget`.
-
-The registry stores the current entry text and a connection fingerprint, not
-the raw API key. Endpoint, credentials, user, account, and peer changes isolate
-the new connection from earlier mappings. New files require a server-confirmed
-user identity. Missing or ambiguous mappings block replacement and deletion
-with a warning; the plugin never selects a target by semantic similarity.
-
-Replacement and deletion require Hermes to provide the full previous entry
-content after its local memory write succeeds. If this data is unavailable,
-the plugin skips those mirror operations with a warning; local memory still
-changes. It does not guess which remote entry to change.
-
-Only entries created by this mirror have mappings. Session-extracted memories,
-explicit `viking_remember` results, and copies created before this registry are
-outside its scope. Use `viking_forget` with an exact URI to remove those copies.
-
-The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
-writes leave the registry unchanged and produce a warning. Additions do not wait
-for indexing, so the mirror does not report later indexing failures. For `replace`,
-if the server reports that the file changed but indexing failed, the registry
-retains the new content and exact URI; a warning reports the indexing failure
-because search results may be stale. There is no durable replay. A remote mutation
-followed by a failed registry save can also cause drift. Operations are ordered
-per provider; registry updates are serialized across instances sharing a profile
-in one process, not across processes.
-
-Registry files use mode `0600` on POSIX. Protect the profile with normal account
-and filesystem permissions on Windows. An unreadable, invalid, or unsupported
-registry blocks all mirror writes. Stop Hermes before restoring a valid backup.
-For an unsupported version, use a plugin version that supports it. Renaming a
-damaged registry starts a new registry but leaves earlier remote copies without
-mappings; those copies need manual cleanup by exact URI.
-
-`viking_forget` is intentionally narrow. It only accepts concrete user memory
-file URIs, such as
-`viking://user/default/peers/hermes/memories/preferences/mem_abc123.md`, or the
-`viking://~/...` self alias. Under `viking://user/...` the user id is required
-and must match the calling identity; the uid-less `viking://user/memories/...`
-and `viking://user/peers/...` shorthands are deprecated and rejected. Files
-directly under `memories/`, such as `viking://user/default/memories/profile.md`,
-are also allowed because OpenViking supports them. The tool rejects directories,
-resources, skills, sessions, generated summary files, and URIs with query
-strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
-resource and directory cleanup.
-
-
-### Cloud recall compression
-
-Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
-`auto` to let the server decide whether to rewrite. Both use search
-`mode=context`; `server` sends `rewrite=true`, and `auto` sends `rewrite="auto"`.
-The server digest takes precedence over raw rendered context, and `no_relevant`
-suppresses injection. The default remains `off`; no local compressor is launched.
-
-The Hermes config equivalent is `memory.openviking.recall_compress: server`.
-When enabled, the default request and total recall deadlines become 55 seconds;
-explicit recall timeout settings still take precedence. Older servers fall back
-to the existing search path within that deadline.
-
-### Active-session commits
-
-The standalone provider checks OpenViking's `pending_tokens` after each successful
-turn upload. At **20,000 tokens** by default, it requests a background commit
-without ending the Hermes session. Memory extraction then runs on the server.
-Session-end and session-switch commits still flush messages below this threshold.
-
-Set a different threshold in the active Hermes profile's `config.yaml`:
-
-```yaml
-memory:
-  openviking:
-    commit_token_threshold: 8000
+```bash
+hermes plugins remove openviking
 ```
 
-`OPENVIKING_COMMIT_TOKEN_THRESHOLD` overrides the YAML value. The setting accepts
-integers from 1,000 to 1,000,000; values outside this range are clamped. Invalid
-values use the 20,000-token default. The provider also exposes this setting through
-its configuration schema.
+Removal does not stop a running server or delete the runtime, model and data
+in `$HERMES_HOME/openviking/`.
 
-This is a client-side commit trigger. It does not set or replace the server's
-`auto_commit_policy`. If a server policy is enabled, both triggers operate
-independently. Server locking serializes their archive operations, but explicit
-client commits do not use the server scheduler's interval or retention settings.
-The plugin retains the existing `keep_recent_count: 0` commit behavior.
-The threshold is not a hard limit on extraction input: one turn can
-exceed it, and the server may include other context during extraction.
+## Requirements
 
-### Non-primary contexts
+- Python 3.11 or newer in the Hermes environment.
+- OpenViking Service, Quick Local or a reachable OpenViking server.
+- OpenViking 0.2.14 or newer for Custom connections.
 
-When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,
-or `flush`, recall and profile reads keep working. Automatic turn uploads,
-session-end/switch commits, and native memory mirroring are skipped for that
-context. Startup recovery can still commit pending messages from earlier sessions.
-Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
-Interactive sessions (and hosts that predate `agent_context`) keep the previous
-automatic write behavior.
+Tested with Hermes v2026.9.24 and the Hermes main commit used in
+[CI](../../.github/workflows/hermes-plugin-tests.yml).
+
+## Config
+
+The wizard saves the connection settings. For optional recall settings,
+model support, backups and memory recovery, see [Advanced configuration](CONFIGURATION.md).
+For development and migration notes, see [DEVELOPMENT.md](DEVELOPMENT.md).
+This directory uses the [MIT license](LICENSE).

@@ -1,40 +1,75 @@
-# Hermes Agent
+# Hermes
 
-[Hermes Agent](https://hermes-agent.nousresearch.com/) by Nous Research has a first-class OpenViking memory provider built in. No plugin to install — just point Hermes at your OpenViking server and it handles memory storage, recall, and extraction natively.
+Use OpenViking for long-term memory in [Hermes Agent](https://hermes-agent.nousresearch.com/).
 
-## Keep the Python environments separate
+## Get started
 
-Hermes connects to OpenViking over HTTP, so OpenViking does not need to be
-installed in the Hermes Python environment. Run the OpenViking server in its
-own virtual environment or container. Do not use `--force-reinstall` to add or
-upgrade OpenViking in an existing Hermes environment: a Hermes release may pin
-dependency versions that differ from OpenViking's supported, security-patched
-versions. If you intentionally combine both applications in one environment,
-resolve them together and run `python -m pip check` before starting either
-service.
-
-## Setup
+Run these commands in the Hermes profile you want to use:
 
 ```bash
+hermes plugins install openviking --enable
 hermes memory setup openviking
+hermes
 ```
 
-- Cloud: keep **OpenViking Service (VolcEngine Cloud)**, paste the API key
-- Custom: URL (default `http://127.0.0.1:1933`) and API key; leave the key empty for local dev
-- Reuse an existing `ovcli.conf` profile if the wizard offers one
+Accept the dependency prompt during installation. If your Hermes release still
+includes OpenViking, skip the install command. That release uses its built-in
+copy and does not provide Quick Local.
 
-## Verify
+Hermes uses conversation history to follow the current chat. OpenViking saves
+useful facts as long-term memory for later chats. Common memory is not linked
+to a sender.
+
+Choose **Personal Agent** to recall common memory and the current sender's
+memory while keeping your conversation history settings. Choose **Shared Agent**
+to share history within each group or thread and recall all senders' memories
+under the same OpenViking user. Shared Agent asks for confirmation.
+
+Then choose a connection:
+
+- **Quick Local** installs a local server and embedding model. It reuses your
+  supported Hermes language model for extraction, which can use a remote API.
+- **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
+  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service)
+  with a service API key. You do not need to install a server or configure
+  local models.
+- **Custom** connects to your own server with its URL and credentials. Setup
+  can also reuse a saved `ovcli.conf`.
+
+After setup, chat as usual. The plugin requests a commit at 20,000 pending
+tokens by default, at session end and when switching sessions. Memories become
+available after OpenViking finishes extraction. Existing server data is kept.
+
+Quick Local keeps its server running after Hermes exits. See the
+[plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+for model support, server controls and the known local embedding issue.
+
+## Check status
 
 ```bash
 hermes memory status
 ```
 
-`available` means that the provider is configured. It does not check server
-connectivity or confirm memory extraction.
+`available` means the provider is configured. It does not confirm server
+health or successful memory extraction.
 
-## See also
+## Update
 
-- [Capability Reference](./16-capability-reference.md)
-- [Hermes — OpenViking memory provider docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers#openviking) — full setup guide and configuration options
-- [Deployment Guide](../guides/03-deployment.md) — setting up your OpenViking server
-- [Authentication](../guides/04-authentication.md) — API key setup for remote access
+```bash
+hermes plugins update openviking
+```
+
+Restart Hermes or the gateway afterward. Your connection settings and data
+are kept. To update a Quick Local server, run setup again and choose Quick
+Local. Normal chat uses the installed server without checking for updates.
+
+When a Hermes update removes the built-in provider, it attempts to install
+the catalog plugin for profiles already using OpenViking. If that fails,
+run the install command above in that profile.
+
+## More information
+
+- [Plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
+- [Capability reference](./16-capability-reference.md)
+- [Server deployment](../guides/03-deployment.md)
+- [API keys](../guides/04-authentication.md)

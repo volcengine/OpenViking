@@ -1,4 +1,4 @@
-# LangChain and LangGraph
+# LangChain / LangGraph
 
 Wire OpenViking into your LangChain or LangGraph agent as the context backend. The
 standalone integration package provides a retriever, chat history, context wrapper,

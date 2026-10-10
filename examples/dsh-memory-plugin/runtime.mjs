@@ -1,7 +1,6 @@
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
-import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 import {
   dequeue,
   enqueue,
@@ -16,6 +15,7 @@ import {
   pluginMessage,
   promptText,
 } from "./capture.mjs";
+import { deriveDshSessionId } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionPeer = null) {
@@ -45,7 +45,7 @@ export class OpenVikingRuntime {
     });
     state = {
       dshSessionId: String(session.id),
-      ovSessionId: deriveHarnessSessionId("dsh-", String(session.id)),
+      ovSessionId: deriveDshSessionId(session.id),
       config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
@@ -131,7 +131,7 @@ export class OpenVikingRuntime {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
-    if (query.length < state.config.minQueryLength) return null;
+    if (!query || query.length < state.config.minQueryLength) return null;
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
@@ -201,9 +201,7 @@ export class OpenVikingRuntime {
         error: response.ok ? undefined : response.error?.message || response.error?.code,
       });
       if (isRetryableFailure(response)) {
-        await this.enqueueFinalCommit(state, {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        });
+        await this.enqueueFinalCommit(state, { keep_recent_count: 0 });
       }
     });
   }
@@ -215,9 +213,7 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
-        const commitPayload = {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        };
+        const commitPayload = { keep_recent_count: 0 };
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;

@@ -1,4 +1,4 @@
-# TRAE、TRAE CN 与 TraeCode CLI 2.0 记忆集成
+# TRAE
 
 为 TRAE、TRAE CN 和 TraeCode CLI 2.0 添加跨项目、跨会话的长期记忆。安装后，OpenViking Hook 会自动加载相关上下文、捕获每轮对话并提交给记忆抽取器；MCP 用于主动搜索、读取和管理记忆。
 

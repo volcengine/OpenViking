@@ -1215,3 +1215,109 @@ def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_pr
     assert bob_marker.exists()
     commits = [c for c in backends["alice"].post.call_args_list if c.args[0].endswith("/commit")]
     assert len(commits) == 2
+
+
+def test_local_server_spawn_drops_unrelated_secrets(external_provider, monkeypatch):
+    _, _, module, _ = external_provider("profile-a")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "sentinel-bot-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "sentinel-embedding-key")
+    monkeypatch.setenv("PYTHONPATH", "/hermes/venv/site-packages")
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+
+    status, _ = module._start_local_openviking_server("http://127.0.0.1:1933")
+
+    assert status == module._LOCAL_SERVER_STARTED
+    (env,) = spawned
+    assert "TELEGRAM_BOT_TOKEN" not in env
+    assert "PYTHONPATH" not in env
+    assert env["OPENAI_API_KEY"] == "sentinel-embedding-key"
+
+
+def test_local_server_spawn_scrubs_profile_overlay(external_provider, monkeypatch, tmp_path):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools.environments.local import _HERMES_PROVIDER_ENV_FORCE_PREFIX
+
+    monkeypatch.setenv("OPENAI_API_KEY", "launch-key")
+    monkeypatch.setenv("GH_TOKEN", "launch-gh-token")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_REAL_HOME", str(tmp_path))
+    monkeypatch.setenv(_HERMES_PROVIDER_ENV_FORCE_PREFIX + "OPENAI_API_KEY", "forced-key")
+    spawned = []
+    for name in ("a", "b", "a"):
+        home, _, module, _ = external_provider("spawn-" + name)
+        (home / ".env").write_text(
+            f"OPENAI_API_KEY=key-{name}\nTELEGRAM_BOT_TOKEN=bot-{name}\ngh_token=gh-{name}\n"
+            "FEISHU_APP_SECRET=feishu-key\nqq_client_secret=qq-key\nAPI_SERVER_KEY=gateway-key\n"
+            "VERCEL_TOKEN=vercel-key\nVERCEL_OIDC_TOKEN=vercel-oidc\n"
+            "PYTHONHOME=/other-python\nVIRTUAL_ENV=/other-venv\nCONDA_PREFIX=/other-conda\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+        monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+        monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+        token = set_hermes_home_override(home)
+        try:
+            status, message = module._start_local_openviking_server("http://127.0.0.1:1933")
+            assert status == module._LOCAL_SERVER_STARTED, message
+        finally:
+            reset_hermes_home_override(token)
+        env = spawned[-1]
+        assert env["OPENAI_API_KEY"] == "key-" + name
+        assert env["HERMES_HOME"] == str(home)
+        assert env["HOME"] == str(tmp_path)
+        assert not {"GH_TOKEN", "gh_token", "TELEGRAM_BOT_TOKEN", "PYTHONPATH"} & env.keys()
+        assert not {"FEISHU_APP_SECRET", "qq_client_secret", "API_SERVER_KEY", "VERCEL_TOKEN",
+                    "VERCEL_OIDC_TOKEN", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX"} & env.keys()
+        assert not any(key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX) for key in env)
+
+
+@pytest.mark.parametrize("failure", ["missing_helper", "unscoped"])
+def test_local_server_spawn_fails_closed(external_provider, monkeypatch, failure):
+    from tools.environments import local
+
+    _, _, module, _ = external_provider("spawn-failure")
+    if failure == "missing_helper":
+        monkeypatch.delattr(local, "_scrub_credentials")
+    else:
+        monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+        monkeypatch.setattr("agent.secret_scope.current_secret_scope", lambda: None)
+        monkeypatch.setattr("hermes_constants.get_hermes_home_override", lambda: None)
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: spawned.append(kwargs))
+
+    status, _ = module._start_local_openviking_server("http://127.0.0.1:1933")
+
+    assert status == module._LOCAL_SERVER_FAILED
+    assert not spawned
+
+
+def test_runtime_spawn_uses_provider_home_under_another_profile(external_provider, monkeypatch):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home_a, provider, module, _ = external_provider("runtime-owner")
+    home_b, _, _, _ = external_provider("runtime-caller")
+    for home, key in ((home_a, "owner-key"), (home_b, "caller-key")):
+        (home / ".env").write_text("OPENAI_API_KEY=" + key + "\n", encoding="utf-8")
+    provider._hermes_home, provider._hermes_home_bound = str(home_a), True
+    provider._endpoint = "http://127.0.0.1:1933"
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    monkeypatch.setattr(provider, "_start_runtime_openviking_waiter", lambda **kwargs: None)
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+    token = set_hermes_home_override(home_b)
+    try:
+        provider._handle_runtime_openviking_unreachable()
+    finally:
+        reset_hermes_home_override(token)
+
+    assert len(spawned) == 1
+    assert spawned[0]["HERMES_HOME"] == str(home_a)
+    assert spawned[0]["OPENAI_API_KEY"] == "owner-key"
+    assert (home_a / "logs/openviking-server.log").exists()
+    assert not (home_b / "logs/openviking-server.log").exists()

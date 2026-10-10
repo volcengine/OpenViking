@@ -1,4 +1,4 @@
-# Hook + MCP Agent Plugin Development and Maintenance Standard
+# Develop and maintain an agent plugin
 
 This guide defines how to add and maintain OpenViking agent plugins that automatically read and write memory through lifecycle hooks and expose tools through MCP. It covers module responsibilities, protocols, state handling, installation, testing, and releases. A host is the client or runtime that runs the agent; the code also calls it a harness.
 

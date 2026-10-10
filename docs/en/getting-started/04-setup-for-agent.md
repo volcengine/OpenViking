@@ -1,4 +1,4 @@
-# OpenViking Setup SOP (For Agent)
+# Server setup instructions for agents
 
 ## Goal
 

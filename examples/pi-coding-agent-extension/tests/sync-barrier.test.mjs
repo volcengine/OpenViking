@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager, describeCommitError } from "../sync.ts";
+import { OVClient } from "../client.ts";
 import { enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
@@ -126,6 +127,36 @@ test("a failed commit keeps its status and server message for /viking commit", a
     response = { result: { status: "accepted", archive_uri: "viking://archive/1" } };
     assert.ok(await sync.commit({ queueOnFailure: false }));
     assert.equal(sync.lastCommitError, "");
+  });
+});
+
+test("a commit archives every message, both when sent and when queued for retry", async () => {
+  await withPendingDir(async () => {
+    const ov = new OVClient({
+      endpoint: "http://127.0.0.1:1933",
+      apiKey: "",
+      account: "",
+      user: "",
+      authMode: "trusted",
+      sendIdentityHeaders: false,
+      peerId: "",
+      userAgent: "test",
+    });
+    const requests = [];
+    ov.fetchJSON = async (path, init) => {
+      requests.push({ path, body: JSON.parse(init.body) });
+      return { ok: false, result: null, status: 503, error: { message: "unavailable" } };
+    };
+    const sync = new SyncManager(ov, config());
+    await sync.ensureSession("pi-keep-zero");
+
+    assert.equal(await sync.commit(), null);
+    assert.deepEqual(requests, [{
+      path: `/api/v1/sessions/${encodeURIComponent(sync.sessionId)}/commit`,
+      body: { keep_recent_count: 0 },
+    }]);
+    const queued = (await listPending()).map(({ entry }) => [entry.type, entry.payload]);
+    assert.deepEqual(queued, [["commitSession", { keep_recent_count: 0 }]]);
   });
 });
 

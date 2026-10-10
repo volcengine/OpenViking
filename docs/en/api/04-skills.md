@@ -88,7 +88,7 @@ Concrete examples of skill invocation.
 | tags | List[str] | Tags for categorization |
 | metadata | object | Preserved extensions such as `metadata.vikingbot.requires`; OpenViking does not install these dependencies |
 
-Use hyphenated **`allowed-tools`** in `SKILL.md`; parsed structured data and API summaries use **`allowed_tools`**. Do not substitute the underscore spelling in frontmatter. An omitted declaration and an explicit empty declaration can have different Harness permissions; a summary with `allowed_tools: []` cannot distinguish them. Read the full definition before execution. See [VikingBot Skills](../../../bot/docs/en/concepts/06-skills.md) for instruction and metadata handling.
+Use hyphenated **`allowed-tools`** in `SKILL.md`; parsed structured data and API summaries use **`allowed_tools`**. Do not substitute the underscore spelling in frontmatter. An omitted declaration and an explicit empty declaration can have different Harness permissions; a summary with `allowed_tools: []` cannot distinguish them. Read the full definition before execution. See [VikingBot Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/en/concepts/06-skills.md) for instruction and metadata handling.
 
 ### MCP Format Automatic Conversion
 
@@ -616,7 +616,7 @@ The HTTP equivalent is `GET /api/v1/skills/search-web?include_content=true&inclu
 
 The manifest includes `SKILL.md`, summaries, and auxiliary files/directories, but excludes `.source.json`. Integrity limits are **512 entries (including directories), 16 MiB per file, and 64 MiB total file bytes**, with read concurrency 8. Exceeding a limit returns `RESOURCE_EXHAUSTED`. Content, manifest, and revision are obtained under one tree lock, but later downloads can encounter updates; consumers should verify file hashes and recheck revision.
 
-Search and `get_skill` return content and manifests without executing scripts or installing files in an Agent sandbox. A Harness can read text remotely and download resources when a tool requires local paths. See [VikingBot Skills](../../../bot/docs/en/concepts/06-skills.md) for the complete consumer workflow. MCP clients reach the same package-level behavior through the `find` tool with `context_type="skill"`; see [MCP Integration](../guides/06-mcp-integration.md).
+Search and `get_skill` return content and manifests without executing scripts or installing files in an Agent sandbox. A Harness can read text remotely and download resources when a tool requires local paths. See [VikingBot Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/en/concepts/06-skills.md) for the complete consumer workflow. MCP clients reach the same package-level behavior through the `find` tool with `context_type="skill"`; see [MCP Integration](../guides/06-mcp-integration.md).
 
 ### Search Skills
 
@@ -953,4 +953,4 @@ Use kebab-case for skill names:
 - [Context Types](../concepts/02-context-types.md) - Skill concept
 - [Retrieval](06-retrieval.md) - Finding skills
 - [Sessions](05-sessions.md) - Tracking skill usage
-- [VikingBot Skills](../../../bot/docs/en/concepts/06-skills.md) - Local/remote activation, metadata, and execution
+- [VikingBot Skills](https://github.com/volcengine/OpenViking/blob/main/bot/docs/en/concepts/06-skills.md) - Local/remote activation, metadata, and execution

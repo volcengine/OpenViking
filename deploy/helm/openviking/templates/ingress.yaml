@@ -28,6 +28,17 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if $.Values.gateway.enabled }}
+          {{- range list "/v1" "/api/v3" "/api/compatible/v1" "/gateway/uploads" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "openviking.fullname" $ }}
+                port:
+                  name: gateway
+          {{- end }}
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             pathType: {{ .pathType }}

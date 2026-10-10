@@ -1,47 +1,46 @@
-# 简介
+# OpenViking 能做什么
 
-OpenViking 是面向 AI Agent 的开源上下文数据库。它用虚拟文件系统组织资源、记忆和技能，让应用按路径浏览、检索相关上下文，并按需读取详细内容。
+OpenViking 是面向 AI Agent 的开源上下文数据库。它把资料、记忆和技能组织在同一个虚拟文件系统里，让 Agent 能找到相关内容，并在后续任务中继续使用。
 
-当 Agent 需要跨会话复用文档和经验时，可以用它集中组织和检索这些上下文。
+如果你正在解决“资料散落不好找”“每次会话都要重述背景”或“已有经验难以复用”，可以从下面选一条路径。
 
 ## 从你的任务开始
 
-| 我想要…… | 阅读入口 |
-| --- | --- |
-| 连接服务并检索第一份文档 | [快速开始](./02-quickstart.md) |
-| 接入已有 Agent 或编程工具 | [Agent 集成](../agent-integrations/01-overview.md) |
-| 在终端使用 OpenViking | [CLI 配置](./05-cli-setup.md) |
-| 部署和运维共享服务 | [部署](../guides/03-deployment.md)与[认证](../guides/04-authentication.md) |
-| 使用 SDK 或 HTTP API 开发 | [API 参考](../api/01-overview.md) |
+| 你想做到什么 | 先做什么 | 再往哪里走 |
+| --- | --- | --- |
+| 让 Agent 找到项目资料中的依据 | [导入并检索第一份文档](02-quickstart.md) | 换成你的资料，[验证实际效果](06-evaluate.md) |
+| 给正在使用的 Agent 加入跨会话记忆 | [选择 Agent 接入方式](../agent-integrations/01-overview.md) | 按插件说明安装，再[用两次会话检查记忆](06-evaluate.md#用两次会话检查记忆) |
+| 在自己的应用中使用上下文 | [应用开发路径](../workflows/01-overview.md) | 选资源、会话或技能流程，再查对应 API |
+| 将资料整理成 Wiki、图谱或日报 | [上下文编译概览](../context-compilation/01-overview.md) | 选一种产物，用熟悉的来源核对结果 |
+
+**还没决定从哪条开始？** 先完成[第一次导入与检索](02-quickstart.md)。这条路径用一份小文档走完连接、导入、检索和读取原文，不要求先读完原理。
+
+已有服务地址和 API Key，可直接[安装与使用 CLI](05-cli-setup.md)。需要自己提供服务，查看[部署路径](../guides/00-overview.md)；想使用 OpenViking 自带的 Agent，查看[VikingBot 安装与配置](../guides/17-vikingbot.md)。
+
+## 怎样把第一次体验用起来
+
+1. **取得第一个结果。** 不只确认服务健康，还要能读到导入的原文。
+2. **换成自己的任务。** 用你知道答案的资料或跨会话背景，检查命中内容和实际使用情况，见[用你的任务验证效果](06-evaluate.md)。
+3. **接进日常工作。** 选择一个 Agent、应用或编译流程继续使用。需要多人共享时，再完善部署和访问控制。
+
+出现问题时，从[观测与排障](../guides/05-observability.md)区分连接、处理与检索问题。
 
 ## 上下文如何组织
 
-每个文件或目录都有一个 `viking://` URI。已知路径时可直接列目录、读内容；不知道内容在哪里时可先检索。
+| 上下文 | 用来存什么 |
+| --- | --- |
+| 资源 | 文档、代码仓库等外部资料 |
+| 记忆 | 从会话提取的偏好、事实与经验 |
+| 技能 | 可复用工作流程的指令与配套文件 |
 
-| 上下文 | 存放内容 | 详细说明 |
-| --- | --- | --- |
-| 资源 | 文档、代码仓库等参考资料 | [资源](../api/02-resources.md) |
-| 记忆 | 从会话提取的用户偏好、实体、事件和经验 | [记忆](../api/16-memory.md) |
-| 技能 | 可复用 Agent 工作流的指令和配套文件 | [技能](../api/04-skills.md) |
-
-共享资源位于 `viking://resources/`；用户上下文位于 `viking://user/{user_id}/`，其中 `peers/{peer_id}/` 存放特定 Peer 的上下文。共享技能可放在 `viking://agent/skills/`。作用域和路径规则见 [Viking URI](../concepts/04-viking-uri.md)。
+内容通过 `viking://` URI 定位，可以按路径浏览，也可以先检索再读取。[上下文类型](../concepts/02-context-types.md)和 [Viking URI](../concepts/04-viking-uri.md)解释对象与空间的边界。
 
 ## 按层读取内容
 
-OpenViking 可在语义处理时生成目录摘要：
-
-| 层级 | 内容 | 默认正文上限 |
-| --- | --- | --- |
-| L0 | 用于快速筛选的摘要 | 256 字符 |
-| L1 | 用于导航的概览 | 4,000 字符 |
-| L2 | 按需读取的原始内容 | 无统一上限 |
-
-L0 和 L1 是目录级附属文件，不会为每个文件固定生成一对摘要；是否可用取决于处理状态和配置。详见[上下文层级](../concepts/03-context-layers.md)。
-
-[检索](../concepts/07-retrieval.md)结合语义匹配与目录遍历。不需要会话上下文时用 `find`，需要结合会话理解查询时用 `search`。[可观测性](../guides/05-observability.md)介绍如何检查处理和检索行为。
+OpenViking 可在语义处理时生成目录摘要（L0）和概览（L1），再按需读取原文（L2）。L0、L1 是目录级附属文件，是否生成取决于处理状态和配置；它们不是每个文件都固定具备的一对摘要。详见[上下文层级](../concepts/03-context-layers.md)。
 
 ## 从会话生成记忆
 
-应用把消息写入会话，提交后触发异步记忆提取。当前记忆策略决定为用户或 Peer 创建、更新哪些记忆。集成插件可自动执行其中部分步骤，使用前需确认对应集成的支持范围。详见[会话](../concepts/08-session.md)和[记忆配置](../guides/01-configuration.md)。
+应用记录消息，提交会话后按策略异步提取记忆。插件可以自动执行其中部分步骤，支持范围见[集成能力对照](../agent-integrations/16-capability-reference.md)。生成了哪些记忆、后续是否召回，需要检查实际结果。
 
-实现原理见[架构](../concepts/01-architecture.md)，各版本变更见 [GitHub Releases](https://github.com/volcengine/OpenViking/releases)。
+想系统理解这套流程，从[概念与原理](../concepts/00-overview.md)开始；想直接完成任务，用左侧“接入你的工作”选择下一步。

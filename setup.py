@@ -27,6 +27,9 @@ get_host_engine_build_config = importlib.import_module(
 resolve_openviking_version = importlib.import_module(
     "scripts.build_support.versioning"
 ).resolve_openviking_version
+pypi_long_description = importlib.import_module(
+    "scripts.build_support.readme"
+).pypi_long_description
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
@@ -560,6 +563,8 @@ if OpenVikingBdistWheel is not None:
 
 setup(
     distclass=OpenVikingDistribution,
+    long_description=pypi_long_description(SETUP_DIR / "README.md"),
+    long_description_content_type="text/markdown",
     ext_modules=(
         []
         if SKIP_CPP_BUILD
@@ -573,6 +578,7 @@ setup(
     ),
     cmdclass=cmdclass,
     package_data={
+        "openviking_gateway": ["client-rules.json"],
         "openviking": [
             "lib/ragfs_python*.so",
             "lib/ragfs_python*.pyd",
