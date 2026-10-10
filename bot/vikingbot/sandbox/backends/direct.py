@@ -12,6 +12,18 @@ from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend
 
+_WINDOWS_ANSI_ENCODING = "mbcs" if os.name == "nt" else None
+
+
+def _decode_process_output(data: bytes) -> str:
+    """Prefer UTF-8, then use the Windows host code page for native children."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        if _WINDOWS_ANSI_ENCODING is not None:
+            return data.decode(_WINDOWS_ANSI_ENCODING, errors="replace")
+        return data.decode("utf-8", errors="replace")
+
 
 @register_backend("direct")
 class DirectBackend(SandboxBackend):
@@ -69,10 +81,10 @@ class DirectBackend(SandboxBackend):
             output_parts = []
 
             if stdout:
-                output_parts.append(stdout.decode("utf-8", errors="replace"))
+                output_parts.append(_decode_process_output(stdout))
 
             if stderr:
-                stderr_text = stderr.decode("utf-8", errors="replace")
+                stderr_text = _decode_process_output(stderr)
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
 
