@@ -1026,3 +1026,40 @@ it('retains the configuration draft when switching settings tabs', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
 })
+
+it('edits uppercase VikingDB credentials with the correct auth controls', async () => {
+  const payload = structuredClone(data)
+  const credential: ModelConfig =
+    payload.models.embedding.config.dense.credentials[0]
+  Object.assign(credential, {
+    provider: 'VIKINGDB',
+    ak: 'dummy-ak',
+    sk: 'dummy-sk',
+    region: 'cn-beijing',
+  })
+  delete credential.api_key
+  mount(payload)
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('embeddingType').getByRole('button', { name: 'models.edit' }),
+  )
+  const dialog = within(screen.getByRole('dialog'))
+  expect(
+    dialog.getByRole('combobox', { name: 'models.fields.provider' })
+      .textContent,
+  ).toContain('vikingdb')
+  expect(
+    dialog.getByLabelText<HTMLInputElement>('models.fields.ak').value,
+  ).toBe('dummy-ak')
+  expect(
+    dialog.getByLabelText<HTMLInputElement>('models.fields.region').value,
+  ).toBe('cn-beijing')
+  expect(dialog.queryByLabelText('models.fields.api_key')).toBeNull()
+  fireEvent.change(dialog.getByLabelText('models.fields.sk'), {
+    target: { value: 'rotated-sk' },
+  })
+  await apply()
+  expect(
+    state.preview.mock.lastCall![1].embedding.dense.credentials[0],
+  ).toMatchObject({ provider: 'VIKINGDB', sk: 'rotated-sk' })
+})

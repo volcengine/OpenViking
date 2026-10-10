@@ -537,7 +537,7 @@ that every derived client has applied it. See [runtime configuration source and 
 File-mode saves require the complete `content` and the previous `revision`.
 Draft previews (`source=file&dry_run=true`) accept optional VLM/Embedding form `settings`;
 other sections remain editable through the complete file.
-File reads and previews return `form_readonly: true` when the document contains dollar signs or escaped dollars. Model form data is omitted and form patches are rejected. Use file mode to edit the original text, including quoted and unquoted environment references. Validation follows startup expansion of the original text; saves do not serialize the document. CLI startup arguments are reapplied during validation, as during restart.
+File reads and previews return `form_readonly: true` when the document contains dollar signs, Windows `%VAR%` references, or escaped dollar/percent signs. Model form data is omitted and form patches are rejected. Use file mode to edit the original text, including quoted and unquoted environment references. Validation follows startup expansion of the original text; saves do not serialize the document. CLI startup arguments are reapplied during validation, as during restart.
 
 #### Server Restart
 

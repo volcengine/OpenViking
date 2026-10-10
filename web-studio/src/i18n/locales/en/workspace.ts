@@ -815,7 +815,7 @@ const workspace = {
       parameters: 'Model parameters',
       advanced: 'Advanced settings',
       environmentObject:
-        'This configuration contains environment references or dollar literals. The form is read-only; use the file editor to preserve the original text.',
+        'This configuration contains environment references or escaped reference symbols. The form is read-only; use the file editor to preserve the original text.',
       embeddingContract:
         'Model identity, dimensions and input type are fixed at account creation.',
       fields: {

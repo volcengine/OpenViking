@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import stat
 import sys
 
@@ -445,3 +446,30 @@ def test_literal_legacy_backup_bindings_remain_distinct(config_file):
         "dummy-review-key",
         "backup-key",
     ]
+
+
+@pytest.mark.parametrize("fragment", ["%STUDIO_WINDOWS_KEY%", r"\u0025STUDIO_WINDOWS_KEY%"])
+def test_windows_environment_references_remain_file_only(config_file, monkeypatch, fragment):
+    import ntpath
+
+    path, raw = config_file
+    monkeypatch.setenv("STUDIO_WINDOWS_KEY", "secret-from-windows-env")
+    # Exercise Windows expansion without requiring a Windows host.
+    monkeypatch.setattr(os.path, "expandvars", ntpath.expandvars)
+    raw["vlm"]["api_key"] = fragment
+    content = json.dumps(raw).replace(r"\\u0025", r"\u0025")
+    path.write_text(content)
+    loaded = read_config_file()
+    assert loaded["form_readonly"]
+    assert loaded["models"] == {kind: {"config": {}} for kind in ("vlm", "embedding")}
+    assert "secret-from-windows-env" not in json.dumps(loaded)
+    with pytest.raises(ValueError, match="requires file editing"):
+        preview_config_file(content, {"vlm": {"timeout": 42}})
+    edited = content.replace('"gpt-4o"', '"gpt-4o-mini"')
+    assert preview_config_file(edited)["content"] == edited
+    save_config_file(edited, loaded["revision"])
+    assert path.read_bytes() == edited.encode()
+    runtime = OpenVikingConfigSingleton._load_from_file(str(path))
+    assert runtime.vlm.credentials[0].api_key == (
+        "%STUDIO_WINDOWS_KEY%" if "\\u0025" in content else "secret-from-windows-env"
+    )

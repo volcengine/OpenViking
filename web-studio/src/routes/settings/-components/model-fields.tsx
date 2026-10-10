@@ -145,22 +145,25 @@ export function ModelFields({
 }) {
   const { t } = useTranslation('settings')
   const [visible, setVisible] = React.useState<Record<string, boolean>>({})
+  const provider = String(value.provider || '').toLowerCase()
   const [customProvider, setCustomProvider] = React.useState(
-    value.provider === 'openai' && Boolean(value.api_base),
+    provider === 'openai' && Boolean(value.api_base),
   )
   const needsEmbeddingBase =
     fields.some((field) => field.key === 'provider') &&
     fields.some((field) => field.key === 'api_key' && !field.required) &&
-    value.provider === 'openai' &&
+    provider === 'openai' &&
     !value.api_key
   return (
     <>
       {fields.map((field) => {
         const id = `${prefix}-${field.key}`
         const current =
-          field.key === 'model'
-            ? value.model || inheritedModel
-            : value[field.key]
+          field.key === 'provider' && typeof value.provider === 'string'
+            ? provider
+            : field.key === 'model'
+              ? value.model || inheritedModel
+              : value[field.key]
         const change = (next: unknown) =>
           onChange({ ...value, [field.key]: next })
         const label = t(`models.fields.${field.key}`)

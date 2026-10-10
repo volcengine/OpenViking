@@ -17,9 +17,9 @@ from openviking_cli.utils.config.open_viking_config import (
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
 FORM_MODEL_KINDS = ("vlm", "embedding")
-# Conservatively reserve dollar-bearing files for the verbatim file editor.
-# Escaped dollars must also stay literal when startup expands the original text.
-_FORM_REFERENCE = re.compile(r"\$|\\u0024", re.IGNORECASE)
+# Reserve environment references for the verbatim file editor on every platform.
+# Escaped dollars/percents must stay literal when startup expands the original text.
+_FORM_REFERENCE = re.compile(r"\$|%[^%]+%|\\u002[45]", re.IGNORECASE)
 
 
 def _form_readonly(content: str) -> bool:

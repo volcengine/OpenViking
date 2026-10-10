@@ -539,7 +539,7 @@ export function ServerConfigurationEditor() {
     query.data?.overrides?.cluster.length ||
     query.data?.overrides?.account.length,
   )
-  const provider = String(editor?.value.provider || '')
+  const provider = String(editor?.value.provider || '').toLowerCase()
   const fields = editor?.settings
     ? editor.kind === 'embedding'
       ? policies

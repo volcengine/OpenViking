@@ -780,7 +780,7 @@ const workspace = {
       parameters: '模型参数',
       advanced: '高级配置',
       environmentObject:
-        '配置含环境变量引用或美元符号字面值，表单只读。请使用文件模式编辑，以保留原文。',
+        '配置含环境变量引用或转义的引用符号，表单只读。请使用文件模式编辑，以保留原文。',
       embeddingContract:
         '模型身份、向量维度与输入类型为创建时配置，不能在此修改。',
       fields: {
