@@ -35,10 +35,10 @@ class _TestVLMResolver:
         return self._vlm
 
 
-async def _generate(extraction=None, vlm_available=True):
+async def _generate(extraction=None, vlm_available=True, content=None):
     config = _config(vlm_available)
     fs = MagicMock()
-    fs.read_file = AsyncMock(return_value="def run():\n    return 1\n")
+    fs.read_file = AsyncMock(return_value=content or "def run():\n    return 1\n")
     patches = [
         patch(
             "openviking.storage.queuefs.semantic_processor.get_openviking_config",
@@ -76,6 +76,18 @@ async def _generate(extraction=None, vlm_available=True):
                     asyncio.Semaphore(1),
                 )
     return result, config
+
+
+@pytest.mark.asyncio
+async def test_skeleton_extraction_uses_complete_source_before_output_truncation():
+    content = "def first():\n    pass\n" + ("# filler\n" * 1500) + "def tail():\n    pass\n"
+
+    result, config = await _generate(content=content, vlm_available=False)
+
+    assert len(content) > config.semantic.max_file_content_chars
+    assert "first" in result["summary"]
+    assert "tail" in result["summary"]
+    assert len(result["summary"]) <= config.semantic.max_skeleton_chars
 
 
 @pytest.mark.asyncio

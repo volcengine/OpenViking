@@ -1268,11 +1268,6 @@ class SemanticProcessor(DequeueHandlerBase):
 
         config = get_openviking_config()
 
-        # Limit content length
-        max_chars = config.semantic.max_file_content_chars
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n...(truncated)"
-
         # Detect file type and select appropriate prompt
         file_type = self._detect_file_type(file_name)
 
@@ -1291,6 +1286,12 @@ class SemanticProcessor(DequeueHandlerBase):
             prompt_id = "semantic.document_summary"
         else:
             prompt_id = "semantic.file_summary"
+
+        # Limit content only when it will be sent to the LLM. Code skeleton
+        # extraction above must see the complete source file.
+        max_chars = config.semantic.max_file_content_chars
+        if len(content) > max_chars:
+            content = content[:max_chars] + "\n...(truncated)"
 
         vlm = await self._get_vlm_config(active_ctx)
         if not vlm.is_available():
