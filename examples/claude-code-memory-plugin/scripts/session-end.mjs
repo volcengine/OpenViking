@@ -18,6 +18,7 @@ import {
   isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { hasPendingWrites } from "./lib/pending-queue.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 
@@ -67,6 +68,19 @@ async function main() {
     }
     if (!health.ok) {
       logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+      return;
+    }
+
+    // Commit only after this session's own writes have left the queue. A Stop
+    // hook parks writes on a retryable failure even when the server actually
+    // received them (lost response), so committing here would archive what
+    // the server already holds; the parked writes would later replay into a
+    // second copy nobody ever archives (or linger forever if they never
+    // reach the server). Park the commit behind the writes instead: the next
+    // replay sends writes first, then the commit (createdAt order).
+    if (await hasPendingWrites(ovSessionId)) {
+      const queued = await enqueuePendingDirectly("commitSession", ovSessionId, {});
+      log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "pending_writes" });
       return;
     }
 
