@@ -17,7 +17,7 @@ from openviking_cli.utils.config.open_viking_config import (
 )
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
-MODEL_KINDS = ("vlm", "embedding", "query_planner", "rerank")
+FORM_MODEL_KINDS = ("vlm", "embedding")
 # Match complete JSON strings first so references inside them stay quoted.
 _JSON_TOKENS = re.compile(r'"(?:[^"\\]|\\.)*"|\$(?:\{[^}]*\}|[\w]+)', re.ASCII)
 
@@ -76,6 +76,9 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
         if index == 1:
             original = original.get("backup") or {}
         source = {}
+    if not embedding and "model" not in source and (explicit or index == 0):
+        # A synthesized primary binding must keep inheriting the shared model.
+        values.pop("model", None)
     original = dict(original)
     if original.get("provider") is None:
         original["provider"] = original.get("backend") or original.get("default_provider")
@@ -98,13 +101,14 @@ def _revision(data: bytes) -> str:
 
 def _validate(raw: dict) -> OpenVikingConfig:
     try:
-        from openviking.server.config import ServerConfig
+        from openviking.server.config import ServerConfig, validate_server_config
 
         expanded = json.loads(os.path.expandvars(_dump(raw)))
         server = expanded.get("server")
-        ServerConfig.model_validate({} if server is None else server)
+        validate_server_config(ServerConfig.model_validate({} if server is None else server))
         return OpenVikingConfig.from_dict(expanded)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        # Startup validators exit on failure; API validation must keep the server alive.
         # Validation errors may contain API keys from rejected input.
         raise ValueError("Invalid ov.conf configuration; check configuration fields") from exc
 
@@ -166,26 +170,22 @@ def _structured_environment_references(node) -> list[str]:
 
 def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
     models = {}
-    for kind in MODEL_KINDS:
-        inherited = kind == "query_planner" and (
-            config.query_planner is None or not config.query_planner._has_any_config()
-        )
-        model = config.get_query_planner() if inherited else getattr(config, kind)
+    for kind in FORM_MODEL_KINDS:
+        model = getattr(config, kind)
         value = model.model_dump(exclude_none=True)
-        original = raw.get("vlm" if inherited else kind) or {}
+        original = raw.get(kind) or {}
         references = _structured_environment_references(original)
         if references:
             # An object/array reference has no literal fields to project. Keep it
             # opaque rather than exposing or materializing environment secrets.
             models[kind] = {
-                "source": "vlm" if inherited else "server",
                 "config": {},
                 "environment_references": references,
             }
             continue
         # Display literal environment references; never replace them with resolved secrets.
         value = _merge(value, original)
-        if kind in ("vlm", "query_planner"):
+        if kind == "vlm":
             # VLM normalization synthesizes provider maps from parent fields.
             # Return only the literal map to avoid exposing expanded secrets.
             value["providers"] = original.get("providers") or {}
@@ -196,25 +196,22 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
                 for mode in ("dense", "sparse", "hybrid")
                 if getattr(model, mode) is not None
             ]
-        if kind != "rerank":
-            for section, original_section, section_model in sections:
-                bindings = section_model.credentials
-                if kind == "embedding" and not bindings:
-                    bindings = [section_model]
-                section["credentials"] = [
-                    _binding_values(
-                        binding, section_model, kind == "embedding", original_section, index
-                    )
-                    for index, binding in enumerate(bindings)
-                ]
-                if kind == "embedding":
-                    for index, binding in enumerate(section["credentials"]):
-                        if not binding.get("id"):
-                            binding["id"] = f"credential-{index}"
+        for section, original_section, section_model in sections:
+            bindings = section_model.credentials
+            if kind == "embedding" and not bindings:
+                bindings = [section_model]
+            section["credentials"] = [
+                _binding_values(
+                    binding, section_model, kind == "embedding", original_section, index
+                )
+                for index, binding in enumerate(bindings)
+            ]
+            if kind == "embedding":
+                for index, binding in enumerate(section["credentials"]):
+                    if not binding.get("id"):
+                        binding["id"] = f"credential-{index}"
         models[kind] = {
-            "source": "vlm" if inherited else "server",
             "config": value,
-            **({"available": model.is_available()} if kind == "rerank" else {}),
         }
     return models
 
@@ -236,7 +233,6 @@ def read_config_file() -> dict:
     startup_revision = OpenVikingConfigSingleton.get_config_file_revision()
     return {
         "content": data.decode("utf-8-sig"),
-        "settings": {kind: raw[kind] for kind in MODEL_KINDS if kind in raw},
         "models": _model_view(raw, config),
         "revision": _revision(data),
         "file_path": str(path),
@@ -326,7 +322,7 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
 
 
 def _merge_model(old: dict, changes: dict, kind: str) -> dict:
-    if kind in ("vlm", "query_planner"):
+    if kind == "vlm":
         return _merge_credentials(old, changes, False)
     result = _merge(old, changes)
     if kind == "embedding":
@@ -360,14 +356,10 @@ def _atomic_write(path: Path, data: bytes, mode: int) -> None:
 
 
 def _apply_model_changes(raw: dict, settings: dict) -> None:
-    if not settings or set(settings) - set(MODEL_KINDS):
+    if not settings or set(settings) - set(FORM_MODEL_KINDS):
         raise ValueError("Only model sections can be edited through the form")
     for kind, value in settings.items():
-        if value is None:
-            if kind != "query_planner":
-                raise ValueError("Only query_planner can be reset to inherit VLM")
-            raw.pop(kind, None)
-        elif isinstance(value, dict):
+        if isinstance(value, dict):
             if _structured_environment_references(raw.get(kind)):
                 raise ValueError(
                     "Model objects supplied by environment references require file editing"
@@ -377,12 +369,8 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
             raise ValueError("Model configuration must be an object")
 
 
-def save_config_file(settings: dict, revision: str, content: str | None = None) -> dict:
+def save_config_file(content: str, revision: str) -> dict:
     """Save one startup-file revision; never update the running configuration."""
-    if content is not None and settings:
-        raise ValueError("Supply either full file content or model settings, not both")
-    if content is None and not settings:
-        raise ValueError("Supply full file content or model settings")
     path = _path()
     lock_fd = os.open(path.with_name(f".{path.name}.studio.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(lock_fd, "r+b") as lock:
@@ -394,17 +382,13 @@ def save_config_file(settings: dict, revision: str, content: str | None = None) 
             import fcntl
 
             fcntl.flock(lock, fcntl.LOCK_EX)
-        data, raw, _ = _read(path)
+        data, _, _ = _read(path)
         if not revision or revision != _revision(data):
             raise ValueError("ov.conf changed; reload before saving")
         mode = stat.S_IMODE(path.stat().st_mode)
         if not mode & 0o222 or not os.access(path, os.W_OK):
             raise ValueError("ov.conf is read-only")
-        if content is None:
-            _apply_model_changes(raw, settings)
-            content = _dump(raw, ensure_ascii=False, indent=2) + "\n"
-        else:
-            raw = _parse(content)
+        raw = _parse(content)
         _validate(raw)
         if path.read_bytes() != data:
             raise ValueError("ov.conf changed; reload before saving")

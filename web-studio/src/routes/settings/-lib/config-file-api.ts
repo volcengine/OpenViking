@@ -1,19 +1,12 @@
 import { createOvClient, getOvResult, OvClientError } from '#/lib/ov-client'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
-export const modelKinds = [
-  'vlm',
-  'embedding',
-  'query_planner',
-  'rerank',
-] as const
+export const modelKinds = ['vlm', 'embedding'] as const
 export type ModelKind = (typeof modelKinds)[number]
 export type ModelConfig = Record<string, unknown>
-export type ModelChanges = Partial<Record<ModelKind, ModelConfig | null>>
+export type ModelChanges = Partial<Record<ModelKind, ModelConfig>>
 export type ModelEntry = {
-  source: 'account' | 'server' | 'vlm'
   config: ModelConfig
-  available?: boolean
   environment_references?: string[]
 }
 export type ConfigFileDraft = {
@@ -27,7 +20,6 @@ export type ConfigFileConfiguration = ConfigFileDraft & {
   restart_required?: boolean
   restart?: RestartStatus
   overrides?: { cluster: string[]; account: string[] }
-  settings: Partial<Record<ModelKind, ModelConfig>>
 }
 export type RestartStatus = {
   supported: boolean
@@ -182,9 +174,7 @@ export function createConfigFileApi(
             settings: Object.fromEntries(
               Object.entries(changes).map(([kind, config]) => [
                 kind,
-                kind === 'embedding' && config
-                  ? embeddingPatch(config)
-                  : config,
+                kind === 'embedding' ? embeddingPatch(config) : config,
               ]),
             ),
           },

@@ -53,7 +53,7 @@ function ConnectionSettingsRoute() {
         <TabsContent value="connection">
           <ConnectionSettingsPanel />
         </TabsContent>
-        <TabsContent value="configuration">
+        <TabsContent value="configuration" keepMounted>
           <ServerConfigurationEditor key={identityScopeKey} />
         </TabsContent>
       </Tabs>

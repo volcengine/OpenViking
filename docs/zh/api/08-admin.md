@@ -445,6 +445,10 @@ PATCH 会先做结构校验，再构造合并后的配置：未知路径和运�
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
 配置层更新成功，不保证所有派生客户端都已完成切换。配置存储和重载行为见[运行时配置来源与重载行为](../guides/01-configuration.md#runtime-configuration-source)。
 
+文件保存始终提交完整 `content` 和旧 `revision`。
+草稿预览（`source=file&dry_run=true`）可附带 VLM/Embedding 表单 `settings`；
+其他配置节通过完整文件编辑。
+
 #### 服务端重启
 
 仅 ROOT 可以重启通过单 worker `openviking-server` CLI 启动的进程。

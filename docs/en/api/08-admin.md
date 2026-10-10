@@ -534,6 +534,10 @@ Consumer failures are logged without rolling back the persisted override, so
 a successful response confirms the configuration update but does not certify
 that every derived client has applied it. See [runtime configuration source and reload behavior](../guides/01-configuration.md#runtime-configuration-source).
 
+File-mode saves require the complete `content` and the previous `revision`.
+Draft previews (`source=file&dry_run=true`) accept optional VLM/Embedding form `settings`;
+other sections remain editable through the complete file.
+
 #### Server Restart
 
 Only ROOT can restart a single-worker `openviking-server` CLI process.

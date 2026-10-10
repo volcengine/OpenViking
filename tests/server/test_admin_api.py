@@ -343,7 +343,19 @@ async def test_studio_file_configuration_permissions_revision_and_overrides(
     result = response.json()["result"]
     assert result["models"]["vlm"]["config"]["model"] == "gpt-4o"
     assert result["overrides"]["account"] == ["vlm"]
-    body = {"revision": result["revision"], "settings": {"rerank": {"provider": "jev", "api_key": "jev-secret", "mode": "choice", "threshold": 0}}}
+    # Persisted overrides still need reporting even outside the form's scope.
+    await manager._source.update(
+        ConfigScope.cluster(), lambda _: {"query_planner": {"model": "planner-override"}}
+    )
+    override_response = await lightweight_admin_client.get(
+        url, params=params, headers=root_headers()
+    )
+    assert override_response.json()["result"]["overrides"]["cluster"] == ["query_planner"]
+    content = json.loads(result["content"])
+    content["rerank"] = {
+        "provider": "jev", "api_key": "jev-secret", "mode": "choice", "threshold": 0
+    }
+    body = {"revision": result["revision"], "content": json.dumps(content)}
     assert (await lightweight_admin_client.patch(url, params={"source": "file"}, headers=admin_headers, json=body)).status_code == 403
     saved = await lightweight_admin_client.patch(url, params={"source": "file"}, headers=root_headers(), json=body)
     assert saved.status_code == 200, saved.text
@@ -398,6 +410,15 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
     assert rejected.status_code == 400
     assert path.read_bytes() == before
     body = {"content": content, "revision": result["revision"]}
+    for extra_body in (
+        {"settings": {"vlm": {"timeout": 1}}},
+        {**body, "settings": {"vlm": {"timeout": 1}}},
+    ):
+        rejected = await lightweight_admin_client.patch(
+            url, params={"source": "file"}, headers=root_headers(), json=extra_body
+        )
+        assert rejected.status_code == 400
+        assert path.read_bytes() == before
     denied = await lightweight_admin_client.patch(
         url, params={"source": "file"}, headers=admin_headers, json=body
     )
@@ -3551,11 +3572,21 @@ async def test_server_restart_requires_root_and_valid_revision(
     assert blocked.status_code == 412
 
 
+@pytest.mark.parametrize(
+    "invalid_server",
+    [
+        {"port": "invalid"},
+        {"root_api_key": ""},
+        {"auth_mode": "api_key"},
+        {"auth_mode": "dev", "host": "0.0.0.0"},
+    ],
+)
 async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
     lightweight_admin_client,
     lightweight_admin_app,
     tmp_path,
     monkeypatch,
+    invalid_server,
 ):
     import hashlib
 
@@ -3575,7 +3606,7 @@ async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
     ).status_code == 412
     stopped = Mock()
     lightweight_admin_app.state.restart_controller = RestartController(stopped)
-    path.write_text('{"server":{"port":"invalid"}}')
+    path.write_text(json.dumps({"server": invalid_server}))
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     response = await lightweight_admin_client.post(
         url,

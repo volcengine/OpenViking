@@ -2,26 +2,9 @@ import * as React from 'react'
 import { toast } from 'sonner'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  DndContext,
-  PointerSensor,
-  KeyboardSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core'
-import {
-  SortableContext,
-  useSortable,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
-import {
   ArrowUpIcon,
   ArrowDownIcon,
   EyeIcon,
-  GripVerticalIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -113,7 +96,6 @@ function Action({
   )
 }
 type RowProps = {
-  id: string
   value: ModelConfig
   fallback: ModelConfig
   index: number
@@ -123,10 +105,8 @@ type RowProps = {
   onEdit: () => void
   onDelete: () => void
   onMove: (index: number) => void
-  sortable: boolean
 }
 function ModelRow({
-  id,
   value,
   fallback,
   index,
@@ -136,43 +116,18 @@ function ModelRow({
   onEdit,
   onDelete,
   onMove,
-  sortable,
 }: RowProps) {
   const { t } = useTranslation('settings')
-  const drag = useSortable({ id, disabled: disabled || !sortable })
-  const ordered = sortable && count > 1
+  const ordered = count > 1
   const modelId = String(
     value.model || value.model_name || fallback.model || t('models.notSet'),
   )
   return (
     <div
-      ref={drag.setNodeRef}
-      style={{
-        transform: CSS.Transform.toString(drag.transform),
-        transition: drag.transition,
-      }}
-      className={`grid min-w-0 items-start gap-2 border-b bg-background py-3 text-sm md:items-center ${ordered ? 'grid-cols-[24px_minmax(0,1fr)] md:grid-cols-[24px_32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[0px_minmax(0,1fr)] gap-x-0 md:grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px] md:gap-x-2'} ${drag.isDragging ? 'relative z-10 shadow-md' : ''}`}
+      className={`grid min-w-0 items-start gap-2 border-b bg-background py-3 text-sm md:items-center ${ordered ? 'grid-cols-[32px_minmax(0,1fr)] md:grid-cols-[32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[0px_minmax(0,1fr)] gap-x-0 md:grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px] md:gap-x-2'}`}
     >
-      {sortable && count > 1 ? (
-        <Action
-          label={t('models.drag')}
-          disabled={disabled}
-          ref={drag.setActivatorNodeRef}
-          {...drag.attributes}
-          {...drag.listeners}
-          className="touch-none cursor-grab"
-        >
-          <GripVerticalIcon />
-        </Action>
-      ) : (
-        <span className="md:hidden" />
-      )}
-      <span
-        className={
-          ordered ? 'hidden text-xs text-muted-foreground md:block' : 'hidden'
-        }
-      >
-        {sortable && count > 1 ? index + 1 : ''}
+      <span className={ordered ? 'text-xs text-muted-foreground' : 'md:hidden'}>
+        {ordered ? index + 1 : null}
       </span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
@@ -183,14 +138,12 @@ function ModelRow({
           >
             {modelId}
           </button>
-          {sortable && (
-            <Badge
-              variant={index === 0 ? 'secondary' : 'outline'}
-              title={t('models.priorityHint')}
-            >
-              {t(index === 0 ? 'models.preferred' : 'models.backup')}
-            </Badge>
-          )}
+          <Badge
+            variant={index === 0 ? 'secondary' : 'outline'}
+            title={t('models.priorityHint')}
+          >
+            {t(index === 0 ? 'models.preferred' : 'models.backup')}
+          </Badge>
         </div>
         <span className="mt-1 block text-xs text-muted-foreground md:hidden">
           {String(value.provider || '')}
@@ -214,62 +167,60 @@ function ModelRow({
         <Action label={t('models.edit')} disabled={disabled} onClick={onEdit}>
           <PencilIcon />
         </Action>
-        {sortable && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t('models.more')}
-                  disabled={disabled}
-                />
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t('models.more')}
+                disabled={disabled}
+              />
+            }
+          >
+            <MoreHorizontalIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-40">
+            <DropdownMenuItem
+              onClick={() =>
+                void copyTextToClipboard(modelId)
+                  .then(() => toast.success(t('models.copied')))
+                  .catch(() => toast.error(t('models.copyFailed')))
               }
             >
-              <MoreHorizontalIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuItem
-                onClick={() =>
-                  void copyTextToClipboard(modelId)
-                    .then(() => toast.success(t('models.copied')))
-                    .catch(() => toast.error(t('models.copyFailed')))
-                }
-              >
-                <CopyIcon />
-                {t('models.copyModelId')}
-              </DropdownMenuItem>
-              {count > 1 && (
-                <>
-                  <DropdownMenuItem
-                    disabled={index === 0}
-                    onClick={() => onMove(index - 1)}
-                  >
-                    <ArrowUpIcon />
-                    {t('models.moveUp')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={index === count - 1}
-                    onClick={() => onMove(index + 1)}
-                  >
-                    <ArrowDownIcon />
-                    {t('models.moveDown')}
-                  </DropdownMenuItem>
-                </>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={count === 1}
-                onClick={onDelete}
-              >
-                <Trash2Icon />
-                {t('models.remove')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+              <CopyIcon />
+              {t('models.copyModelId')}
+            </DropdownMenuItem>
+            {count > 1 && (
+              <>
+                <DropdownMenuItem
+                  disabled={index === 0}
+                  onClick={() => onMove(index - 1)}
+                >
+                  <ArrowUpIcon />
+                  {t('models.moveUp')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={index === count - 1}
+                  onClick={() => onMove(index + 1)}
+                >
+                  <ArrowDownIcon />
+                  {t('models.moveDown')}
+                </DropdownMenuItem>
+              </>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              disabled={count === 1}
+              onClick={onDelete}
+            >
+              <Trash2Icon />
+              {t('models.remove')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   )
@@ -282,7 +233,6 @@ function ModelList({
   onOrder,
   onOpen,
   onDelete,
-  sortable = true,
 }: {
   group: string
   values: ModelConfig[]
@@ -291,19 +241,15 @@ function ModelList({
   onOrder: (values: ModelConfig[]) => void
   onOpen: (index: number, readonly: boolean) => void
   onDelete: (index: number) => void
-  sortable?: boolean
 }) {
   const { t } = useTranslation('settings')
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  )
   const ids = values.map((value, index) => `${group}-${value.id || index}`)
   function move(from: number, to: number) {
-    if (from >= 0 && to >= 0 && to < values.length && from !== to)
-      onOrder(arrayMove(values, from, to))
+    if (from < 0 || to < 0 || to >= values.length || from === to) return
+    const reordered = [...values]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(to, 0, moved)
+    onOrder(reordered)
   }
   if (!values.length)
     return (
@@ -312,52 +258,29 @@ function ModelList({
   return (
     <div className="min-w-0">
       <div
-        className={`hidden gap-2 border-b pb-2 text-xs text-muted-foreground md:grid ${sortable && values.length > 1 ? 'grid-cols-[24px_32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]'}`}
+        className={`hidden gap-2 border-b pb-2 text-xs text-muted-foreground md:grid ${values.length > 1 ? 'grid-cols-[32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]'}`}
       >
-        {sortable && values.length > 1 && (
-          <>
-            <span />
-            <span>{t('models.priority')}</span>
-          </>
-        )}
+        {values.length > 1 && <span>{t('models.priority')}</span>}
         <span>{t('models.listModel')}</span>
         <span>{t('models.provider')}</span>
         <span>{t('models.apiBase')}</span>
         <span>{t('models.apiKey')}</span>
         <span className="text-right">{t('models.actions')}</span>
       </div>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={({ active, over }) => {
-          if (over && !disabled)
-            move(ids.indexOf(String(active.id)), ids.indexOf(String(over.id)))
-        }}
-      >
-        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {values.map((value, index) => (
-            <ModelRow
-              key={ids[index]}
-              id={ids[index]}
-              value={value}
-              fallback={fallback}
-              index={index}
-              count={values.length}
-              disabled={disabled}
-              sortable={sortable}
-              onView={() => onOpen(index, true)}
-              onEdit={() => onOpen(index, false)}
-              onDelete={() => onDelete(index)}
-              onMove={(to) => move(index, to)}
-            />
-          ))}
-        </SortableContext>
-      </DndContext>
-      {!values.length && (
-        <p className="py-5 text-sm text-muted-foreground">
-          {t('models.empty')}
-        </p>
-      )}
+      {values.map((value, index) => (
+        <ModelRow
+          key={ids[index]}
+          value={value}
+          fallback={fallback}
+          index={index}
+          count={values.length}
+          disabled={disabled}
+          onView={() => onOpen(index, true)}
+          onEdit={() => onOpen(index, false)}
+          onDelete={() => onDelete(index)}
+          onMove={(to) => move(index, to)}
+        />
+      ))}
     </div>
   )
 }

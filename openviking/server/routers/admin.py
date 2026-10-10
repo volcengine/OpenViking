@@ -815,7 +815,7 @@ async def get_cluster_configuration(
     """Return the cluster layer's explicit runtime configuration."""
     runtime_config = _get_runtime_config_manager()
     if source == "file":
-        from openviking.config.config_file import MODEL_KINDS, read_config_file
+        from openviking.config.config_file import read_config_file
 
         response.headers["Cache-Control"] = "no-store"
         try:
@@ -828,9 +828,10 @@ async def get_cluster_configuration(
         account = (
             await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
         )
+        model_kinds = ("vlm", "embedding", "query_planner", "rerank")
         result["overrides"] = {
-            "cluster": [key for key in MODEL_KINDS if (cluster or {}).get(key) is not None],
-            "account": [key for key in MODEL_KINDS if (account or {}).get(key) is not None],
+            "cluster": [key for key in model_kinds if (cluster or {}).get(key) is not None],
+            "account": [key for key in model_kinds if (account or {}).get(key) is not None],
         }
         result["restart"] = request.app.state.restart_controller.status()
         return Response(status="ok", result=result)
@@ -904,8 +905,10 @@ async def patch_cluster_configuration(
                         preview_config_file, body.content, body.settings
                     )
                 else:
+                    if body.content is None or body.settings:
+                        raise ValueError("File saves require full content and no model settings")
                     result = await asyncio.to_thread(
-                        save_config_file, body.settings, body.revision or "", body.content
+                        save_config_file, body.content, body.revision or ""
                     )
             except ValueError as exc:
                 raise InvalidArgumentError(str(exc)) from exc

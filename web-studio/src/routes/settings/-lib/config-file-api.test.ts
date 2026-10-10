@@ -61,10 +61,7 @@ it('uses ROOT credentials to preview a full draft without saving, then saves one
               revision: 'file-revision',
               content: '{"server":{"port":1933}}',
               models: Object.fromEntries(
-                ['vlm', 'embedding', 'query_planner', 'rerank'].map((kind) => [
-                  kind,
-                  { source: 'server', config: {} },
-                ]),
+                ['vlm', 'embedding'].map((kind) => [kind, { config: {} }]),
               ),
             },
           },

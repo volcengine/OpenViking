@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { ServerConfigurationEditor } from './server-configuration'
+import { Route } from '../route'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import en from '#/i18n/locales/en/workspace'
 
@@ -55,14 +56,24 @@ vi.mock('../-lib/config-file-api', async (importOriginal) => ({
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
-    connection: { accountId: 'default' },
+    connection: {
+      accountId: 'default',
+      userId: 'default',
+      baseUrl: '',
+      adminApiKey: 'root',
+      apiKey: '',
+    },
+    saveConnection: vi.fn(),
     connectionRole: state.role,
     identityScopeKey: 'default',
     serverMode: 'api_key',
   }),
 }))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { resolvedLanguage: 'en' },
+  }),
 }))
 afterEach(() => {
   cleanup()
@@ -93,18 +104,27 @@ const language = {
     },
   ],
 }
+const rerank = {
+  provider: 'jev',
+  model: 'jev-latest',
+  api_key: 'jev-secret',
+  api_base: 'https://api.typesafe.ai',
+  mode: 'noul',
+  threshold: 0.1,
+  timeout: 30,
+  max_input_tokens: 0,
+  extra_headers: { keep: 'yes' },
+  log_payloads: false,
+}
 const data = {
   file_path: '/server/ov.conf',
   writable: true,
   restart_required: false,
   restart: { supported: true, instance_id: 'new', restarting: false },
   revision: 'revision',
-  settings: {},
   models: {
-    vlm: { source: 'server', config: language },
-    query_planner: { source: 'vlm', config: language },
+    vlm: { config: language },
     embedding: {
-      source: 'server',
       config: {
         max_retries: 3,
         max_concurrent: 10,
@@ -123,28 +143,12 @@ const data = {
         },
       },
     },
-    rerank: {
-      source: 'server',
-      available: true,
-      config: {
-        provider: 'jev',
-        model: 'jev-latest',
-        api_key: 'jev-secret',
-        api_base: 'https://api.typesafe.ai',
-        mode: 'noul',
-        threshold: 0.1,
-        timeout: 30,
-        max_input_tokens: 0,
-        extra_headers: { keep: 'yes' },
-        log_payloads: false,
-      },
-    },
   },
 }
 const file = {
   vlm: language,
   embedding: data.models.embedding.config,
-  rerank: data.models.rerank.config,
+  rerank,
   server: { port: 1933, root_api_key: '${ROOT_KEY}' },
   storage: { workspace: '/server/data' },
 }
@@ -158,6 +162,7 @@ function mount(
   payload: typeof data & {
     overrides?: { cluster: string[]; account: string[] }
   } = data,
+  withSettingsTabs = false,
 ) {
   state.get.mockResolvedValue({ ...structuredClone(payload), content })
   state.preview.mockImplementation(async (text: string, changes = {}) => {
@@ -187,9 +192,10 @@ function mount(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+  const SettingsRoute = Route.options.component!
   render(
     <QueryClientProvider client={client}>
-      <ServerConfigurationEditor />
+      {withSettingsTabs ? <SettingsRoute /> : <ServerConfigurationEditor />}
     </QueryClientProvider>,
   )
   return client
@@ -347,15 +353,9 @@ it('copies a model ID from its menu without touching configuration', async () =>
   expect(state.save).not.toHaveBeenCalled()
   expect(screen.queryByRole('button', { name: 'models.saveAll' })).toBeNull()
 })
-it('places each add button alongside model settings in the section header', async () => {
+it('adds an embedding credential without changing its model contract', async () => {
   mount()
   await screen.findByText('model-a')
-  for (const kind of ['vlmType', 'embeddingType']) {
-    const region = section(kind)
-    const add = region.getByRole('button', { name: 'models.addModel' })
-    const parameters = region.getByRole('button', { name: 'models.parameters' })
-    expect(add.parentElement).toBe(parameters.parentElement)
-  }
   fireEvent.click(
     section('embeddingType').getByRole('button', { name: 'models.addModel' }),
   )
@@ -1005,4 +1005,36 @@ it('keeps environment objects read-only in the form and offers file editing', as
   ).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
   expect(await screen.findByLabelText('models.fileContent')).toBeTruthy()
+})
+
+it('retains the configuration draft when switching settings tabs', async () => {
+  await act(async () => {
+    mount(data, true)
+  })
+  fireEvent.click(
+    await screen.findByRole('tab', { name: 'tabs.configuration' }),
+  )
+  await screen.findByText('model-a')
+  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  const text = content.replace('default-model', 'unsaved-model')
+  fireEvent.change(
+    await screen.findByRole<HTMLTextAreaElement>('textbox', {
+      name: 'models.fileContent',
+    }),
+    { target: { value: text } },
+  )
+  fireEvent.click(screen.getByRole('tab', { name: 'tabs.connection' }))
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('textbox', { name: 'models.fileContent' }),
+    ).toBeNull(),
+  )
+  fireEvent.click(screen.getByRole('tab', { name: 'tabs.configuration' }))
+  expect(
+    screen.getByRole<HTMLTextAreaElement>('textbox', {
+      name: 'models.fileContent',
+    }).value,
+  ).toBe(text)
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
 })
