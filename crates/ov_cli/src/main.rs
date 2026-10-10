@@ -1393,6 +1393,14 @@ enum Commands {
             help_heading = "Common options"
         )]
         wait: bool,
+        /// HTTP request timeout in seconds (only valid with --wait=true)
+        #[arg(
+            long,
+            value_parser = config::parse_positive_timeout,
+            value_name = "seconds",
+            help_heading = "Common options"
+        )]
+        timeout: Option<f64>,
         /// Rebuild all selected semantic/vector data without comparing fingerprints
         #[arg(long, help_heading = "Common options")]
         force: bool,
@@ -3893,12 +3901,16 @@ async fn main() {
             uri,
             mode,
             wait,
+            timeout,
             force,
             tags,
             tag_mode,
             recursive,
         } => {
-            handlers::handle_reindex(uri, mode, wait, force, tags, tag_mode, recursive, ctx).await
+            handlers::handle_reindex(
+                uri, mode, wait, timeout, force, tags, tag_mode, recursive, ctx,
+            )
+            .await
         }
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
