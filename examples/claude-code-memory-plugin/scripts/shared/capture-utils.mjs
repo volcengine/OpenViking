@@ -617,7 +617,7 @@ function hasEnoughSignal(text) {
 }
 
 function isPunctuationOnly(text) {
-  return !/[a-z0-9\u3400-\u9fff]/i.test(text);
+  return !/[\p{L}\p{N}\u3400-\u9fff]/u.test(text);
 }
 
 /**

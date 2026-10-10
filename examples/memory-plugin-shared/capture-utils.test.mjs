@@ -18,6 +18,30 @@ const CAPTURE_CONFIG = {
   captureMaxLength: 24000,
 }
 
+for (const text of [
+  "мой любимый редактор называется курсор",
+  "これからもこのせっていをおぼえてください",
+  "تذكر أن المحرر المفضل لدي هو هذا المحرر",
+  "앞으로도 이 설정을 꼭 기억해 주세요",
+]) {
+  test(`capture keeps substantive Unicode text: ${text}`, () => {
+    for (const role of ["user", "assistant"]) {
+      const decision = shouldCaptureText(text, role)
+      assert.equal(decision.shouldCapture, true)
+      assert.equal(decision.text, text)
+    }
+  })
+}
+
+test("Unicode punctuation detection preserves signal thresholds and noise filtering", () => {
+  for (const text of ["abcd", "αβγδεζ", "中文本abc", "……！？！？……", "😀😀😀😀😀😀😀😀😀😀😀😀", "\u0301".repeat(16), "thanks", "/remember project"]) {
+    assert.equal(shouldCaptureText(text, "user").shouldCapture, false, text)
+  }
+  for (const text of ["abcdef", "中文文字", "䷀䷁䷂䷃"]) {
+    assert.equal(shouldCaptureText(text, "user").shouldCapture, true, text)
+  }
+})
+
 function toolPart(parts) {
   return parts.find((part) => part?.type === "tool")
 }
