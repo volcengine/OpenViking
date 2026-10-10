@@ -918,13 +918,13 @@ def _latest_user_text_from_input(input_value: Any, input_messages_key: str | Non
 
 
 def _input_messages(input_value: Any, input_messages_key: str | None) -> list[Any]:
-    if isinstance(input_value, list):
-        return list(input_value)
     if isinstance(input_value, dict):
         key = input_messages_key or "messages"
-        value = input_value.get(key)
-        if isinstance(value, list):
-            return list(value)
+        input_value = input_value.get(key)
+    if isinstance(input_value, (list, tuple)):
+        return list(input_value)
+    if isinstance(input_value, BaseMessage):
+        return [input_value]
     return []
 
 
@@ -933,13 +933,17 @@ def _inject_system_context(
     context_block: str,
     input_messages_key: str | None,
 ) -> Any:
-    if isinstance(input_value, list):
-        return _merge_system_message(input_value, context_block)
+    if isinstance(input_value, (list, tuple, BaseMessage)):
+        return _merge_system_message(
+            _input_messages(input_value, input_messages_key), context_block
+        )
     if isinstance(input_value, dict):
         key = input_messages_key or "messages"
-        if isinstance(input_value.get(key), list):
+        if isinstance(input_value.get(key), (list, tuple, BaseMessage)):
             updated = dict(input_value)
-            updated[key] = _merge_system_message(input_value[key], context_block)
+            updated[key] = _merge_system_message(
+                _input_messages(input_value, input_messages_key), context_block
+            )
             return updated
         updated = dict(input_value)
         updated["openviking_context"] = context_block

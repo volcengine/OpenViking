@@ -9,7 +9,9 @@ pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, convert_to_messages
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -58,6 +60,63 @@ def test_recall_assembler_does_not_read_history_by_default():
     client = NoContextClient({"viking://~/memories/pref.md": "Use Rust."})
     assembler = OpenVikingSessionContextAssembler(client=client)
     assert assembler.assemble(session_id="host", query="Rust").block
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("shape", ["list", "tuple", "single", "string"])
+@pytest.mark.asyncio
+async def test_host_history_recalls_supported_current_message_inputs(asynchronous, shape):
+    client = NoContextClient({"viking://resources/support.md": "support reset steps"})
+    previous = HumanMessage(content="Earlier question.")
+    history = InMemoryChatMessageHistory(messages=[previous])
+    user = HumanMessage(content="support reset")
+    current = {"list": [user], "tuple": (user,), "single": user, "string": user.content}[shape]
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "Policy.\n{openviking_context}"),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{question}"),
+        ]
+    )
+    seen = []
+
+    def model_input(data):
+        value = data["question"]
+        if isinstance(value, str):
+            messages = prompt.invoke(data).to_messages()
+        else:
+            messages = [
+                *data["history"],
+                *convert_to_messages([value] if isinstance(value, BaseMessage) else value),
+            ]
+        seen.extend(messages)
+        return messages
+
+    async with with_openviking_memory(
+        RunnableLambda(model_input) | FakeListChatModel(responses=["ok"]),
+        client=client,
+        history_factory=lambda _: history,
+        session_id="supported-input",
+        input_messages_key="question",
+        history_messages_key="history",
+    ) as runnable:
+        payload = {"question": current, "ability": "not the current query"}
+        response = await runnable.ainvoke(payload) if asynchronous else runnable.invoke(payload)
+
+    assert response.content == "ok"
+    assert [call["query"] for call in client.search_calls] == ["support reset"]
+    assert any("support reset steps" in str(message.content) for message in seen)
+    assert seen[-1].content == "support reset"
+    assert history.messages[0] is previous
+    assert [message.content for message in history.messages] == [
+        "Earlier question.",
+        "support reset",
+        "ok",
+    ]
+    captured = client.sessions["supported-input"]
+    assert [message["role"] for message in captured] == ["user", "assistant"]
+    assert captured[0]["parts"] == [{"type": "text", "text": "support reset"}]
+    assert any(part["type"] == "context" for part in captured[1]["parts"])
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
