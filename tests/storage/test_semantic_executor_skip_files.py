@@ -132,6 +132,36 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_memory_associations_are_not_summarized_or_vectorized(monkeypatch):
+    root = "viking://user/user1/memories"
+    fake_fs = _FakeVikingFS(
+        {
+            root: [{"name": ".association", "isDir": True}, {"name": "note.md", "isDir": False}],
+            root + "/.association": [{"name": "Caroline", "isDir": True}],
+            root + "/.association/Caroline": [{"name": "meta.json", "isDir": False}],
+        }
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor()
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+    )
+    await executor.run(root)
+    assert processor.summarized_files == [root + "/note.md"]
+    assert not any("/.association" in path for path in processor.vectorized_files)
+    assert not any("/.association" in path for path, _ in fake_fs.writes)
+
+
+@pytest.mark.asyncio
 async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     """messages.jsonl in a subdirectory should also be skipped."""
     root_uri = "viking://user/user1/sessions/test-session"

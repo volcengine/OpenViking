@@ -89,6 +89,7 @@ dependencies = [
 
 
 [project.optional-dependencies]
+nlp = ["spacy>=3.8,<3.8.15"]
 gateway = [
     "aiohttp>=3.13.3",
     "async-timeout>=5.0.1",

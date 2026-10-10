@@ -67,6 +67,30 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 TimeField = Literal["updated_at", "created_at"]
 
 
+class AssociationSearchRequest(BaseModel):
+    """Exact cue lookup. Does not alter ordinary Find/Search."""
+
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1)
+    target_uri: Union[str, List[str]] = ""
+    limit: int = Field(default=20, ge=1, le=1000)
+
+
+@router.post("/associations")
+async def search_associations(
+    request: AssociationSearchRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    service = get_service()
+    result = await service.search.search_associations(
+        request.query,
+        ctx=ctx,
+        target_uri=_resolve_uri_or_uris(request.target_uri, ctx),
+        limit=request.limit,
+    )
+    return Response(status="ok", result=result)
+
+
 def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
     return node_limit if node_limit is not None else limit
 

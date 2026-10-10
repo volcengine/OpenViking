@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from openviking.concurrency import bounded_map
+from openviking.core.memory_association import is_association_uri
 from openviking.core.namespace import context_type_for_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.storage.abstract_overview import body_for_preview
@@ -165,6 +166,8 @@ async def build_rfv_snapshot(
         if raw.get("access") == "denied":
             continue
         uri = str(raw.get("uri") or "")
+        if is_association_uri(uri):
+            continue
         relative = _relative_uri(root, uri)
         if relative is None:
             complete = False

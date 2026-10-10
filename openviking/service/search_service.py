@@ -6,10 +6,12 @@ Search Service for OpenViking.
 Provides search operations: search, find.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.image_search import (
     image_bytes_to_data_uri,
@@ -55,6 +57,34 @@ class SearchService:
     def set_viking_fs(self, viking_fs: VikingFS) -> None:
         """Set VikingFS instance (for deferred initialization)."""
         self._viking_fs = viking_fs
+
+    async def search_associations(
+        self, query: str, ctx: RequestContext, target_uri="", limit: int = 20
+    ) -> dict:
+        fs = self._ensure_initialized()
+        store = getattr(fs, "memory_association", None)
+        if store is None:
+            raise InvalidArgumentError("retrieval.memory_association.enabled is false")
+        if not query.strip() or not 1 <= limit <= 1000:
+            raise InvalidArgumentError(
+                "A non-empty query and limit between 1 and 1000 are required"
+            )
+        # No account-wide discovery: require explicit memory scopes for ROOT,
+        # and default to current user's Self/actor Peer scopes for other callers.
+        if not target_uri:
+            if ctx.role == Role.ROOT:
+                raise InvalidArgumentError("ROOT association lookup requires target_uri")
+            base = f"viking://user/{ctx.user.user_id}"
+            target_uri = [base + "/memories"]
+            if ctx.actor_peer_id:
+                target_uri.append(base + f"/peers/{ctx.actor_peer_id}/memories")
+        targets = resolve_retrieval_targets(target_uri, ctx).target_directories
+        for uri in targets:
+            await fs._ensure_retrieval_scope(uri, ctx)
+        hits = await asyncio.wait_for(
+            store.search(query, targets, ctx, limit), timeout=store.config.timeout_s
+        )
+        return {"query": query, "associations": hits, "total": len(hits)}
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
