@@ -105,13 +105,17 @@ def _revision(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _validate(raw: dict) -> OpenVikingConfig:
+def _validate(raw: dict, server_overrides: dict | None = None) -> OpenVikingConfig:
     try:
         from openviking.server.config import ServerConfig, validate_server_config
 
         expanded = json.loads(os.path.expandvars(_dump(raw)))
         server = expanded.get("server")
-        validate_server_config(ServerConfig.model_validate({} if server is None else server))
+        server_config = ServerConfig.model_validate({} if server is None else server)
+        # The CLI reapplies these arguments after loading ov.conf on every restart.
+        if server_overrides:
+            server_config = server_config.model_copy(update=server_overrides)
+        validate_server_config(server_config)
         return OpenVikingConfig.from_dict(expanded)
     except (Exception, SystemExit) as exc:
         # Startup validators exit on failure; API validation must keep the server alive.
@@ -148,13 +152,13 @@ def _parse(content: str) -> dict:
         raise ValueError("ov.conf must contain a JSON object") from exc
 
 
-def _read(path: Path):
+def _read(path: Path, server_overrides: dict | None = None):
     data = path.read_bytes()
     try:
         raw = _parse(data.decode("utf-8-sig"))
     except UnicodeError as exc:
         raise ValueError("ov.conf must contain UTF-8 JSON") from exc
-    return data, raw, _validate(raw)
+    return data, raw, _validate(raw, server_overrides)
 
 
 def _path() -> Path:
@@ -196,6 +200,7 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
             # Return only the literal map to avoid exposing expanded secrets.
             value["providers"] = original.get("providers") or {}
         sections = [(value, original, model)]
+        resolved_providers = {}
         if kind == "embedding":
             sections = [
                 (value[mode], original.get(mode) or {}, getattr(model, mode))
@@ -216,25 +221,32 @@ def _model_view(raw: dict, config: OpenVikingConfig) -> dict:
                 for index, binding in enumerate(section["credentials"]):
                     if not binding.get("id"):
                         binding["id"] = f"credential-{index}"
+            for binding, credential in zip(section["credentials"], bindings, strict=True):
+                provider = credential.provider or section_model.provider
+                if binding.get("provider") and provider:
+                    resolved_providers[binding["provider"]] = provider.strip().lower()
         models[kind] = {
             "config": value,
+            "resolved_providers": resolved_providers,
         }
     return models
 
 
-def preview_config_file(content: str, settings: dict | None = None) -> dict:
+def preview_config_file(
+    content: str, settings: dict | None = None, server_overrides: dict | None = None
+) -> dict:
     """Validate a draft and project its form fields without writing or publishing it."""
     raw = _parse(content)
     if settings:
         _apply_model_changes(raw, settings)
         content = _dump(raw, ensure_ascii=False, indent=2) + "\n"
-    config = _validate(raw)
+    config = _validate(raw, server_overrides)
     return {"content": content, "models": _model_view(raw, config)}
 
 
-def read_config_file() -> dict:
+def read_config_file(server_overrides: dict | None = None) -> dict:
     path = _path()
-    data, raw, config = _read(path)
+    data, raw, config = _read(path, server_overrides)
     active = OpenVikingConfigSingleton.get_instance()
     startup_revision = OpenVikingConfigSingleton.get_config_file_revision()
     return {
@@ -388,7 +400,7 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
             raise ValueError("Model configuration must be an object")
 
 
-def save_config_file(content: str, revision: str) -> dict:
+def save_config_file(content: str, revision: str, server_overrides: dict | None = None) -> dict:
     """Save one startup-file revision; never update the running configuration."""
     path = _path()
     lock_fd = os.open(path.with_name(f".{path.name}.studio.lock"), os.O_CREAT | os.O_RDWR, 0o600)
@@ -401,14 +413,14 @@ def save_config_file(content: str, revision: str) -> dict:
             import fcntl
 
             fcntl.flock(lock, fcntl.LOCK_EX)
-        data, _, _ = _read(path)
+        data, _, _ = _read(path, server_overrides)
         if not revision or revision != _revision(data):
             raise ValueError("ov.conf changed; reload before saving")
         mode = stat.S_IMODE(path.stat().st_mode)
         if not mode & 0o222 or not os.access(path, os.W_OK):
             raise ValueError("ov.conf is read-only")
         raw = _parse(content)
-        _validate(raw)
+        _validate(raw, server_overrides)
         if path.read_bytes() != data:
             raise ValueError("ov.conf changed; reload before saving")
         output = content.encode("utf-8")

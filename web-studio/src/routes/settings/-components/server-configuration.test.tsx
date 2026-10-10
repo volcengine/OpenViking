@@ -15,6 +15,7 @@ import { ServerConfigurationEditor } from './server-configuration'
 import { Route } from '../route'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import en from '#/i18n/locales/en/workspace'
+import type { ModelConfig } from '../-lib/config-file-api'
 
 const state = vi.hoisted(() => ({
   role: 'root',
@@ -123,8 +124,9 @@ const data = {
   restart: { supported: true, instance_id: 'new', restarting: false },
   revision: 'revision',
   models: {
-    vlm: { config: language },
+    vlm: { config: language, resolved_providers: {} as Record<string, string> },
     embedding: {
+      resolved_providers: {} as Record<string, string>,
       config: {
         max_retries: 3,
         max_concurrent: 10,
@@ -661,9 +663,68 @@ it('uses localized validation text for invalid JSON', async () => {
   expect(headers.validationMessage).toBe('')
 })
 
+it.each(['vikingdb', 'ollama', 'openai'])(
+  'edits an environment-bound %s embedding provider without replacing its reference',
+  async (provider) => {
+    const payload = structuredClone(data)
+    const entry = payload.models.embedding
+    entry.resolved_providers = { '${EMBEDDING_PROVIDER}': provider }
+    const credential: ModelConfig = entry.config.dense.credentials[0]
+    credential.provider = '${EMBEDDING_PROVIDER}'
+    delete credential.api_key
+    if (provider === 'vikingdb') {
+      Object.assign(credential, {
+        ak: '${EMBEDDING_AK}',
+        sk: '${EMBEDDING_SK}',
+        region: 'cn-beijing',
+      })
+      delete credential.api_base
+    }
+    mount(payload)
+    await screen.findByText('model-a')
+    fireEvent.click(
+      section('embeddingType').getByRole('button', { name: 'models.edit' }),
+    )
+    const dialog = within(screen.getByRole('dialog'))
+    expect(
+      dialog.getByText(`\${EMBEDDING_PROVIDER} (${provider})`),
+    ).toBeTruthy()
+    if (provider === 'vikingdb') {
+      expect(
+        dialog.getByLabelText<HTMLInputElement>('models.fields.ak').value,
+      ).toBe('${EMBEDDING_AK}')
+      fireEvent.change(dialog.getByLabelText('models.fields.sk'), {
+        target: { value: '${ROTATED_SK}' },
+      })
+      expect(dialog.queryByLabelText('models.fields.api_key')).toBeNull()
+    } else {
+      const key = dialog.queryByLabelText<HTMLInputElement>(
+        'models.fields.api_key',
+      )
+      expect(key?.required ?? false).toBe(false)
+      fireEvent.change(dialog.getByLabelText('models.fields.api_base'), {
+        target: { value: 'http://localhost:11434/v1' },
+      })
+    }
+    expect(
+      screen.getByRole('dialog').querySelector('form')!.checkValidity(),
+    ).toBe(true)
+    await apply()
+    expect(
+      state.preview.mock.lastCall![1].embedding.dense.credentials[0].provider,
+    ).toBe('${EMBEDDING_PROVIDER}')
+  },
+)
+
 it('shares form edits and whole-file edits across modes, preserving all other sections', async () => {
   mount()
   await screen.findByText('model-a')
+  const tabs = within(screen.getByRole('tablist', { name: 'models.editMode' }))
+  expect(
+    tabs
+      .getByRole('tab', { name: 'models.formMode' })
+      .getAttribute('aria-selected'),
+  ).toBe('true')
   fireEvent.click(
     section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
   )
@@ -671,7 +732,12 @@ it('shares form edits and whole-file edits across modes, preserving all other se
     target: { value: 'form-draft' },
   })
   await apply()
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
+  expect(
+    tabs
+      .getByRole('tab', { name: 'models.fileMode' })
+      .getAttribute('aria-selected'),
+  ).toBe('true')
   const input =
     await screen.findByLabelText<HTMLTextAreaElement>('models.fileContent')
   const raw = JSON.parse(input.value)
@@ -683,9 +749,14 @@ it('shares form edits and whole-file edits across modes, preserving all other se
   const text = JSON.stringify(raw, null, 4)
   fireEvent.change(input, { target: { value: text } })
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'models.formMode' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'models.formMode' }))
   })
   expect(await screen.findByText('file-draft')).toBeTruthy()
+  expect(
+    tabs
+      .getByRole('tab', { name: 'models.formMode' })
+      .getAttribute('aria-selected'),
+  ).toBe('true')
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() => expect(state.save).toHaveBeenCalledWith(text, 'revision'))
   expect(state.save).toHaveBeenCalledTimes(1)
@@ -694,16 +765,16 @@ it('shares form edits and whole-file edits across modes, preserving all other se
 it('blocks invalid JSON from saving or switching, then discards the same draft', async () => {
   mount()
   await screen.findByText('model-a')
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const input =
     await screen.findByLabelText<HTMLTextAreaElement>('models.fileContent')
   fireEvent.change(input, { target: { value: '{broken' } })
   expect(screen.getByText('models.invalidJsonObject')).toBeTruthy()
   expect(
     screen
-      .getByRole('button', { name: 'models.formMode' })
-      .hasAttribute('disabled'),
-  ).toBe(true)
+      .getByRole('tab', { name: 'models.formMode' })
+      .getAttribute('aria-disabled'),
+  ).toBe('true')
   expect(
     screen
       .getByRole('button', { name: 'models.saveAll' })
@@ -717,7 +788,7 @@ it('blocks invalid JSON from saving or switching, then discards the same draft',
 it('keeps full-file text and its original revision after validation and save failures', async () => {
   const client = mount()
   await screen.findByText('model-a')
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = JSON.stringify({
     ...file,
     server: { ...file.server, port: 1934 },
@@ -727,7 +798,7 @@ it('keeps full-file text and its original revision after validation and save fai
   })
   state.preview.mockRejectedValue(new Error('Invalid startup configuration'))
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'models.formMode' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'models.formMode' }))
   })
   await screen.findByText(/Invalid startup configuration/)
   expect(
@@ -824,7 +895,7 @@ it.each(['vlmType', 'embeddingType'])(
 it('allows unquoted environment values in file drafts without resolving them in the browser', async () => {
   mount()
   await screen.findByText('model-a')
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = content.replace('"port": 1933', '"port": ${STUDIO_PORT}')
   fireEvent.change(screen.getByLabelText('models.fileContent'), {
     target: { value: text },
@@ -832,7 +903,7 @@ it('allows unquoted environment values in file drafts without resolving them in 
   expect(screen.queryByText('models.invalidJsonObject')).toBeNull()
   expect(
     screen
-      .getByRole('button', { name: 'models.formMode' })
+      .getByRole('tab', { name: 'models.formMode' })
       .hasAttribute('disabled'),
   ).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
@@ -1003,7 +1074,7 @@ it('keeps environment objects read-only in the form and offers file editing', as
   expect(
     section('embeddingType').getByRole('button', { name: 'models.edit' }),
   ).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   expect(await screen.findByLabelText('models.fileContent')).toBeTruthy()
 })
 
@@ -1015,7 +1086,7 @@ it('retains the configuration draft when switching settings tabs', async () => {
     await screen.findByRole('tab', { name: 'tabs.configuration' }),
   )
   await screen.findByText('model-a')
-  fireEvent.click(screen.getByRole('button', { name: 'models.fileMode' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = content.replace('default-model', 'unsaved-model')
   fireEvent.change(
     await screen.findByRole<HTMLTextAreaElement>('textbox', {

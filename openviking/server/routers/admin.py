@@ -819,7 +819,9 @@ async def get_cluster_configuration(
 
         response.headers["Cache-Control"] = "no-store"
         try:
-            result = await asyncio.to_thread(read_config_file)
+            result = await asyncio.to_thread(
+                read_config_file, getattr(request.app.state, "server_config_overrides", None)
+            )
         except (ValueError, OSError) as exc:
             raise FailedPreconditionError(
                 "Cannot read the server startup configuration file"
@@ -855,16 +857,17 @@ async def restart_server(
     from openviking.config.config_file import preview_config_file, read_config_file
 
     controller = request.app.state.restart_controller
+    server_overrides = getattr(request.app.state, "server_config_overrides", None)
     if controller.shutdown is None:
         raise FailedPreconditionError(
             "Remote restart requires the single-worker openviking-server CLI"
         )
     async with controller.lock:
         try:
-            config = await asyncio.to_thread(read_config_file)
+            config = await asyncio.to_thread(read_config_file, server_overrides)
             if config["revision"] != body.revision:
                 raise ValueError("ov.conf changed; reload before restarting")
-            await asyncio.to_thread(preview_config_file, config["content"], {})
+            await asyncio.to_thread(preview_config_file, config["content"], {}, server_overrides)
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         except OSError as exc:
@@ -895,6 +898,7 @@ async def patch_cluster_configuration(
     if source == "file":
         from openviking.config.config_file import preview_config_file, save_config_file
 
+        server_overrides = getattr(request.app.state, "server_config_overrides", None)
         async with request.app.state.restart_controller.lock:
             if request.app.state.restart_controller.requested:
                 raise FailedPreconditionError("Server restart is already in progress")
@@ -902,13 +906,13 @@ async def patch_cluster_configuration(
             try:
                 if dry_run:
                     result = await asyncio.to_thread(
-                        preview_config_file, body.content, body.settings
+                        preview_config_file, body.content, body.settings, server_overrides
                     )
                 else:
                     if body.content is None or body.settings:
                         raise ValueError("File saves require full content and no model settings")
                     result = await asyncio.to_thread(
-                        save_config_file, body.content, body.revision or ""
+                        save_config_file, body.content, body.revision or "", server_overrides
                     )
             except ValueError as exc:
                 raise InvalidArgumentError(str(exc)) from exc

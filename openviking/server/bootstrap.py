@@ -314,6 +314,11 @@ def main():
     # Create and run server app
     app = create_app(
         config,
+        server_overrides={
+            key: getattr(config, key)
+            for key in ("host", "port", "workers", "with_bot")
+            if getattr(args, key) is not None and (key != "with_bot" or args.with_bot)
+        },
         config_path=(
             str(resolved_config_path) if resolved_config_path is not None else args.config
         ),

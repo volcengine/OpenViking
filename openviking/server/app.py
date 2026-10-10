@@ -248,6 +248,7 @@ def create_app(
     config: Optional[ServerConfig] = None,
     service: Optional[OpenVikingService] = None,
     config_path: Optional[str] = None,
+    server_overrides: Optional[dict] = None,
 ) -> FastAPI:
     """Create FastAPI application.
 
@@ -255,6 +256,7 @@ def create_app(
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
         config_path: Resolved ov.conf path used for startup configuration.
+        server_overrides: CLI arguments reapplied when loading the startup file.
 
     Returns:
         FastAPI application instance
@@ -433,6 +435,7 @@ def create_app(
     )
 
     app.state.config = config
+    app.state.server_config_overrides = server_overrides or {}
     from openviking.server.restart import RestartController
 
     app.state.restart_controller = RestartController()

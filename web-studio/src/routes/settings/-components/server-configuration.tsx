@@ -25,6 +25,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { copyTextToClipboard } from '#/lib/clipboard'
 import { Button } from '#/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { useTheme } from 'next-themes'
 import { Badge } from '#/components/ui/badge'
 import {
@@ -538,7 +539,11 @@ export function ServerConfigurationEditor() {
     query.data?.overrides?.cluster.length ||
     query.data?.overrides?.account.length,
   )
-  const provider = String(editor?.value.provider || '')
+  const providerValue = String(editor?.value.provider || '')
+  const provider =
+    (editor &&
+      document?.models[editor.kind].resolved_providers?.[providerValue]) ||
+    providerValue
   const fields = editor?.settings
     ? editor.kind === 'embedding'
       ? policies
@@ -678,212 +683,212 @@ export function ServerConfigurationEditor() {
             </p>
           )}
         </div>
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="group"
-          aria-label={t('models.editMode')}
-        >
-          <Button
-            variant={editMode === 'form' ? 'default' : 'outline'}
-            disabled={pending || invalidJson}
-            aria-pressed={editMode === 'form'}
-            onClick={() => {
-              if (editMode === 'form' || !document || pending) return
+        <Tabs
+          value={editMode}
+          className="min-w-0 gap-6"
+          onValueChange={(value) => {
+            if (pending || value === editMode) return
+            if (value === 'file') setEditMode('file')
+            else if (value === 'form' && document && !invalidJson) {
               setBaseline((previous) => previous ?? query.data ?? null)
               preview.mutate({ content: document.content, returnToForm: true })
-            }}
-          >
-            {t('models.formMode')}
-          </Button>
-          <Button
-            variant={editMode === 'file' ? 'default' : 'outline'}
-            disabled={pending}
-            aria-pressed={editMode === 'file'}
-            onClick={() => setEditMode('file')}
-          >
-            {t('models.fileMode')}
-          </Button>
-        </div>
-        <p className="text-sm text-muted-foreground">{t('models.fileScope')}</p>
-        {preview.isError && !editor && !confirm && (
-          <p role="alert" className="break-all text-destructive">
-            {t('models.validateFailed')} {preview.error.message}
+            }
+          }}
+        >
+          <TabsList variant="line" aria-label={t('models.editMode')}>
+            <TabsTrigger value="form" disabled={pending || invalidJson}>
+              {t('models.formMode')}
+            </TabsTrigger>
+            <TabsTrigger value="file" disabled={pending}>
+              {t('models.fileMode')}
+            </TabsTrigger>
+          </TabsList>
+          <p className="text-sm text-muted-foreground">
+            {t('models.fileScope')}
           </p>
-        )}
-        {editMode === 'file' ? (
-          <div className="grid gap-3">
-            <p className="text-sm font-medium">{t('models.fileContent')}</p>
-            <div className="h-[min(60vh,36rem)] min-h-80 min-w-0">
-              <React.Suspense
-                fallback={<p role="status">{t('models.loading')}</p>}
-              >
-                <LazyCodeEditor
-                  filename="ov.conf"
-                  language="json"
-                  ariaLabel={t('models.fileContent')}
-                  initialContent={document?.content ?? ''}
-                  isDark={resolvedTheme === 'dark'}
-                  lineWrapping
-                  readOnly={pending || query.data?.writable === false}
-                  onChange={(content) => {
-                    if (pending || !document) return
-                    setBaseline((previous) => previous ?? query.data ?? null)
-                    setSaved(false)
-                    mutation.reset()
-                    preview.reset()
-                    setDraft({ ...document, content })
-                  }}
-                />
-              </React.Suspense>
+          {preview.isError && !editor && !confirm && (
+            <p role="alert" className="break-all text-destructive">
+              {t('models.validateFailed')} {preview.error.message}
+            </p>
+          )}
+          <TabsContent value="file" className="min-w-0">
+            <div className="grid gap-3">
+              <p className="text-sm font-medium">{t('models.fileContent')}</p>
+              <div className="h-[min(60vh,36rem)] min-h-80 min-w-0">
+                <React.Suspense
+                  fallback={<p role="status">{t('models.loading')}</p>}
+                >
+                  <LazyCodeEditor
+                    filename="ov.conf"
+                    language="json"
+                    ariaLabel={t('models.fileContent')}
+                    initialContent={document?.content ?? ''}
+                    isDark={resolvedTheme === 'dark'}
+                    lineWrapping
+                    readOnly={pending || query.data?.writable === false}
+                    onChange={(content) => {
+                      if (pending || !document) return
+                      setBaseline((previous) => previous ?? query.data ?? null)
+                      setSaved(false)
+                      mutation.reset()
+                      preview.reset()
+                      setDraft({ ...document, content })
+                    }}
+                  />
+                </React.Suspense>
+              </div>
+              {invalidJson && (
+                <p role="alert" className="text-destructive">
+                  {t('models.invalidJsonObject')}
+                </p>
+              )}
             </div>
-            {invalidJson && (
-              <p role="alert" className="text-destructive">
-                {t('models.invalidJsonObject')}
-              </p>
-            )}
-          </div>
-        ) : (
-          visibleModelKinds.map((kind) => {
-            const references = document?.models[kind].environment_references
-            if (references?.length)
+          </TabsContent>
+          <TabsContent value="form" className="grid min-w-0 gap-8">
+            {visibleModelKinds.map((kind) => {
+              const references = document?.models[kind].environment_references
+              if (references?.length)
+                return (
+                  <section
+                    key={kind}
+                    aria-label={t(titles[kind])}
+                    className="min-w-0 border-b pb-6 last:border-b-0"
+                  >
+                    <h2 className="mb-4 text-base font-semibold">
+                      {t(titles[kind])}
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      {t('models.environmentObject')}
+                    </p>
+                    <p className="mt-2 break-all font-mono text-xs">
+                      {references.join(', ')}
+                    </p>
+                  </section>
+                )
+              const config = current(kind)
+              const groups =
+                kind === 'embedding'
+                  ? embeddingModes
+                      .filter((mode) => config[mode])
+                      .map((mode) => ({ mode, config: object(config[mode]) }))
+                  : [{ mode: undefined, config }]
               return (
                 <section
                   key={kind}
                   aria-label={t(titles[kind])}
                   className="min-w-0 border-b pb-6 last:border-b-0"
                 >
-                  <h2 className="mb-4 text-base font-semibold">
-                    {t(titles[kind])}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {t('models.environmentObject')}
-                  </p>
-                  <p className="mt-2 break-all font-mono text-xs">
-                    {references.join(', ')}
-                  </p>
-                </section>
-              )
-            const config = current(kind)
-            const groups =
-              kind === 'embedding'
-                ? embeddingModes
-                    .filter((mode) => config[mode])
-                    .map((mode) => ({ mode, config: object(config[mode]) }))
-                : [{ mode: undefined, config }]
-            return (
-              <section
-                key={kind}
-                aria-label={t(titles[kind])}
-                className="min-w-0 border-b pb-6 last:border-b-0"
-              >
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-base font-semibold">
-                      {t(titles[kind])}
-                    </h2>
-                    {dirty && (
-                      <Badge variant="secondary">{t('models.unsaved')}</Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Action
-                      label={t('models.parameters')}
-                      disabled={pending}
-                      onClick={() =>
-                        open(kind, undefined, undefined, false, true)
-                      }
-                    >
-                      <Settings2Icon />
-                    </Action>
-                    {kind === 'embedding' && groups.length > 1 ? (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={t('models.addModel')}
-                              title={t('models.addModel')}
-                              disabled={pending}
-                            />
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-base font-semibold">
+                        {t(titles[kind])}
+                      </h2>
+                      {dirty && (
+                        <Badge variant="secondary">{t('models.unsaved')}</Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Action
+                        label={t('models.parameters')}
+                        disabled={pending}
+                        onClick={() =>
+                          open(kind, undefined, undefined, false, true)
+                        }
+                      >
+                        <Settings2Icon />
+                      </Action>
+                      {kind === 'embedding' && groups.length > 1 ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={t('models.addModel')}
+                                title={t('models.addModel')}
+                                disabled={pending}
+                              />
+                            }
+                          >
+                            <PlusIcon />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {groups.map((group) => (
+                              <DropdownMenuItem
+                                key={group.mode}
+                                onClick={() => open(kind, group.mode)}
+                              >
+                                {t(`models.${group.mode}`)}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : (
+                        <Action
+                          label={t('models.addModel')}
+                          disabled={
+                            pending || (kind === 'embedding' && !groups.length)
+                          }
+                          onClick={() =>
+                            open(
+                              kind,
+                              kind === 'embedding'
+                                ? groups[0]?.mode
+                                : undefined,
+                            )
                           }
                         >
                           <PlusIcon />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {groups.map((group) => (
-                            <DropdownMenuItem
-                              key={group.mode}
-                              onClick={() => open(kind, group.mode)}
-                            >
-                              {t(`models.${group.mode}`)}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    ) : (
-                      <Action
-                        label={t('models.addModel')}
-                        disabled={
-                          pending || (kind === 'embedding' && !groups.length)
-                        }
-                        onClick={() =>
-                          open(
-                            kind,
-                            kind === 'embedding' ? groups[0]?.mode : undefined,
-                          )
-                        }
-                      >
-                        <PlusIcon />
-                      </Action>
-                    )}
+                        </Action>
+                      )}
+                    </div>
                   </div>
-                </div>
-                {groups.map((group) => (
-                  <div key={group.mode || kind} className="min-w-0">
-                    {group.mode && (
-                      <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                        <Badge variant="outline">
-                          {t(`models.${group.mode}`)}
-                        </Badge>
-                        <span>
-                          {t('models.dimension')}:{' '}
-                          {String(group.config.dimension)}
-                        </span>
-                        {credentials(group.config).some(
-                          (binding) =>
-                            binding.model &&
-                            binding.model !== group.config.model,
-                        ) && (
-                          <span className="break-all">
-                            {t('models.model')}: {String(group.config.model)}
+                  {groups.map((group) => (
+                    <div key={group.mode || kind} className="min-w-0">
+                      {group.mode && (
+                        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                          <Badge variant="outline">
+                            {t(`models.${group.mode}`)}
+                          </Badge>
+                          <span>
+                            {t('models.dimension')}:{' '}
+                            {String(group.config.dimension)}
                           </span>
-                        )}
-                      </div>
-                    )}
-                    <ModelList
-                      group={`${kind}-${group.mode || ''}`}
-                      values={credentials(group.config)}
-                      fallback={group.config}
-                      disabled={pending}
-                      onOrder={(values) => reorder(kind, group.mode, values)}
-                      onOpen={(index, readonly) =>
-                        open(kind, group.mode, index, readonly)
-                      }
-                      onDelete={(index) => {
-                        setBaseline(
-                          (previous) => previous ?? query.data ?? null,
-                        )
-                        setConfirm({ kind, mode: group.mode, index })
-                      }}
-                    />
-                  </div>
-                ))}
-              </section>
-            )
-          })
-        )}
+                          {credentials(group.config).some(
+                            (binding) =>
+                              binding.model &&
+                              binding.model !== group.config.model,
+                          ) && (
+                            <span className="break-all">
+                              {t('models.model')}: {String(group.config.model)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <ModelList
+                        group={`${kind}-${group.mode || ''}`}
+                        values={credentials(group.config)}
+                        fallback={group.config}
+                        disabled={pending}
+                        onOrder={(values) => reorder(kind, group.mode, values)}
+                        onOpen={(index, readonly) =>
+                          open(kind, group.mode, index, readonly)
+                        }
+                        onDelete={(index) => {
+                          setBaseline(
+                            (previous) => previous ?? query.data ?? null,
+                          )
+                          setConfirm({ kind, mode: group.mode, index })
+                        }}
+                      />
+                    </div>
+                  ))}
+                </section>
+              )
+            })}
+          </TabsContent>
+        </Tabs>
         {dirty && (
           <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 shadow-lg backdrop-blur-sm">
             <p className="text-sm">{t('models.unsaved')}</p>
@@ -985,6 +990,7 @@ export function ServerConfigurationEditor() {
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
                   fields={fields}
                   value={editor.value}
+                  resolvedProvider={provider}
                   inheritedModel={
                     editor.settings
                       ? undefined

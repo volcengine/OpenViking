@@ -135,6 +135,7 @@ export function ModelFields({
   readOnly = false,
   prefix = 'model',
   inheritedModel,
+  resolvedProvider,
 }: {
   fields: FieldSpec[]
   value: ModelConfig
@@ -142,6 +143,7 @@ export function ModelFields({
   readOnly?: boolean
   prefix?: string
   inheritedModel?: unknown
+  resolvedProvider?: string
 }) {
   const { t } = useTranslation('settings')
   const [visible, setVisible] = React.useState<Record<string, boolean>>({})
@@ -151,7 +153,7 @@ export function ModelFields({
   const needsEmbeddingBase =
     fields.some((field) => field.key === 'provider') &&
     fields.some((field) => field.key === 'api_key' && !field.required) &&
-    value.provider === 'openai' &&
+    (resolvedProvider ?? value.provider) === 'openai' &&
     !value.api_key
   return (
     <>
@@ -173,6 +175,17 @@ export function ModelFields({
           options.push({
             value: CUSTOM_OPENAI,
             label: t('models.customProvider'),
+          })
+        if (
+          isProvider &&
+          options &&
+          typeof current === 'string' &&
+          resolvedProvider &&
+          !options.some((option) => option.value === current)
+        )
+          options.push({
+            value: current,
+            label: `${current} (${resolvedProvider})`,
           })
         return (
           <Field key={field.key} className="gap-2">

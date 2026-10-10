@@ -537,6 +537,10 @@ that every derived client has applied it. See [runtime configuration source and 
 File-mode saves require the complete `content` and the previous `revision`.
 Draft previews (`source=file&dry_run=true`) accept optional VLM/Embedding form `settings`;
 other sections remain editable through the complete file.
+File reads and previews include `models.<kind>.resolved_providers`, mapping literal
+provider values (including environment references) to the effective provider used
+to select form fields. Keep the literal value when submitting edits. CLI startup
+arguments are reapplied during file validation, as they are during restart.
 
 #### Server Restart
 

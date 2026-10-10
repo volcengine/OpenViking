@@ -8,6 +8,7 @@ export type ModelChanges = Partial<Record<ModelKind, ModelConfig>>
 export type ModelEntry = {
   config: ModelConfig
   environment_references?: string[]
+  resolved_providers?: Record<string, string>
 }
 export type ConfigFileDraft = {
   content: string

@@ -366,17 +366,24 @@ async def test_studio_file_configuration_permissions_revision_and_overrides(
     assert settings["vlm"]["model"] == "override-model"
 
 
+@pytest.mark.parametrize("cli_host", [None, "127.0.0.1"])
 async def test_studio_full_configuration_preview_and_save_are_root_only(
     lightweight_admin_client,
+    lightweight_admin_app,
     template_account,
     tmp_path,
     monkeypatch,
+    cli_host,
 ):
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
     _, admin_headers = template_account
     path = tmp_path / "startup.conf"
-    path.write_text('{"server":{"port":1933},"storage":{"workspace":"/tmp/old"}}')
+    server = {"port": 1933}
+    if cli_host:
+        server.update(host="0.0.0.0", auth_mode="trusted")
+        lightweight_admin_app.state.server_config_overrides = {"host": cli_host}
+    path.write_text(json.dumps({"server": server, "storage": {"workspace": "/tmp/old"}}))
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     before = path.read_bytes()
     url = "/api/v1/admin/configuration"
@@ -385,7 +392,7 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
     )
     result = loaded.json()["result"]
     assert result["content"] == before.decode()
-    content = '{"server":{"port":1934},"storage":{"workspace":"/tmp/new"}}'
+    content = json.dumps({"server": {**server, "port": 1934}, "storage": {"workspace": "/tmp/new"}})
     preview_params = {"source": "file", "dry_run": True}
     denied = await lightweight_admin_client.patch(
         url, params=preview_params, headers=admin_headers, json={"content": content}
@@ -437,7 +444,10 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
     runtime = await lightweight_admin_client.patch(url, headers=root_headers(), json=body)
     assert runtime.status_code == 400
     invalid = await lightweight_admin_client.patch(
-        url, params=preview_params, headers=root_headers(), json={"content": '{"server":{"port":"bad"}}'}
+        url,
+        params=preview_params,
+        headers=root_headers(),
+        json={"content": '{"server":{"port":"bad"}}'},
     )
     assert invalid.status_code == 400
     assert path.read_text() == content
@@ -3504,12 +3514,14 @@ async def test_user_page_summary_respects_account_access(lightweight_admin_clien
     assert denied.status_code == 403
 
 
+@pytest.mark.parametrize("cli_host", [None, "127.0.0.1"])
 async def test_server_restart_requires_root_and_valid_revision(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
     tmp_path,
     monkeypatch,
+    cli_host,
 ):
     from openviking.config.config_file import read_config_file
     from openviking.server.restart import RestartController
@@ -3527,11 +3539,22 @@ async def test_server_restart_requires_root_and_valid_revision(
     controller = RestartController(stopped)
     lightweight_admin_app.state.restart_controller = controller
     path = tmp_path / "ov.conf"
+    server = {}
+    server_overrides = {}
+    if cli_host:
+        server = {"host": "0.0.0.0", "auth_mode": "trusted"}
+        server_overrides = {"host": cli_host}
+        lightweight_admin_app.state.server_config_overrides = server_overrides
     path.write_text(
-        json.dumps({"vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "test-key"}})
+        json.dumps(
+            {
+                "server": server,
+                "vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "test-key"},
+            }
+        )
     )
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
-    revision = read_config_file()["revision"]
+    revision = read_config_file(server_overrides)["revision"]
     url = "/api/v1/admin/restart"
     for headers in [admin_headers, user_headers, {}]:
         assert (

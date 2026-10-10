@@ -50,12 +50,30 @@ def config_file(tmp_path, monkeypatch):
     return path, raw
 
 
-def test_file_models_preserve_environment_references_and_save_without_publishing(config_file):
+def test_file_models_preserve_environment_references_and_save_without_publishing(
+    config_file, monkeypatch
+):
     path, raw = config_file
+    raw["embedding"]["dense"].update(
+        provider="${STUDIO_EMBEDDING_PROVIDER}",
+        ak="${STUDIO_TEST_KEY}",
+        sk="${STUDIO_TEST_KEY}",
+        region="cn-beijing",
+    )
+    monkeypatch.setenv("STUDIO_EMBEDDING_PROVIDER", "vikingdb")
+    path.write_text(json.dumps(raw))
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton,
+        "_config_file_revision",
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
     result = read_config_file()
     assert result["file_path"] == str(path)
     assert result["writable"] and not result["restart_required"]
     assert set(result["models"]) == {"vlm", "embedding"}
+    assert result["models"]["embedding"]["resolved_providers"] == {
+        "${STUDIO_EMBEDDING_PROVIDER}": "vikingdb"
+    }
     assert "resolved-secret" not in json.dumps(result)
     assert (
         result["models"]["embedding"]["config"]["dense"]["credentials"][0]["api_key"]
@@ -630,6 +648,7 @@ def test_normalized_provider_references_survive_unrelated_form_edits(
     loaded = read_config_file()
     model = json.loads(json.dumps(loaded["models"]["vlm"]["config"]))
     assert model["credentials"][0]["provider"] == "${STUDIO_PROVIDER_REFERENCE}"
+    assert loaded["models"]["vlm"]["resolved_providers"]["${STUDIO_PROVIDER_REFERENCE}"] == "openai"
     model["timeout"] = 42
     draft = preview_config_file(loaded["content"], {"vlm": model})
     save_config_file(draft["content"], loaded["revision"])
