@@ -69,6 +69,51 @@ _OVCLI_SAVED_PREFIX = "ovcli.conf."
 _CONNECTION_KEYS = ("endpoint", "api_key", "account", "user", "agent")
 _IDENTITY_UNSET = object()
 _OPENVIKING_ENV_KEYS = tuple(f"OPENVIKING_{key.upper()}" for key in _CONNECTION_KEYS)
+_EXTRA_HEADERS_ENV = "OPENVIKING_EXTRA_HEADERS"
+_RESERVED_HEADER_PREFIX = "x-openviking-"
+
+
+def _parse_extra_headers(raw) -> dict:
+    """Extra HTTP headers to send on every OpenViking request.
+
+    Mirrors the JS layer (memory-plugin-shared/lib/mcp-proxy-config.mjs): a JSON
+    object whose values are scalars. Reserved X-OpenViking-* names are dropped so a
+    caller-supplied map can never assert tenant identity (trusted mode reads those
+    as identity, so allowing them would be an impersonation vector).
+    """
+    data = raw
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            return {}
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            logger.warning("%s is not valid JSON; ignoring", _EXTRA_HEADERS_ENV)
+            return {}
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("extra headers must be a JSON object of string values; ignoring")
+        return {}
+    parsed = {}
+    for name, value in data.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip()
+        if key.lower().startswith(_RESERVED_HEADER_PREFIX):
+            logger.warning("extra headers: ignoring reserved header %r", key)
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            logger.warning("extra headers: header %r must be a scalar; ignoring", key)
+            continue
+        parsed[key] = str(value)
+    return parsed
+
+
+def _extra_headers_key(headers) -> str:
+    """Stable fingerprint so a changed map refreshes the cached client."""
+    return json.dumps(headers or {}, sort_keys=True, separators=(",", ":"))
 _TIMEOUT = 30.0
 _SESSION_DRAIN_TIMEOUT = 10.0
 _DEFERRED_COMMIT_TIMEOUT = (_TIMEOUT * 2) + 5.0
@@ -287,7 +332,8 @@ class _VikingClient:
     def __init__(self, endpoint: str, api_key: str = "",
                  account: Optional[str] | object = _IDENTITY_UNSET,
                  user: Optional[str] | object = _IDENTITY_UNSET,
-                 agent: Optional[str] | object = _IDENTITY_UNSET):
+                 agent: Optional[str] | object = _IDENTITY_UNSET,
+                 extra_headers: Optional[dict] | object = _IDENTITY_UNSET):
         self._endpoint = endpoint.rstrip("/")
         self._api_key = api_key
         # Account/user are local/trusted-mode tenant identity. API-key requests
@@ -297,7 +343,17 @@ class _VikingClient:
         self._account = (get_secret("OPENVIKING_ACCOUNT", "") if account is _IDENTITY_UNSET or account is None else account) or "default"
         self._user = (get_secret("OPENVIKING_USER", "") if user is _IDENTITY_UNSET or user is None else user) or "default"
         self._agent = (get_secret("OPENVIKING_AGENT", "") or _DEFAULT_AGENT) if agent is _IDENTITY_UNSET or agent is None else agent
+        # Extra HTTP headers (e.g. Cloudflare Access service tokens) — same resolution
+        # shape as the identity fields above: an explicit value wins, otherwise the
+        # profile's OPENVIKING_EXTRA_HEADERS.
+        self._extra_headers = (
+            _parse_extra_headers(get_secret(_EXTRA_HEADERS_ENV))
+            if extra_headers is _IDENTITY_UNSET or extra_headers is None
+            else _parse_extra_headers(extra_headers)
+        )
         # Every client owns its resolved identity, including clients retained across reloads.
+        # The snapshot stays a 5-tuple on purpose: it is unpacked positionally in several
+        # places, so extra headers ride beside it (self._extra_headers) instead.
         self._conn_snapshot = (self._endpoint, self._api_key, self._account, self._user, self._agent)
         self._httpx = _get_httpx()
         if self._httpx is None:
@@ -313,6 +369,10 @@ class _VikingClient:
             h.update({k: v for k, v in (("X-OpenViking-Account", self._account), ("X-OpenViking-User", self._user)) if v})
         if self._api_key:
             h.update({"X-API-Key": self._api_key, "Authorization": "Bearer " + self._api_key})
+        if self._extra_headers:
+            # Operator-supplied headers fill gaps; ours win, so a stray entry can never
+            # override authentication or tenant identity.
+            return {**self._extra_headers, **h}
         return h
 
     @staticmethod
@@ -650,6 +710,7 @@ def _connection_values_from_ovcli(data: dict) -> dict:
         "account": _clean_config_value(data.get("account") or data.get("account_id")) if send_identity else "",
         "user": _clean_config_value(data.get("user") or data.get("user_id")) if send_identity else "",
         "agent": _clean_config_value(data.get("actor_peer_id") or data.get("agent_id")),
+        "extra_headers": _parse_extra_headers(data.get("extra_headers")),
     }
 
 
@@ -901,7 +962,9 @@ def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env:
         except quick_local.QuickLocalSetupError as exc:
             raise _OpenVikingEndpointError(str(exc)) from exc
         values = _connection_values_from_ovcli(profile)
-        return {key: values[key] or ("default" if key in ("account", "user") else _DEFAULT_AGENT if key == "agent" else "") for key in _CONNECTION_KEYS}
+        resolved = {key: values[key] or ("default" if key in ("account", "user") else _DEFAULT_AGENT if key == "agent" else "") for key in _CONNECTION_KEYS}
+        resolved["extra_headers"] = values.get("extra_headers") or {}
+        return resolved
     ovcli_values = _ovcli_values_for(provider_config, env=env)
 
     def layered(key: str, default: str = "", *, env_authoritative: bool = False) -> str:
@@ -917,12 +980,14 @@ def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env:
     account = layered("account", env_authoritative=True)
     user = layered("user", env_authoritative=True)
     account, user = account or "default", user or "default"
+    extra_headers_raw = get_secret(_EXTRA_HEADERS_ENV) if env is None else env.get(_EXTRA_HEADERS_ENV)
     return {
         "endpoint": _normalize_openviking_url(layered("endpoint", _DEFAULT_ENDPOINT)),
         "api_key": api_key,
         "account": account,
         "user": user,
         "agent": layered("agent", _DEFAULT_AGENT),
+        "extra_headers": _parse_extra_headers(extra_headers_raw) or ovcli_values.get("extra_headers") or {},
     }
 
 
@@ -1457,6 +1522,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._commit_scope: Optional[_CommitScope] = None
         self._profile_prefetched_sessions: Set[str] = set()
         self._conn_snapshot: Optional[tuple] = None
+        self._extra_headers: dict = {}
         self._failed_refresh: Optional[tuple] = None
         self._runtime_start_thread: Optional[threading.Thread] = None
         self._runtime_start_pending = False
@@ -1558,7 +1624,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _build_client(self, endpoint: Optional[str] = None) -> _VikingClient:
         endpoint, api_key, account, user, agent = self._settings_tuple(endpoint)
-        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent,
+                             extra_headers=self._extra_headers)
 
     def _publish_client(self, client: _VikingClient, endpoint: str) -> None:
         with self._session_state_lock:
@@ -1752,6 +1819,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         if self._client:
             self._conn_snapshot = self._settings_tuple()
+            self._extra_headers = settings.get("extra_headers") or {}
             self._recover_pending_sessions()
 
         _active_providers_by_home[self._hermes_home] = self  # atexit safety net
@@ -1814,7 +1882,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     self._failed_refresh = (("quick-local-restart",), time.monotonic())
                 return None
         settings_key = tuple(settings[k] for k in _CONNECTION_KEYS)
-        if settings_key == self._settings_tuple():
+        extra_key = _extra_headers_key(settings.get("extra_headers"))
+        if settings_key == self._settings_tuple() and extra_key == _extra_headers_key(self._extra_headers):
             if self._client is not None:
                 if managed:
                     from .local_server import LocalServer
@@ -1875,7 +1944,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not isinstance(snapshot, tuple):
             snapshot = self._conn_snapshot or self._settings_tuple()
         endpoint, api_key, account, user, agent = snapshot
-        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent,
+                             extra_headers=self._extra_headers)
 
     # -- prompt / prefetch ---------------------------------------------------
 
@@ -1989,7 +2059,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if scope in ("shared", "peer"):
                 endpoint, api_key, account, user, _agent = client._conn_snapshot
                 client = _VikingClient(endpoint, api_key, account=account, user=user,
-                                       agent=sender_peer if scope == "peer" else "")
+                                       agent=sender_peer if scope == "peer" else "",
+                                       extra_headers=self._extra_headers)
             if scope == "peer":
                 # Explicit roots also constrain fallback searches when there is
                 # no sender. An actor-less user-root search includes all peers.
