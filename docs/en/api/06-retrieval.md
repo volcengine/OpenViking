@@ -181,6 +181,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 Tags must use strict `k=v` strings. When multiple tags are provided, `find()` requires all of them; the example above only returns contexts whose explicit retrieval tags contain both `env=prod` and `team=search`.
 
+Legacy invalid stored tags are discarded when a full index record is written or an explicit tag field is updated. Reads filter invalid tags without changing storage. To repair a known affected file or directory without re-embedding or replacing its valid tags, call `POST /api/v1/content/set_tags` with `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`. For directories, add `"recursive": true` only when descendants should also be repaired. Bare values such as `default` are removed, not assigned an inferred key.
+
 **Python SDK**
 
 ```python

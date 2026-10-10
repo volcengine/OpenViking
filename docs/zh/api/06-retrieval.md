@@ -181,6 +181,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
 
+完整索引记录写回或显式标签字段更新时，会丢弃存储中的遗留非法标签。读取只过滤非法标签，不修改存储。如需修复已知受影响的文件或目录，同时保留合法标签且不重新生成向量，可调用 `POST /api/v1/content/set_tags`，请求体为 `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`。仅在需要同时修复目录后代时添加 `"recursive": true`。`default` 等裸值会被移除，不会通过猜测键名进行转换。
+
 **Python SDK**
 
 ```python

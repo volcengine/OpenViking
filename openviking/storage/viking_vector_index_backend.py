@@ -42,7 +42,11 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import create_collection_adapter
-from openviking.utils.tags import merge_search_tags, preserve_memory_type_tag
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tags,
+    preserve_memory_type_tag,
+)
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
@@ -380,6 +384,11 @@ class _SingleAccountBackend:
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
+        # Full-record writes must not carry legacy invalid tags through a merge.
+        if "search_tags" in result:
+            result["search_tags"] = normalize_search_tags(
+                result["search_tags"], discard_invalid=True
+            )
 
         # Ensure text fields required by the schema are present (even if empty).
         # VikingDB requires all schema-defined fields in upsert data.
@@ -416,6 +425,10 @@ class _SingleAccountBackend:
         payload = self._filter_known_fields(
             {key: value for key, value in data.items() if value is not None}
         )
+        if "search_tags" in payload:
+            payload["search_tags"] = normalize_search_tags(
+                payload["search_tags"], discard_invalid=True
+            )
         if self._adapter.USE_CONTENT_FIELD:
             content = payload.get("content")
             if isinstance(content, (str, bytes)):
