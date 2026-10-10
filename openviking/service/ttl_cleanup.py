@@ -1,25 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""B: access-triggered bounded discovery and QueueFS deletion, no Redis.
-
-The queue consumer polls queue state, never source directories. Scheduling an
-access is best effort until its discovery message is persisted; the next access
-can retrigger it. Durable deliveries are acknowledged only after successful work.
-"""
+"""B: enqueue known expired objects; no discovery queries or idle queue polling."""
 
 import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
 
-from openviking.config.ttl import resolve_loaded_ttl_config, resolve_ttl_config
 from openviking.server.identity import RequestContext, Role
 from openviking.service.ttl_deletion import delete_expired
-from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.queue_middleware import AckContext
-from openviking.storage.ttl import query_filter, scope_and_root, deletion_uri
+from openviking.storage.ttl import deletion_uri
 from openviking_cli.session.user_id import UserIdentifier
 
 logger = logging.getLogger(__name__)
@@ -35,16 +27,21 @@ class TTLCleanup:
         self.queue = queue or NamedQueue(fs.agfs, "/queue", "TTLModtimeCleanup")
         self._loop = None
         self._worker = None
+        self._wake = asyncio.Event()
         self._tasks = set()
         self._access = {}
         self._closed = False
         self._pending = None
-        self.stats = {"discovery_queries": 0, "delete_candidates": 0, "deleted": 0, "errors": 0}
+        self.stats = {"enqueued": 0, "delete_candidates": 0, "deleted": 0, "errors": 0}
 
     async def start(self):
         if self.settings.enabled:
             self._loop = asyncio.get_running_loop()
-            self._worker = asyncio.create_task(self._run())
+            if self.settings.execution == "async":
+                # Recover durable deliveries once. There is no source scan and
+                # no recurring read of an empty queue.
+                self._wake.set()
+                self._worker = asyncio.create_task(self._run())
 
     async def close(self):
         self._closed = True
@@ -54,22 +51,21 @@ class TTLCleanup:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
 
-    def on_access(self, ctx):
-        if self._closed or not self.settings.enabled:
-            return
-        config = resolve_loaded_ttl_config(self.fs, ctx.account_id)
-        if config is None or not config.enabled:
+    def on_expired(self, uri, ctx):
+        """Caller already checked expiry using metadata its normal access held."""
+        target = deletion_uri(uri)
+        if self._closed or not self.settings.enabled or target is None:
             return
 
         def schedule():
-            key = (ctx.account_id, ctx.user.user_id)
+            key = (ctx.account_id, target)
             now = time.monotonic()
             if now - self._access.get(key, float("-inf")) < self.settings.check_interval_seconds:
                 return
             if len(self._access) >= 1024:
                 self._access.clear()
             self._access[key] = now
-            task = asyncio.create_task(self._enqueue_access(ctx))
+            task = asyncio.create_task(self._enqueue(target, ctx, key))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
@@ -78,51 +74,21 @@ class TTLCleanup:
         else:
             self._loop.call_soon_threadsafe(schedule)
 
-    async def _enqueue_access(self, ctx):
+    async def _enqueue(self, uri, ctx, key):
         try:
             await self.queue.enqueue(
-                {"kind": "discover", "account": ctx.account_id, "user": ctx.user.user_id}
+                {"kind": "delete", "account": ctx.account_id, "user": ctx.user.user_id, "uri": uri}
             )
+            self.stats["enqueued"] += 1
+            self._wake.set()
         except Exception:
             self.stats["errors"] += 1
-            self._access.pop((ctx.account_id, ctx.user.user_id), None)
-            logger.exception("TTL discovery enqueue failed")
+            self._access.pop(key, None)
+            logger.exception("TTL deletion enqueue failed; next access can retry")
 
-    async def on_write(self, uri, ctx, **_):
-        if scope_and_root(uri):
-            self.on_access(ctx)
-
-    async def _discover(self, ctx, config):
-        filters = And(
-            [
-                query_filter(config, datetime.now(timezone.utc), expired=True),
-                Eq("account_id", ctx.account_id),
-                PathScope("uri", f"viking://user/{ctx.user.user_id}"),
-            ]
-        )
-        self.stats["discovery_queries"] += 1
-        rows = await self.fs.vector_store.filter(
-            filter=filters,
-            limit=self.settings.batch_size,
-            ctx=ctx,
-            output_fields=["uri", "updated_at", "level"],
-        )
-        seen = set()
-        for row in rows:
-            uri = row.get("uri", "")
-            target = deletion_uri(uri)
-            if target is not None:
-                seen.add(target)
-        return sorted(seen)
-
-    async def on_access_sync(self, ctx):
-        """Explicit comparison mode: pay candidate discovery and deletes inline."""
-        if not self.settings.enabled:
-            return
-        config = resolve_loaded_ttl_config(self.fs, ctx.account_id)
-        if config is None or not config.enabled:
-            return
-        for uri in await self._discover(ctx, config):
+    async def delete_known_sync(self, uri, ctx):
+        """Explicit experiment: wait for deletion of this already known URI."""
+        if self.settings.enabled and not self._closed and deletion_uri(uri) is not None:
             self.stats["delete_candidates"] += 1
             if await delete_expired(self.fs, uri, ctx):
                 self.stats["deleted"] += 1
@@ -134,42 +100,33 @@ class TTLCleanup:
         self._pending = delivery
         payload = delivery.get("data", {})
         payload = json.loads(payload) if isinstance(payload, str) else payload
-        ctx = RequestContext(
-            user=UserIdentifier(payload["account"], payload["user"]), role=Role.ROOT
-        )
-        if payload["kind"] == "discover":
-            config = await resolve_ttl_config(self.fs, ctx.account_id, fresh=True)
-            if config is not None and config.enabled:
-                for uri in await self._discover(ctx, config):
-                    await self.queue.enqueue(
-                        {
-                            "kind": "delete",
-                            "account": ctx.account_id,
-                            "user": ctx.user.user_id,
-                            "uri": uri,
-                        }
-                    )
-        elif payload["kind"] == "delete":
+        if payload["kind"] == "delete":
+            ctx = RequestContext(
+                user=UserIdentifier(payload["account"], payload["user"]), role=Role.ROOT
+            )
             self.stats["delete_candidates"] += 1
             if await delete_expired(self.fs, payload["uri"], ctx):
                 self.stats["deleted"] += 1
-        else:
+        elif payload["kind"] != "discover":
             raise ValueError("Unknown TTL queue message kind")
-        # Strict acknowledgement; failure leaves the durable delivery recoverable.
+        # Discard obsolete B0 discovery notifications without issuing a query.
         await self.queue._ack(AckContext(self.queue.name, delivery["id"], delivery))
         self._pending = None
         return True
 
     async def _run(self):
         while True:
-            try:
-                worked = await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self.stats["errors"] += 1
-                logger.exception("TTL QueueFS delivery failed; retrying unacknowledged delivery")
-                await asyncio.sleep(1)
-                worked = False
-            if not worked:
-                await asyncio.sleep(0.2)
+            await self._wake.wait()
+            self._wake.clear()
+            while True:
+                try:
+                    worked = await self.run_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.stats["errors"] += 1
+                    logger.exception("TTL deletion failed; retrying durable delivery")
+                    await asyncio.sleep(1)
+                    continue
+                if not worked:
+                    break

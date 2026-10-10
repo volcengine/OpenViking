@@ -508,7 +508,10 @@ class Session:
             self._compression.compression_index = max(0, int(self._meta.commit_count))
             self._stats.compression_count = self._compression.compression_index
         except Exception as exc:
-            if not _is_storage_not_found(exc):
+            if (
+                getattr(exc, "details", {}).get("reason") == "TTL expired"
+                or not _is_storage_not_found(exc)
+            ):
                 raise
             # Old session without meta — derive from existing data
             try:
