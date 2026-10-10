@@ -185,7 +185,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
     def clear(self) -> None:
         client = self._get_client()
         call_openviking(client, "delete_session", session_id=self.session_id)
-        self._ensure_session(client)
+        call_openviking(client, "create_session", session_id=self.session_id)
         self._acknowledge_context_parts()
 
     async def aclear(self) -> None:
@@ -193,7 +193,7 @@ class OpenVikingChatMessageHistory(BaseChatMessageHistory):
 
         client = await self._get_async_client()
         await acall_openviking(client, "delete_session", session_id=self.session_id)
-        await self._aensure_session(client)
+        await acall_openviking(client, "create_session", session_id=self.session_id)
         self._acknowledge_context_parts()
 
     def close(self) -> None:
