@@ -149,6 +149,21 @@ test("the table covers every harness that has a shared loader", () => {
 });
 
 for (const [key, entry] of Object.entries(LOADERS)) {
+  test(`${key} defaults WM injection/takeover off and preserves explicit opt-in`, () => {
+    for (const enabled of [undefined, false, true]) {
+      withFixture({ cli: { ...CONNECTION, plugin: { resumeArchiveInject: enabled, takeoverEnabled: enabled } } }, ({ otherDir }) => {
+        const loaded = entry.load(otherDir);
+        assert.equal(loaded.resumeArchiveInject, enabled ?? false);
+        assert.equal(loaded.takeoverEnabled, enabled ?? false);
+        process.env.OPENVIKING_RESUME_ARCHIVE_INJECT = "1";
+        process.env.OPENVIKING_TAKEOVER = "1";
+        const overridden = entry.load(otherDir);
+        assert.equal(overridden.resumeArchiveInject, true);
+        assert.equal(overridden.takeoverEnabled, true);
+      });
+    }
+  });
+
   test(`${key} answers what buildPluginConfig answers`, () => {
     for (const files of FIXTURES) {
       withFixture(files, ({ workspaceDir, otherDir }) => {

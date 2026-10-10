@@ -62,6 +62,14 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature e
 Launch `codex`; on the first prompt of a session, the `SessionStart` hook should load your profile, and the plugin should then recall relevant memories for every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
 For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confirm the plugin is enabled.
 
+## OpenViking source summaries
+
+The memory plugin includes OV-Usage by default. Reports summarize automatic recall and explicit OpenViking MCP or `ov` CLI lookups. They count sources made available, not proven reliance. Missing or unrecognized rollout records can omit automatic-recall attribution.
+
+Set `OPENVIKING_USAGE_OUTPUT=terminal` for a single informational Stop-hook message, or `desktop` for a model-rendered answer footer with no duplicate Stop message. The default `auto` selects terminal when `TERM_PROGRAM` or a non-`dumb` `TERM` is present, and desktop otherwise; this heuristic can be overridden when a desktop client inherits terminal variables. Set `OPENVIKING_USAGE_VIEW=expanded` for source details or `off` to disable reporting and local metadata writes. Review updated hooks with `/hooks`. Footer display follows higher-priority formatting requirements. Reporting failures do not block recall or capture. Interactive expand/collapse controls are not implemented.
+
+See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md).
+
 ## How it works
 
 The plugin handles memory at these Codex lifecycle events:

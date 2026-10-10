@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -366,8 +366,8 @@ async def get_session(
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
     result["auto_commit_policy"] = service.sessions.effective_auto_commit_policy(session)
     result.pop("event_search_tags", None)
-    result["memory_extraction_config"] = (
-        service.sessions.effective_memory_extraction_config(session)
+    result["memory_extraction_config"] = service.sessions.effective_memory_extraction_config(
+        session
     )
     return Response(status="ok", result=result)
 
@@ -400,9 +400,7 @@ async def update_session_config(
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    event_tags = _event_tags_from_extraction_config(
-        request.memory_extraction_config
-    )
+    event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
     update_auto_commit_policy = "auto_commit_policy" in request.model_fields_set
     auto_commit_policy = (
         request.auto_commit_policy.model_dump(exclude_none=True)
@@ -434,9 +432,9 @@ async def update_session_config(
         )
     except NotFoundError:
         return error_response("NOT_FOUND", f"Session {session_id} not found")
-    return Response(
-        status="ok", result=execution.result, telemetry=execution.telemetry
-    ).model_dump(exclude_none=True)
+    return Response(status="ok", result=execution.result, telemetry=execution.telemetry).model_dump(
+        exclude_none=True
+    )
 
 
 @router.get("/{session_id}/tool-results")
@@ -535,9 +533,7 @@ async def get_session_archive(
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
-        return error_response(
-            code="NOT_FOUND", message=f"Archive {archive_id} not found"
-        )
+        return error_response(code="NOT_FOUND", message=f"Archive {archive_id} not found")
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -591,6 +587,10 @@ class CommitRequest(BaseModel):
     behavior.
     """
 
+    enable_working_memory: Optional[StrictBool] = Field(
+        default=None,
+        description="Override only Working Memory generation for this commit; null inherits policy.",
+    )
     reset_context: bool = Field(
         default=False,
         strict=True,
@@ -672,6 +672,7 @@ async def commit_session(
     service = get_service()
     commit_kwargs: Dict[str, Any] = {"keep_recent_count": body.keep_recent_count}
     optional_retention = {
+        "enable_working_memory": body.enable_working_memory,
         "retention_mode": body.retention_mode,
         "keep_recent_turn_count": body.keep_recent_turn_count,
         "retained_message_token_budget": body.retained_message_token_budget,

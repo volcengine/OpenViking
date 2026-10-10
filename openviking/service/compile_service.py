@@ -132,15 +132,21 @@ class CompileAPIClient:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, str]:
-        """Build Runtime headers from saved connection data; legacy tasks may lack request_id."""
+        """Build Runtime headers from saved identity, optional request ID, and retry key."""
         headers = {
             "Content-Type": "application/json",
         }
         if self._endpoint.gateway_token:
             headers["X-Gateway-Token"] = self._endpoint.gateway_token
-        api_key = str(connection.get("api_key") or "").strip()
-        if api_key:
-            headers["X-API-Key"] = api_key
+        for field, header in (
+            ("api_key", "X-API-Key"),
+            ("account_id", "X-OpenViking-Account"),
+            ("user_id", "X-OpenViking-User"),
+            ("actor_peer_id", "X-OpenViking-Actor-Peer"),
+        ):
+            value = str(connection.get(field) or "").strip()
+            if value:
+                headers[header] = value
         request_id = connection.get("request_id")
         if request_id:
             headers["X-Tt-Logid"] = request_id

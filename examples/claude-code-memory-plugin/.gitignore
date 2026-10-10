@@ -3,3 +3,7 @@ node_modules/
 # Top-level .gitignore excludes lib/ (Python setuptools convention); the
 # plugin's scripts/lib/ is a JS module directory and must be tracked.
 !scripts/lib/
+# Written by Claude Code when it loads this directory with --plugin-dir: the
+# hooks-module API types and a tsconfig that points at them.
+.claude-plugin/types/
+/tsconfig.json

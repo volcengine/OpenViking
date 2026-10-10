@@ -28,6 +28,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve import ContextType
 
 
 class _SemanticMixin:
@@ -402,6 +403,7 @@ class _SemanticMixin:
         image_url: Optional[str] = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
     ):
         """Complex search with session context.
 
@@ -427,7 +429,6 @@ class _SemanticMixin:
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             QueryPlan,
             TypedQuery,
@@ -479,20 +480,27 @@ class _SemanticMixin:
                 )
             analyzer = IntentAnalyzer(
                 max_recent_messages=5,
-                query_planner=await self._vlm_resolver.get_query_planner(
-                    real_ctx.account_id
-                ),
+                query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
             )
             with telemetry.measure("search.intent_analysis"):
                 query_plan = await analyzer.analyze(
                     compression_summary=session_summary or "",
                     messages=current_messages or [],
                     current_message=query,
+                    context_type=context_types[0]
+                    if context_types and len(context_types) == 1
+                    else None,
                     target_abstract=target_abstract,
                 )
             typed_queries = query_plan.queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
+                # Caller scope is authoritative even when the planner ignores its prompt.
+                if context_types and len(context_types) == 1:
+                    tq.context_type = context_types[0]
+                elif context_types and tq.context_type not in context_types:
+                    # The existing scope filter searches only the caller's allowed types.
+                    tq.context_type = None
         else:
             # No session context, or intent disabled: search with the raw query.
             typed_queries = [

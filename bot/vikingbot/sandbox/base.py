@@ -112,8 +112,8 @@ class SandboxBackend(ABC):
             raise ValueError("max_bytes must be non-negative")
 
     @staticmethod
-    def _validate_max_entries(max_entries: int) -> None:
-        if max_entries <= 0:
+    def _validate_max_entries(max_entries: int | None) -> None:
+        if max_entries is not None and max_entries <= 0:
             raise ValueError("max_entries must be positive")
 
     @staticmethod
@@ -281,13 +281,13 @@ class SandboxBackend(ABC):
         self,
         path: str = ".",
         *,
-        max_entries: int,
+        max_entries: int | None,
     ) -> list[SandboxFileInfo]:
-        """Recursively list regular files without unbounded workspace traversal.
+        """Recursively list regular files, with no inventory quota when ``max_entries`` is None.
 
         Returned paths are relative to the sandbox workspace, including ``path``
-        when a subdirectory is requested. Directories and files both consume the
-        inventory budget so a deep directory-only tree is bounded as well.
+        when a subdirectory is requested. A supplied quota counts directories and
+        files and raises ValueError on overflow. Symlinks are not followed.
         """
         self._validate_max_entries(max_entries)
         root = self._normalize_workspace_path(path)
@@ -307,7 +307,7 @@ class SandboxBackend(ABC):
                 with stream:
                     for entry in stream:
                         visited += 1
-                        if visited > max_entries:
+                        if max_entries is not None and visited > max_entries:
                             raise ValueError(
                                 f"Sandbox workspace inventory exceeds {max_entries} entries"
                             )

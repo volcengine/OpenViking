@@ -1,5 +1,7 @@
 # langchain-openviking
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 `langchain-openviking` is the official OpenViking integration package for
 LangChain and LangGraph applications. It keeps framework-specific adapters
 separate from the OpenViking server and communicates with remote OpenViking

@@ -740,11 +740,11 @@ export function AppConnectionProvider({
           throw createConnectionError('credentialMismatch')
         }
 
-        if (pathname === '/playground') {
+        if (pathname === '/filesystem') {
           await navigate({
             replace: true,
             search: { upload: false },
-            to: '/playground',
+            to: '/filesystem',
           })
         }
         commitConnection({

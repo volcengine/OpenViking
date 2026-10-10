@@ -87,6 +87,12 @@ VITE_OV_BASE_URL=http://127.0.0.1:1933 npm run dev
 
 The connection dialog can still override the server URL, API key, account ID, and user ID at runtime.
 
+### Filesystem Page
+
+Open `/filesystem` to browse and preview context, run terminal commands, or use the Agent panel. When Studio is served under `/studio`, the URL is `/studio/filesystem`.
+
+The former `/playground` route redirects to `/filesystem`, preserving the selected file, directory, panel, session, and URL fragment. Existing browser-stored layout and history remain available.
+
 ## Connection and Auth
 
 Application code should use the adapter under `src/lib/ov-client` instead of importing from `src/gen/ov-client` directly. The adapter centralizes base URL handling, auth headers, telemetry defaults, and error normalization.

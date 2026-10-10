@@ -7,7 +7,8 @@ import json
 import re
 import time
 import uuid
-from contextlib import AsyncExitStack
+from collections.abc import Callable
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,7 @@ from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
-from vikingbot.agent.tools.base import MultimodalToolResult
+from vikingbot.agent.tools.base import TOOL_RESULT_DIRECTORY, MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -214,12 +215,9 @@ def _compact_strip_note_header(content: str) -> str:
 
 
 def _compact_build_note(previous_summary: str, new_summary: str) -> str:
+    """Join complete compaction summaries without dropping saved facts or unfinished work."""
     previous = (previous_summary or "").strip()
     new = (new_summary or "").strip()
-    if len(previous) > 24_000:
-        previous = previous[:24_000] + "\n...<older summary trimmed>"
-    if len(new) > 24_000:
-        new = new[:24_000] + "\n...<summary trimmed>"
     parts = ["[Context compaction]"]
     if previous:
         parts.append(previous)
@@ -277,40 +275,28 @@ class AgentIterationLimitExceeded(RuntimeError):
         )
 
 
-_BUDGET_REMINDER_CONSEQUENCE = (
-    "若在轮次耗尽前未成功调用 submit_wiki_bundle，系统会把工作区所有文件"
-    "（含中间临时文件）原样写入目标目录，且不经校验。"
-)
-
-
 def render_budget_reminder(
     remaining: int,
     thresholds: tuple[int, int, int] = (15, 8, 3),
 ) -> str | None:
-    """Render the per-iteration budget countdown reminder for a structured task.
-
-    ``thresholds`` is a descending ``(heads_up, warn, critical)`` triple. A short,
-    action-oriented reminder is returned only once ``remaining`` has crossed the
-    corresponding threshold; otherwise ``None``. The consequence sentence keeps the
-    reminder tied to the real salvage failure mode instead of a vague deadline.
-    """
+    """Return a submission reminder within descending heads-up, warning and critical thresholds."""
     heads_up, warn, critical = thresholds
     remaining = max(0, remaining)
     if remaining <= critical:
-        action = f"还剩 {remaining} 轮。立即提交当前最好结果，禁止再开启新的探索/读取。"
+        return (
+            f"还剩 {remaining} 轮。收集子任务结果，检查并调用 submit_wiki_bundle；不再开启新任务。"
+        )
     elif remaining <= warn:
-        action = (
+        return (
             f"还剩 {remaining} 轮。必须开始提交：把当前最好结果通过 submit_wiki_bundle "
-            "提交；不足的部分明确记为“未覆盖/待确认”，不要追求完美。"
+            "提交，不要追求完美。"
         )
     elif remaining <= heads_up:
-        action = (
+        return (
             f"还剩 {remaining} 轮。请停止对已读文件的全量重扫，开始把已有发现收敛成最终产物，"
             "并准备调用 submit_wiki_bundle。"
         )
-    else:
-        return None
-    return f"{action}\n{_BUDGET_REMINDER_CONSEQUENCE}"
+    return None
 
 
 class AgentLoop:
@@ -501,53 +487,127 @@ class AgentLoop:
         tools: list[dict[str, Any]],
         session_key: SessionKey,
         publish_events: bool,
+        *,
+        agent_id: str = "main",
+        iteration: int | None = None,
     ) -> tuple[Any, bool, bool]:
-        """Call the provider and forward native stream deltas to the bus."""
+        """Forward provider events and log caller-observed timing for one model call.
+
+        Agent ID and iteration identify concurrent loops without changing their sessions.
+        Return the response and content/reasoning-stream flags; publish_events controls
+        forwarding deltas to the bus independently of timing logs.
+        Millisecond offsets include provider capacity waits and retries. The first event
+        can be a buffered final response, so it is not necessarily a first-token time.
+        Missing delta timings are null. Errors and cancellation propagate after logging;
+        request bodies, reasoning text and tool arguments are excluded from timing logs.
+        """
         streamed_content = False
         streamed_reasoning = False
         response = None
+        log_context = {
+            "call_id": uuid.uuid4().hex,
+            "session_id": session_key.safe_name(),
+            "agent_id": agent_id,
+            "iteration": iteration,
+            "model": self.model,
+            "message_count": len(messages),
+            "input_chars": _compact_msg_chars(messages),
+        }
+        first_events: dict[str, Any] = {
+            "first_event_ms": None,
+            "first_event_type": None,
+            "first_reasoning_ms": None,
+            "first_content_ms": None,
+        }
+        status, error_type = "ok", None
+        fallback = False
+        logger.info("[LLM_START] {}", json.dumps(log_context, ensure_ascii=False))
+        started = time.perf_counter()
+        try:
+            async with aclosing(
+                self.provider.chat_stream(
+                    messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    temperature=self.temperature,
+                    session_id=session_key.safe_name(),
+                )
+            ) as stream:
+                async for event in stream:
+                    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                    if first_events["first_event_ms"] is None and (
+                        event.type == "response" or event.content
+                    ):
+                        first_events.update(first_event_ms=elapsed_ms, first_event_type=event.type)
+                    if event.type == "content_delta":
+                        if event.content:
+                            if first_events["first_content_ms"] is None:
+                                first_events["first_content_ms"] = elapsed_ms
+                            streamed_content = True
+                            if publish_events:
+                                await self.bus.publish_outbound(
+                                    OutboundMessage(
+                                        session_key=session_key,
+                                        content=event.content,
+                                        event_type=OutboundEventType.CONTENT_DELTA,
+                                    )
+                                )
+                    elif event.type == "reasoning_delta":
+                        if event.content:
+                            if first_events["first_reasoning_ms"] is None:
+                                first_events["first_reasoning_ms"] = elapsed_ms
+                            streamed_reasoning = True
+                            if publish_events:
+                                await self.bus.publish_outbound(
+                                    OutboundMessage(
+                                        session_key=session_key,
+                                        content=event.content,
+                                        event_type=OutboundEventType.REASONING_DELTA,
+                                    )
+                                )
+                    elif event.type == "response":
+                        response = event.response
 
-        async for event in self.provider.chat_stream(
-            messages=messages,
-            tools=tools,
-            model=self.model,
-            temperature=self.temperature,
-            session_id=session_key.safe_name(),
-        ):
-            if event.type == "content_delta":
-                if event.content:
-                    streamed_content = True
-                    if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=event.content,
-                                event_type=OutboundEventType.CONTENT_DELTA,
-                            )
-                        )
-            elif event.type == "reasoning_delta":
-                if event.content:
-                    streamed_reasoning = True
-                    if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=event.content,
-                                event_type=OutboundEventType.REASONING_DELTA,
-                            )
-                        )
-            elif event.type == "response":
-                response = event.response
-
-        if response is None:
-            response = await self.provider.chat(
-                messages=messages,
-                tools=tools,
-                model=self.model,
-                temperature=self.temperature,
-                session_id=session_key.safe_name(),
+            if response is None:
+                fallback = True
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    temperature=self.temperature,
+                    session_id=session_key.safe_name(),
+                )
+            if response.finish_reason == "error":
+                status = "error"
+            return response, streamed_content, streamed_reasoning
+        except asyncio.CancelledError:
+            status, error_type = "cancelled", "CancelledError"
+            raise
+        except Exception as exc:
+            status, error_type = "error", type(exc).__name__
+            raise
+        finally:
+            logger.info(
+                "[LLM_END] {}",
+                json.dumps(
+                    {
+                        **log_context,
+                        **first_events,
+                        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "status": status,
+                        "error_type": error_type,
+                        "fallback": fallback,
+                        "finish_reason": response.finish_reason if response is not None else None,
+                        "usage": response.usage if response is not None else {},
+                        "tool_names": (
+                            [call.name for call in response.tool_calls]
+                            if response is not None
+                            else []
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
             )
-        return response, streamed_content, streamed_reasoning
 
     def _register_builtin_hooks(self):
         """Register built-in hooks."""
@@ -913,6 +973,11 @@ class AgentLoop:
         openviking_connection: dict[str, Any] | None = None,
         actor_peer_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        if get_openviking_state(session).get("working_memory_confirmed") is False:
+            # A rejected WM request must not replace local history with an OV tail.
+            return session.get_history(
+                max_messages=len(session.messages), provider_name=provider_name
+            )
         if not self._ov_session_context_enabled():
             return session.get_history(provider_name=provider_name)
 
@@ -1154,8 +1219,9 @@ class AgentLoop:
         Keeps system messages and the original task, folds older turns into a
         structured summary note (the previous note is reused verbatim, only the
         region since it is summarized), and retains the most recent complete turns.
-        Cuts only between complete turns and stays within ``budget_chars``; best
-        effort on summarization failure.
+        Summaries remain complete; ``budget_chars`` limits retained recent turns,
+        with cuts only between turns. Fixed instructions, summaries and the newest
+        turn can exceed that budget. Summarization failure is handled best effort.
         """
         budget = budget_chars or 240_000
 
@@ -1264,7 +1330,9 @@ class AgentLoop:
                         "agent. Produce a dense, factual summary that preserves everything "
                         "needed to continue the task without re-reading the transcript, using "
                         "exactly these headings:\n## Current goal\n## Key facts & progress\n"
-                        "## Decisions\n## Constraints\n## Next steps / open questions\n"
+                        "## Saved files & coverage\n## Decisions\n## Constraints\n## Next steps / open questions\n"
+                        "Record saved draft paths, covered sources/ranges and unwritten gaps; "
+                        "distinguish successful writes from plans or failed writes. Continue from saved files. "
                         "Be precise about names, paths, tools, and numbers. Do not invent anything."
                     ),
                 },
@@ -1299,8 +1367,9 @@ class AgentLoop:
                     "content": (
                         "You are the final assembly step of a context-compaction pipeline. "
                         "Merge the segment summaries below into ONE note with exactly these "
-                        "headings:\n## Current goal\n## Key facts & progress\n## Decisions\n"
+                        "headings:\n## Current goal\n## Key facts & progress\n## Saved files & coverage\n## Decisions\n"
                         "## Constraints\n## Next steps / open questions\n"
+                        "Keep saved draft paths, coverage and unwritten gaps, including failed writes. "
                         "Preserve ALL distinct facts across segments; drop only duplicates. "
                         "Keep names, paths, tools, numbers. Carry over hard constraints from "
                         "the system instructions verbatim."
@@ -1328,6 +1397,31 @@ class AgentLoop:
                 logger.warning("Tool-loop compaction summary attempt {}/3 failed: {}", attempt, exc)
         return ""
 
+    async def _preview_tool_result(self, result: Any, session_key: SessionKey) -> Any:
+        """Save text exceeding 8,000 characters and return a bounded head/tail preview.
+
+        Non-text results pass through. Saving failures are explicit in the preview;
+        original tool outcomes still determine success and stop conditions.
+        """
+        if not isinstance(result, str) or len(result) <= 8_000:
+            return result
+        path = f"{TOOL_RESULT_DIRECTORY}/{uuid.uuid4().hex}.txt"
+        try:
+            sandbox = await self.sandbox_manager.get_sandbox(session_key)
+            await sandbox.write_file_bytes(path, result.encode("utf-8"))
+            notice = (
+                f"Full output ({len(result)} characters) saved at task-relative path {path}. "
+                "Use read_file with offset/limit or a script to inspect selected sections; "
+                "do not print the complete file. This file is not a deliverable."
+            )
+        except Exception as exc:
+            notice = (
+                f"Full output ({len(result)} characters) could NOT be saved: "
+                f"{type(exc).__name__}. Only this preview is available; "
+                "retrieve smaller sections from the original source if needed."
+            )
+        return f"{result[:4_000]}\n\n[Output truncated. {notice}]\n\n{result[-2_000:]}"
+
     async def _run_agent_loop(
         self,
         messages: list[dict],
@@ -1349,8 +1443,12 @@ class AgentLoop:
         allow_final_fallback: bool = True,
         inject_write_experience: bool = True,
         context_compact_budget: int | None = None,
+        pre_compact_prompt: str | None = None,
         status_note_provider: Any | None = None,
+        should_stop: Callable[[], bool] | None = None,
         skill_runtime: Any | None = None,
+        agent_id: str = "main",
+        max_iterations: int | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -1387,15 +1485,27 @@ class AgentLoop:
                 tool-use iteration limit is reached.
             inject_write_experience: Whether to retrieve and inject relevant agent experience
                 before executing configured write tools.
+            pre_compact_prompt: Optional one-turn save instruction at 85% of the character
+                budget. Uses existing tools and iteration budget; a successful stop tool
+                ends the loop before compaction. Already oversized contexts compact
+                immediately; saving is best effort.
             status_note_provider: Optional async callback ``(iteration) -> str | None``.
                 When set, its result is appended to the model-facing messages right before
-                every model call. Compile uses this to inject the per-iteration budget
-                countdown and read/unread summary; ordinary chat leaves it ``None`` so its
-                behavior is unchanged.
+                every model call. Compile emits a reminder at each configured iteration
+                threshold; ordinary chat leaves it ``None``.
+            should_stop: Optional synchronous callback checked before each iteration.
+                Returning true ends the loop without an extra model call.
+            agent_id: Diagnostic identity for model and tool logs; Compile children use
+                their child task ID while sharing the parent's session and workspace.
+            max_iterations: Positive budget for this invocation, or None to use the
+                instance default. Concurrent children do not change each other's budgets.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
         """
+        iteration_limit = self.max_iterations if max_iterations is None else max_iterations
+        if max_iterations is not None and max_iterations < 1:
+            raise ValueError("max_iterations must be positive")
         iteration = 0
         active_tools = tool_registry or self.tools
         scoped_openviking_tools = (
@@ -1412,6 +1522,9 @@ class AgentLoop:
         }
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
+        compact_pending = False
+        compact_threshold_chars = (context_compact_budget or 0) * 0.85
+        compact_trigger_chars = compact_threshold_chars
 
         def accumulate_token_usage(response: Any) -> None:
             if not response.usage:
@@ -1422,24 +1535,35 @@ class AgentLoop:
             token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
             token_usage["cache_read_input_tokens"] += cur_token.get("cache_read_input_tokens", 0)
 
-        while iteration < self.max_iterations:
+        while iteration < iteration_limit:
+            if should_stop is not None and should_stop():
+                break
             iteration += 1
 
             if context_compact_budget is not None:
-                current_chars = sum(
-                    len(json.dumps(message, ensure_ascii=False, default=str))
-                    for message in messages
-                )
-                if current_chars > context_compact_budget:
+                current_chars = _compact_msg_chars(messages)
+                if compact_pending or current_chars > context_compact_budget:
                     messages = await self._compact_tool_loop(
                         messages, session_key, budget_chars=context_compact_budget
                     )
+                    compact_pending = False
+                    # Fixed task content can exceed the save threshold; wait for new content.
+                    compact_trigger_chars = max(
+                        compact_threshold_chars, _compact_msg_chars(messages)
+                    )
+                elif (
+                    pre_compact_prompt
+                    and 1 < iteration < iteration_limit
+                    and current_chars > compact_trigger_chars
+                ):
+                    messages.append({"role": "user", "content": pre_compact_prompt})
+                    compact_pending = True
 
             if publish_events:
                 await self.bus.publish_outbound(
                     OutboundMessage(
                         session_key=session_key,
-                        content=f"Iteration {iteration}/{self.max_iterations}",
+                        content=f"Iteration {iteration}/{iteration_limit}",
                         event_type=OutboundEventType.ITERATION,
                     )
                 )
@@ -1464,6 +1588,8 @@ class AgentLoop:
                 tools=tool_definitions,
                 session_key=session_key,
                 publish_events=publish_events,
+                agent_id=agent_id,
+                iteration=iteration,
             )
             accumulate_token_usage(response)
 
@@ -1523,7 +1649,8 @@ class AgentLoop:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(args),
+                            # Unicode escapes inflate the history's character budget.
+                            "arguments": json.dumps(args, ensure_ascii=False),
                         },
                     }
                     for tc, args in zip(response.tool_calls, args_list, strict=False)
@@ -1540,7 +1667,7 @@ class AgentLoop:
                     idx: int, tool_call, allowed_names=visible_tool_names
                 ):
                     """Execute a single tool and track execution time."""
-                    tool_execute_start_time = time.time()
+                    tool_execute_start_time = time.perf_counter()
                     if tool_call.name not in allowed_names:
                         result = f"Error: Tool '{tool_call.name}' is not available in this turn"
                         return (
@@ -1585,12 +1712,20 @@ class AgentLoop:
                             result=result,
                             effective_params=dict(tool_call.arguments),
                         )
-                    tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
+                    tool_execute_duration = (time.perf_counter() - tool_execute_start_time) * 1000
                     return idx, tool_call, outcome, tool_execute_duration
 
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                    logger.info(
+                        "[TOOL_CALL]: {}({}) session={} agent={} iteration={} call_id={}",
+                        tool_call.name,
+                        args_str[:200],
+                        session_key.safe_name(),
+                        agent_id,
+                        iteration,
+                        tool_call.id,
+                    )
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
@@ -1670,21 +1805,36 @@ class AgentLoop:
                 for _idx, tool_call, outcome, tool_execute_duration in results:
                     result = outcome.result
                     result_text = str(result)
+                    model_result = await self._preview_tool_result(result, session_key)
                     recorded_result = (
-                        result_text if isinstance(result, MultimodalToolResult) else result
+                        result_text if isinstance(result, MultimodalToolResult) else model_result
                     )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(
+                        "[TOOL_END] {}",
+                        json.dumps(
+                            {
+                                "session_id": session_key.safe_name(),
+                                "agent_id": agent_id,
+                                "iteration": iteration,
+                                "tool_call_id": tool_call.id,
+                                "tool_name": tool_call.name,
+                                "duration_ms": round(tool_execute_duration, 1),
+                                "success": _is_tool_result_success(result),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
                     logger.info(f"[RESULT]: {result_text[:200]}")
 
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
-                                content=result_text,
+                                content=str(model_result),
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
-                    model_result = result
                     if isinstance(result, MultimodalToolResult):
                         result_media_bytes = _inline_media_bytes([{"content": result.content}])
                         if not self.provider.supports_tool_result_media(self.model):
@@ -1754,9 +1904,6 @@ class AgentLoop:
                     final_content = ""
                     break
 
-                messages.append(
-                    {"role": "user", "content": "Reflect on the results and decide next steps."}
-                )
             else:
                 text = (response.content or "").strip()
                 routed = False
@@ -1834,7 +1981,7 @@ class AgentLoop:
         elif final_content is None or (
             isinstance(final_content, str) and not final_content.strip()
         ):
-            if iteration >= self.max_iterations and allow_final_fallback:
+            if iteration >= iteration_limit and allow_final_fallback:
                 messages.append(
                     {
                         "role": "user",
@@ -1856,6 +2003,8 @@ class AgentLoop:
                     tools=[],
                     session_key=session_key,
                     publish_events=publish_events,
+                    agent_id=agent_id,
+                    iteration=iteration + 1,
                 )
                 accumulate_token_usage(response)
                 final_content = response.content
@@ -1871,7 +2020,7 @@ class AgentLoop:
                     )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
-            if iteration >= self.max_iterations:
+            if iteration >= iteration_limit:
                 final_content = (
                     "I reached the tool-use limit before completing every step, and the "
                     "available tool results are not enough for a reliable final answer."
@@ -1892,36 +2041,23 @@ class AgentLoop:
         stop_tool_names: list[str],
         openviking_connection: dict[str, Any] | None,
         context_compact_budget: int | None = None,
+        pre_compact_prompt: str | None = None,
         budget_reminder_thresholds: tuple[int, int, int] | None = None,
-        readlist_provider: Any | None = None,
     ) -> tuple[Any, list[dict], dict[str, int], int]:
         """Run a tool-terminated structured task through the existing agent loop.
 
-        ``budget_reminder_thresholds`` and ``readlist_provider`` enable the two Compile
-        efficiency optimizations (iteration budget countdown and the read/unread list).
-        Both default to ``None`` so this method's behavior is unchanged for callers that
-        do not opt in.
+        ``budget_reminder_thresholds`` optionally adds an iteration countdown before
+        model calls near the execution limit. ``pre_compact_prompt`` enables a bounded
+        save turn before context compaction, using the task's existing file tools.
         """
 
         max_iterations = getattr(self, "max_iterations", 0)
 
         async def status_note_provider(iteration: int) -> str | None:
-            sections: list[str] = []
-            if budget_reminder_thresholds:
-                reminder = render_budget_reminder(
-                    max(0, max_iterations - iteration), budget_reminder_thresholds
-                )
-                if reminder:
-                    sections.append(reminder)
-            if readlist_provider is not None:
-                try:
-                    summary = await readlist_provider.summary()
-                except Exception as exc:
-                    logger.warning("[READLIST]: summary failed: {}", exc)
-                    summary = None
-                if summary:
-                    sections.append(summary)
-            return "\n\n".join(sections) if sections else None
+            remaining = max(0, max_iterations - iteration)
+            if budget_reminder_thresholds and remaining in budget_reminder_thresholds:
+                return render_budget_reminder(remaining, budget_reminder_thresholds)
+            return None
 
         async def require_submission(context: _PlainTextContext) -> _PlainTextDelivered:
             messages = self.context.add_assistant_message(context.messages, context.text, [])
@@ -1953,6 +2089,7 @@ class AgentLoop:
             allow_final_fallback=False,
             inject_write_experience=False,
             context_compact_budget=context_compact_budget,
+            pre_compact_prompt=pre_compact_prompt,
             status_note_provider=status_note_provider,
         )
         submit_tool = tool_registry.get("submit_wiki_bundle")
@@ -2037,7 +2174,9 @@ class AgentLoop:
             if msg.metadata.get("studio_managed"):
                 from vikingbot.studio.policy import disabled_group_tools
 
-                disabled_tools = list(set(disabled_tools) | set(disabled_group_tools(self.tools.tool_names)))
+                disabled_tools = list(
+                    set(disabled_tools) | set(disabled_group_tools(self.tools.tool_names))
+                )
             openviking_connection = getattr(msg, "openviking_connection", None)
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None

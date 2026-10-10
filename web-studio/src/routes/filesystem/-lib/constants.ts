@@ -1,0 +1,173 @@
+import type { TerminalCommandSuggestion } from './types'
+
+export const ROOT_URI = 'viking://'
+
+// Keep legacy storage keys so the page rename preserves saved layout and sessions.
+export const FILESYSTEM_LEFT_WIDTH_STORAGE_KEY =
+  'openviking.playground.leftWidth'
+export const FILESYSTEM_RIGHT_WIDTH_STORAGE_KEY =
+  'openviking.playground.rightWidth'
+export const FILESYSTEM_RIGHT_COLLAPSED_STORAGE_KEY =
+  'openviking.playground.rightCollapsed'
+export const FILESYSTEM_AGENT_SESSIONS_STORAGE_KEY =
+  'openviking.playground.agentSessions'
+export const FILESYSTEM_EXPANDED_URIS_STORAGE_KEY =
+  'openviking.playground.expandedUris'
+export const FILESYSTEM_LEFT_WIDTH = {
+  default: 330,
+  max: 620,
+  min: 240,
+}
+export const FILESYSTEM_RIGHT_WIDTH = {
+  default: 430,
+  max: 680,
+  min: 320,
+}
+export const FILESYSTEM_MAIN_MIN_WIDTH = 420
+
+export const TERMINAL_COMMANDS: TerminalCommandSuggestion[] = [
+  {
+    command: '/status',
+    executable: true,
+    examples: ['status.default'],
+    group: 'status',
+    key: 'status',
+    insertText: '/status',
+  },
+  {
+    command: '/ls',
+    executable: true,
+    examples: ['ls.current', 'ls.target'],
+    group: 'filesystem',
+    key: 'ls',
+    insertText: '/ls ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/search',
+    executable: true,
+    examples: ['search.global', 'search.current', 'search.scoped'],
+    group: 'search',
+    key: 'search',
+    insertText: '/search ',
+    parameters: ['query', 'scope'],
+  },
+  {
+    command: '/read',
+    executable: true,
+    examples: ['read.file'],
+    group: 'core',
+    key: 'read',
+    insertText: '/read ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/find',
+    executable: true,
+    examples: ['find.global', 'find.current', 'find.scoped'],
+    group: 'core',
+    key: 'find',
+    insertText: '/find ',
+    parameters: ['query', 'scope'],
+  },
+  {
+    command: '/add-resource',
+    executable: true,
+    examples: ['addResource.default'],
+    group: 'core',
+    key: 'addResource',
+    insertText: '/add-resource',
+  },
+  {
+    command: '/session',
+    executable: true,
+    examples: [
+      'session.current',
+      'session.list',
+      'session.create',
+      'session.switch',
+      'session.get',
+      'session.context',
+      'session.messages',
+      'session.archive',
+      'session.commit',
+      'session.extract',
+      'session.message',
+      'session.toolResults',
+      'session.toolResult',
+      'session.toolSearch',
+      'session.delete',
+    ],
+    group: 'core',
+    key: 'session',
+    insertText: '/session ',
+    parameters: [
+      'sessionAction',
+      'sessionId',
+      'archiveId',
+      'messageRole',
+      'messageContent',
+      'keepRecent',
+      'tokenBudget',
+      'toolName',
+      'toolResultId',
+      'limit',
+      'offset',
+      'contextChars',
+    ],
+  },
+  {
+    command: '/tree',
+    executable: true,
+    examples: ['tree.current', 'tree.target'],
+    group: 'filesystem',
+    key: 'tree',
+    insertText: '/tree ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/stat',
+    executable: true,
+    examples: ['stat.target'],
+    group: 'filesystem',
+    key: 'stat',
+    insertText: '/stat ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/abstract',
+    executable: true,
+    examples: ['abstract.target'],
+    group: 'search',
+    key: 'abstract',
+    insertText: '/abstract ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/overview',
+    executable: true,
+    examples: ['overview.target'],
+    group: 'search',
+    key: 'overview',
+    insertText: '/overview ',
+    parameters: ['uri'],
+  },
+  {
+    command: '/health',
+    executable: true,
+    examples: ['health.default'],
+    group: 'status',
+    key: 'health',
+    insertText: '/health',
+  },
+  {
+    adminOnly: true,
+    command: '/wait',
+    executable: true,
+    examples: ['wait.default', 'wait.timeout'],
+    group: 'status',
+    key: 'wait',
+    insertText: '/wait ',
+    parameters: ['timeout'],
+  },
+]

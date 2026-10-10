@@ -8,6 +8,7 @@ import importlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -106,6 +107,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
 
         self._resolved_model_path = self._resolve_model_path()
         self._llama = self._load_model()
+        self._llama_lock = Lock()
 
     def _import_llama(self):
         try:
@@ -191,8 +193,10 @@ class LocalDenseEmbedder(DenseEmbedderBase):
         raise RuntimeError("Unexpected llama-cpp-python embedding response format")
 
     def _embed_formatted_text(self, formatted: str) -> EmbedResult:
-        payload = self._llama.create_embedding(formatted)
-        return EmbedResult(dense_vector=self._extract_embedding(payload))
+        # llama.cpp mutates the shared context, including during native calls that release the GIL.
+        with self._llama_lock:
+            payload = self._llama.create_embedding(formatted)
+            return EmbedResult(dense_vector=self._extract_embedding(payload))
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         formatted = self._format_text(text, is_query=is_query)
@@ -219,6 +223,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
         return self._dimension
 
     def close(self):
-        close_fn = getattr(self._llama, "close", None)
-        if callable(close_fn):
-            close_fn()
+        with self._llama_lock:
+            close_fn = getattr(self._llama, "close", None)
+            if callable(close_fn):
+                close_fn()

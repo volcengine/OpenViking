@@ -2,7 +2,10 @@ const workspace = {
   appShell: {
     footer: {
       agentIntegrations: 'Agent Integrations',
+      beta: 'Beta',
       connection: 'Connection Settings',
+      gateway: 'OpenViking Gateway',
+      gatewayBeta: 'OpenViking Gateway · Beta',
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
@@ -64,8 +67,8 @@ const workspace = {
       sessions: {
         title: 'Sessions',
       },
-      playground: {
-        title: 'Playground',
+      filesystem: {
+        title: 'Filesystem',
       },
     },
     sidebar: {
@@ -287,7 +290,7 @@ const workspace = {
     detail: {
       back: 'Back',
       copyUri: 'Copy URI',
-      openPlayground: 'Open in Workbench',
+      openFilesystem: 'Open in Filesystem',
       copied: 'Copied',
       copyFailed: 'Copy failed',
       contentTitle: 'Experience content',
@@ -359,7 +362,7 @@ const workspace = {
       'Could not connect to the OpenViking service. Check the server URL and connection status.',
     connectionSettings: 'Open connection settings',
     detail: 'Details',
-    openPlayground: 'Open in Playground',
+    openFilesystem: 'Open in Filesystem',
     viewDetail: 'View {{name}} details',
     detailLoading: 'Loading skill details...',
     detailLoadFailed: 'Could not load skill details',
@@ -1030,14 +1033,14 @@ const workspace = {
       keyGuide: {
         control: {
           primary:
-            'Your User API Key already enables the Playground and data access. Regular users do not need a control credential.',
+            'Your User API Key already enables the Filesystem and data access. Regular users do not need a control credential.',
           secondary:
             'To switch Accounts or manage users, request a Root Key from the deployment admin or an Admin Key from the current Account admin. The Root Key is stored at server.root_api_key in the server-side ov.conf.',
           title: 'Need to manage Accounts or users?',
         },
         data: {
           primary:
-            'The Root/Admin API Key is mainly for management. The Playground and tenant data APIs require a User API Key bound to a user identity.',
+            'The Root/Admin API Key is mainly for management. The Filesystem and tenant data APIs require a User API Key bound to a user identity.',
           secondary:
             'Select or create a user in Users & Permissions, or regenerate its key, then use it as the User API Key.',
           title: 'A User API Key is still required',
@@ -1066,7 +1069,7 @@ const workspace = {
         primary: 'This server is configured with {{mode}} authentication.',
         title: 'Unsupported authentication mode',
       },
-      userHint: 'Used by the Playground and tenant data APIs.',
+      userHint: 'Used by the Filesystem and tenant data APIs.',
     },
     connectionPage: {
       description:
@@ -1178,9 +1181,9 @@ const workspace = {
       description:
         'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       memberListDescription:
-        '"Switch identity" uses that user for data pages such as Playground and Retrieval without changing the active Root/Admin management credential.',
+        '"Switch identity" uses that user for data pages such as Filesystem and Retrieval without changing the active Root/Admin management credential.',
       memberListDescriptionRoot:
-        'You can change member roles here. "Switch identity" only changes the user used by data pages such as Playground and Retrieval; it does not change the active Root management credential.',
+        'You can change member roles here. "Switch identity" only changes the user used by data pages such as Filesystem and Retrieval; it does not change the active Root management credential.',
       memberListTitle: 'Workspace members',
       cannotRemoveCurrentIdentity: 'The active identity cannot be deleted.',
       cannotRemoveLastManager:

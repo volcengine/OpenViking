@@ -931,6 +931,7 @@ export class OpenVikingClient {
       options = optionsOrKeepRecentCount;
     }
     const body = compact({
+      enable_working_memory: options.enableWorkingMemory,
       keep_recent_count: options.keepRecentCount,
       retention_mode: options.retentionMode,
       keep_recent_turn_count: options.keepRecentTurnCount,

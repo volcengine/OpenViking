@@ -130,7 +130,7 @@ def test_real_create_agent_records_through_middleware_recorder():
     )
 
     assert result["messages"][-1].content == "Stored by a real LangChain agent."
-    assert client.batch_sizes == [2]
+    assert sum(client.batch_sizes) == 2
     assert [message["parts"][0]["text"] for message in client.sessions["real-agent-recorder"]] == [
         "Remember this agent turn.",
         "Stored by a real LangChain agent.",

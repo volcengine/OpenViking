@@ -46,6 +46,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/usage/report.mjs\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -68,6 +78,18 @@
             "type": "command",
             "command": "node \"${PLUGIN_ROOT}/scripts/pre-compact-capture.mjs\"",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|(?:functions\\.)?exec|mcp__.*openviking.*__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/usage/track-lookup.mjs\"",
+            "timeout": 5
           }
         ]
       }

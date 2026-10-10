@@ -875,6 +875,32 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
 
 媒体处理会把文件内容发送给所配置的外部 provider。禁用响应存储和 best-effort 删除可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制；上传文件未显式指定过期时间，其保留周期由方舟的默认策略决定。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
 
+### bot.compile
+
+配置单个 Resource Compile 任务各阶段的并发工作数，适用于直接模型调用和 agent 执行：
+
+```json
+{
+  "bot": {
+    "compile": {
+      "map_concurrency": 8,
+      "shuffle_concurrency": 4,
+      "shuffle_batch_size": 4,
+      "reduce_concurrency": 6
+    }
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `map_concurrency` | 继承 `vlm.max_concurrent` | Map 提取工作并发数 |
+| `shuffle_concurrency` | 继承 `vlm.max_concurrent` | Shuffle 路由工作及 embedding 批次并发数 |
+| `shuffle_batch_size` | `4` | 每次 Shuffle 路由请求的主记录数上限；与并发数、字符软预算独立 |
+| `reduce_concurrency` | 继承 `vlm.max_concurrent` | Reduce 工作并发数；同路径候选的最终 merge 复用此值 |
+
+三个并发配置项必须为正整数；省略或设为 `null` 时继承默认值。`shuffle_batch_size` 必须为正整数，省略时为 `4`，不接受 `null`。路由逐条保存合法结果，仅失败记录重新组批重试，最后一次降为单条；每条记录最多尝试三轮。修改后需重启 VikingBot 服务。一个 VikingBot 服务内的所有 Compile 任务仍共享 `vlm.max_concurrent` 限制的模型请求容量，因此提高阶段并发不会突破这一总上限。Embedding 请求另受 embedding 服务的并发限制。恢复任务默认使用相同的 reduce 配置，显式 `--concurrency` 可覆盖恢复并发数。
+
 ### query_planner
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，用于 `search()` 的意图分析、query expansion，以及可选的服务端 recall 摘要重写。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。

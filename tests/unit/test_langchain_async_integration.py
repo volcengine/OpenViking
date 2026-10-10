@@ -1248,6 +1248,7 @@ async def test_async_context_assembler_combines_session_and_recall():
     backing.add_message("async-assembler", "user", content="Active async turn.")
     client = AsyncInMemoryOpenVikingClient(backing)
     assembler = OpenVikingSessionContextAssembler(
+        include_session_context=True,
         async_client=client,
         target_uri="viking://resources",
     )
@@ -1269,6 +1270,7 @@ async def test_async_assemble_skips_create_for_existing_session():
     backing.add_message("async-existing", "user", content="Existing async turn.")
     client = AsyncInMemoryOpenVikingClient(backing)
     assembler = OpenVikingSessionContextAssembler(
+        include_session_context=True,
         async_client=client,
         target_uri="viking://resources",
         include_recall=False,
@@ -1286,6 +1288,7 @@ async def test_async_assemble_creates_session_only_on_not_found():
     backing = InMemoryOpenVikingClient()
     client = AsyncInMemoryOpenVikingClient(backing)
     assembler = OpenVikingSessionContextAssembler(
+        include_session_context=True,
         async_client=client,
         target_uri="viking://resources",
         include_recall=False,

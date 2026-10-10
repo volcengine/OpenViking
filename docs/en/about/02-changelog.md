@@ -7,6 +7,18 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
+  and extract long-term memories, but generate no WM/checkpoint summaries by default.
+  Update installed agent plugins separately: automatic archive injection and takeover now
+  default off, and host history/compaction stays in use. VikingBot retains OV-managed
+  context and compaction and explicitly requests WM on session-context commits.
+  The old serializer omitted WM=true,
+  so previously saved policies without that field now become false even if true was once
+  chosen explicitly. Already-queued legacy tasks retain their submission-time semantics.
+  A new per-commit `enable_working_memory` boolean can opt in without replacing other
+  policy fields. Completed WM-off archives remain readable as raw messages with empty
+  summary fields. See the [upgrade guide](../guides/working-memory-default-off.md), including
+  handoffs for old conversations that no longer have complete host history.
 - **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
   no longer updates or reactivates an existing Watch. Native Watches retain exclusive
   ownership while paused, and incompatible target reuse returns `409 Conflict`.

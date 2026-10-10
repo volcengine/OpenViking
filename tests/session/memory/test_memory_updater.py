@@ -445,11 +445,15 @@ class TestMemoryUpdater:
         assert "deleted_event.md" not in document.body
 
     @pytest.mark.asyncio
-    async def test_generate_overview_template_fallbacks_for_preferences_and_entities(self):
+    async def test_generate_overview_template_fallbacks_for_builtin_memories(self):
         registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml("openviking/prompts/templates/memory/cases.yaml")
         registry.load_from_yaml("openviking/prompts/templates/memory/entities.yaml")
         registry.load_from_yaml("openviking/prompts/templates/memory/preferences.yaml")
 
+        case_dir = "viking://user/alice/memories/cases"
+        case_uri = f"{case_dir}/merged_case.md"
+        case_overview_uri = f"{case_dir}/.overview.md"
         entity_dir = "viking://user/alice/memories/entities/动漫角色"
         entity_uri = f"{entity_dir}/越前龙马.md"
         entity_overview_uri = f"{entity_dir}/.overview.md"
@@ -460,11 +464,14 @@ class TestMemoryUpdater:
         class FakeVikingFS:
             def __init__(self):
                 self.store = {
+                    case_uri: "Merged into another case.",
                     entity_uri: "A tennis character.",
                     preference_uri: "Prefers concise updates.",
                 }
 
             async def ls(self, uri, show_all_hidden=False, ctx=None):
+                if uri == case_dir:
+                    return [{"name": "merged_case.md", "isDir": False}]
                 if uri == entity_dir:
                     return [{"name": "越前龙马.md", "isDir": False}]
                 if uri == preference_dir:
@@ -486,13 +493,16 @@ class TestMemoryUpdater:
             "openviking.utils.embedding_utils.vectorize_directory_meta",
             new_callable=AsyncMock,
         ) as vectorize_directory_meta:
+            await updater.generate_overview("cases", case_dir, ctx, extract_context=None)
             await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
             await updater.generate_overview(
                 "preferences", preference_dir, ctx, extract_context=None
             )
 
-        assert vectorize_directory_meta.await_count == 2
+        assert vectorize_directory_meta.await_count == 3
 
+        assert "- [merged_case.md](./merged_case.md)" in viking_fs.store[case_overview_uri]
+        assert "no such element" not in viking_fs.store[case_overview_uri]
         assert "**Category:** 动漫角色" in viking_fs.store[entity_overview_uri]
         assert "- [越前龙马.md](./越前龙马.md)" in viking_fs.store[entity_overview_uri]
         assert "**User:** alice" in viking_fs.store[preference_overview_uri]

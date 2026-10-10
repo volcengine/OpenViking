@@ -1289,8 +1289,9 @@ async def test_list_reports_more_entries(service):
 
 async def test_store_single_message(service):
     result = await remember(messages=[StoreMessage(role="user", content="The sky is blue")])
-    assert "stored" in result.lower()
-    assert "1 message" in result
+    assert "Submitted 1 message(s) for memory extraction" in result
+    assert "task_id=" in result
+    assert "decides which memories to create or update" in result
 
 
 async def test_store_batch_messages(service):
@@ -1300,8 +1301,45 @@ async def test_store_batch_messages(service):
             StoreMessage(role="assistant", content="Noted, your favorite color is blue."),
         ]
     )
-    assert "stored" in result.lower()
-    assert "2 message" in result
+    assert "Submitted 2 message(s)" in result
+
+
+async def test_store_reports_extraction_in_progress(service, monkeypatch):
+    monkeypatch.setattr(
+        service.sessions,
+        "commit_async",
+        AsyncMock(return_value={"session_id": "s", "status": "accepted", "task_id": "task-123"}),
+    )
+
+    result = await remember(messages=[StoreMessage(role="user", content="The sky is blue")])
+
+    assert "Submitted 1 message(s) for memory extraction" in result
+    assert "task_id=task-123" in result
+    assert "session mcp-store-" in result
+    assert "runs in the background" in result
+    assert "decides which memories to create or update" in result
+    assert "committed for memory extraction" not in result
+
+
+async def test_store_reports_skipped_commit(service, monkeypatch):
+    monkeypatch.setattr(
+        service.sessions,
+        "commit_async",
+        AsyncMock(
+            return_value={
+                "session_id": "s",
+                "status": "skipped",
+                "task_id": None,
+                "reason": "no_messages",
+            }
+        ),
+    )
+
+    result = await remember(messages=[StoreMessage(role="user", content="")])
+
+    assert "Nothing was committed" in result
+    assert "no_messages" in result
+    assert "Submitted" not in result
 
 
 async def test_store_does_not_autofill_peer_id_from_ctx(service, monkeypatch):
@@ -1340,7 +1378,11 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
 
     fake_session = FakeSession()
     monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
-    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+    monkeypatch.setattr(
+        service.sessions,
+        "commit_async",
+        AsyncMock(return_value={"status": "accepted", "task_id": "task-1"}),
+    )
 
     result = await remember(
         messages=[
@@ -1349,7 +1391,7 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
         ]
     )
 
-    assert "2 message" in result
+    assert "Submitted 1 message(s)" in result
     assert len(fake_session.messages) == 1
     role, parts, peer_id, created_at = fake_session.messages[0]
     assert role == "assistant"

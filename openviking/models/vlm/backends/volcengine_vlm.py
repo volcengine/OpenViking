@@ -98,6 +98,9 @@ class VolcEngineVLM(OpenAIVLM):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -237,8 +240,9 @@ class VolcEngineVLM(OpenAIVLM):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion asynchronously via Chat Completions API."""
+        """Get text completion; per-call reasoning effort applies only with thinking enabled."""
         effective_thinking = self.thinking if thinking is None else thinking
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         kwargs_messages = sanitize_openai_messages(
@@ -255,6 +259,8 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["extra_body"] = dict(self.extra_request_body)
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
+        if effective_thinking and reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

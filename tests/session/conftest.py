@@ -74,6 +74,7 @@ async def client(
     if commit_tasks:
         await asyncio.gather(*commit_tasks, return_exceptions=True)
 
+
 @pytest_asyncio.fixture(scope="function")
 async def session(
     client,
@@ -130,3 +131,16 @@ async def session_with_tool_call(
     msg = session.add_message("assistant", [TextPart("Executing tool..."), tool_part])
 
     yield session, msg.id, tool_id
+
+
+@pytest_asyncio.fixture
+async def wm_session_with_messages(client, service, request_context, working_memory_policy):
+    session = await service.sessions.create(request_context, memory_policy=working_memory_policy)
+    for role, text in [
+        ("user", "Hello, this is a test message."),
+        ("assistant", "Hello! How can I help you today?"),
+        ("user", "I need help with testing."),
+        ("assistant", "I can help you with testing."),
+    ]:
+        await session.add_message_async(role, [TextPart(text)])
+    yield session

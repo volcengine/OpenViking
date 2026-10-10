@@ -296,14 +296,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
-    const added = await flushPendingMessages(opencodeSessionId, state)
-    if (commit && isCaptureEnabled(config)) {
-      await commitOvSession(state.ovSessionId, { force: true, reason })
-    } else if (added > 0) {
-      await maybeCommitByThreshold(state)
-    }
-    await enqueueSave()
-    return true
+    // Overlapping flushes of one session (e.g. session.idle and dispose) must
+    // not send the same pending messages twice.
+    const run = (state.flushChain ?? Promise.resolve()).then(async () => {
+      const added = await flushPendingMessages(opencodeSessionId, state)
+      if (commit && isCaptureEnabled(config)) {
+        await commitOvSession(state.ovSessionId, { force: true, reason })
+      } else if (added > 0) {
+        await maybeCommitByThreshold(state)
+      }
+      await enqueueSave()
+      return true
+    })
+    state.flushChain = run.catch(() => {})
+    return run
   }
 
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
@@ -466,7 +472,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
-    const body = { keep_recent_count: config.commitKeepRecentCount }
+    const body = { keep_recent_count: 0 }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),

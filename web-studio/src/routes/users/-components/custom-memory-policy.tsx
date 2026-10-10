@@ -68,7 +68,7 @@ export function CustomMemoryPolicy({
               <input
                 className="mt-1"
                 type="checkbox"
-                checked={draft[key]?.enabled !== false}
+                checked={draft[key]?.enabled ?? key !== 'working_memory'}
                 onChange={(event) =>
                   setDraft({
                     ...draft,

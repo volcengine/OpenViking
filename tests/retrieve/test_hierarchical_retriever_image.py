@@ -117,3 +117,116 @@ async def test_image_query_requires_multimodal_embedder(monkeypatch):
             ),
             ctx=_ctx(),
         )
+
+
+class _ProviderEmbedder(MultimodalEmbedder):
+    """Fake provider client whose capability follows the account config."""
+
+    def __init__(self, supports_multimodal: bool):
+        super().__init__()
+        self.supports_multimodal = supports_multimodal
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+async def account_embedding_provider(monkeypatch):
+    from openviking.config.binding import manager_over_source
+    from openviking.config.embedding import AccountEmbeddingProvider
+    from openviking.config.source import MemoryConfigSource
+    from openviking.config.vector import AccountVectorConfigResolver
+    from openviking_cli.utils.config import set_openviking_config
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    clients = []
+
+    def create(config):
+        client = _ProviderEmbedder(config.dense.input == "multimodal")
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", create)
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.VikingDBManagerProxy",
+        FakeProxy,
+    )
+    base = OpenVikingConfig.from_dict(
+        {
+            "embedding": {
+                "dense": {
+                    "model": "fake-multimodal",
+                    "dimension": 1,
+                    "provider": "openai",
+                    "api_key": "cluster-key",
+                    "input": "multimodal",
+                }
+            }
+        }
+    )
+    set_openviking_config(base)
+    manager = manager_over_source(MemoryConfigSource(), base_config=base)
+    provider = AccountEmbeddingProvider(AccountVectorConfigResolver(manager), manager)
+    await manager.initialize()
+    try:
+        yield manager, provider, clients
+    finally:
+        await provider.close()
+        OpenVikingConfigSingleton.reset_instance()
+
+
+def _image_query():
+    return TypedQuery(
+        query="",
+        context_type=None,
+        intent="",
+        embedding_input=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}],
+        image_query=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_image_query_through_account_bound_multimodal_embedder(account_embedding_provider):
+    _manager, provider, clients = account_embedding_provider
+    retriever = HierarchicalRetriever(storage=object(), embedder=provider.bind("acc"))
+    retriever._rerank_client = object()
+
+    await retriever.retrieve(_image_query(), ctx=_ctx(), limit=1)
+
+    assert clients[-1].seen == _image_query().embedding_input
+
+
+@pytest.mark.asyncio
+async def test_image_query_capability_follows_account_embedding_config(
+    account_embedding_provider,
+):
+    manager, provider, clients = account_embedding_provider
+    embedder = provider.bind("acc")
+    retriever = HierarchicalRetriever(storage=object(), embedder=embedder)
+    retriever._rerank_client = object()
+    await retriever.retrieve(_image_query(), ctx=_ctx(), limit=1)
+
+    await manager.patch_account(
+        "acc",
+        {
+            "embedding": {
+                "dense": {
+                    "model": "fake-text",
+                    "dimension": 1,
+                    "input": "text",
+                    "credentials": [{"provider": "openai", "api_key": "acc-key"}],
+                }
+            }
+        },
+        creating=True,
+    )
+
+    with pytest.raises(InvalidArgumentError, match="multimodal embedding"):
+        await retriever.retrieve(_image_query(), ctx=_ctx(), limit=1)
+    assert clients[0].closed
+    assert not clients[-1].seen

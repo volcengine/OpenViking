@@ -66,7 +66,7 @@ it('opens file materials in preview and directory materials in the explorer', as
       page.getByRole('link', { name: 'report.md' }).getAttribute('href')!,
       'http://localhost',
     )
-    expect(link.pathname).toBe('/playground')
+    expect(link.pathname).toBe('/filesystem')
     expect(link.searchParams.get('file')).toBe(
       'viking://resources/folder/report.md',
     )

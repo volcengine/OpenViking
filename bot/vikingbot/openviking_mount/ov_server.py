@@ -532,16 +532,31 @@ class VikingClient:
         )
         return result
 
+    async def compile_embeddings(
+        self, texts: List[str], *, target_uri: str, expected_model: str | None = None
+    ) -> Dict[str, Any]:
+        """Use the authenticated server embedder for transient Compile routing batches."""
+        response = await self.client._request(
+            "POST",
+            "/api/v1/compile/embeddings",
+            json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
+        )
+        return self.client._handle_response_data(response).get("result", {})
+
     async def list_resources(
         self,
         path: Optional[str] = None,
         recursive: bool = False,
         node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
 
     async def stat(self, uri: str) -> Dict[str, Any]:
@@ -563,8 +578,11 @@ class VikingClient:
     async def mkdir(self, uri: str) -> None:
         await self.client.mkdir(uri)
 
-    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
-        return await self.client.tree(uri, node_limit=node_limit)
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return await self.client.read_raw(uri, offset=offset, limit=limit)
@@ -625,7 +643,7 @@ class VikingClient:
     ) -> Dict[str, Any]:
         return await self.client.add_skill(
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
             timeout=timeout,
         )
@@ -642,7 +660,7 @@ class VikingClient:
         return await self.client.update_skill(
             skill_name,
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
             timeout=timeout,
         )
@@ -654,12 +672,15 @@ class VikingClient:
         operations: List[Dict[str, Any]],
         wait: bool = True,
         timeout: Optional[float] = None,
+        skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
+        """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
             root_uri=root_uri,
             operations=operations,
             wait=wait,
             timeout=timeout,
+            options={"skip_conflicts": skip_conflicts},
         )
 
     async def read_content(
@@ -1197,6 +1218,7 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        enable_working_memory: Optional[bool] = None,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -1213,6 +1235,7 @@ class VikingClient:
         retention_kwargs = {
             key: value
             for key, value in {
+                "enable_working_memory": enable_working_memory,
                 "retention_mode": retention_mode,
                 "keep_recent_turn_count": keep_recent_turn_count,
                 "retained_message_token_budget": retained_message_token_budget,

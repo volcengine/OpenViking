@@ -37,7 +37,7 @@ const resources = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Playground telemetry',
+    eyebrow: 'Server API telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',
@@ -547,7 +547,7 @@ const resources = {
     detail: {
       score: 'Score',
       level: 'Level',
-      openPlayground: 'Open in Playground',
+      openFilesystem: 'Open in Filesystem',
       uri: 'URI',
       summary: 'Summary',
       noSummary: 'No summary available',

@@ -10,13 +10,13 @@ Otherwise, choose one:
 
 ### Managed service on Volcengine
 
-Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) and obtain your key from **User Management → API Key**. The service endpoint is:
+Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_02-quickstart) and obtain your key from **User Management → API Key**. The service endpoint is:
 
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-No server installation or local model configuration is needed. See the [product page](https://www.volcengine.com/product/openviking-service) and [service documentation](https://docs.volcengine.com/docs/84313/2374478) for managed-service usage and limits. Continue to step 2.
+No server installation or local model configuration is needed. See the [product page](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_02-quickstart) and [service documentation](https://docs.volcengine.com/docs/84313/2374478) for managed-service usage and limits. Continue to step 2.
 
 ### Self-host a server
 
@@ -52,7 +52,7 @@ ov config
 
 In the interactive configuration, choose **OpenViking Service** for Volcengine or **Custom** for a self-hosted endpoint. Enter the API key and, for a custom service, its URL. Leave the key empty for the default local server. Save and activate the configuration.
 
-The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For scripted setup or multiple endpoints, see [CLI Setup](05-cli-setup.md).
+The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For multiple endpoints or agent-assisted setup, see [CLI Setup](05-cli-setup.md).
 
 Verify the connection:
 
@@ -64,34 +64,32 @@ This checks that the server responds; the import below also exercises model proc
 
 ## 3. Import a document
 
-Save the following as `quickstart.md` in your current directory:
+This example imports a real team fact: the four GitHub users who take turns owning the weekly OpenViking release. Save the following as `ov-release-rotation.md` in your current directory:
 
 ```markdown
-# Project Atlas
+# OpenViking release rotation
 
-Project Atlas backs up its documents every Friday.
-Maya owns the backup process. Keep each backup for 30 days.
+OpenViking ships a new release every Friday.
+Release owners rotate in this order: qin-ctx, zhoujh01, ZaynJarvis, t0saki.
 ```
 
 Import it into a new resource directory:
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+ov add-resource ./ov-release-rotation.md --to viking://resources/ov-release-rotation --wait --timeout 120
 ```
 
 The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).
 
-Use an unused target URI for this example. If you repeat the example, choose a new target and use that same URI in the commands below.
-
 ## 4. Browse and search
 
 ```bash
-ov tree viking://resources/quickstart-demo
-ov overview viking://resources/quickstart-demo
-ov find "Who owns the backup process?" --uri viking://resources/quickstart-demo
+ov tree viking://resources/ov-release-rotation
+ov overview viking://resources/ov-release-rotation
+ov find "Who owns the weekly OpenViking release?" --uri viking://resources/ov-release-rotation
 ```
 
-`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. To read a match, pass its returned URI to `ov read`:
+`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. The imported file answers the question, so it is the top match. To read a match, pass its returned URI to `ov read`:
 
 ```bash
 ov read "<returned-file-uri>"

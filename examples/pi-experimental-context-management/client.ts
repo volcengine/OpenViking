@@ -180,7 +180,12 @@ export class OVClient {
         headers: { ...this.headers(), ...(init?.headers as Record<string, string> || {}) },
         signal: controller.signal,
       });
-      const body = await resp.json().catch(() => ({}));
+      // A complete non-JSON body falls back to `{}`; a body cut off after the
+      // headers rejects into the status-0 branch below so writes stay retryable.
+      const body = await resp.json().catch((error: unknown) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return {};
+      });
       const traceId = body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
       if (!resp.ok || body.status === "error") {
         return {

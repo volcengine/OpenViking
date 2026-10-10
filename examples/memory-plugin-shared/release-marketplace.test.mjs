@@ -541,11 +541,24 @@ test("the docs download tree holds what the installer fetches, under the address
     assert.ok(existsSync(join(tmp, "clone", "codex-memory-plugin", ".codex-plugin", "plugin.json")));
     assert.ok(existsSync(join(out, "plugins", "memory-plugins.git", "info", "refs")), "dumb HTTP clients read info/refs");
 
+    // Built later from the same plugins, it serves git clients the same files.
     const again = join(tmp, "again");
-    const rebuilt = run("bash", [downloadsScript, again, "https://docs.example.invalid/dl"]);
+    const later = "2001-02-03T04:05:06Z";
+    const rebuilt = run("bash", [downloadsScript, again, "https://docs.example.invalid/dl"], {
+      env: { ...process.env, GIT_AUTHOR_DATE: later, GIT_COMMITTER_DATE: later },
+    });
     assert.equal(rebuilt.status, 0, `${rebuilt.stdout}\n${rebuilt.stderr}`);
-    for (const zip of [join("plugins", "claude", zipName), join("releases", "latest", "memory-plugin-marketplace.zip")]) {
-      assert.equal(sha256(join(again, zip)), sha256(join(out, zip)), zip);
+    const repo = join("plugins", "memory-plugins.git");
+    const packs = readdirSync(join(out, repo, "objects", "pack")).map((name) => join(repo, "objects", "pack", name));
+    assert.deepEqual(readdirSync(join(again, repo, "objects", "pack")).map((name) => join(repo, "objects", "pack", name)), packs);
+    for (const file of [
+      join("plugins", "claude", zipName),
+      join("releases", "latest", "memory-plugin-marketplace.zip"),
+      join(repo, "info", "refs"),
+      join(repo, "objects", "info", "packs"),
+      ...packs,
+    ]) {
+      assert.equal(sha256(join(again, file)), sha256(join(out, file)), file);
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });

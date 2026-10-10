@@ -724,7 +724,11 @@ class VolcengineKMSProvider(BaseProvider):
 
         self._root_key = secrets.token_bytes(32)
 
-        # Encrypt and store root key
+        # Encrypt and store root key. Any failure here (KMS outage, read-only
+        # or full filesystem) must clear the cached ephemeral key before raising:
+        # otherwise a retried get_root_key() hits the `self._root_key is not None`
+        # fast path and encrypts data with a key that was never persisted — the
+        # data-loss class this provider guards.
         try:
             encrypted_root_key = await self._encrypt_with_kms(self._root_key)
             self.key_file.parent.mkdir(parents=True, exist_ok=True)
@@ -732,6 +736,7 @@ class VolcengineKMSProvider(BaseProvider):
                 f.write(encrypted_root_key)
             logger.info(f"Created and stored new root key at {self.key_file}")
         except Exception as e:
+            self._root_key = None
             raise ConfigError(
                 f"Failed to persist root key to file. "
                 f"Refusing to start with ephemeral key (data loss risk): {e}"

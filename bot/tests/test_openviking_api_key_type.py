@@ -137,17 +137,23 @@ class _SessionContextClient:
         keep_recent_count=0,
         user_id=None,
         *,
+        enable_working_memory=None,
         retention_mode,
         keep_recent_turn_count,
         retained_message_token_budget,
         min_raw_tail_steps,
     ):
         assert retention_mode == "turn_budget"
+        assert enable_working_memory is True
         assert keep_recent_turn_count == 2
         self.commit_calls.append((session_id, keep_recent_count, user_id))
         if self.fail_session_commit:
             raise RuntimeError("session commit failed")
-        return {"session_id": session_id, "status": "accepted"}
+        return {
+            "session_id": session_id,
+            "status": "accepted",
+            "effective_enable_working_memory": True,
+        }
 
 
 def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
@@ -1193,7 +1199,12 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             **_retention_kwargs,
         ):
             self.commit_calls.append((session_id, keep_recent_count, user_id))
-            return {"session_id": session_id, "status": "accepted"}
+            assert _retention_kwargs["enable_working_memory"] is True
+            return {
+                "session_id": session_id,
+                "status": "accepted",
+                "effective_enable_working_memory": True,
+            }
 
     fake_client = _FakeClient()
     hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_count=2)

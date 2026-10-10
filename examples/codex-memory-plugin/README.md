@@ -1,5 +1,7 @@
 # OpenViking Memory Plugin for Codex and TraeCode CLI 2.0
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 Long-term semantic memory for [Codex](https://developers.openai.com/codex), powered by [OpenViking](https://github.com/volcengine/OpenViking).
 TraeCode CLI 2.0 supports the same plugin format; use the shared installer's dedicated `--harness trae-cli` entry.
 
@@ -11,8 +13,9 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 
 - **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
+- **OV-Usage source summaries** after each answer: show sources made available through automatic recall and explicit OpenViking lookups, with optional source URI and query details.
 - **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
-- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
+- **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit and archive every captured message.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionEnd`** (Codex ≥ 0.145): when a thread shuts down gracefully, catch up any turns `Stop` never sent and commit the OV session, so the extractor runs on the whole conversation the moment you leave.
 - **Fallback sweep on `SessionStart` (source=startup|clear)**: commit state files that carry an end marker whose commit did not go through, or that have been idle past `OPENVIKING_CODEX_IDLE_TTL_MS`. `source=resume` never commits or sweeps; if the live OV session was already committed, it combines the profile block with the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
@@ -51,7 +54,7 @@ After install:
 codex             # first run: pick "Trust all and continue" at the hook review prompt
 ```
 
-Startup stops on `6 hooks need review` — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
+Startup may stop at a hook review prompt — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
 
 ### B. Codex marketplace install
 
@@ -60,8 +63,7 @@ This path uses the same checked-in stdio MCP proxy as the installer path. Authen
 The repo ships a Codex marketplace catalog at `.agents/plugins/marketplace.json`, so you can install with Codex's native commands:
 
 ```bash
-# 1. add the OpenViking marketplace (use volcengine/OpenViking once merged
-#    upstream, or <your-fork>/OpenViking while testing a fork)
+# 1. add the OpenViking marketplace
 codex plugin marketplace add volcengine/OpenViking
 
 # 2. install the plugin from that marketplace
@@ -219,7 +221,7 @@ A repository can carry its own plugin settings in `<repo-root>/.openviking/confi
 }
 ```
 
-`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
+`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, `usage.view`, `usage.output`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
 
 These files are trusted without a prompt, because a hook is non-interactive and an approval gate would mean one command per workspace. What is refused is structural: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in them. What a committed file switches off is announced by `$ov-memory-doctor` rather than blocked.
 
@@ -389,7 +391,7 @@ Nothing is denied: Codex edits files through `apply_patch`, whose input is a pat
 
 `auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append. Tool calls and results become dedicated `tool` parts and `tool_output` is reported verbatim — the server externalizes anything larger than `tool_output_externalization.threshold_chars` (default `20000`) and leaves a synopsis stub plus `tool_output_ref`, so the original stays readable via `/api/v1/sessions/{id}/tool-results`. `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default `1000000`) is only a guard against pathological payloads. Configured `captureFilters` rules run last, just before the payload is sent — see [Input filters](#input-filters).
 
-After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default `10`) so the newest turns remain live for continuity while older context is archived and extracted. `PreCompact` still commits everything before compaction.
+After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=0`: Codex keeps its own transcript, so every captured message is archived and extracted. `PreCompact` also commits everything before compaction, whatever `pending_tokens` is.
 
 ### PreCompact (deterministic commit)
 
@@ -545,3 +547,102 @@ the hook preserves the existing raw-context / legacy retrieval fallback.
 `auto` uses `rewrite: "auto"` when the Codex executable or its compressor profile
 is unavailable (including a cached runtime failure). A first local failure still
 uses the deterministic fallback for that turn; later turns use the server.
+
+## OV-Usage source summaries
+
+OV-Usage is built into the memory plugin; no separate plugin is needed. A
+`PostToolUse` hook records explicit OpenViking lookups, and the `Stop` hook
+summarizes them together with automatic recall.
+A typical summary is:
+
+```text
+OpenViking · 3 sources · 1 past event · 2 team docs · 1 read
+```
+
+Sources were made available during the turn; the count does not prove that the
+answer relied on each source. `read` counts distinct sources read successfully, including
+partial reads, and does not mean the entire file was read. Failed lookups are
+excluded from source counts.
+
+### Configure the output
+
+Set `OPENVIKING_USAGE_VIEW` before launching Codex, or `usageView` in `ovcli.conf`'s `plugin` / `plugin.codex` section (also `usage.view` in a workspace config file, or `codex.usageView` in `ov.conf`). The environment variable wins over the files:
+
+| Value | Behavior |
+| --- | --- |
+| `summary` (default) | One-line source and read counts |
+| `expanded` | Source titles, URIs, and lookup details |
+| `off` | Disable reporting and new usage metadata writes |
+
+```bash
+OPENVIKING_USAGE_VIEW=expanded codex
+```
+
+```json
+{ "plugin": { "codex": { "usageView": "off" } } }
+```
+
+Usage uses one display channel per client. In terminal mode, the Stop hook emits
+an informational `systemMessage`; the recall hook does not request an answer
+footer. In desktop mode, the recall hook supplies `additionalContext` for a
+model-rendered answer footer covering automatic recall, and Stop does not emit a
+second message. The lookup hook never returns `additionalContext`: Codex would
+insert it between the outputs of parallel tool calls, which strict model
+providers reject. Higher-priority formatting requirements can suppress the footer.
+Interactive expand/collapse controls are not implemented.
+
+Set `OPENVIKING_USAGE_OUTPUT=terminal` or `desktop` (file key `usageOutput`, workspace `usage.output`) to select the channel explicitly.
+The default `auto` selects terminal when `TERM_PROGRAM` or a non-`dumb` `TERM` is
+present, and desktop otherwise. This is a heuristic, not a guaranteed client ID;
+use the explicit setting if your client inherits a terminal environment. This
+setting is independent of `OPENVIKING_USAGE_VIEW` (summary, expanded, or off).
+Turns with no recall or lookups produce no summary.
+
+### Verify after installation
+
+1. Run `codex plugin list` and confirm `openviking-memory@openviking` is enabled.
+2. Start a new Codex session with your OpenViking server configured. Review and
+   trust the updated hooks at startup or with `/hooks`, including `PostToolUse`
+   and `Stop`.
+3. Ask the agent to find and read a known OpenViking document. Check the source
+   summary; with `expanded`, check that its URI matches the document.
+
+Working MCP tools alone do not establish that hooks are enabled. If a summary is
+missing, check hook trust and `OPENVIKING_USAGE_VIEW` / `usageView`, then restart Codex after
+changing environment variables. With `OPENVIKING_DEBUG=1`, reporting failures
+write a generic notice to the existing Codex debug log. Exception text and hook
+input are never logged; reporting and logging failures leave memory hooks intact.
+
+### Limits and local storage
+
+The observer recognizes direct OpenViking MCP calls, `ov`/`openviking` CLI calls
+through `Bash`, and MCP lookups nested in `functions.exec` or `exec`.
+For wrappers, only source URIs present in successful output count; failed result
+blocks are excluded independently. Wrapper code cannot prove which reads ran,
+so wrapped lookups do not increment the read count. Bodies returned without a
+source URI cannot be attributed. Experience files use the same generic
+`find`/`search` and `read` tools as other sources.
+
+Wrapper detection and automatic-recall attribution from Codex rollout records
+are best effort; missing or unrecognized records can omit attribution.
+
+The observer reads at most the last 8 MiB of the current rollout in memory and
+stores source metadata and redacted, truncated lookup terms under
+`~/.openviking/codex-plugin-state/ov-usage`. Completed-turn reporting prunes storage
+to at most 50 turns per session across 20 sessions, retaining the current session
+and turn and ordering other metadata by write activity. Disabling reporting does not
+delete existing metadata. The observer makes no network calls and adds no
+project-directory gate.
+
+### Contributor validation
+
+From the repository root:
+
+```bash
+node --test examples/codex-memory-plugin/scripts/*.test.mjs
+```
+
+The marketplace contract tests cover package wiring and usage attribution;
+other plugin tests exercise recall and capture with local mocks. Validate the
+installed package and a fresh interactive session as well: passing script tests
+does not establish visible output in the Codex UI.

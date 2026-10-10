@@ -6,7 +6,7 @@ OpenViking runs as an HTTP service. Choose who operates it before installing a s
 
 | Service | What you need |
 | --- | --- |
-| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing), then connect with the independent CLI. No local server or model configuration is needed. |
+| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment), then connect with the independent CLI. No local server or model configuration is needed. |
 | An existing team or remote deployment | Obtain the service URL and a user/admin key from its administrator. |
 | Self-hosted OpenViking | Install and configure the server using the instructions below. |
 
@@ -303,7 +303,7 @@ docker compose up -d
 After startup, you can access:
 - API service: `http://localhost:1933`
 - Web Studio: `http://localhost:1933/studio` (same origin as the API)
-- Legacy entry point: `http://localhost:1934` (Caddy reverse proxy to 1933, kept for existing deployments)
+- Caddy entry point: `http://localhost:1934`. It proxies to 1933 and is kept for existing deployments. When you also run OpenViking Gateway, it sends the model API paths to the gateway; see [OpenViking Gateway deployment and operations](22-gateway-operations.md#docker-compose).
 
 ### Deploy on Railway
 
@@ -403,8 +403,8 @@ This variant is useful when multiple instances share the same `workspace`, but Q
 
 For public HTTPS access, see the [Public Access Guide](12-public-access.md).
 
-To build the image yourself, pass an explicit OpenViking version:
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+To build the image yourself, pass an explicit OpenViking version. Replace `<VERSION>` with a release number:
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 

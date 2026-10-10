@@ -77,7 +77,10 @@ export function createOvHttp(cfg = {}, {
         ...(init.headers || {}),
       };
       const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-      const body = await response.json().catch(() => null);
+      const body = await response.json().catch((error) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return null;
+      });
       if (requireJsonBody && !body) {
         return {
           ok: false,

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import warnings
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from copy import deepcopy
@@ -16,6 +17,7 @@ from typing import Any, Iterator
 from pydantic import PrivateAttr
 
 try:
+    from langchain_core.chat_history import BaseChatMessageHistory
     from langchain_core.messages import BaseMessage, SystemMessage
     from langchain_core.runnables import ConfigurableFieldSpec, RunnableLambda
     from langchain_core.runnables.history import RunnableWithMessageHistory
@@ -130,9 +132,11 @@ class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
         recorder: OpenVikingSessionRecorder,
         sync_write_lock_pool: _SyncSessionWriteLockPool,
         async_write_lock_pools: LoopScopedAsyncClientCache,
+        host_history: BaseChatMessageHistory | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, _recorder=recorder, **kwargs)
+        self._host_history = host_history
         self._entry_snapshot: list[BaseMessage] | None = None
         self._sync_write_lock_pool = sync_write_lock_pool
         self._async_write_lock_pools = async_write_lock_pools
@@ -140,17 +144,25 @@ class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
     @property
     def messages(self) -> list[BaseMessage]:  # type: ignore[override]
         if self._entry_snapshot is None:
-            self._entry_snapshot = list(super().messages)
+            self._entry_snapshot = list(
+                self._host_history.messages if self._host_history is not None else super().messages
+            )
         return list(self._entry_snapshot)
 
     async def aget_messages(self) -> list[BaseMessage]:
         if self._entry_snapshot is None:
-            self._entry_snapshot = list(await super().aget_messages())
+            self._entry_snapshot = list(
+                await self._host_history.aget_messages()
+                if self._host_history is not None
+                else await super().aget_messages()
+            )
         return list(self._entry_snapshot)
 
     def add_messages(self, messages: Sequence[BaseMessage]) -> None:
         try:
             with self._sync_write_lock_pool.acquire(self.session_id):
+                if self._host_history is not None:
+                    self._host_history.add_messages(messages)
                 super().add_messages(messages)
         finally:
             self._entry_snapshot = None
@@ -159,6 +171,8 @@ class _InvocationOpenVikingChatMessageHistory(OpenVikingChatMessageHistory):
         try:
             lock_pool = self._async_write_lock_pools.get(_AsyncSessionWriteLockPool)
             async with lock_pool.acquire(self.session_id):
+                if self._host_history is not None:
+                    await self._host_history.aadd_messages(messages)
                 await super().aadd_messages(messages)
         finally:
             self._entry_snapshot = None
@@ -186,7 +200,7 @@ class OpenVikingSessionContextAssembler:
         limit: int = 5,
         score_threshold: float | None = None,
         token_budget: int = 128_000,
-        include_session_context: bool = True,
+        include_session_context: bool = False,
         include_active_messages: bool = True,
         include_recall: bool = True,
         recall_header: str = "Relevant OpenViking context:",
@@ -643,12 +657,21 @@ def with_openviking_context(
     session_id_config_key: str = "session_id",
     peer_id_config_key: str = "peer_id",
     inject_context: bool = True,
+    history_factory: Callable[[str], BaseChatMessageHistory] | None = None,
 ) -> OpenVikingContextRunnable:
     """Wrap a runnable with invocation-scoped history and managed resources.
 
     Use the returned runnable as a context manager, or call ``close()`` /
     ``await aclose()`` when it is no longer needed.
     """
+
+    if history_factory is None:
+        warnings.warn(
+            "with_openviking_context uses OV as the history backend and requires Working Memory. "
+            "Use with_openviking_memory with a host history_factory when WM is disabled.",
+            FutureWarning,
+            stacklevel=2,
+        )
 
     assembler = OpenVikingSessionContextAssembler(
         client=client,
@@ -666,6 +689,7 @@ def with_openviking_context(
         limit=limit,
         score_threshold=score_threshold,
         token_budget=token_budget,
+        include_session_context=history_factory is None,
         include_active_messages=False,
         include_recall=inject_context,
     )
@@ -692,6 +716,7 @@ def with_openviking_context(
         return _InvocationOpenVikingChatMessageHistory(
             session_id=active_session_id,
             recorder=recorder,
+            host_history=history_factory(active_session_id) if history_factory else None,
             sync_write_lock_pool=sync_write_lock_pool,
             async_write_lock_pools=async_write_lock_pools,
             peer_id=peer_id,
@@ -808,6 +833,22 @@ def with_openviking_context(
         _resources=resources,
     )
     return wrapped
+
+
+def with_openviking_memory(
+    runnable: Any,
+    *,
+    history_factory: Callable[[str], BaseChatMessageHistory],
+    **kwargs: Any,
+) -> OpenVikingContextRunnable:
+    """Add recall and recording while the caller owns persisted chat history.
+
+    The history provider must supply its own retention/compaction policy. OV
+    commits never determine which messages the next model invocation can see.
+    """
+    if not callable(history_factory):
+        raise ValueError("history_factory must provide host-managed chat history")
+    return with_openviking_context(runnable, history_factory=history_factory, **kwargs)
 
 
 def _session_id_from_config(config: dict[str, Any] | None, *, key: str) -> str:

@@ -2,11 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 from vikingbot.agent.loop import AgentLoop
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import AgentsConfig, SessionKey
 from vikingbot.hooks.base import HookContext
 from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.session.manager import Session
+
+
+def test_session_context_defaults_to_working_memory():
+    assert AgentsConfig().session_context_enabled is True
 
 
 @pytest.mark.asyncio
@@ -33,7 +37,7 @@ async def test_session_context_commit_uses_turn_budget_retention():
         @staticmethod
         async def commit_session(**kwargs):
             commit_calls.append(kwargs)
-            return {"archived": True}
+            return {"archived": True, "effective_enable_working_memory": True}
 
     result = await OpenVikingCompactHook()._execute_session_context_commit(
         HookContext(event_type="message.compact", session_key=session_key),
@@ -53,6 +57,7 @@ async def test_session_context_commit_uses_turn_budget_retention():
         {
             "session_id": make_openviking_storage_session_id(session_key.safe_name()),
             "keep_recent_count": 0,
+            "enable_working_memory": True,
             "retention_mode": "turn_budget",
             "keep_recent_turn_count": 3,
             "retained_message_token_budget": 12_000,

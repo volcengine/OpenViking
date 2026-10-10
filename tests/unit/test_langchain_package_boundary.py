@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PACKAGE_ROOT = PROJECT_ROOT / "integrations" / "langchain"
+PACKAGE_ROOT = PROJECT_ROOT / "examples" / "langchain"
 SOURCE_ROOT = PACKAGE_ROOT / "src"
 SDK_ROOT = PROJECT_ROOT / "sdk" / "python"
 

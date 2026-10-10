@@ -369,6 +369,44 @@ OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；
 - 彻底卸载：`jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`。
 - 已有自定义 statusline？安装时会询问替换 / 跳过 / 稍后手动 compose。
 
+## 来源卡片
+
+插件会在每次回答下方加一张卡片，列出这次回答用到的 OpenViking 来源：自动召回加进提示的内容，以及 Claude 自己搜索、读取的内容。卡片默认折叠成一行：
+
+```
+OV · 14 sources · 6 past events · 5 work memories · 2 team docs · 1 skill · 1 read in full  [Expand]
+```
+
+展开后列出全部来源和 Claude 自己的查询：
+
+```
+OV · 14 sources · … · 1 read in full  [Collapse]
+  ◷ 10/3 发版检查清单补充 · found by Claude · read in full
+  ⚙ openviking-release · auto-recalled
+  …
+Claude's own lookups
+  ⌕ Searched “lark-daemon release” · 6 results
+  ▤ Read 10/3 发版检查清单补充
+```
+
+- 分组：★ 偏好，◷ 过往事件，◆ 工作记忆（笔记、经验、你的 agent 的记忆），▤ 团队文档，⚙ Skill。
+- **read in full**：Claude 用 `read`（MCP 工具，或 `ov read`/`cat`/`abstract`/`overview`）打开了这个文件。只出现在搜索结果里的不算。
+- 没用到任何 OpenViking 内容的回答不显示卡片。
+- 用卡片上的按钮展开或折叠单张卡片；用 `/openviking-usage expand` 或 `/openviking-usage collapse` 展开或折叠全部卡片。界面文字只有英文。
+
+**前提。** 卡片是一个 Claude Code hooks 模块（`hooks/hooks.json` 里的 `modules`，代码在 `mods/usage/`），需要 Claude Code 2.1.286 或更高版本，并启用 hooks 模块。下面这些情况下，Claude Code 会忽略这个模块，命令 hook 照常运行：
+
+- 版本不支持模块。
+- 模块被关闭，例如设置了 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0`，或被灰度开关关闭。
+
+在支持模块、但早于 2.1.286 的版本上，如果开启了模块，这个模块会因为用到 `session.append` 而加载失败。Claude Code 会记录这条错误，命令 hook 仍然照常注册。
+
+**数据。** 模块读取本插件 `UserPromptSubmit` hook 返回的 `<openviking-context>` 块，以及 Claude 发起的 OpenViking MCP 调用和 `ov` CLI 调用。它不发网络请求，不向 OpenViking 写任何内容。
+
+它在 Claude Code 的插件存储里保存每次回答的来源 URI、分数、脱敏后的搜索词，以及卡片所在对话行的 id 和该行回答文本的哈希（桌面端靠这个哈希找到卡片对应的回答），保留最近 20 个会话，所以 `claude --continue` 之后卡片还在。不保存 shell 命令和提示原文。卡片不会发给 Claude，不消耗 token。
+
+**开发。** `claude plugin test examples/claude-code-memory-plugin` 会运行 `mods/usage/sources.test.ts`。用 `claude --plugin-dir examples/claude-code-memory-plugin` 启动一次、生成 `.claude-plugin/types/` 后，可以用 `tsc -p examples/claude-code-memory-plugin/mods/usage` 做类型检查。
+
 ## 调试日志
 
 设置 `claude_code.debug: true` 或 `OPENVIKING_DEBUG=1`，hook 日志写到 `~/.openviking/logs/cc-hooks.log`。
@@ -478,7 +516,7 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 9 个 hook 注册
+│   └── hooks.json           # 9 个 hook 注册 + 来源卡片模块
 ├── commands/
 │   └── ov.md                # /ov 状态命令
 ├── skills/
@@ -486,6 +524,8 @@ claude-code-memory-plugin/
 │   ├── openviking-skills/   # 查找、添加、共享和迁移 OpenViking skill
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/    # 安装 / 配置 / 连接 / 本机 server 排障
+├── mods/
+│   └── usage/               # 来源卡片（Claude Code hooks 模块）
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/

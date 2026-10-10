@@ -181,7 +181,7 @@ jobs:
             echo "cuvs_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          LANGCHAIN_PATTERN="examples/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|pyproject\.toml|uv\.lock|\.github/workflows/(pr|python-langchain-release)\.yml"
+          LANGCHAIN_PATTERN="examples/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|^pyproject\.toml$|^uv\.lock$|\.github/workflows/(pr|python-langchain-release)\.yml"
           LANGCHAIN_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LANGCHAIN_PATTERN" || true)
 
           if [ -n "$LANGCHAIN_CHANGED_FILES" ]; then

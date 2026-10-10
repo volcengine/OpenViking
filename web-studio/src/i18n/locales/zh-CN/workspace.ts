@@ -2,7 +2,10 @@ const workspace = {
   appShell: {
     footer: {
       agentIntegrations: 'Agent 接入',
+      beta: 'Beta',
       connection: '连接设置',
+      gateway: 'OpenViking 网关',
+      gatewayBeta: 'OpenViking 网关 · Beta',
       docs: '文档站',
       github: 'GitHub',
       sdkApi: 'SDK 与 API',
@@ -64,8 +67,8 @@ const workspace = {
       sessions: {
         title: '会话',
       },
-      playground: {
-        title: '工作台',
+      filesystem: {
+        title: '文件系统',
       },
     },
     sidebar: {
@@ -283,7 +286,7 @@ const workspace = {
     detail: {
       back: '返回',
       copyUri: '复制 URI',
-      openPlayground: '在工作台中打开',
+      openFilesystem: '在文件系统中打开',
       copied: '已复制',
       copyFailed: '复制失败',
       contentTitle: '经验内容',
@@ -349,7 +352,7 @@ const workspace = {
     networkError: '无法连接 OpenViking 服务，请检查服务地址和连接状态。',
     connectionSettings: '打开连接设置',
     detail: '详情',
-    openPlayground: '在工作台中打开',
+    openFilesystem: '在文件系统中打开',
     viewDetail: '查看 {{name}} 详情',
     detailLoading: '正在加载技能详情...',
     detailLoadFailed: '技能详情加载失败',
@@ -985,14 +988,14 @@ const workspace = {
       keyGuide: {
         control: {
           primary:
-            '当前用户 API 密钥已可用于工作台和数据访问，普通用户无需配置控制凭证。',
+            '当前用户 API 密钥已可用于文件系统和数据访问，普通用户无需配置控制凭证。',
           secondary:
             '如需切换账号或管理用户，请向部署管理员索取 Root API 密钥，或向当前账号管理员索取管理员 API 密钥。Root API 密钥位于服务端 ov.conf 的 server.root_api_key。',
           title: '需要管理账号或用户？',
         },
         data: {
           primary:
-            'Root 或管理员 API 密钥主要用于管理操作；工作台和租户数据 API 需要绑定用户身份的用户 API 密钥。',
+            'Root 或管理员 API 密钥主要用于管理操作；文件系统和租户数据 API 需要绑定用户身份的用户 API 密钥。',
           secondary:
             '请在“用户与权限”中选择或创建用户，或者重新生成用户密钥，然后将其用作用户 API 密钥。',
           title: '还缺少用户 API 密钥',
@@ -1020,7 +1023,7 @@ const workspace = {
         primary: '该服务器配置了 {{mode}} 认证。',
         title: '不支持的认证模式',
       },
-      userHint: '供工作台和租户数据 API 使用。',
+      userHint: '供文件系统和租户数据 API 使用。',
     },
     connectionPage: {
       description: '配置 OpenViking 服务连接、控制面凭证和当前数据访问凭证。',
@@ -1127,9 +1130,9 @@ const workspace = {
       currentAccountDescription: '管理当前账号的用户和访问凭证。',
       description: '查看选中账号下的用户和凭证，并在网页端新增用户或轮换密钥。',
       memberListDescription:
-        '“切换身份”会将该用户设为工作台、检索等数据页面的访问身份，不会改变当前 Root 或管理员凭证。',
+        '“切换身份”会将该用户设为文件系统、检索等数据页面的访问身份，不会改变当前 Root 或管理员凭证。',
       memberListDescriptionRoot:
-        '可直接修改成员角色。“切换身份”只会改变工作台、检索等数据页面的访问身份，不会改变当前 Root 管理凭证。',
+        '可直接修改成员角色。“切换身份”只会改变文件系统、检索等数据页面的访问身份，不会改变当前 Root 管理凭证。',
       memberListTitle: '空间成员',
       cannotRemoveCurrentIdentity: '不能删除当前正在使用的身份。',
       cannotRemoveLastManager: '不能删除空间内最后一个管理员。',

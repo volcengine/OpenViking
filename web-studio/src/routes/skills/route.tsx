@@ -392,14 +392,14 @@ function SkillsRoute() {
                       rel="noreferrer noopener"
                       search={{ uri: selectedSkill.uri }}
                       target="_blank"
-                      to="/playground"
+                      to="/filesystem"
                     />
                   }
                   nativeButton={false}
                   size="xs"
                   variant="outline"
                 >
-                  {t('openPlayground')}
+                  {t('openFilesystem')}
                   <ExternalLinkIcon />
                 </Button>
               ) : null}

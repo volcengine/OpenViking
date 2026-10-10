@@ -2,8 +2,8 @@
 
 <a href="https://openviking.ai/" target="_blank">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-dark.png">
-    <img alt="OpenViking" src="https://raw.githubusercontent.com/volcengine/OpenViking/f5b6043d29406ec8102402868745bdc879e48f90/docs/images/readme-logo-light.png" width="300" height="56">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/readme-logo-dark.png">
+    <img alt="OpenViking" src="https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/readme-logo-light.png" width="300" height="56">
   </picture>
 </a>
 
@@ -160,7 +160,7 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>OpenViking Service を使う（Volcengine がホスト）</strong></summary>
 
-同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。サーバーのアドレスは `https://api.vikingdb.cn-beijing.volces.com/openviking` です。エージェントを接続するときに、このアドレスと API キーを使います。
+同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。サーバーのアドレスは `https://api.vikingdb.cn-beijing.volces.com/openviking` です。エージェントを接続するときに、このアドレスと API キーを使います。
 
 </details>
 
@@ -355,7 +355,7 @@ ov chat   # 別のターミナルで実行
 <img src="../images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
 
 </td>
 <td width="50%" valign="top">

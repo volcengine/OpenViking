@@ -3,6 +3,7 @@
 import json
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar
 from types import SimpleNamespace
 
 import httpx
@@ -65,7 +66,7 @@ class GatewayBackend:
             self.pending.clear()
             result = {"status": "accepted"}
         elif path.startswith("/api/v1/sessions/"):
-            result = {"pending_tokens": 0}
+            result = {"pending_tokens": len(self.pending)}
         elif path.startswith("/api/v1/search/"):
             self.searches.append((request, payload))
             if self.reject_session_search and payload.get("session_id"):
@@ -370,3 +371,219 @@ def test_recall_scope_default_and_environment_override(external_provider, monkey
     assert provider._setting("recall_scope", {"recall_scope": "shared"}) == "peer"
     monkeypatch.delenv("OPENVIKING_RECALL_SCOPE")
     assert provider._setting("recall_scope", {"recall_scope": "invalid"}) is None
+
+
+def pause_first_worker(module, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    spawn = module.spawn_context_thread
+    count = 0
+
+    def delayed(body, *, name):
+        nonlocal count
+        if name == "openviking-sync":
+            count += 1
+            if count == 1:
+                def paused():
+                    entered.set()
+                    assert release.wait(10)
+                    body()
+
+                return spawn(paused, name=name)
+        return spawn(body, name=name)
+
+    monkeypatch.setattr(module, "spawn_context_thread", delayed)
+    return entered, release
+
+
+def user_texts(messages):
+    return [m["parts"][0]["text"] for m in messages if m["role"] == "user"]
+
+
+@pytest.mark.parametrize("boundary", ["end", "switch", "threshold"])
+def test_delayed_worker_preserves_order_context_and_commit(
+    external_provider, monkeypatch, boundary
+):
+    home, provider, module, manager, backend = initialize(external_provider, monkeypatch)
+    entered, release = pause_first_worker(module, monkeypatch)
+    uploaded = threading.Event()
+    context = ContextVar("upload-author", default="missing")
+    seen = []
+    run = module._TurnUpload.run
+
+    def record(upload):
+        seen.append(context.get())
+        result = run(upload)
+        uploaded.set()
+        return result
+
+    monkeypatch.setattr(module._TurnUpload, "run", record)
+    if boundary == "threshold":
+        monkeypatch.setattr(provider, "_setting", lambda *_args, **_kwargs: 0)
+    try:
+        with profile_scope(home):
+            for number, author in enumerate(("alice", "bob", "alice"), 1):
+                token = context.set(f"{author}-{number}")
+                try:
+                    manager.sync_all(
+                        f"Turn {number}", "Reply", session_id="shared-group",
+                        turn_author={"id": author},
+                    )
+                    assert manager.flush_pending(timeout=5)
+                finally:
+                    context.reset(token)
+                if number == 1:
+                    assert entered.wait(5)
+            # No later upload may overtake a worker paused before its write lock.
+            assert not uploaded.wait(0.5)
+            assert not provider._drain_writers("shared-group", timeout=0.01)
+            if boundary == "switch":
+                provider.on_session_switch("next-session")
+                assert provider._session_id == "next-session"
+            elif boundary == "end":
+                monkeypatch.setattr(module, "_SESSION_DRAIN_TIMEOUT", 0.01)
+                provider.on_session_end([])
+            assert backend.archived == []
+            release.set()
+            assert provider._drain_writers("shared-group", timeout=10)
+            if boundary == "end":
+                provider.on_session_end([])
+            assert provider._drain_finalizers(timeout=10)
+        assert user_texts(backend.archived) == ["Turn 1", "Turn 2", "Turn 3"]
+        assert seen == ["alice-1", "bob-2", "alice-3"]
+        assert [m["peer_id"] for m in backend.archived if m["role"] == "user"] == [
+            "telegram.alice", "telegram.bob", "telegram.alice",
+        ]
+        assert backend.pending == []
+        assert provider._inflight_writers == {}
+        assert provider._upload_tails == {}
+        assert not provider._state_path("pending", "shared-group").exists()
+    finally:
+        release.set()
+        manager.shutdown_all()
+
+
+def test_upload_order_does_not_wait_for_previous_metadata(external_provider, monkeypatch):
+    home, provider, _, manager, backend = initialize(external_provider, monkeypatch)
+    checking, release, second_written = (threading.Event() for _ in range(3))
+    check = provider._maybe_commit_live_session
+    calls = 0
+
+    def delay_metadata(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            checking.set()
+            assert release.wait(10)
+        else:
+            second_written.set()
+        check(*args)
+
+    monkeypatch.setattr(provider, "_maybe_commit_live_session", delay_metadata)
+    try:
+        with profile_scope(home):
+            provider.sync_turn("First", "Reply")
+            assert checking.wait(5)
+            provider.sync_turn("Second", "Reply")
+            assert second_written.wait(5)
+            assert user_texts(backend.pending) == ["First", "Second"]
+            assert not provider._drain_writers("shared-group", timeout=0.01)
+            release.set()
+            assert provider._drain_writers("shared-group", timeout=5)
+    finally:
+        release.set()
+        manager.shutdown_all()
+
+
+def test_failed_worker_start_does_not_break_upload_order(external_provider, monkeypatch):
+    home, provider, module, manager, backend = initialize(external_provider, monkeypatch)
+    entered, release = pause_first_worker(module, monkeypatch)
+    spawn = module.spawn_context_thread
+    calls = 0
+
+    def fail_second_start(body, *, name):
+        nonlocal calls
+        thread = spawn(body, name=name)
+        if name == "openviking-sync":
+            calls += 1
+            if calls == 2:
+                def fail():
+                    raise RuntimeError("No thread available")
+
+                thread.start = fail
+        return thread
+
+    monkeypatch.setattr(module, "spawn_context_thread", fail_second_start)
+    try:
+        with profile_scope(home):
+            provider.sync_turn("First", "Reply")
+            assert entered.wait(5)
+            provider.sync_turn("Cannot start", "Reply")
+            provider.sync_turn("Third", "Reply")
+            assert not provider._drain_writers("shared-group", timeout=0.1)
+            assert backend.pending == []
+            release.set()
+            assert provider._drain_writers("shared-group", timeout=5)
+            assert user_texts(backend.pending) == ["First", "Third"]
+            provider.sync_turn("Fourth", "Reply")
+            assert provider._drain_writers("shared-group", timeout=5)
+            assert user_texts(backend.pending) == ["First", "Third", "Fourth"]
+            assert provider._upload_tails == {}
+            assert provider._inflight_writers == {}
+    finally:
+        release.set()
+        manager.shutdown_all()
+
+
+@pytest.mark.parametrize("fail_all", [False, True])
+def test_failed_upload_releases_next_turn(external_provider, monkeypatch, fail_all):
+    home, provider, module, manager, backend = initialize(external_provider, monkeypatch)
+    entered, release = pause_first_worker(module, monkeypatch)
+    run = module._TurnUpload.run
+
+    def fail_first(upload):
+        if upload.user_content == "First":
+            backend.batch_failures = 4
+            if fail_all:
+                # Exhaust the individual-message fallback too, then allow the next turn.
+                def offline(*_args):
+                    raise OSError("offline")
+
+                monkeypatch.setattr(upload.client, "post", offline)
+        result = run(upload)
+        backend.batch_failures = 0
+        return result
+
+    monkeypatch.setattr(module._TurnUpload, "run", fail_first)
+    try:
+        with profile_scope(home):
+            for text in ("First", "Second"):
+                provider.sync_turn(text, "Reply", messages=[{"role": "user", "content": text}])
+                if text == "First":
+                    assert entered.wait(5)
+            release.set()
+            assert provider._drain_writers("shared-group", timeout=5)
+            assert user_texts(backend.pending) == (["Second"] if fail_all else ["First", "Second"])
+            assert provider._upload_tails == {}
+    finally:
+        release.set()
+        manager.shutdown_all()
+
+
+def test_other_session_upload_is_not_blocked_by_paused_worker(external_provider, monkeypatch):
+    home, provider, module, manager, backend = initialize(external_provider, monkeypatch)
+    entered, release = pause_first_worker(module, monkeypatch)
+    try:
+        with profile_scope(home):
+            provider.sync_turn("First session", "Reply", session_id="first")
+            assert entered.wait(5)
+            provider.sync_turn("Second session", "Reply", session_id="second")
+            assert provider._drain_writers("second", timeout=5)
+            assert user_texts(backend.pending) == ["Second session"]
+            release.set()
+            manager.shutdown_all()
+            assert user_texts(backend.pending) == ["Second session", "First session"]
+            assert provider._inflight_writers == {}
+            assert provider._upload_tails == {}
+    finally:
+        release.set()
+        manager.shutdown_all()

@@ -6,6 +6,7 @@ import { useSessionTitles } from './use-session-titles'
 const PLACEHOLDERS = new Set([
   '新建对话',
   '新建工作台会话',
+  '新建文件系统会话',
   'New conversation',
   'New session',
 ])

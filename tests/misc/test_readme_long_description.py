@@ -37,3 +37,24 @@ def test_repository_readme_has_no_relative_targets():
     targets += re.findall(r"\]\(([^)\s]+)", description)
     relative = [t for t in targets if not re.match(r"^(?:https?:|mailto:|#)", t)]
     assert relative == []
+
+
+def test_pypi_removes_github_utm_from_cloud_links_only(tmp_path):
+    """复用渠道不误标为 GitHub，业务参数、锚点和其他来源保持不变。"""
+    readme = tmp_path / "README.md"
+    product = "https://www.volcengine.com/product/openviking-service"
+    console = "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+    text = (
+        f"[云服务]({product}?plan=personal&utm_medium=referral&utm_source=github&utm_campaign=readme#plans) "
+        f'<a href="{console}?utm_source=github&amp;utm_content=card&amp;lang=zh&amp;utm_term=agent">控制台</a> '
+        f"[文档来源]({product}?utm_source=opensource_docs&utm_medium=referral) "
+        "[其他链接](https://example.com/?utm_source=github)"
+    )
+    readme.write_text(text, encoding="utf-8")
+    assert pypi_long_description(readme) == (
+        f"[云服务]({product}?plan=personal#plans) "
+        f'<a href="{console}?lang=zh">控制台</a> '
+        f"[文档来源]({product}?utm_source=opensource_docs&utm_medium=referral) "
+        "[其他链接](https://example.com/?utm_source=github)"
+    )
+    assert readme.read_text(encoding="utf-8") == text

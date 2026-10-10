@@ -131,11 +131,11 @@ const activity = {
         '请先在“连接设置”中配置 OpenViking Studio 身份凭证，或在下方临时粘贴 API 密钥完成验证。',
     },
   },
-  playground: {
+  filesystem: {
     copyUri: '复制当前 URI',
     copied: '已复制 URI',
     copyFailed: '复制失败',
-    resizeContext: '调整上下文树宽度',
+    resizeContext: '调整文件系统宽度',
     resizeAction: '调整终端和 Agent 面板宽度',
     readFailed: '无法读取 {{uri}}',
     tabs: {
@@ -148,11 +148,11 @@ const activity = {
     },
     addResource: {
       title: '添加资源',
-      description: '添加完成后左侧上下文树会刷新，右侧终端可继续定位新资源。',
+      description: '添加完成后左侧文件系统会刷新，右侧终端可继续定位新资源。',
       submitted: '资源添加任务已提交',
     },
     explorer: {
-      title: '上下文树',
+      title: '文件系统',
       addResource: '添加资源',
       abstractLevel: 'L0',
       collapseDirectory: '收起 {{name}}',
@@ -161,7 +161,7 @@ const activity = {
       loading: '加载中',
       overviewLevel: 'L1',
       search: '搜索上下文',
-      refresh: '刷新上下文树',
+      refresh: '刷新文件系统',
       namespaces: {
         agent: 'Agent 的能力、工具和经验',
         user: '用户个性化记忆',
@@ -171,18 +171,18 @@ const activity = {
     agent: {
       history: '历史会话',
       newSession: '新建会话',
-      creating: '正在创建工作台会话...',
+      creating: '正在创建文件系统会话...',
       detectingBot: '正在检查 VikingBot 是否可用...',
       createFailed: '创建会话失败：{{error}}',
       retry: '重试',
       botDisabledFooter: '启用 VikingBot 后即可与 Agent 对话',
       historyTitle: 'Agent 会话历史',
       historyDescription:
-        '工作台与 VikingBot 共用对话记录，也包含当前浏览器保存的旧 Agent 会话。',
+        '文件系统与 VikingBot 共用对话记录，也包含当前浏览器保存的旧 Agent 会话。',
       loadingSessions: '正在加载会话...',
       noSessions: '暂无历史会话',
-      createTimeout: '创建工作台会话超时，请检查连接设置后重试。',
-      newSessionTitle: '新建工作台会话',
+      createTimeout: '创建文件系统会话超时，请检查连接设置后重试。',
+      newSessionTitle: '新建文件系统会话',
       botPrompt: {
         title: '请启用 VikingBot',
         description:
@@ -207,7 +207,7 @@ const activity = {
       historyDescription: '查看当前浏览器中执行过的命令。',
       clearHistory: '清空命令历史',
       noHistory: '暂无命令历史',
-      welcomeTitle: '终端已连接上下文树',
+      welcomeTitle: '终端已连接文件系统',
       welcomeBody:
         '可执行 /status、/ls、/search、/read、/add-resource。/search 默认全局检索，可通过 --scope . 使用当前目录，或通过 --scope viking://resources/... 指定目录。',
       scopeLabel: '目录：{{uri}}',

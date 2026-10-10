@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
-
 from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingCommitPolicy,
-    with_openviking_context,
+    with_openviking_memory,
 )
 
 
@@ -26,9 +26,12 @@ def build_app(client: InMemoryOpenVikingClient | None = None):
         assert "OpenViking context backend examples" in context
         return AIMessage(content="OpenViking context says azure.")
 
-    return with_openviking_context(
+    # A production app should use a durable history provider and native compaction.
+    histories = {}
+    return with_openviking_memory(
         RunnableLambda(answer),
         client=client,
+        history_factory=lambda sid: histories.setdefault(sid, InMemoryChatMessageHistory()),
         session_id="langchain-context-backend-demo",
         target_uri="viking://resources",
         commit_policy=OpenVikingCommitPolicy(

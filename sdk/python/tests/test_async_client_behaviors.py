@@ -118,6 +118,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "demo-session",
         options={
             "retention_mode": "turn_budget",
+            "enable_working_memory": True,
             "keep_recent_turn_count": 3,
             "retained_message_token_budget": 12_000,
             "min_raw_tail_steps": 1,
@@ -133,6 +134,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
         "keep_recent_count": 0,
+        "enable_working_memory": True,
         "retention_mode": "turn_budget",
         "keep_recent_turn_count": 3,
         "retained_message_token_budget": 12_000,

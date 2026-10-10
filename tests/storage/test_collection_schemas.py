@@ -899,6 +899,39 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_query", [True, False])
+async def test_request_level_400_does_not_trip_account_breaker(monkeypatch, is_query):
+    """One rejected input (e.g. an invalid image URL) must not open the
+    account-wide breaker and block the next, valid embedding call."""
+
+    class _RejectFirstEmbedder(_DummyEmbedder):
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            if self.calls == 0:
+                self.calls += 1
+                raise RuntimeError(
+                    "Error code: 400 - {'error': {'code': 'InvalidParameter', "
+                    "'message': 'Invalid base64 image url'}}"
+                )
+            return self.embed(text, is_query=is_query)
+
+    embedder = _RejectFirstEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    handler = TextEmbeddingHandler(SimpleNamespace(is_closing=False, has_queue_manager=True))
+    provider = handler._embedding_provider
+
+    with pytest.raises(RuntimeError, match="400"):
+        await provider.embed("default", "bad input", is_query=is_query)
+
+    (await handler.breaker()).check()  # would raise CircuitBreakerOpen if tripped
+    result = await provider.embed("default", "good input", is_query=is_query)
+    assert result.dense_vector == [0.1, 0.2]
+    assert embedder.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypatch):
     class _ClosingDuringUpsertVikingDB:
         uses_content_field = False

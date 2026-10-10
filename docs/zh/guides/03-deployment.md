@@ -6,7 +6,7 @@ OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行
 
 | 服务方式 | 你需要准备什么 |
 | --- | --- |
-| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
+| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
 | 团队已有服务或他人部署 | 向管理员获取服务地址和 user/admin key。 |
 | 自建 OpenViking | 按下文安装、配置和运行服务端。 |
 
@@ -298,7 +298,7 @@ docker compose up -d
 启动后可以访问：
 - API 服务：`http://localhost:1933`
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
-- 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
+- Caddy 入口：`http://localhost:1934`。它把请求转发到 1933，主要为已有部署保留；同时运行 OpenViking 网关时，它还把模型 API 路径转发给网关，见[OpenViking 网关部署与运维](22-gateway-operations.md#docker-compose)。
 
 ### 部署到 Railway
 
@@ -398,8 +398,8 @@ docker compose up -d
 
 如需公网 HTTPS 访问，请参考 [公网访问指南](12-public-access.md)。
 
-如需自行构建镜像，请显式传入 OpenViking 版本：
-`docker build --build-arg OPENVIKING_VERSION=0.3.12 -t openviking:latest .`
+如需自行构建镜像，请显式传入 OpenViking 版本。把 `<VERSION>` 替换为发布版本号：
+`docker build --build-arg OPENVIKING_VERSION=<VERSION> -t openviking:latest .`
 
 ### Kubernetes + Helm
 

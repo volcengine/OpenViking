@@ -35,7 +35,7 @@ const resources = {
       description: '无法从服务端加载审计请求日志。',
       title: '请求失败',
     },
-    eyebrow: '工作台请求记录',
+    eyebrow: '服务端 API 请求记录',
     filters: {
       all: '所有日志',
       apiTypePlaceholder: 'API 类型',
@@ -526,7 +526,7 @@ const resources = {
     detail: {
       score: '相关度',
       level: '层级',
-      openPlayground: '在工作台中打开',
+      openFilesystem: '在文件系统中打开',
       uri: 'URI',
       summary: '摘要',
       noSummary: '暂无可展示的摘要',

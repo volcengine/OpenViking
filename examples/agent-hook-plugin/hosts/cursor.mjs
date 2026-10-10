@@ -48,6 +48,13 @@ async function captureTranscript(ctx, state) {
 
 export const cursor = {
   prefix: "cu-",
+  requestBudgets: {
+    sessionStart: 25_000,
+    beforeSubmitPrompt: 17_000,
+    stop: 25_000,
+    preCompact: 25_000,
+    sessionEnd: 25_000,
+  },
   stages: {
     sessionStart: "start",
     beforeSubmitPrompt: "prompt",
