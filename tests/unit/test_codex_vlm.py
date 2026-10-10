@@ -741,6 +741,43 @@ def test_codex_translates_tool_history_into_responses_input(mock_resolve, mock_o
     ]
 
 
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_bounds_paired_tool_call_ids(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "oauth-token",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+    }
+    mock_real_client = MagicMock()
+    mock_real_client.responses.create.return_value = _MockResponsesStream(
+        _build_final_response("final answer")
+    )
+    mock_openai_class.return_value = mock_real_client
+    long_id = "vertex_" + "x" * 1000
+
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    vlm.get_completion(
+        messages=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": long_id,
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+        ]
+    )
+
+    input_items = mock_real_client.responses.create.call_args.kwargs["input"]
+    assert len(input_items[0]["call_id"]) == 40
+    assert input_items[0]["call_id"] == input_items[1]["call_id"]
+
+
 @pytest.mark.parametrize(
     ("content", "expected_output"),
     [

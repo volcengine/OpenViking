@@ -18,7 +18,11 @@ from openviking.models.network import (
 )
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking.utils.message_format import format_messages, sanitize_openai_messages
+from openviking.utils.message_format import (
+    format_messages,
+    normalize_openai_tool_call_ids,
+    sanitize_openai_messages,
+)
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -95,6 +99,12 @@ class OpenAIVLM(VLMBase):
                 keepalive_expiry=self.keepalive_expiry,
             )
         return kwargs
+
+    def _prepare_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        prepared = sanitize_openai_messages(messages)
+        if self.provider in {"openai", "azure"}:
+            return normalize_openai_tool_call_ids(prepared)
+        return prepared
 
     def get_client(self):
         """Get sync client"""
@@ -281,9 +291,7 @@ class OpenAIVLM(VLMBase):
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
-        kwargs_messages = sanitize_openai_messages(
-            messages or [{"role": "user", "content": prompt}]
-        )
+        kwargs_messages = self._prepare_messages(messages or [{"role": "user", "content": prompt}])
         model = self.model or "gpt-4o-mini"
         kwargs: Dict[str, Any] = {
             "model": model,
@@ -306,14 +314,14 @@ class OpenAIVLM(VLMBase):
     ) -> Dict[str, Any]:
         effective_thinking = self.thinking if thinking is None else thinking
         if messages:
-            kwargs_messages = sanitize_openai_messages(messages)
+            kwargs_messages = self._prepare_messages(messages)
         else:
             content = []
             if images:
                 content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
-            kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
+            kwargs_messages = self._prepare_messages([{"role": "user", "content": content}])
 
         model = self.model or "gpt-4o-mini"
         kwargs: Dict[str, Any] = {

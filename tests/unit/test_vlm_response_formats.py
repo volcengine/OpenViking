@@ -112,6 +112,52 @@ def test_text_request_drops_empty_assistant_but_preserves_tool_only_turn(vlm_typ
     assert messages[1] == {"role": "assistant", "content": None}
 
 
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_openai_family_request_bounds_paired_tool_call_ids(provider):
+    vlm = OpenAIVLM({"provider": provider, "model": "test-model"})
+    long_id = "vertex_" + "x" * 1000
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": long_id, "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+    ]
+
+    prepared = vlm._build_text_kwargs(messages=messages)["messages"]
+
+    assert len(prepared[0]["tool_calls"][0]["id"]) == 40
+    assert prepared[0]["tool_calls"][0]["id"] == prepared[1]["tool_call_id"]
+    assert messages[0]["tool_calls"][0]["id"] == long_id
+
+
+@pytest.mark.parametrize(
+    ("vlm_type", "config"),
+    [
+        (LiteLLMVLMProvider, {"provider": "litellm", "model": "gemini/test"}),
+        (VolcEngineVLM, {"provider": "volcengine", "model": "test-model"}),
+    ],
+    ids=["litellm", "volcengine"],
+)
+def test_non_openai_request_preserves_provider_native_tool_call_ids(vlm_type, config):
+    vlm = vlm_type(config)
+    long_id = "vertex_" + "x" * 1000
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": long_id, "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": long_id, "content": "ok"},
+    ]
+
+    prepared = vlm._build_text_kwargs(messages=messages)["messages"]
+
+    assert prepared[0]["tool_calls"][0]["id"] == long_id
+    assert prepared[1]["tool_call_id"] == long_id
+
+
 @pytest.mark.asyncio
 async def test_openai_async_completion_from_str_with_tools(monkeypatch):
     async def create(**_kwargs):
