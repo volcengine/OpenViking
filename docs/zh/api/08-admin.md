@@ -445,6 +445,49 @@ PATCH 会先做结构校验，再构造合并后的配置：未知路径和运�
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
 配置层更新成功，不保证所有派生客户端都已完成切换。配置存储和重载行为见[运行时配置来源与重载行为](../guides/01-configuration.md#runtime-configuration-source)。
 
+#### 服务端重启
+
+仅 ROOT 可以重启通过单 worker `openviking-server` CLI 启动的进程。
+多 worker 和嵌入式 ASGI 启动模式不支持远程重启。
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<已保存文件的版本>"}
+```
+
+`revision` 是必填的非空字符串。通过
+`GET /api/v1/admin/configuration?source=file` 获取当前文件版本和重启能力；
+`result.restart` 包含 `supported`、`instance_id` 和 `restarting`。
+重启接口不保存配置。修改配置时，先通过
+`PATCH /api/v1/admin/configuration?source=file` 提交 `content` 和旧 `revision`，
+再将保存响应中的新版本提交给重启接口。
+
+服务端接受重启前会核对当前文件版本并校验配置。
+版本过期或文件无效返回 `INVALID_ARGUMENT`；启动模式不支持或文件不可读返回
+`FAILED_PRECONDITION`。这些检查失败时不会请求重启。
+
+接受请求后，在优雅关闭前返回 **HTTP 202**：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+CLI 等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和
+工作目录替换当前进程。接受重启后拒绝文件保存请求。HTTP 202 只表示请求已接受，
+不代表服务已恢复；应轮询文件配置读取接口，直到 `instance_id` 改变且
+`restarting` 为 false。外部依赖仍可能阻止启动。如果地址、端口或 ROOT 凭证发生
+变化，需要先更新客户端连接设置再轮询。详见[服务端配置](../configuration/01-server.md)。
+
 #### Account Configuration 接口参考
 
 Account 配置通过创建接口的 `settings` 初始化，并通过 configuration 接口读取和更新：

@@ -496,6 +496,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 |--------|------|-------------|
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
+| POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
 | GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
 | GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |

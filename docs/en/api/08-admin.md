@@ -534,6 +534,52 @@ Consumer failures are logged without rolling back the persisted override, so
 a successful response confirms the configuration update but does not certify
 that every derived client has applied it. See [runtime configuration source and reload behavior](../guides/01-configuration.md#runtime-configuration-source).
 
+#### Server Restart
+
+Only ROOT can restart a single-worker `openviking-server` CLI process.
+Multi-worker and embedded ASGI launch modes do not support remote restart.
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<saved-file-revision>"}
+```
+
+`revision` is a required, non-empty string. Obtain the current file revision and
+restart capability from `GET /api/v1/admin/configuration?source=file`;
+`result.restart` contains `supported`, `instance_id`, and `restarting`.
+The restart endpoint does not save configuration. Save any changes first using
+`PATCH /api/v1/admin/configuration?source=file`, with `content` and the previous
+`revision`, then submit the returned revision to the restart endpoint.
+
+The server checks the current file revision and validates the configuration before
+accepting the restart. A stale revision or invalid file returns `INVALID_ARGUMENT`;
+an unsupported launch mode or unreadable file returns `FAILED_PRECONDITION`.
+No restart is requested when these checks fail.
+
+An accepted request returns **HTTP 202**, before graceful shutdown:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+The CLI drains active requests, stops its managed Bot, and replaces the process
+with the original interpreter, arguments, environment, and working directory.
+File saves are rejected once restart has been requested. HTTP 202 confirms
+acceptance, not successful recovery: poll the file configuration endpoint until
+`instance_id` changes and `restarting` is false. External dependencies may still
+prevent startup. If the address, port, or ROOT credential changes, update the
+client connection before polling. See [server configuration](../configuration/01-server.md).
+
 #### Account Configuration Reference
 
 Initialize Account configuration through `settings` on the create endpoint,
