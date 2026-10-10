@@ -812,6 +812,7 @@ const workspace = {
         mode: '评分模式',
         threshold: '相关性阈值',
         timeout: '请求超时（秒）',
+        thinking: '深度思考（thinking）',
         max_input_tokens: '输入 Token 上限',
         log_payloads: '记录请求内容',
         extra_headers: '额外请求头（JSON）',

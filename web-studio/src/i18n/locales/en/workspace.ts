@@ -847,6 +847,7 @@ const workspace = {
         mode: 'Scoring mode',
         threshold: 'Relevance threshold',
         timeout: 'Request timeout (seconds)',
+        thinking: 'Thinking',
         max_input_tokens: 'Input token limit',
         log_payloads: 'Log request content',
         extra_headers: 'Extra headers (JSON)',

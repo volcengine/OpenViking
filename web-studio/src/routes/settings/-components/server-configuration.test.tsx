@@ -739,3 +739,28 @@ it('shows and preserves environment references in numeric form fields', async ()
     '${NEW_CONCURRENCY}',
   )
 })
+
+it.each([false, true])(
+  'toggles the shared VLM thinking policy from %s without changing bindings',
+  async (initial) => {
+    const payload = structuredClone(data)
+    Object.assign(payload.models.vlm.config, { thinking: initial })
+    mount(payload)
+    await screen.findByText('model-a')
+    fireEvent.click(
+      section('vlmType').getByRole('button', { name: 'models.parameters' }),
+    )
+    const thinking = screen.getByRole('switch', {
+      name: 'models.fields.thinking',
+    })
+    expect(thinking.getAttribute('aria-checked')).toBe(String(initial))
+    fireEvent.click(thinking)
+    await apply()
+    fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+    const saved = JSON.parse(state.save.mock.calls[0][0])
+    expect(saved.vlm.thinking).toBe(!initial)
+    expect(saved.vlm.credentials).toEqual(language.credentials)
+    expect(saved.embedding).toEqual(file.embedding)
+  },
+)

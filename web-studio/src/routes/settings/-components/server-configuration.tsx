@@ -574,6 +574,7 @@ export function ServerConfigurationEditor() {
       : ([
           { key: 'model', required: true },
           { key: 'timeout', type: 'number', min: 0.001 },
+          { key: 'thinking', type: 'toggle' },
         ] as FieldSpec[])
     : editor
       ? bindingFields(editor.kind, provider).map((field) =>
