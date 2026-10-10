@@ -1788,7 +1788,11 @@ class MemoryUpdater:
         for uri in uris_to_vectorize:
             try:
                 # Read the memory file to get content
-                content = await viking_fs.read_file(uri, ctx=ctx) or ""
+                metadata = {}
+                content = await viking_fs.read_file(uri, ctx=ctx, _metadata=metadata) or ""
+                from openviking.storage.ttl import timestamp
+
+                content_time = timestamp(metadata.get("modTime"))
 
                 mf = MemoryFileUtils.read(content, uri=uri)
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
@@ -1838,6 +1842,8 @@ class MemoryUpdater:
                     is_leaf=True,
                     abstract=abstract,
                     context_type="memory",
+                    created_at=content_time,
+                    updated_at=content_time,
                     level=ContextLevel.DETAIL,
                     user=ctx.user,
                     account_id=ctx.account_id,

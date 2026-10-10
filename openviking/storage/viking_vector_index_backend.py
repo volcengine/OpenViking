@@ -1932,6 +1932,32 @@ class VikingVectorIndexBackend:
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================
 
+    def _prepare_ttl_query(self, ctx, scope_filter, request_now=None):
+        reader = getattr(self, "ttl_policy_reader", None)
+        if reader is None:
+            return None, scope_filter
+        config = reader(ctx.account_id)
+        if config is None or not config.enabled:
+            return None, scope_filter
+        from openviking.storage.ttl import query_filter
+
+        return config, self._merge_filters(
+            scope_filter, query_filter(config, request_now or datetime.now(timezone.utc))
+        )
+
+    async def _finish_ttl_query(self, records, config, ctx):
+        if config is None:
+            return records
+        from openviking.storage.ttl import project_results
+
+        cleanup = getattr(self, "ttl_cleanup", None)
+        if cleanup is not None:
+            if cleanup.settings.execution == "sync":
+                await cleanup.on_access_sync(ctx)
+            else:
+                cleanup.on_access(ctx)
+        return project_results(records, config)
+
     async def search_in_tenant(
         self,
         ctx: RequestContext,
@@ -1955,8 +1981,9 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
+        ttl_config, scope_filter = self._prepare_ttl_query(ctx, scope_filter, request_now)
         if events_time_decay_protection is None:
-            return await self.search(
+            records = await self.search(
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=scope_filter,
@@ -1966,10 +1993,12 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
             )
 
+            return await self._finish_ttl_query(records, ttl_config, ctx)
+
         parse_duration_ms(
             events_time_decay_protection, parameter_name="events_time_decay_protection"
         )
-        return await self._search_with_event_time_decay(
+        records = await self._search_with_event_time_decay(
             ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
@@ -1979,6 +2008,8 @@ class VikingVectorIndexBackend:
             events_time_decay_protection=events_time_decay_protection,
             request_now=request_now,
         )
+
+        return await self._finish_ttl_query(records, ttl_config, ctx)
 
     async def search_by_keywords_in_tenant(
         self,
@@ -2000,8 +2031,9 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
+        ttl_config, scope_filter = self._prepare_ttl_query(ctx, scope_filter)
         backend = await self._get_backend_for_context(ctx)
-        return await backend.search_by_keywords(
+        records = await backend.search_by_keywords(
             query=query,
             mode="bm25",
             fields=["content"],
@@ -2010,6 +2042,8 @@ class VikingVectorIndexBackend:
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
         )
+
+        return await self._finish_ttl_query(records, ttl_config, ctx)
 
     async def filter_in_tenant(
         self,
@@ -2042,13 +2076,16 @@ class VikingVectorIndexBackend:
             raise InvalidArgumentError(
                 "A query-less lookup needs a filter or a target directory to scope by."
             )
-        return await self.filter(
+        ttl_config, scope_filter = self._prepare_ttl_query(ctx, scope_filter)
+        records = await self.filter(
             filter=scope_filter,
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
+
+        return await self._finish_ttl_query(records, ttl_config, ctx)
 
     async def _search_with_event_time_decay(
         self,

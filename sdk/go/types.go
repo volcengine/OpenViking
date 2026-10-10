@@ -4,6 +4,7 @@
 package openviking
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -544,6 +545,8 @@ type SearchContextResult struct {
 // actually populates are exposed; search_tags is surfaced under the "tags" key
 // to match the tags filter parameter accepted by Find and Search.
 type MatchedContext struct {
+	ExpiresAt   *string  `json:"expires_at,omitempty"`
+	TTLStatus   string   `json:"ttl_status,omitempty"`
 	URI         string   `json:"uri,omitempty"`
 	ContextType string   `json:"context_type,omitempty"`
 	Level       int      `json:"level,omitempty"`
@@ -556,6 +559,19 @@ type MatchedContext struct {
 	Score       float64  `json:"score,omitempty"`
 	MatchReason string   `json:"match_reason,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
+}
+
+// MarshalJSON preserves the server's explicit unknown TTL deadline while
+// omitting TTL fields for objects outside an enabled policy.
+func (m MatchedContext) MarshalJSON() ([]byte, error) {
+	type plain MatchedContext
+	if m.TTLStatus != "" && m.ExpiresAt == nil {
+		return json.Marshal(struct {
+			plain
+			ExpiresAt *string `json:"expires_at"`
+		}{plain(m), nil})
+	}
+	return json.Marshal(plain(m))
 }
 
 // QueryPlan describes search query expansion details when the server returns them.

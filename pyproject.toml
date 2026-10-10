@@ -89,6 +89,7 @@ dependencies = [
 
 
 [project.optional-dependencies]
+ttl-index = ["redis>=5.2,<7"]
 gateway = [
     "aiohttp>=3.13.3",
     "async-timeout>=5.0.1",

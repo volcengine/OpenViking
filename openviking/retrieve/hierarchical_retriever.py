@@ -329,6 +329,8 @@ class HierarchicalRetriever:
         ctx: RequestContext,
     ) -> List[MatchedContext]:
         """Convert candidates to contexts ordered by vector or rerank score."""
+        from openviking.storage.ttl import public_tags
+
         results = []
         for c in candidates:
             final_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
@@ -357,9 +359,13 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
-                    search_tags=normalize_search_tags(c.get("search_tags"), discard_invalid=True),
+                    search_tags=normalize_search_tags(
+                        public_tags(c.get("search_tags")), discard_invalid=True
+                    ),
                     origin_score=c.get("_origin_score"),
                     time_score=c.get("_time_score"),
+                    expires_at=c.get("expires_at"),
+                    ttl_status=c.get("ttl_status"),
                 )
             )
 

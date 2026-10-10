@@ -28,6 +28,7 @@ from openviking.models.vlm.registry import is_valid_provider
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.github_config import GitHubConfig
 from openviking_cli.utils.config.runtime_field import RuntimeField
+from openviking_cli.utils.config.ttl_config import TTLConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig, VLMCredential
 
 
@@ -105,9 +106,7 @@ class AccountVLMConfig(BaseModel):
         for index, credential in enumerate(self.credentials):
             provider = credential.provider.strip().lower() if credential.provider else ""
             if not provider:
-                raise ValueError(
-                    f"credentials[{index}].provider is required for Account VLM"
-                )
+                raise ValueError(f"credentials[{index}].provider is required for Account VLM")
             if not is_valid_provider(provider):
                 raise ValueError(
                     f"credentials[{index}].provider '{credential.provider}' is not supported"
@@ -116,9 +115,7 @@ class AccountVLMConfig(BaseModel):
             for field_name in ("model", "api_key", "api_base", "api_version"):
                 value = getattr(credential, field_name)
                 if value is not None and not value.strip():
-                    raise ValueError(
-                        f"credentials[{index}].{field_name} must not be blank"
-                    )
+                    raise ValueError(f"credentials[{index}].{field_name} must not be blank")
         self.to_vlm_config()
         return self
 
@@ -146,6 +143,7 @@ class AccountConfig(BaseModel):
         fallback="agent_evolution",
     )
     acl: Optional[AccountAclSettings] = RuntimeField(default=None)
+    ttl: Optional[TTLConfig] = RuntimeField(default=None, fallback="ttl")
 
     embedding: Optional[AccountEmbeddingConfig] = RuntimeField(default=None)
     vectordb: Optional[AccountVectorDBConfig] = RuntimeField(
