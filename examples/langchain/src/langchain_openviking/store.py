@@ -17,6 +17,7 @@ from langchain_openviking.client import (
     OptionalDependencyError,
     call_openviking,
     ensure_client,
+    is_not_found_error,
     item_value,
     iter_result_items,
     missing_dependency,
@@ -59,6 +60,7 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
+    Removal ignores missing targets and propagates other backend errors.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -360,9 +362,10 @@ class OpenVikingStore(BaseStore):
     def _remove(self, uri: str) -> None:
         try:
             call_openviking(self._client(), "rm", uri=uri, recursive=False)
-        except Exception:
-            logger.debug("OpenVikingStore remove ignored missing/unavailable URI", exc_info=True)
-            pass
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            logger.debug("OpenVikingStore remove ignored missing URI", exc_info=True)
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
         return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"

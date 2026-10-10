@@ -36,7 +36,12 @@ from langchain_openviking.history import (
 from langchain_openviking.middleware import _message_signature
 from langchain_openviking.tools import _archive_grep_pattern, _resolve_resource_source
 from langgraph.store.base import PutOp
-from openviking_sdk.errors import InvalidArgumentError
+from openviking_sdk.errors import (
+    InvalidArgumentError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 
 
 def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
@@ -1224,6 +1229,67 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert semantic[0].value["color"] == "azure"
 
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
+
+
+@pytest.mark.parametrize(
+    ("operation", "collection"), [("delete", "data"), ("delete", "index"), ("put", "index")]
+)
+@pytest.mark.parametrize(
+    "error", [PermissionDeniedError(), UnavailableError(), TimeoutError("removal timed out")]
+)
+def test_langgraph_store_removal_errors_remain_visible_and_retryable(operation, collection, error):
+    class FailingRemoveClient(InMemoryOpenVikingClient):
+        fail = True
+
+        def rm(self, uri, recursive=False):
+            if self.fail and f"/{collection}/" in uri:
+                raise error
+            if uri not in self.records:
+                raise NotFoundError(uri)
+            return super().rm(uri, recursive=recursive)
+
+    client = FailingRemoveClient()
+    store = OpenVikingStore(client=client)
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.put(namespace, key, value)
+
+    def mutate():
+        if operation == "delete":
+            store.delete(namespace, key)
+        else:
+            store.put(namespace, key, value, index=False)
+
+    with pytest.raises(type(error)) as caught:
+        mutate()
+    assert caught.value is error
+    assert bool(store.get(namespace, key)) is (operation == "put" or collection == "data")
+
+    client.fail = False
+    mutate()
+    assert store.search(namespace, query="azure") == []
+    item = store.get(namespace, key)
+    assert (item.value if item else None) == (value if operation == "put" else None)
+
+
+@pytest.mark.parametrize("missing_error", [FileNotFoundError, NotFoundError])
+def test_langgraph_store_removal_keeps_missing_targets_idempotent(missing_error):
+    class StrictRemoveClient(InMemoryOpenVikingClient):
+        def rm(self, uri, recursive=False):
+            if uri not in self.records:
+                raise missing_error(uri)
+            return super().rm(uri, recursive=recursive)
+
+    store = OpenVikingStore(client=StrictRemoveClient())
+    namespace, key, value = ("users",), "ada", {"color": "azure"}
+    store.delete(namespace, key)
+    store.put(namespace, key, value, index=False)
+    assert store.get(namespace, key).value == value
+    store.put(namespace, key, value)
+    assert len(store.search(namespace, query="azure")) == 1
+    store.delete(namespace, key)
+    store.delete(namespace, key)
+    assert store.get(namespace, key) is None
+    assert store.search(namespace, query="azure") == []
 
 
 def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
