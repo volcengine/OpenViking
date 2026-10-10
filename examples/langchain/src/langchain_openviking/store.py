@@ -452,14 +452,20 @@ def _parse_canonicalized_record_uri(
 ) -> tuple[tuple[str, ...], str] | None:
     root = classify_uri(root_uri)
     root_tail = _identity_relative_root_tail(root)
-    if root_tail is None:
-        return None
-
     candidate = classify_uri(uri)
-    if candidate.scope != root.scope or candidate.content_index is None:
-        return None
+    if root.parts[:2] == ("~", "peers") and root.content_index == 3:
+        if candidate.scope != "user" or candidate.content_index != 4:
+            return None
+        # Only the current-user alias changes; keep the peer ID in the match.
+        root_tail = root.parts[1:]
+        candidate_tail = candidate.parts[2:]
+    else:
+        if root_tail is None:
+            return None
+        if candidate.scope != root.scope or candidate.content_index is None:
+            return None
+        candidate_tail = candidate.parts[candidate.content_index :]
 
-    candidate_tail = candidate.parts[candidate.content_index :]
     if len(candidate_tail) < len(root_tail) + 2:
         return None
     if candidate_tail[: len(root_tail)] != root_tail:

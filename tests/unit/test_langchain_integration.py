@@ -1267,9 +1267,27 @@ def test_langgraph_store_batch_rejects_ttl_writes():
             "viking://~/memories",
             "viking://user/default/memories",
         ),
+        (
+            "viking://~/peers/support/memories/langgraph_store",
+            "viking://~/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
+        (
+            "viking://~/peers/support/resources/langgraph_store",
+            "viking://~/peers/support/resources",
+            "viking://user/default/peers/support/resources",
+        ),
+        (
+            "viking://user/default/peers/support/memories/langgraph_store",
+            "viking://user/default/peers/support/memories",
+            "viking://user/default/peers/support/memories",
+        ),
     ],
     ids=[
         "user-memory",
+        "peer-memory",
+        "peer-resource",
+        "explicit-peer-memory",
     ],
 )
 def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
@@ -1305,6 +1323,9 @@ def test_langgraph_store_accepts_canonical_result_uris_for_home_alias_root(
 
     store.put(("users", "ada"), "preferences", {"color": "azure"})
 
+    assert store.get(("users", "ada"), "preferences").value == {"color": "azure"}
+    assert [item.key for item in store.search(("users",))] == ["preferences"]
+    assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
     semantic = store.search(("users",), query="azure", limit=5)
 
     assert semantic[0].namespace == ("users", "ada")
@@ -1328,6 +1349,19 @@ def test_langgraph_store_ignores_unrelated_canonical_result_uris():
         store._parse_index_uri("viking://user/support/memories/other_store/index/users/ada.md")
         is None
     )
+
+    peer_store = OpenVikingStore(
+        client=InMemoryOpenVikingClient(),
+        root_uri="viking://~/peers/support/memories/langgraph_store",
+    )
+    for unrelated_root in (
+        "viking://user/default/peers/other/memories/langgraph_store",
+        "viking://user/default/memories/langgraph_store",
+        "viking://agent/support/memories/langgraph_store",
+        "viking://user/default/peers/support/memories/other_store",
+        "viking://user/default/peers/support/resources/langgraph_store",
+    ):
+        assert peer_store._parse_index_uri(f"{unrelated_root}/index/users/ada.md") is None
 
 
 def test_langgraph_store_waits_for_indexing_by_default():
