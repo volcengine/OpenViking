@@ -22,6 +22,12 @@ function userEntry(...texts) {
   };
 }
 
+function userEntryWithKinds(texts, kinds) {
+  const entry = userEntry(...texts);
+  entry.payload.internal_chat_message_metadata_passthrough = { content_item_kinds: kinds };
+  return entry;
+}
+
 test("excludes complete Codex startup blocks and records their old turn positions", () => {
   const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
     { type: "session_meta", payload: {} },
@@ -78,6 +84,47 @@ test("keeps incomplete wrappers and normal-turn quotations", () => {
   assert.deepEqual(excludedLegacyTurnIndices, []);
   assert.equal(turns.length, 2);
   assert.match(turns[1].text, /AGENTS\.md instructions/);
+});
+
+test("excludes Codex heartbeat messages and records their v2 turn positions", () => {
+  const { turns, excludedLegacyTurnIndices, excludedHeartbeatTurnIndices } = extractCaptureTranscript([
+    userEntry(...startupBlocks),
+    { type: "turn_context", payload: {} },
+    userEntryWithKinds(["Already captured"], ["user.text"]),
+    userEntryWithKinds(["Host-generated scheduler update 1"], ["user.heartbeat"]),
+    userEntryWithKinds(["Host-generated scheduler update 2"], ["user.heartbeat"]),
+    userEntryWithKinds(["Real question"], ["user.text"]),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, [0]);
+  assert.deepEqual(excludedHeartbeatTurnIndices, [1, 2]);
+  assert.deepEqual(turns.map((turn) => turn.text), ["Already captured", "Real question"]);
+});
+
+test("removes only heartbeat parts from a mixed Codex user message", () => {
+  const { turns, excludedHeartbeatTurnIndices } = extractCaptureTranscript([
+    userEntryWithKinds(
+      ["Host-generated scheduler update", "Real request", "Future host content"],
+      ["user.heartbeat", "user.text", "user.future"],
+    ),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedHeartbeatTurnIndices, []);
+  assert.deepEqual(turns.flatMap((turn) => turn.parts.map((part) => part.text)), [
+    "Real request",
+    "Future host content",
+  ]);
+});
+
+test("preserves unannotated and unknown Codex user content", () => {
+  const turns = extractCaptureTurns([
+    userEntry("Legacy user request"),
+    userEntryWithKinds(["Unknown provenance"], ["user.future"]),
+    userEntryWithKinds(["Heartbeat", "Unannotated tail"], ["user.heartbeat"]),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(turns.map((turn) => turn.text), [
+    "Legacy user request",
+    "Unknown provenance",
+    "Unannotated tail",
+  ]);
 });
 
 function toolParts(turns, toolName) {

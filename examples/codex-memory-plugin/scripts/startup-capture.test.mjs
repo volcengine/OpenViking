@@ -24,6 +24,14 @@ function message(role, ...texts) {
   } };
 }
 
+function heartbeat(text) {
+  const entry = message("user", text);
+  entry.payload.internal_chat_message_metadata_passthrough = {
+    content_item_kinds: ["user.heartbeat"],
+  };
+  return entry;
+}
+
 function rollout(...conversation) {
   return [
     { type: "session_meta", payload: { id: "example" } },
@@ -39,12 +47,12 @@ async function writeRollout(id, entries) {
   return path;
 }
 
-async function catchUp(id, transcriptPath, sent, { oldCursor, fail = false } = {}) {
+async function catchUp(id, transcriptPath, sent, { oldCursor, oldVersion = 1, fail = false } = {}) {
   const outcome = await withSessionLock(id, async () => {
     const state = await loadState(id);
     if (oldCursor !== undefined) {
       state.capturedTurnCount = oldCursor;
-      state.captureFormatVersion = 1;
+      state.captureFormatVersion = oldVersion;
       await saveState(state);
     }
     const result = await catchUpTurns({
@@ -109,6 +117,33 @@ test("legacy cursor is corrected by excluded old positions before sending", asyn
   assert.equal((await catchUp(id, path, sent)).result.added, 0);
 });
 
+test("v2 cursor is corrected by excluded heartbeat positions before sending", async () => {
+  const id = "heartbeat-v2";
+  const sent = [];
+  const path = await writeRollout(id, rollout(
+    message("user", "Already sent"), heartbeat("Host-generated scheduler update"),
+    message("assistant", "Also sent"), message("user", "New question"),
+  ));
+  const { result, state } = await catchUp(id, path, sent, { oldCursor: 3, oldVersion: 2 });
+  assert.equal(result.added, 1);
+  assert.deepEqual(sent.map((item) => item.parts[0].text), ["New question"]);
+  assert.equal(state.capturedTurnCount, 3);
+  assert.equal((await catchUp(id, path, sent)).result.added, 0);
+});
+
+test("v1 cursor applies startup and heartbeat migrations in sequence", async () => {
+  const id = "heartbeat-v1";
+  const sent = [];
+  const path = await writeRollout(id, rollout(
+    message("user", "Already sent"), heartbeat("Host-generated scheduler update"),
+    message("assistant", "Also sent"), message("user", "New question"),
+  ));
+  const { result, state } = await catchUp(id, path, sent, { oldCursor: 4 });
+  assert.equal(result.added, 1);
+  assert.deepEqual(sent.map((item) => item.parts[0].text), ["New question"]);
+  assert.equal(state.capturedTurnCount, 3);
+});
+
 test("failed send keeps the corrected legacy cursor for retry", async () => {
   const id = "failure";
   const sent = [];
@@ -125,6 +160,16 @@ test("legacy startup-only cursor migrates without an empty batch", async () => {
   const sent = [];
   const path = await writeRollout(id, rollout());
   const { result, state } = await catchUp(id, path, sent, { oldCursor: 1 });
+  assert.equal(result.added, 0);
+  assert.equal(state.capturedTurnCount, 0);
+  assert.deepEqual(sent, []);
+});
+
+test("v2 heartbeat-only cursor migrates without an empty batch", async () => {
+  const id = "heartbeat-only";
+  const sent = [];
+  const path = await writeRollout(id, rollout(heartbeat("Host-generated scheduler update")));
+  const { result, state } = await catchUp(id, path, sent, { oldCursor: 1, oldVersion: 2 });
   assert.equal(result.added, 0);
   assert.equal(state.capturedTurnCount, 0);
   assert.deepEqual(sent, []);

@@ -1,5 +1,9 @@
 import {
+  collectToolNamesByIdFromEntries,
   extractCaptureTurns as extractSharedCaptureTurns,
+  isAssistantSideCaptureRole,
+  normalizeCaptureRole,
+  shapeCapturePayload,
 } from "./shared/capture-utils.mjs";
 
 // Named one by one rather than re-exported wholesale: this module has an
@@ -431,13 +435,63 @@ function withoutStartupContext(entries, cfg) {
   return { entries: filtered, excludedLegacyTurnIndices };
 }
 
+function withoutHeartbeatContent(entries, cfg) {
+  const filtered = [];
+  const excludedHeartbeatTurnIndices = [];
+  const capturedIndexByEntry = new Map();
+  const toolNameById = collectToolNamesByIdFromEntries(entries);
+  let capturedIndex = 0;
+  for (const [sourceIndex, entry] of entries.entries()) {
+    if (!entry || typeof entry !== "object") continue;
+    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
+    const message = payload.message && typeof payload.message === "object" ? payload.message : null;
+    const rawRole = message?.role || payload.role || payload.type || payload.kind;
+    const role = normalizeCaptureRole(rawRole);
+    if (!role || (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns)) continue;
+    const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
+    if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
+    capturedIndexByEntry.set(sourceIndex, capturedIndex);
+    capturedIndex += 1;
+  }
+  for (const [index, entry] of entries.entries()) {
+    const payload = entry?.payload;
+    const kinds = payload?.internal_chat_message_metadata_passthrough?.content_item_kinds;
+    if (
+      entry?.type !== "response_item"
+      || payload?.type !== "message" || payload.role !== "user"
+      || !Array.isArray(payload.content) || !Array.isArray(kinds)
+    ) {
+      filtered.push(entry);
+      continue;
+    }
+    const content = payload.content.filter((_, partIndex) => kinds[partIndex] !== "user.heartbeat");
+    if (content.length === payload.content.length) {
+      filtered.push(entry);
+    } else if (content.length) {
+      filtered.push({ ...entry, payload: { ...payload, content } });
+    } else {
+      // These indices use the v2 coordinate system, after startup context was
+      // removed. Persisted v2 cursors can then migrate without replaying the
+      // already-captured conversation on the first v3 hook.
+      const capturedIndex = capturedIndexByEntry.get(index);
+      if (capturedIndex !== undefined) excludedHeartbeatTurnIndices.push(capturedIndex);
+    }
+  }
+  return { entries: filtered, excludedHeartbeatTurnIndices };
+}
+
 export function extractCaptureTranscript(rolloutEntries, cfg = {}) {
   const expanded = expandCodexRolloutEntries(rolloutEntries);
   const deduplicated = deduplicateCodexToolEvents(expanded);
   const normalized = normalizeCodexNativeToolEvents(deduplicated);
   const completed = normalizeCodexCompletedToolEvents(normalized);
-  const { entries, excludedLegacyTurnIndices } = withoutStartupContext(completed, cfg);
-  return { turns: extractSharedCaptureTurns(entries, cfg), excludedLegacyTurnIndices };
+  const startupFiltered = withoutStartupContext(completed, cfg);
+  const heartbeatFiltered = withoutHeartbeatContent(startupFiltered.entries, cfg);
+  return {
+    turns: extractSharedCaptureTurns(heartbeatFiltered.entries, cfg),
+    excludedLegacyTurnIndices: startupFiltered.excludedLegacyTurnIndices,
+    excludedHeartbeatTurnIndices: heartbeatFiltered.excludedHeartbeatTurnIndices,
+  };
 }
 
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {

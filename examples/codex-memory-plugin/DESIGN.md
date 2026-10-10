@@ -214,7 +214,12 @@ Codex's startup-only user message is removed before slicing. Only complete
 host blocks before the first `turn_context` qualify: plugin recommendations,
 `AGENTS.md instructions`, and `<environment_context>`. If a message also
 contains a real prompt, only those blocks are removed. Normal conversation
-may quote the same labels without being filtered. State is updated:
+may quote the same labels without being filtered. Codex content items whose
+aligned `internal_chat_message_metadata_passthrough.content_item_kinds` value
+is exactly `user.heartbeat` are also removed. These are host-generated
+scheduler updates, not human conversation. Other parts of a mixed message
+remain, and missing or unknown provenance never causes content removal. State
+is updated:
 `{ovSessionId, capturedTurnCount, captureFormatVersion, lastUpdatedAt: now}`.
 
 The transcript and persisted cursor own retries. Failed messages are not also
@@ -363,7 +368,7 @@ OV session id, while commits create additional archives under that session.
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop or retirement"
   "transcriptPath": "/path/rollout.jsonl", // last rollout seen; lets the sweep catch up
   "capturedTurnCount": 7,            // turns from transcript already appended
-  "captureFormatVersion": 2,         // cursor counts turns after Codex startup filtering
+  "captureFormatVersion": 3,         // cursor counts turns after startup and heartbeat filtering
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
@@ -374,11 +379,14 @@ Legacy state files from earlier plugin versions may still contain a UUID
 next resolve. The migration window for preserving old UUID sessions has
 closed.
 
-A state file without `captureFormatVersion` uses the old extraction count.
-On the first readable rollout under the session lock, the plugin subtracts
-startup turns before the old cursor and persists version 2 before appending.
-Unreadable rollouts leave the old cursor untouched for a later retry. Already
-written OV sessions and extracted memories are not changed.
+A state file without `captureFormatVersion` uses the v1 extraction count. On
+the first readable rollout under the session lock, migration applies each
+coordinate change in order: v1 to v2 subtracts excluded startup turns, then
+v2 to v3 subtracts excluded heartbeat turns. A v2 state applies only the
+second step. The corrected v3 cursor is persisted before appending so a failed
+send cannot replay old conversation. Unreadable rollouts leave the old cursor
+untouched for a later retry. Already written OV sessions and extracted
+memories are not changed.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 

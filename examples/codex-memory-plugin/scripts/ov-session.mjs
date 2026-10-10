@@ -66,14 +66,18 @@ function parseTranscript(content) {
  * cursor on a transient read error replays the whole session.
  */
 export async function readTranscriptTurns(transcriptPath, cfg, logError) {
-  if (!transcriptPath) return { turns: [], excludedLegacyTurnIndices: [], ok: false };
+  if (!transcriptPath) {
+    return { turns: [], excludedLegacyTurnIndices: [], excludedHeartbeatTurnIndices: [], ok: false };
+  }
   try {
     const raw = await readFile(transcriptPath, "utf-8");
-    if (!raw.trim()) return { turns: [], excludedLegacyTurnIndices: [], ok: true };
+    if (!raw.trim()) {
+      return { turns: [], excludedLegacyTurnIndices: [], excludedHeartbeatTurnIndices: [], ok: true };
+    }
     return { ...extractCaptureTranscript(parseTranscript(raw), cfg), ok: true };
   } catch (err) {
     logError?.("transcript_read", err);
-    return { turns: [], excludedLegacyTurnIndices: [], ok: false };
+    return { turns: [], excludedLegacyTurnIndices: [], excludedHeartbeatTurnIndices: [], ok: false };
   }
 }
 
@@ -113,11 +117,24 @@ export async function catchUpTurns({
   // a session whose Stop/SessionEnd workers never ran.
   if (transcriptPath) state.transcriptPath = transcriptPath;
 
-  const { turns, excludedLegacyTurnIndices, ok } = await readTranscriptTurns(transcriptPath, cfg, logError);
+  const {
+    turns,
+    excludedLegacyTurnIndices,
+    excludedHeartbeatTurnIndices,
+    ok,
+  } = await readTranscriptTurns(transcriptPath, cfg, logError);
 
-  if (ok && state.captureFormatVersion !== CAPTURE_FORMAT_VERSION) {
+  const storedFormatVersion = Math.max(1, Number(state.captureFormatVersion) || 1);
+  if (ok && storedFormatVersion < CAPTURE_FORMAT_VERSION) {
     const oldCursor = Math.max(0, Number(state.capturedTurnCount) || 0);
-    state.capturedTurnCount = oldCursor - excludedLegacyTurnIndices.filter((index) => index < oldCursor).length;
+    let correctedCursor = oldCursor;
+    if (storedFormatVersion < 2) {
+      correctedCursor -= excludedLegacyTurnIndices.filter((index) => index < correctedCursor).length;
+    }
+    if (storedFormatVersion < 3) {
+      correctedCursor -= excludedHeartbeatTurnIndices.filter((index) => index < correctedCursor).length;
+    }
+    state.capturedTurnCount = correctedCursor;
     state.captureFormatVersion = CAPTURE_FORMAT_VERSION;
     // The caller holds the session lock. Persist the corrected cursor before
     // any append; a failed send must retry from this new coordinate system.
@@ -126,6 +143,7 @@ export async function catchUpTurns({
       oldCursor,
       correctedCursor: state.capturedTurnCount,
       excludedLegacyTurnIndices,
+      excludedHeartbeatTurnIndices,
     });
   }
 

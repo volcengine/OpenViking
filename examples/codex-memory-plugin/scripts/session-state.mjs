@@ -115,7 +115,7 @@ function lockPath(codexSessionId) {
 // outlive that rule; bump this whenever the derivation changes. The rest of the
 // state (ovSessionId, capture progress) stays valid across a bump and is kept.
 export const PEER_PIN_VERSION = 3;
-export const CAPTURE_FORMAT_VERSION = 2;
+export const CAPTURE_FORMAT_VERSION = 3;
 
 function defaultState(codexSessionId) {
   const now = Date.now();

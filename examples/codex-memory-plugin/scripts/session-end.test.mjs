@@ -196,7 +196,7 @@ test("session-end migrates a startup-inclusive cursor before catch-up and commit
     assert.deepEqual(sentMessages(calls).map((item) => item.parts?.[0]?.text ?? item.content), ["New question"]);
     assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
     const state = await readState(stateDir, "startup-end");
-    assert.equal(state.captureFormatVersion, 2);
+    assert.equal(state.captureFormatVersion, 3);
     assert.equal(state.capturedTurnCount, 2);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
