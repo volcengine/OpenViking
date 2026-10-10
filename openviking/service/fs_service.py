@@ -9,7 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1047,6 +1047,7 @@ class FSService:
         ctx: RequestContext,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        count_levels: Optional[Sequence[int]] = None,
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
@@ -1055,6 +1056,7 @@ class FSService:
             ctx=ctx,
             skip_count=skip_count,
             include_lock_status=include_lock_status,
+            count_levels=count_levels,
         )
 
     async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
