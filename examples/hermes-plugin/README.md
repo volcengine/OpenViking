@@ -46,11 +46,11 @@ separate access.
 | Connection | What you need |
 |------------|---------------|
 | **Quick Local** | A language model already configured in Hermes. Setup installs a local server and embedding model. |
-| **OpenViking Service (VolcEngine Cloud)** | A service API key for VolcEngine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service). |
+| **OpenViking Service (VolcEngine Cloud)** | A service API key for VolcEngine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme). |
 | **Custom** | Your server URL and credentials. Setup can also reuse a saved `ovcli.conf`. |
 
 For the cloud service, activate it and create an API key in the
-[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
+[OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=github&utm_medium=referral&utm_campaign=readme).
 Open **User Management**, then **API Key**. You do not need to install a server
 or configure local models.
 
