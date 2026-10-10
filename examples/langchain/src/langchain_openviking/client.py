@@ -807,7 +807,9 @@ def extract_message_text(content: Any) -> str:
             if isinstance(block, str):
                 chunks.append(block)
             elif isinstance(block, dict):
-                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                if block.get("type") in ("text", "input_text", "output_text") and isinstance(
+                    block.get("text"), str
+                ):
                     chunks.append(block["text"])
                 elif isinstance(block.get("content"), str):
                     chunks.append(block["content"])
