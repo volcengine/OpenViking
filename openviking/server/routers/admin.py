@@ -844,17 +844,23 @@ async def patch_cluster_configuration(
     request: Request,
     response: HTTPResponse,
     source: str = Query("runtime", pattern="^(runtime|file)$"),
+    dry_run: bool = Query(False),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
+    if dry_run and (source != "file" or body.content is None):
+        raise InvalidArgumentError("dry_run requires source=file and full file content")
     if source == "file":
-        from openviking.config.config_file import save_config_file
+        from openviking.config.config_file import preview_config_file, save_config_file
 
         response.headers["Cache-Control"] = "no-store"
         try:
-            result = await asyncio.to_thread(
-                save_config_file, body.settings, body.revision or "", body.content
-            )
+            if dry_run:
+                result = await asyncio.to_thread(preview_config_file, body.content, body.settings)
+            else:
+                result = await asyncio.to_thread(
+                    save_config_file, body.settings, body.revision or "", body.content
+                )
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         except OSError as exc:
@@ -871,30 +877,6 @@ async def patch_cluster_configuration(
         raise InvalidArgumentError(str(exc)) from exc
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
-
-
-class ConfigFilePreviewRequest(BaseModel):
-    content: str
-    settings: dict[str, Any] = Field(default_factory=dict)
-
-
-@router.post("/configuration/preview")
-@require_auth_root
-async def preview_startup_configuration(
-    body: ConfigFilePreviewRequest,
-    request: Request,
-    response: HTTPResponse,
-    ctx: RequestContext = Depends(get_request_context),
-):
-    """Validate/project a full startup-file draft without touching disk or runtime."""
-    from openviking.config.config_file import preview_config_file
-
-    response.headers["Cache-Control"] = "no-store"
-    try:
-        result = await asyncio.to_thread(preview_config_file, body.content, body.settings)
-    except ValueError as exc:
-        raise InvalidArgumentError(str(exc)) from exc
-    return Response(status="ok", result=result)
 
 
 # ---- User endpoints ----

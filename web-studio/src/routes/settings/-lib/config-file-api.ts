@@ -108,8 +108,9 @@ export function createConfigFileApi(
     },
     preview: (content: string, changes: ModelChanges = {}) =>
       getOvResult<ConfigFileDraft>(
-        client.post({
-          url: `${url}/preview`,
+        client.patch({
+          url,
+          query: { source: 'file', dry_run: true },
           headers: { 'Content-Type': 'application/json' },
           body: {
             content,

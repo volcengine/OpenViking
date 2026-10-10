@@ -94,8 +94,9 @@ it('uses ROOT credentials to preview a full draft without saving, then saves one
   ).toBe(true)
   expect(requests[0].url).toContain('source=file')
   expect(requests[0].url).not.toContain('/accounts/')
-  expect(requests[1].method).toBe('post')
-  expect(requests[1].url).toContain('/api/v1/admin/configuration/preview')
+  expect(requests[1].method).toBe('patch')
+  expect(requests[1].url).toContain('/api/v1/admin/configuration?source=file')
+  expect(requests[1].url).toContain('dry_run=true')
   expect(JSON.parse(requests[1].data)).toEqual({
     content: loaded.content,
     settings: { embedding: { max_retries: 2 } },

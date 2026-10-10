@@ -371,17 +371,28 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
     result = loaded.json()["result"]
     assert result["content"] == before.decode()
     content = '{"server":{"port":1934},"storage":{"workspace":"/tmp/new"}}'
-    preview_url = url + "/preview"
-    denied = await lightweight_admin_client.post(
-        preview_url, headers=admin_headers, json={"content": content}
+    preview_params = {"source": "file", "dry_run": True}
+    denied = await lightweight_admin_client.patch(
+        url, params=preview_params, headers=admin_headers, json={"content": content}
     )
     assert denied.status_code == 403
-    preview = await lightweight_admin_client.post(
-        preview_url, headers=root_headers(), json={"content": content}
+    preview = await lightweight_admin_client.patch(
+        url, params=preview_params, headers=root_headers(), json={"content": content}
     )
     assert preview.status_code == 200, preview.text
     assert preview.headers["cache-control"] == "no-store"
     assert preview.json()["result"]["content"] == content
+    assert path.read_bytes() == before
+    assert not path.with_name(path.name + ".studio.bak").exists()
+    for params in ({"dry_run": True}, preview_params):
+        rejected = await lightweight_admin_client.patch(
+            url, params=params, headers=root_headers(), json={"settings": {}}
+        )
+        assert rejected.status_code == 400
+    rejected = await lightweight_admin_client.patch(
+        url, params={"dry_run": True}, headers=root_headers(), json={"content": content}
+    )
+    assert rejected.status_code == 400
     assert path.read_bytes() == before
     body = {"content": content, "revision": result["revision"]}
     denied = await lightweight_admin_client.patch(
@@ -401,8 +412,8 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
     assert stale.status_code == 400
     runtime = await lightweight_admin_client.patch(url, headers=root_headers(), json=body)
     assert runtime.status_code == 400
-    invalid = await lightweight_admin_client.post(
-        preview_url, headers=root_headers(), json={"content": '{"server":{"port":"bad"}}'}
+    invalid = await lightweight_admin_client.patch(
+        url, params=preview_params, headers=root_headers(), json={"content": '{"server":{"port":"bad"}}'}
     )
     assert invalid.status_code == 400
     assert path.read_text() == content
