@@ -1,6 +1,6 @@
 {
   "name": "codebuddy-openviking-memory",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenViking memory plugin for the CodeBuddy Code CLI — semantic long-term memory",
   "type": "module",
   "scripts": {

@@ -129,9 +129,10 @@ dev checkout it warns instead of failing, apart from the
 
 ## Known limitations
 
-- **`PreCompact` is unregistered-by-behaviour, not by testing** — compaction
-  never happened in any probe session, so the hook is registered but its trigger
-  is unproven.
+- **`PreCompact` fires only when compaction actually happens.** Verified in a real
+  TUI session: the host leaves a `{"type":"summary","providerData":{"source":"pre-compact"}}`
+  record, and this plugin's commit is what archived the turns. `/compact` triggers it on
+  demand if you want to exercise it deliberately.
 - **Recall and the final commit only run in the interactive TUI.** Headless
   (`-p`, `--input-format stream-json`) runs never emit `UserPromptSubmit` or
   `SessionEnd`, so a headless session captures on `Stop` and never commits. This

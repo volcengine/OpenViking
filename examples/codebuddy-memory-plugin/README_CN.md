@@ -110,7 +110,9 @@ list` 那一行除外）。
 
 ## 已知限制
 
-- **`PreCompact` 未经触发验证**：所有探针会话都没发生压缩，hook 已注册但触发未证实。
+- **`PreCompact` 只在真的发生压缩时触发**，已由真实 TUI 会话证实：host 会留下
+  `{"type":"summary","providerData":{"source":"pre-compact"}}` 记录，而把轮归档的正是本插件的
+  commit。想主动触发可用 `/compact`。
 - **recall 与收尾 commit 只在交互 TUI 跑**：headless（`-p` / `stream-json`）不发
   `UserPromptSubmit` 与 `SessionEnd` ⇒ headless 会话只在 `Stop` 捕获、永不 commit。这是 host
   性质，不是插件缺陷。

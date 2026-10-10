@@ -78,7 +78,7 @@ reported `mcp_servers: [{"name":"openviking","status":"connected"}]` and listed 
 | `SessionEnd` | **verified** (run 3) | `reason`; observed `prompt_input_exit` |
 | `SubagentStart` | **verified** (run 3) | not in the user-hook event table, **but fires for plugin hooks** |
 | `SubagentStop` | **verified** (run 3) | no independent stdin schema in the host docs |
-| `PreCompact` | **pending** — no compaction occurred in any run | *documented*: `manual` / `auto` |
+| `PreCompact` | **verified** (P7 follow-up) | *documented*: `manual` / `auto`; a compaction leaves `{"type":"summary","providerData":{"source":"pre-compact"}}` in the transcript |
 
 ⚠️ **`UserPromptSubmit` is emitted by the interactive TUI but not by headless paths** — an
 undocumented asymmetry with direct consequences for automation-based testing of the recall
@@ -199,13 +199,20 @@ non-blocking error shown to the user. **Not exercised by the probe** — every h
 
 ## 9. Remaining unknowns
 
-1. `PreCompact` — never fired (no compaction in any run). Register it, but treat as unproven.
-2. Marketplace install → versioned cache behaviour (P6), including the "installed plugins
-   cannot reference files outside their directory" rule.
-3. Non-blocking-exit (code 1 / other) and exit-2 semantics — documented but unexercised.
-4. Whether a plugin hook can be disabled individually from `settings.json` (the host docs
+1. Marketplace install → versioned cache behaviour — **verified at P6**: the plugin lands in
+   `~/.codebuddy/plugins/cache/<marketplace>/<name>/<version>` with its generated `scripts/shared`
+   and `skills/` intact, and a session with no `--plugin-dir` runs the hooks from that copy (its
+   state directory loses the `-inline` suffix). A marketplace cannot reference a plugin outside
+   itself — `source: "../x"` is rejected with `Path escapes marketplace root` — so the marketplace
+   root must be the plugin's parent directory. (The installer does copy `scripts/*.test.mjs`, whose
+   imports point outside the plugin; nothing executes them, so it is inert.)
+2. Non-blocking-exit (code 1 / other) and exit-2 semantics — documented but unexercised; every
+   hook written here exits 0.
+3. Whether a plugin hook can be disabled individually from `settings.json` (the host docs
    only offer disabling the whole plugin, or `CODEBUDDY_DISABLE_EXTENDED_PLUGIN_HOOKS` to
    restrict hook types).
+4. `PostToolUse` is registered nowhere in this plugin, so its payload shape beyond the common
+   fields is untested. `skill-experience` (the optional experience-recall hook) is not ported.
 
 ## 10. Naming divergence
 
