@@ -889,6 +889,14 @@ const workspace = {
       save: '保存',
       saving: '保存中...',
       saved: '已保存到 ov.conf，请重启服务使改动生效',
+      saveAndRestart: '保存并重启',
+      restartService: '重启服务',
+      restarting: '正在重启服务，等待连接恢复…',
+      restarted: '服务已重启，配置已重新加载。',
+      restartFailed:
+        '未能确认服务重启成功。配置已保存在文件中；请检查服务状态。如修改了地址、端口或 ROOT 凭证，请更新连接设置后重试。',
+      restartUnsupported:
+        '当前启动方式不支持页面重启，请通过部署平台重启服务。',
       saveFailed: '保存失败，请检查模型参数及权限后重试。',
     },
     acl: {

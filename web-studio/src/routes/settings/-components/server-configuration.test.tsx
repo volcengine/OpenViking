@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   get: vi.fn(),
   save: vi.fn(),
   preview: vi.fn(),
+  restart: vi.fn(),
+  restartStatus: vi.fn(),
   copy: vi.fn(),
 }))
 vi.mock('#/components/code-editor', () => ({
@@ -49,6 +51,8 @@ vi.mock('../-lib/config-file-api', async (importOriginal) => ({
     get: state.get,
     save: state.save,
     preview: state.preview,
+    restart: state.restart,
+    restartStatus: state.restartStatus,
   }),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
@@ -172,7 +176,17 @@ function mount(
       ),
     }
   })
-  state.save.mockResolvedValue({})
+  state.save.mockResolvedValue({ revision: 'saved-revision' })
+  state.restartStatus.mockResolvedValue({
+    supported: true,
+    instance_id: 'new',
+    restarting: false,
+  })
+  state.restart.mockResolvedValue({
+    supported: true,
+    instance_id: 'old',
+    restarting: true,
+  })
   state.copy.mockResolvedValue(undefined)
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -792,3 +806,66 @@ it.each([false, true])(
     expect(saved.embedding).toEqual(file.embedding)
   },
 )
+it('saves before requesting restart and waits for a new service instance', async () => {
+  mount()
+  await screen.findByText('model-a')
+  await menuAction(section('vlmType'), 0, 'models.moveDown')
+  let finishRestart!: (value: {
+    supported: boolean
+    instance_id: string
+    restarting: boolean
+  }) => void
+  state.restart.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishRestart = resolve
+      }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
+  await waitFor(() =>
+    expect(state.restart).toHaveBeenCalledWith('saved-revision'),
+  )
+  expect(state.save.mock.invocationCallOrder[0]).toBeLessThan(
+    state.restart.mock.invocationCallOrder[0],
+  )
+  expect(screen.getByText('models.restarting')).toBeTruthy()
+  expect(
+    section('vlmType')
+      .getByRole('button', { name: 'models.addModel' })
+      .hasAttribute('disabled'),
+  ).toBe(true)
+  await act(async () =>
+    finishRestart({ supported: true, instance_id: 'old', restarting: true }),
+  )
+  await waitFor(() =>
+    expect(screen.queryByText('models.restarting')).toBeNull(),
+  )
+  expect(
+    screen.queryByRole('button', { name: 'models.saveAndRestart' }),
+  ).toBeNull()
+})
+it('does not restart after a save failure and preserves the draft', async () => {
+  mount()
+  await screen.findByText('model-a')
+  await menuAction(section('vlmType'), 0, 'models.moveDown')
+  state.save.mockRejectedValue(new Error('revision conflict'))
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
+  await screen.findByText(/revision conflict/)
+  expect(state.restart).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'models.discardAll' })).toBeTruthy()
+})
+it('keeps saved state when restart is rejected and permits retry without saving again', async () => {
+  mount()
+  await screen.findByText('model-a')
+  await menuAction(section('vlmType'), 0, 'models.moveDown')
+  state.restart.mockRejectedValue(new Error('restart unavailable'))
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAndRestart' }))
+  await screen.findByText('models.restartFailed')
+  expect(screen.queryByRole('button', { name: 'models.discardAll' })).toBeNull()
+  expect(
+    screen
+      .getByRole('button', { name: 'models.restartService' })
+      .hasAttribute('disabled'),
+  ).toBe(false)
+  expect(state.save).toHaveBeenCalledTimes(1)
+})

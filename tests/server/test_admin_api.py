@@ -156,6 +156,9 @@ def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.routers import admin as admin_router
 
     app = FastAPI()
+    from openviking.server.restart import RestartController
+
+    app.state.restart_controller = RestartController()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
     fake_service = _FakeService()
     app.state.fake_service = fake_service
@@ -3478,3 +3481,96 @@ async def test_user_page_summary_respects_account_access(lightweight_admin_clien
         headers={"X-API-Key": admin_key},
     )
     assert denied.status_code == 403
+
+
+async def test_server_restart_requires_root_and_valid_revision(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    tmp_path,
+    monkeypatch,
+):
+    from openviking.config.config_file import read_config_file
+    from openviking.server.restart import RestartController
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    account_id, admin_headers = template_account
+    user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account_id}/users",
+        headers=admin_headers,
+        json={"user_id": "restart-test-user"},
+    )
+    assert user.status_code == 200
+    user_headers = {"X-API-Key": user.json()["result"]["user_key"]}
+    stopped = Mock()
+    controller = RestartController(stopped)
+    lightweight_admin_app.state.restart_controller = controller
+    path = tmp_path / "ov.conf"
+    path.write_text(
+        json.dumps({"vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "test-key"}})
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    revision = read_config_file()["revision"]
+    url = "/api/v1/admin/restart"
+    for headers in [admin_headers, user_headers, {}]:
+        assert (await lightweight_admin_client.get(url, headers=headers)).status_code in (401, 403)
+        assert (
+            await lightweight_admin_client.post(url, headers=headers, json={"revision": revision})
+        ).status_code in (401, 403)
+    stopped.assert_not_called()
+    assert not controller.requested
+    status = await lightweight_admin_client.get(url, headers=root_headers())
+    assert status.json()["result"]["supported"]
+    assert status.headers["cache-control"] == "no-store"
+    stale = await lightweight_admin_client.post(
+        url, headers=root_headers(), json={"revision": "stale"}
+    )
+    assert stale.status_code == 400
+    stopped.assert_not_called()
+    original = path.read_bytes()
+    accepted = await lightweight_admin_client.post(
+        url, headers=root_headers(), json={"revision": revision}
+    )
+    assert accepted.status_code == 202
+    assert accepted.json()["result"]["instance_id"] == controller.instance_id
+    assert accepted.json()["result"]["restarting"]
+    stopped.assert_called_once()
+    assert path.read_bytes() == original
+    blocked = await lightweight_admin_client.patch(
+        "/api/v1/admin/configuration",
+        params={"source": "file"},
+        headers=root_headers(),
+        json={"revision": revision, "content": original.decode()},
+    )
+    assert blocked.status_code == 412
+
+
+async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    tmp_path,
+    monkeypatch,
+):
+    import hashlib
+
+    from openviking.server.restart import RestartController
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    url = "/api/v1/admin/restart"
+    status = await lightweight_admin_client.get(url, headers=root_headers())
+    assert not status.json()["result"]["supported"]
+    assert (
+        await lightweight_admin_client.post(url, headers=root_headers(), json={"revision": "r"})
+    ).status_code == 412
+    stopped = Mock()
+    lightweight_admin_app.state.restart_controller = RestartController(stopped)
+    path = tmp_path / "ov.conf"
+    path.write_text('{"server":{"port":"invalid"}}')
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    response = await lightweight_admin_client.post(
+        url,
+        headers=root_headers(),
+        json={"revision": hashlib.sha256(path.read_bytes()).hexdigest()},
+    )
+    assert response.status_code == 400
+    stopped.assert_not_called()

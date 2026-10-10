@@ -1,4 +1,4 @@
-import { createOvClient, getOvResult } from '#/lib/ov-client'
+import { createOvClient, getOvResult, OvClientError } from '#/lib/ov-client'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
 export const modelKinds = [
@@ -26,6 +26,37 @@ export type ConfigFileConfiguration = ConfigFileDraft & {
   restart_required?: boolean
   overrides?: { cluster: string[]; account: string[] }
   settings: Partial<Record<ModelKind, ModelConfig>>
+}
+export type RestartStatus = {
+  supported: boolean
+  instance_id: string
+  restarting: boolean
+}
+export async function waitForServerRestart(
+  status: () => Promise<RestartStatus>,
+  instanceId: string,
+  signal: AbortSignal,
+  timeoutMs = 120_000,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    signal.throwIfAborted()
+    try {
+      const result = await status()
+      signal.throwIfAborted()
+      if (result.instance_id !== instanceId && !result.restarting) return
+    } catch (error) {
+      signal.throwIfAborted()
+      if (
+        error instanceof OvClientError &&
+        (error.statusCode === 401 || error.statusCode === 403)
+      )
+        throw error
+      // Temporary connection errors are expected during graceful shutdown.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  throw new Error('Restart timed out')
 }
 export const embeddingModes = ['dense', 'sparse', 'hybrid'] as const
 export const embeddingCredentialFields = [
@@ -104,6 +135,18 @@ export function createConfigFileApi(
   })
   const url = '/api/v1/admin/configuration'
   return {
+    restartStatus: () =>
+      getOvResult<RestartStatus>(
+        client.get({ url: '/api/v1/admin/restart', timeout: 3000 }),
+      ),
+    restart: (revision: string) =>
+      getOvResult<RestartStatus>(
+        client.post({
+          url: '/api/v1/admin/restart',
+          headers: { 'Content-Type': 'application/json' },
+          body: { revision },
+        }),
+      ),
     get: async () => {
       const result = await getOvResult<
         Omit<ConfigFileConfiguration, 'models'> & {
@@ -144,7 +187,7 @@ export function createConfigFileApi(
         }),
       ),
     save: (content: string, revision: string) =>
-      getOvResult(
+      getOvResult<{ revision: string; restart_required: boolean }>(
         client.patch({
           url,
           query: { source: 'file' },

@@ -321,6 +321,7 @@ def main():
     workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
+    restart_requested = False
     try:
         workers = config.workers
         if workers > 1:
@@ -340,7 +341,7 @@ def main():
                 log_config=None,
             )
         else:
-            uvicorn.run(
+            restart_requested = _run_restartable_server(
                 app,
                 host=config.host,
                 port=config.port,
@@ -351,6 +352,22 @@ def main():
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
             _stop_vikingbot_gateway(bot_process)
+    if restart_requested:
+        # Preserve the interpreter, CLI arguments, cwd and environment. Replacing
+        # this process also keeps its PID and relationship to systemd/Docker.
+        if resolved_config_path is not None:
+            os.environ[OPENVIKING_CONFIG_ENV] = str(resolved_config_path)
+        os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+
+
+def _run_restartable_server(app, **kwargs) -> bool:
+    from openviking.server.restart import RestartController
+
+    server = uvicorn.Server(uvicorn.Config(app, **kwargs))
+    controller = RestartController(lambda: setattr(server, "should_exit", True))
+    app.state.restart_controller = controller
+    server.run()
+    return controller.requested
 
 
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:

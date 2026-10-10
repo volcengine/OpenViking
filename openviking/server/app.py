@@ -433,6 +433,9 @@ def create_app(
     )
 
     app.state.config = config
+    from openviking.server.restart import RestartController
+
+    app.state.restart_controller = RestartController()
     app.state.api_key_manager = None
     app.state.deletion_service = None
     set_server_config(config)

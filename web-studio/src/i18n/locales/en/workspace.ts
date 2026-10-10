@@ -926,6 +926,14 @@ const workspace = {
       save: 'Save',
       saving: 'Saving...',
       saved: 'Saved to ov.conf. Restart the server to apply changes.',
+      saveAndRestart: 'Save and restart',
+      restartService: 'Restart service',
+      restarting: 'Restarting the service, waiting for the connection…',
+      restarted: 'Service restarted and configuration reloaded.',
+      restartFailed:
+        'Could not confirm the restart. Configuration is saved in the file; check the service status. If the address, port or ROOT credential changed, update connection settings and retry.',
+      restartUnsupported:
+        'This launch mode does not support remote restart. Restart through your deployment platform.',
       saveFailed:
         'Could not save. Check the model parameters and permissions, then retry.',
     },

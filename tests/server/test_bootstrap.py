@@ -58,8 +58,8 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        bootstrap.uvicorn,
-        "run",
+        bootstrap,
+        "_run_restartable_server",
         lambda app, host, port, log_config=None, **kwargs: captured.update(
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
@@ -112,8 +112,8 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        bootstrap.uvicorn,
-        "run",
+        bootstrap,
+        "_run_restartable_server",
         lambda app, host, port, log_config=None, **kwargs: captured.update(
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
@@ -167,7 +167,7 @@ def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
 
     monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", _fake_start)
     monkeypatch.setattr(bootstrap, "_stop_vikingbot_gateway", lambda process: None)
-    monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bootstrap, "_run_restartable_server", lambda *args, **kwargs: False)
 
     bootstrap.main()
 
@@ -359,3 +359,53 @@ def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
     )
 
     app_module._configure_default_executor(ServerConfig())
+
+
+def test_restartable_server_drains_uvicorn_before_returning(monkeypatch):
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    server = SimpleNamespace(should_exit=False)
+
+    def run():
+        assert app.state.restart_controller.status()["supported"]
+        app.state.restart_controller.request()
+        app.state.restart_controller.stop()
+        assert server.should_exit
+
+    server.run = run
+    monkeypatch.setattr(bootstrap.uvicorn, "Server", lambda config: server)
+    assert bootstrap._run_restartable_server(app, host="127.0.0.1", port=1933)
+
+
+def test_main_restart_cleans_up_bot_and_preserves_launch_command(monkeypatch):
+    import sys
+
+    config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
+    steps = []
+    monkeypatch.setattr(sys, "argv", ["openviking-server", "--with-bot", "--bot-port", "19000"])
+    original_argv = [sys.executable, "/venv/bin/openviking-server", *sys.argv[1:]]
+    monkeypatch.setattr(sys, "orig_argv", original_argv)
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda path: config)
+    monkeypatch.setattr(bootstrap, "resolve_config_path", lambda *a: Path("/tmp/explicit.conf"))
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton, "initialize", classmethod(lambda cls, **kw: None)
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.ollama.detect_ollama_in_config", lambda c: (False, "", 0)
+    )
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
+    monkeypatch.setattr(bootstrap, "create_app", lambda *a, **kw: "app")
+    monkeypatch.setattr(bootstrap, "_abort_if_port_in_use", lambda *a: None)
+    monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", lambda *a, **kw: "bot")
+    monkeypatch.setattr(
+        bootstrap, "_stop_vikingbot_gateway", lambda bot: steps.append(("stop", bot))
+    )
+    monkeypatch.setattr(bootstrap, "_run_restartable_server", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        os, "execv", lambda executable, args: steps.append(("exec", executable, args))
+    )
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/explicit.conf")
+    bootstrap.main()
+    assert steps == [("stop", "bot"), ("exec", sys.executable, original_argv)]
+    assert os.environ["OPENVIKING_CONFIG_FILE"] == "/tmp/explicit.conf"

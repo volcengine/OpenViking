@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
 from fastapi import Response as HTTPResponse
 from pydantic import BaseModel, Field
 
@@ -837,6 +837,57 @@ async def get_cluster_configuration(
     return Response(status="ok", result={"settings": settings})
 
 
+class RestartRequest(BaseModel):
+    revision: str = Field(min_length=1)
+
+
+@router.get("/restart")
+@require_auth_root
+async def get_restart_status(
+    request: Request,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return Response(status="ok", result=request.app.state.restart_controller.status())
+
+
+@router.post("/restart", status_code=202)
+@require_auth_root
+async def restart_server(
+    body: RestartRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    from openviking.config.config_file import preview_config_file, read_config_file
+
+    controller = request.app.state.restart_controller
+    if controller.shutdown is None:
+        raise FailedPreconditionError(
+            "Remote restart requires the single-worker openviking-server CLI"
+        )
+    async with controller.lock:
+        try:
+            config = await asyncio.to_thread(read_config_file)
+            if config["revision"] != body.revision:
+                raise ValueError("ov.conf changed; reload before restarting")
+            await asyncio.to_thread(preview_config_file, config["content"], {})
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        except OSError as exc:
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
+        # Runs after the accepted response has been sent. Uvicorn drains active
+        # requests and the CLI cleans up its managed Bot before replacing itself.
+        result = controller.request()
+        background_tasks.add_task(controller.stop)
+        response.headers["Cache-Control"] = "no-store"
+        return Response(status="ok", result=result)
+
+
 @router.patch("/configuration")
 @require_auth_root
 async def patch_cluster_configuration(
@@ -853,21 +904,26 @@ async def patch_cluster_configuration(
     if source == "file":
         from openviking.config.config_file import preview_config_file, save_config_file
 
-        response.headers["Cache-Control"] = "no-store"
-        try:
-            if dry_run:
-                result = await asyncio.to_thread(preview_config_file, body.content, body.settings)
-            else:
-                result = await asyncio.to_thread(
-                    save_config_file, body.settings, body.revision or "", body.content
-                )
-        except ValueError as exc:
-            raise InvalidArgumentError(str(exc)) from exc
-        except OSError as exc:
-            raise FailedPreconditionError(
-                "Cannot write ov.conf; check file and directory permissions"
-            ) from exc
-        return Response(status="ok", result=result)
+        async with request.app.state.restart_controller.lock:
+            if request.app.state.restart_controller.requested:
+                raise FailedPreconditionError("Server restart is already in progress")
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                if dry_run:
+                    result = await asyncio.to_thread(
+                        preview_config_file, body.content, body.settings
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        save_config_file, body.settings, body.revision or "", body.content
+                    )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            except OSError as exc:
+                raise FailedPreconditionError(
+                    "Cannot write ov.conf; check file and directory permissions"
+                ) from exc
+            return Response(status="ok", result=result)
     if body.content is not None:
         raise InvalidArgumentError("Full file content requires source=file")
     runtime_config = _get_runtime_config_manager()
