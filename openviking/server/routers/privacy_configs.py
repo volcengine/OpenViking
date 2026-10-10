@@ -22,11 +22,14 @@ async def _require_privacy_target(
     category: str,
     target_key: str,
 ) -> None:
+    """Raise ``NotFoundError`` when the privacy target has no stored configuration."""
     if privacy is None or not await privacy.exists(ctx, category, target_key):
         raise NotFoundError(f"{category}/{target_key}", "privacy config")
 
 
 class UpsertPrivacyConfigRequest(BaseModel):
+    """Request body that writes a new version of a target's configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     values: Dict[str, Any]
@@ -35,6 +38,8 @@ class UpsertPrivacyConfigRequest(BaseModel):
 
 
 class ActivatePrivacyConfigVersionRequest(BaseModel):
+    """Request body that selects which stored version to activate."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: int
@@ -44,6 +49,7 @@ class ActivatePrivacyConfigVersionRequest(BaseModel):
 async def list_privacy_categories(
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """List the privacy configuration categories available to the caller."""
     service = get_service()
     privacy = service.privacy_configs
     result = [] if privacy is None else await privacy.list_categories(_ctx)
@@ -55,6 +61,7 @@ async def list_privacy_targets(
     category: str = Path(..., description="Privacy config category"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """List the configured target keys under a category."""
     service = get_service()
     privacy = service.privacy_configs
     result = [] if privacy is None else await privacy.list_targets(_ctx, category)
@@ -67,6 +74,7 @@ async def get_privacy_current(
     target_key: str = Path(..., description="Privacy config target key"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Return a target's metadata together with its current configuration values."""
     service = get_service()
     privacy = service.privacy_configs
     await _require_privacy_target(privacy, _ctx, category, target_key)
@@ -87,6 +95,7 @@ async def list_privacy_versions(
     target_key: str = Path(..., description="Privacy config target key"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """List the stored versions of a target, newest first."""
     service = get_service()
     privacy = service.privacy_configs
     await _require_privacy_target(privacy, _ctx, category, target_key)
@@ -101,6 +110,7 @@ async def get_privacy_version(
     version: int = Path(..., description="Privacy config version"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Return one stored version of a target, or HTTP 404 when it no longer exists."""
     service = get_service()
     privacy = service.privacy_configs
     await _require_privacy_target(privacy, _ctx, category, target_key)
@@ -117,6 +127,12 @@ async def upsert_privacy_config(
     target_key: str = Path(..., description="Privacy config target key"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Write a new version of a target's configuration.
+
+    Records who made the change and the optional ``change_reason`` on the new
+    version. Returns the stored version, or ``None`` when privacy configs are
+    unavailable in this deployment.
+    """
     service = get_service()
     privacy = service.privacy_configs
     result = None
@@ -140,6 +156,7 @@ async def activate_privacy_version(
     target_key: str = Path(..., description="Privacy config target key"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
+    """Activate a stored version so it becomes the target's current configuration."""
     service = get_service()
     privacy = service.privacy_configs
     await _require_privacy_target(privacy, _ctx, category, target_key)
