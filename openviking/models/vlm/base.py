@@ -20,7 +20,9 @@ from openviking_cli.utils import get_logger
 
 from .token_usage import TokenUsageTracker
 
-_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
+_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
+_LEADING_THINK_CLOSE_TAG_RE = re.compile(r"^\s*</think>\s*", re.IGNORECASE)
+_LEADING_UNCLOSED_THINK_TAG_RE = re.compile(r"^\s*<think>[\s\S]*$", re.IGNORECASE)
 logger = get_logger(__name__)
 
 
@@ -205,8 +207,10 @@ class VLMBase(ABC):
         )
 
     def _clean_response(self, content: str) -> str:
-        """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
-        return _THINK_TAG_RE.sub("", content).strip()
+        """Strip complete ``<think>`` blocks and malformed leading reasoning tags."""
+        content = _THINK_TAG_RE.sub("", content)
+        content = _LEADING_THINK_CLOSE_TAG_RE.sub("", content)
+        return _LEADING_UNCLOSED_THINK_TAG_RE.sub("", content).strip()
 
     def is_available(self) -> bool:
         """Check if available"""

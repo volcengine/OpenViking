@@ -75,6 +75,22 @@ class TestStripThinkTags:
         result = vlm._clean_response(text)
         assert result == '{"abstract": "summary", "overview": "details"}'
 
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("<THINK>reasoning</THINK>\nSummary.", "Summary."),
+            (" \n<Think>unclosed reasoning\nSummary-like text.", ""),
+            (" \n</THINK> Summary.", "Summary."),
+            (
+                "Document the literal <think> marker without a closing tag.",
+                "Document the literal <think> marker without a closing tag.",
+            ),
+            ("Summary with a literal </think> marker.", "Summary with a literal </think> marker."),
+        ],
+    )
+    def test_malformed_and_literal_think_tags(self, vlm, text, expected):
+        assert vlm._clean_response(text) == expected
+
 
 class TestThinkTagRegex:
     """Test the compiled regex pattern directly."""
