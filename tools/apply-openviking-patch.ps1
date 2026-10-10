@@ -94,29 +94,47 @@ function Get-LatestBackup {
         Select-Object -First 1
 }
 
+# Roll back to a *pristine* tree, not merely the previous run. Each backup dir
+# holds whatever was there when that run patched; if a later run patched an
+# already-patched file, its backup is itself patched, so stepping back one
+# directory at a time walks forward, not backward. Walk every backup instead and
+# keep the earliest copy of each file, which is the version from before any of
+# this script's runs touched it.
+function Get-PristineSources {
+    $out = @{}
+    if (-not (Test-Path $BackupRoot)) { return $out }
+    $dirs = Get-ChildItem $BackupRoot -Directory | Sort-Object Name
+    foreach ($d in $dirs) {
+        $m = Join-Path $d.FullName 'manifest.txt'
+        if (-not (Test-Path $m)) { continue }
+        foreach ($dst in (Get-Content $m | Where-Object { $_.Trim() -ne '' })) {
+            $sp = Resolve-SitePackages
+            $rel = $dst.Substring($sp.Length).TrimStart('\')
+            if ($out.ContainsKey($rel)) { continue }
+            $src = Join-Path $d.FullName $rel
+            if (Test-Path $src) { $out[$rel] = $src }
+        }
+    }
+    return $out
+}
+
 # ---------------------------------------------------------------- rollback
 if ($Rollback) {
     $bk = Get-LatestBackup
     if (-not $bk) { Write-Host "No backup under $BackupRoot; nothing to roll back."; exit 0 }
     $sp = Resolve-SitePackages
-    Write-Host "Rolling back from: $($bk.Name)"
-    $manifestPath = Join-Path $bk.FullName 'manifest.txt'
-    $targets = if (Test-Path $manifestPath) {
-        Get-Content $manifestPath | Where-Object { $_.Trim() -ne '' }
-    } else {
-        $PatchedFiles | ForEach-Object { Join-Path $sp $_ }
+    Write-Host "Rolling back to the pre-patch state (oldest backup per file)"
+    $pristine = Get-PristineSources
+    if ($pristine.Count -eq 0) {
+        Write-Error "Backups exist but no manifest entries were readable."
+        exit 1
     }
-    foreach ($dst in $targets) {
-        $rel = $dst.Substring($sp.Length).TrimStart('\')
-        $src = Join-Path $bk.FullName $rel
-        if (Test-Path $src) {
-            Copy-Item $src $dst -Force
-            Write-Host "  restored  $rel"
-        } else {
-            Write-Warning "  missing in backup, skipped: $rel"
-        }
+    foreach ($rel in $pristine.Keys) {
+        Copy-Item $pristine[$rel] (Join-Path $sp $rel) -Force
+        Write-Host "  restored  $rel   (from $($pristine[$rel].Split('\')[-3]))"
     }
-    Write-Host 'Rollback complete. Restart openviking-server to load the restored code.'
+    Write-Host ''
+    Write-Host 'Restart openviking-server to load the restored code.'
     exit 0
 }
 
