@@ -53,6 +53,36 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 
 For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
 
+### Ordered credentials in ov.conf
+
+`vlm` and `query_planner` support an ordered `credentials` array. Embedding supports the same array inside each configured `dense`, `sparse`, or `hybrid` section. Index 0 has the highest priority; later entries provide failover credentials. The model sections remain JSON objects, and existing single-credential configurations remain supported.
+
+Merge the following fields into your `ov.conf`; set `PRIMARY_API_KEY` and `BACKUP_API_KEY` before starting the server:
+
+```json
+{
+  "vlm": {
+    "model": "your-vlm-model",
+    "credentials": [
+      {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+      {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+    ]
+  },
+  "embedding": {
+    "dense": {
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
+      "credentials": [
+        {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+        {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+      ]
+    }
+  }
+}
+```
+
+Each credential can specify its own provider, model and connection fields; an omitted model uses the parent section's `model`. Embedding credentials must remain compatible with the parent model's vector dimension and input semantics. `query_planner.credentials` follows the VLM format. Rerank remains a single configuration and does not support a `credentials` array.
+
 ## Configuration Scope and Update Lifecycle
 
 OpenViking configuration has two layers:
@@ -95,33 +125,7 @@ Account-owned business code must resolve model configuration through
 evaluation composition roots. A CI architecture test rejects new direct reads
 of Cluster VLM or Query Planner configuration from other production modules.
 
-Web Studio's **Settings → Server configuration** edits the server's actual startup `ov.conf`. ROOT credentials are required; file and draft responses disable caching. It does not create Account model overrides.
-
-- **Form editor** exposes common VLM and Embedding fields. Confirmed changes, additions and ordering update the same full-file draft while preserving settings outside the form.
-- **File editor** edits the complete JSON document, including server, authentication, storage, retrieval, Query Planner and Rerank settings. Switching back to the form validates and projects this draft without saving it. Invalid JSON blocks switching and saving; schema errors retain the draft.
-- Both modes share one **Save configuration** and **Discard changes** action. Saving writes the file, not the running configuration. The page distinguishes **unsaved changes** from **saved, restart required**. It never restarts or hot-reloads the service automatically.
-
-The form protects Embedding identity, dimensions and input contracts. File mode allows complete configuration changes; operators must keep embedding settings compatible with existing vectors. Saving does not rebuild indexes.
-Literal environment references are retained. Full-file saves replace the document exactly, so removing a field in file mode removes it from `ov.conf`. The previous file is backed up as `<filename>.studio.bak` with mode 0600. Read-only files cannot be saved.
-Existing runtime overrides are not removed. The UI reports Cluster and current Account model overrides; other Accounts may also have overrides and need separate review.
-
-The existing Cluster configuration API accepts `source=file`; its default runtime behavior is unchanged:
-
-```http
-GET   /api/v1/admin/configuration?source=file&account_id=default
-POST  /api/v1/admin/configuration/preview
-PATCH /api/v1/admin/configuration?source=file
-```
-
-GET returns the literal full-file `content`, projected `models`, `file_path`, `revision`, `writable`, `restart_required` and override warnings. POST accepts `content` and optional model `settings`; it validates/projects the draft without writing or publishing it. PATCH replaces the full file after validating the revision and configuration:
-
-```json
-{"revision": "<revision from GET>", "content": "<complete ov.conf JSON text>"}
-```
-
-The model-only `settings` PATCH remains supported; do not send it together with `content`. `query_planner: null` in a model PATCH removes that section to inherit VLM. Stale revisions are rejected without losing the browser draft. Servers initialized without a startup file cannot use file editing. Avoid concurrent UI edits and external configuration-management writers.
-
-The original runtime configuration APIs remain unchanged:
+For runtime changes, use the following endpoints:
 
 ```http
 GET   /api/v1/admin/configuration

@@ -54,6 +54,36 @@ openviking-server doctor
 
 如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
 
+### ov.conf 的有序凭据数组
+
+`vlm` 和 `query_planner` 支持有序的 `credentials` 数组；Embedding 在已配置的 `dense`、`sparse` 或 `hybrid` 节内支持同样的数组。索引 0 优先级最高，后续元素提供故障切换凭据。模型配置节仍是 JSON 对象，原有单凭据配置继续兼容。
+
+将以下字段合并到你的 `ov.conf`，并在启动服务前设置 `PRIMARY_API_KEY` 和 `BACKUP_API_KEY`：
+
+```json
+{
+  "vlm": {
+    "model": "your-vlm-model",
+    "credentials": [
+      {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+      {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+    ]
+  },
+  "embedding": {
+    "dense": {
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
+      "credentials": [
+        {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+        {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+      ]
+    }
+  }
+}
+```
+
+每项凭据可以独立指定 provider、模型及连接字段；未指定模型时使用父级的 `model`。Embedding 凭据必须与父级模型的向量维度和输入语义兼容。`query_planner.credentials` 使用与 VLM 相同的格式。Rerank 仍使用单配置，不支持 `credentials` 数组。
+
 ## 配置范围与生效方式
 
 OpenViking 的配置分为两个层级：
@@ -92,33 +122,7 @@ Account 凭证和显式 VectorDB 连接必须独立提供连接与鉴权字段�
 等依赖组装入口使用。CI 架构测试会拒绝其他生产模块新增对 Cluster VLM
 或 Query Planner 配置的直接读取。
 
-Web Studio 的**设置 → 服务端配置**编辑服务端实际加载的 `ov.conf`。需要 ROOT 凭证，文件和草稿响应禁用缓存，不会创建账号级模型覆盖配置。
-
-- **表单编辑**提供 VLM 和 Embedding 的常用字段。确认修改、添加和调整顺序都会更新同一份完整文件草稿，保留表单未展示的配置。
-- **文件编辑**支持修改完整 JSON，包括服务端、认证、存储、检索、Query Planner 和 Rerank 等配置。切回表单时会校验并解析这份草稿，但不会保存。JSON 无效时不能切回表单或保存；配置校验失败时保留草稿。
-- 两种模式共享**保存配置**与**撤销修改**。保存只写入文件，不更新运行中的配置。页面区分**未保存**与**已保存，待重启**，不会自动重启服务或热更新配置。
-
-表单保护 Embedding 的模型身份、维度与输入契约；文件模式允许修改完整配置，操作人员需确保嵌入配置与已有向量兼容。保存不会重建索引。
-环境变量引用保持原样。完整文件保存会替换整个文档，因此在文件模式中删除字段会将它从 `ov.conf` 中删除。旧文件备份为 `<filename>.studio.bak`，权限为 0600。只读文件不能保存。
-已有运行时覆盖配置不会被删除。界面提示 Cluster 和当前账号的模型覆盖，其他账号也可能存在覆盖，需要单独检查。
-
-现有 Cluster 配置 API 支持 `source=file`，默认运行时行为保持不变：
-
-```http
-GET   /api/v1/admin/configuration?source=file&account_id=default
-POST  /api/v1/admin/configuration/preview
-PATCH /api/v1/admin/configuration?source=file
-```
-
-GET 返回完整文件原文 `content`、表单模型 `models`、`file_path`、`revision`、`writable`、`restart_required` 和覆盖提示。POST 接收 `content` 与可选的模型 `settings`，仅校验和解析草稿，不落盘或更新运行配置。PATCH 校验版本和配置后替换完整文件：
-
-```json
-{"revision": "<GET 返回的 revision>", "content": "<完整 ov.conf JSON 文本>"}
-```
-
-仍支持仅修改模型的 `settings` PATCH，但不能与 `content` 同时提交。模型 PATCH 中 `query_planner: null` 删除该节并恢复继承 VLM。过期版本会被拒绝，浏览器保留草稿。没有启动文件的程序化初始化不支持文件编辑。不要同时使用界面与外部配置管理工具作为写入入口。
-
-原有运行时配置接口保持不变：
+修改运行时配置使用以下接口：
 
 ```http
 GET   /api/v1/admin/configuration
