@@ -812,6 +812,7 @@ enum Commands {
         /// Content to write
         #[arg(
             long,
+            allow_hyphen_values = true,
             conflicts_with = "from_file",
             value_name = "text",
             help_heading = "Common options"
@@ -4989,6 +4990,62 @@ mod tests {
             }
             _ => panic!("expected add-resource command"),
         }
+    }
+
+    #[test]
+    fn cli_write_accepts_hyphen_prefixed_content() {
+        for text in [
+            "---\nname: test\n---",
+            "- a bullet",
+            "--literal",
+            "--wait",
+            "-",
+            "--",
+        ] {
+            let cli = Cli::try_parse_from(preprocess_cli_args(os_args(&[
+                "ov",
+                "write",
+                "viking://resources/test.md",
+                "--content",
+                text,
+                "--wait",
+            ])))
+            .expect("hyphen-prefixed content should parse as one value");
+            assert!(matches!(
+                cli.command,
+                Commands::Write { content, wait, .. } if content.as_deref() == Some(text) && wait
+            ));
+        }
+    }
+
+    #[test]
+    fn cli_write_keeps_equals_and_file_source_rules() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/test.md",
+            "--content=---\nname: test\n---",
+        ])
+        .expect("equals form should still parse");
+        assert!(matches!(
+            cli.command,
+            Commands::Write { content, .. } if content.as_deref() == Some("---\nname: test\n---")
+        ));
+        assert_eq!(
+            Cli::try_parse_from([
+                "ov",
+                "write",
+                "viking://resources/test.md",
+                "--content",
+                "text",
+                "--from-file",
+                "test.md",
+            ])
+            .err()
+            .expect("content and file sources must remain mutually exclusive")
+            .kind(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
     }
 
     #[test]
