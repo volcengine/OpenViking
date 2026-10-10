@@ -26,6 +26,7 @@ class _FakePathLock:
     def __init__(self):
         self._lease = SimpleNamespace(id="lock-1")
         self.release_calls = []
+        self.handoff_calls = []
 
     async def pathlock_acquire_exact(self, lock_path):
         del lock_path
@@ -33,6 +34,12 @@ class _FakePathLock:
 
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
+
+    async def pathlock_to_handoff(self, lease):
+        return {"owner_id": lease.id, "covered_paths": [{"path": "/fake/file", "kind": "exact"}]}
+
+    async def pathlock_handoff(self, lease):
+        self.handoff_calls.append(lease.id)
 
 
 class _FakeVikingFS:
@@ -94,6 +101,7 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     monkeypatch.setattr(content_write_module, "vectorize_file", vectorize_file, raising=False)
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
     coordinator._enqueue_semantic_refresh = semantic_refresh
+    coordinator._enqueue_embedding_lock_wait = AsyncMock()
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/demo.md",
@@ -119,6 +127,8 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     }
     assert vectorize_file.await_args.kwargs["file_md5"] == content_md5(b"updated")
     assert "register_request_wait" not in vectorize_file.await_args.kwargs
+    coordinator._enqueue_embedding_lock_wait.assert_awaited_once()
+    assert fake_fs._async_agfs.handoff_calls == ["lock-1"]
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
 
@@ -158,6 +168,8 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
     assert vectorize_directory.await_args.kwargs["ingest_options"] == IngestOptions(
         search_tags=["team=search"], search_tag_mode="append"
     )
+    assert sidecar_fs._async_agfs.release_calls == ["lock-1"]
+    assert sidecar_fs._async_agfs.handoff_calls == []
     assert sidecar_result["semantic_status"] == "skipped"
     assert sidecar_result["vector_status"] == "queued"
 
@@ -191,6 +203,9 @@ async def test_direct_write_passes_final_md5_and_old_abstract_to_semantic_refres
 
     assert enqueue.await_args.kwargs["file_md5"] == content_md5(b"updated")
     assert enqueue.await_args.kwargs["file_abstract"] == "old abstract"
+    assert enqueue.await_args.kwargs["lock_handoff"]["covered_paths"][0]["kind"] == "exact"
+    assert fake_fs._async_agfs.release_calls == []
+    assert fake_fs._async_agfs.handoff_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio
@@ -218,6 +233,29 @@ async def test_semantic_message_carries_file_md5_and_old_abstract(monkeypatch, c
     msg = queue.enqueue.await_args.args[0]
     assert msg.file_md5s == {file_uri: "new-md5"}
     assert msg.file_abstracts == {file_uri: "old abstract"}
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_enqueues_semantic_lock_wait(monkeypatch, ctx):
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="enqueued"))
+    manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
+    monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    handoff = {"owner_id": "lock-1", "covered_paths": [{"path": "/fake/file", "kind": "exact"}]}
+
+    await coordinator._enqueue_embedding_lock_wait(
+        uri="viking://resources/demo.md",
+        context_type="resource",
+        ctx=ctx,
+        telemetry_id="tm-test",
+        lock_handoff=handoff,
+    )
+
+    msg = queue.enqueue.await_args.args[0]
+    assert msg.uri == "viking://resources/demo.md"
+    assert msg.lock_handoff == handoff
+    assert msg.wait_for_embeddings_only is True
+    assert msg.aggregate_directory is False
 
 
 @pytest.mark.asyncio
@@ -324,6 +362,7 @@ async def test_vectors_only_write_wait_reports_embedding_status(monkeypatch, ctx
     )
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
     coordinator._wait_for_request = AsyncMock(return_value=queue_status)
+    coordinator._enqueue_embedding_lock_wait = AsyncMock()
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/demo.md",
@@ -340,6 +379,8 @@ async def test_vectors_only_write_wait_reports_embedding_status(monkeypatch, ctx
     )
 
     assert result["queue_status"] == queue_status
+    coordinator._enqueue_embedding_lock_wait.assert_awaited_once()
+    assert fake_fs._async_agfs.handoff_calls == ["lock-1"]
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
 

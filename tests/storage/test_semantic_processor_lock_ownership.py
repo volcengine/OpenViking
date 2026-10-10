@@ -117,6 +117,41 @@ async def test_durable_plan_waits_for_embeddings_before_releasing_handoff_lock(m
     assert pathlock.release_calls == ["durable-plan-lock"]
 
 
+@pytest.mark.asyncio
+async def test_content_write_waits_for_embeddings_before_releasing_handoff_lock(monkeypatch):
+    events = []
+    pathlock = _FakePathLock()
+    lease = {"id": "content-write-lock"}
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        telemetry_id="content-write",
+        lock_handoff={"owner_id": "producer"},
+        generation_trigger="content_write",
+    )
+
+    class Tracker:
+        async def wait_for_embeddings(self, telemetry_id, **kwargs):
+            assert telemetry_id == msg.telemetry_id
+            events.append("embeddings-settled")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_work.get_request_wait_tracker", lambda: Tracker()
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+
+    work = SemanticMessageWork(SimpleNamespace(), msg, caller_lock=None)
+    work.scope = SemanticLockScope(lease, _owned=True)
+
+    await work.finish_processing(True)
+
+    assert events == ["embeddings-settled"]
+    assert pathlock.release_calls == ["content-write-lock"]
+
+
 def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():
     telemetry_id = "reindex-request-stats"
     SemanticProcessor._cache_tree_stats(

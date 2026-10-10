@@ -654,6 +654,7 @@ class ContentWriteCoordinator:
         ingest_options: IngestOptions | None = None,
         file_md5s: dict[str, str] | None = None,
         file_abstracts: dict[str, str] | None = None,
+        lock_handoff: dict[str, Any] | None = None,
     ) -> FreshnessAction:
         changed_entries = len({uri for values in changes.values() for uri in values})
         semantic_config = get_openviking_config().semantic
@@ -710,6 +711,7 @@ class ContentWriteCoordinator:
             aggregate_directory=aggregate_directory,
             file_md5s=file_md5s,
             file_abstracts=file_abstracts,
+            lock_handoff=lock_handoff,
         )
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
@@ -720,6 +722,42 @@ class ContentWriteCoordinator:
                 get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
         return action
+
+    async def _enqueue_embedding_lock_wait(
+        self,
+        *,
+        uri: str,
+        context_type: str,
+        ctx: RequestContext,
+        telemetry_id: str,
+        lock_handoff: dict[str, Any],
+    ) -> None:
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        msg = SemanticMsg(
+            uri=uri,
+            context_type=context_type,
+            recursive=False,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
+            role=str(ctx.role),
+            skip_vectorization=True,
+            telemetry_id=telemetry_id,
+            lock_handoff=lock_handoff,
+            generation_trigger="content_write",
+            aggregate_directory=False,
+            propagate_to_parent=False,
+            wait_for_embeddings_only=True,
+        )
+        if telemetry_id:
+            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
+        try:
+            await semantic_queue.enqueue(msg)
+        except Exception as exc:
+            if telemetry_id:
+                get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
+            raise
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
@@ -900,6 +938,7 @@ class ContentWriteCoordinator:
         content_written = False
         post_process_started = False
         lock_released = False
+        handoff_pending = False
         vector_enqueued = False
         refresh_action: Optional[FreshnessAction] = None
         try:
@@ -934,6 +973,7 @@ class ContentWriteCoordinator:
                 )
                 post_process_started = True
             elif processing_mode == VECTORS_ONLY:
+                lock_handoff = await self._viking_fs._async_agfs.pathlock_to_handoff(lease)
                 vector_enqueued = await self._vectorize_written_file(
                     uri=uri,
                     context_type=context_type,
@@ -941,8 +981,18 @@ class ContentWriteCoordinator:
                     ingest_options=ingest_options,
                     file_md5=content_md5(final_content),
                 )
-                post_process_started = True
+                post_process_started = vector_enqueued
+                if vector_enqueued:
+                    await self._enqueue_embedding_lock_wait(
+                        uri=uri,
+                        context_type=context_type,
+                        ctx=ctx,
+                        telemetry_id=telemetry_id,
+                        lock_handoff=lock_handoff,
+                    )
+                    handoff_pending = True
             else:
+                lock_handoff = await self._viking_fs._async_agfs.pathlock_to_handoff(lease)
                 refresh_action = await self._enqueue_semantic_refresh(
                     root_uri=root_uri,
                     changed_uri=uri,
@@ -953,13 +1003,18 @@ class ContentWriteCoordinator:
                     ingest_options=ingest_options,
                     file_md5=content_md5(final_content),
                     file_abstract=file_abstract,
+                    lock_handoff=lock_handoff,
                 )
                 post_process_started = True
+                handoff_pending = True
             if ingest_options and ingest_options.acl_update:
                 await self._viking_fs.acl_manager.apply_indexed_update(
                     ingest_options.acl_update, ctx
                 )
-            await self._viking_fs._async_agfs.pathlock_release(lease)
+            if handoff_pending:
+                await self._viking_fs._async_agfs.pathlock_handoff(lease)
+            else:
+                await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
@@ -1340,6 +1395,7 @@ class ContentWriteCoordinator:
         ingest_options: IngestOptions | None = None,
         file_md5: str | None = None,
         file_abstract: str = "",
+        lock_handoff: dict[str, Any] | None = None,
     ) -> FreshnessAction:
         return await self._enqueue_semantic_refresh_changes(
             root_uri=root_uri,
@@ -1352,6 +1408,7 @@ class ContentWriteCoordinator:
             ingest_options=ingest_options,
             file_md5s={changed_uri: file_md5} if file_md5 else None,
             file_abstracts={changed_uri: file_abstract} if file_abstract else None,
+            lock_handoff=lock_handoff,
         )
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
