@@ -86,6 +86,52 @@ function Wait-OvTask {
     }
 }
 
+function Get-OvRunningTasks {
+    <#
+      .SYNOPSIS
+        Lists add_resource / session_commit tasks the server still reports as running.
+    #>
+    $json = & $script:OvExe task list -o json 2>$null | Out-String
+    if (-not $json -or $json -notmatch '"ok":\s*true') { return @() }
+
+    $out = @()
+    foreach ($m in [regex]::Matches($json,
+        '"task_id":\s*"([0-9a-f-]+)"[^}]*?"task_type":\s*"(\w+)"[^}]*?"status":\s*"(\w+)"')) {
+        if ($m.Groups[3].Value -eq 'running') {
+            $out += [pscustomobject]@{
+                TaskId = $m.Groups[1].Value
+                Type   = $m.Groups[2].Value
+            }
+        }
+    }
+    return $out
+}
+
+function Assert-OvIdle {
+    <#
+      .SYNOPSIS
+        Refuses to submit while another add_resource is running.
+
+      .DESCRIPTION
+        Concurrent directory imports collide: each one packs its tree into
+        data/temp/upload/upload_<id>.zip, and the first one to finish or abort can
+        leave its archive open, so every later submit fails with
+        [PERMISSION_DENIED] [WinError 32] "another process is using this file".
+        That looks like a permission problem but is a concurrency one, and
+        retrying blindly just accumulates more orphaned archives.
+
+        add_resource and session_commit do not share the same archive path, so only
+        add_resource is treated as blocking.
+    #>
+    $busy = @(Get-OvRunningTasks | Where-Object { $_.Type -eq 'add_resource' })
+    if ($busy.Count -eq 0) { return $null }
+
+    $msg = ("{0} add_resource task(s) still running: {1}. " +
+            "Wait for them, or stop the server to clear them, before importing.") -f `
+            $busy.Count, (($busy | ForEach-Object { $_.TaskId.Substring(0, 8) }) -join ', ')
+    return $msg
+}
+
 function Invoke-OvAddResource {
     <#
       .SYNOPSIS
@@ -128,7 +174,6 @@ function Invoke-OvAddResource {
             FailedFiles = @(); TaskId = $taskId; Error = $null; Raw = $out
         }
     }
-
     $t = Wait-OvTask -TaskId $taskId -TimeoutMinutes $TimeoutMinutes -IntervalSeconds $IntervalSeconds
     if (-not $t) {
         return [pscustomobject]@{
