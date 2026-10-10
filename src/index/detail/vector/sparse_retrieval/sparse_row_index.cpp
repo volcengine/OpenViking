@@ -231,6 +231,46 @@ int SparseRowIndex::append_term_vals(const std::vector<TermKey>& terms,
   return append(temp_idxs, tmp_values);
 }
 
+int SparseRowIndex::lookup_by_terms(const std::vector<TermKey>& terms,
+                                    const std::vector<ValueT>& values,
+                                    std::vector<IndexT>& mutable_indices,
+                                    std::vector<ValueT>& mutable_values) const {
+  if (terms.size() != values.size()) {
+    SPDLOG_ERROR(
+        "SparseRowIndex lookup_by_terms populate size not match {}!={}",
+        terms.size(), values.size());
+    return -1;
+  }
+  mutable_indices.clear();
+  mutable_values.clear();
+  if (!finish_populate_terms_) {
+    SPDLOG_ERROR(
+        "SparseRowIndex lookup_by_terms but have not finish build terms");
+    return -2;
+  }
+  mutable_indices.reserve(values.size());
+  mutable_values.reserve(values.size());
+  std::unordered_map<TermKey, size_t> add_term_set;
+  IndexT next_unseen_index = IndexT(term_index_.size());
+  for (size_t ii = 0; ii < terms.size(); ++ii) {
+    const auto& term = terms[ii];
+    auto added = add_term_set.find(term);
+    if (added != add_term_set.end()) {
+      mutable_values[added->second] += values[ii];
+      continue;
+    }
+    auto found = term_index_.find(term);
+    add_term_set[term] = mutable_indices.size();
+    mutable_indices.emplace_back(
+        found != term_index_.end() ? found->second : next_unseen_index++);
+    mutable_values.emplace_back(values[ii]);
+  }
+  ZipSortBranchOptimized(std::less<IndexT>(), mutable_indices.begin(),
+                         mutable_indices.end(), mutable_values.begin(),
+                         mutable_values.end());
+  return 0;
+}
+
 int SparseRowIndex::index_by_terms(const std::vector<TermKey>& terms,
                                    const std::vector<ValueT>& values,
                                    std::vector<IndexT>& mutable_indices,
