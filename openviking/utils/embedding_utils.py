@@ -213,6 +213,24 @@ async def _resolve_context_timestamps(
         if existing_created_at is not None:
             created_at = existing_created_at
 
+    from openviking.storage.ttl import scope_and_root, deletion_uri, timestamp
+
+    target = scope_and_root(uri)
+    fs = get_viking_fs()
+    if target and target[0] == "sessions" and getattr(fs, "runtime_config_manager", None):
+        from openviking.config.ttl import resolve_loaded_ttl_config
+
+        policy = resolve_loaded_ttl_config(fs, ctx.account_id)
+        if policy.resolve_uri_policy(uri, "sessions").mode == "days":
+            session = deletion_uri(uri)
+            if session:
+                import json
+
+                path = fs._uri_to_path(session + "/.meta.json", ctx=ctx)
+                raw = fs._handle_agfs_read(await fs._async_agfs.read(path))
+                created_at = timestamp(json.loads(raw).get("created_at"))
+                if created_at is None:
+                    raise ValueError("Session TTL requires its existing created_at")
     return created_at, updated_at
 
 

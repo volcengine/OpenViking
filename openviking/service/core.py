@@ -493,6 +493,20 @@ class OpenVikingService:
             embedding_provider=self._embedding_provider,
             vector_config_resolver=self._vector_config_resolver,
         )
+        from functools import partial
+        from openviking.config.ttl import resolve_loaded_ttl_config
+
+        self._viking_fs.runtime_config_manager = self._runtime_config_manager
+        self._vikingdb_manager.ttl_policy_reader = partial(
+            resolve_loaded_ttl_config, self._viking_fs
+        )
+        from openviking.service.ttl_cleanup import TTLCleanup
+
+        self._ttl_cleanup = TTLCleanup(self._viking_fs, config.ttl_cleanup)
+        self._viking_fs.ttl_cleanup = self._ttl_cleanup
+        self._vikingdb_manager.ttl_cleanup = self._ttl_cleanup
+        await self._ttl_cleanup.start()
+
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
         self._resource_processor = ResourceProcessor(
@@ -675,6 +689,9 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
+        cleanup = getattr(self, "_ttl_cleanup", None)
+        if cleanup is not None:
+            await cleanup.close()
         await self._resource_service.close_background_tasks()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
 

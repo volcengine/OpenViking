@@ -289,6 +289,8 @@ class MatchedContext:
     # Recall-stage vector score and time factor, retained after model rerank.
     origin_score: Optional[float] = None
     time_score: Optional[float] = None
+    expires_at: Optional[str] = None
+    ttl_status: Optional[str] = None
 
 
 @dataclass
@@ -383,6 +385,10 @@ class FindResult:
             "abstract": ctx.abstract,
             "tags": normalize_search_tags(ctx.search_tags, discard_invalid=True),
         }
+        if ctx.expires_at is not None or ctx.ttl_status is not None:
+            result["expires_at"] = ctx.expires_at
+        if ctx.ttl_status is not None:
+            result["ttl_status"] = ctx.ttl_status
         if ctx.origin_score is not None:
             result["origin_score"] = ctx.origin_score
             result["time_score"] = ctx.time_score
@@ -416,6 +422,12 @@ class FindResult:
                         if ctx.origin_score is not None
                         else {}
                     ),
+                    **(
+                        {"expires_at": ctx.expires_at}
+                        if ctx.expires_at is not None or ctx.ttl_status is not None
+                        else {}
+                    ),
+                    **({"ttl_status": ctx.ttl_status} if ctx.ttl_status is not None else {}),
                     "match_reason": ctx.match_reason,
                 }
                 for ctx in qr.matched_contexts
@@ -438,6 +450,8 @@ class FindResult:
                 score=d.get("score", 0.0),
                 origin_score=d.get("origin_score"),
                 time_score=d.get("time_score"),
+                expires_at=d.get("expires_at"),
+                ttl_status=d.get("ttl_status"),
                 match_reason=d.get("match_reason", ""),
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )

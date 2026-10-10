@@ -278,6 +278,13 @@ class CollectionAdapter(ABC):
 
     def _normalize_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(record)
+        if "uri" in normalized:
+            from openviking.storage.ttl import indexed_tags
+
+            uri = self._decode_uri_field_value(normalized["uri"])
+            tags = indexed_tags(uri, normalized.get("search_tags"), normalized.get("level", 2))
+            if tags or "search_tags" in normalized:
+                normalized["search_tags"] = tags
         for key in self._URI_FIELD_NAMES:
             if key in normalized:
                 normalized[key] = self._encode_uri_field_value(normalized[key])

@@ -371,6 +371,9 @@ export interface UpdateWatchOptions {
 /** One retrieval hit. Only fields the retrieval pipeline populates are typed;
  * `search_tags` is surfaced under `tags` to match the tags filter parameter. */
 export interface MatchedContext {
+  /** Calculated for effective TTL days policies; UTC, absent when TTL is off. */
+  expires_at?: string | null;
+  ttl_status?: "unknown_timestamp";
   uri?: string;
   context_type?: string;
   level?: number;

@@ -655,7 +655,17 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             }
             if not changed_fields:
                 return {"id": record_id, "status": "skipped"}
-            changed_fields["updated_at"] = get_current_timestamp()
+            # Scalar-only updates do not change the indexed content version.
+            from openviking.storage.ttl import scope_and_root
+
+            if scope_and_root(existing.get("uri", "")) is None:
+                changed_fields["updated_at"] = get_current_timestamp()
+            if "search_tags" in changed_fields:
+                from openviking.storage.ttl import indexed_tags
+
+                changed_fields["search_tags"] = indexed_tags(
+                    existing.get("uri", ""), changed_fields["search_tags"], existing.get("level", 2)
+                )
             updated_record = {"id": record_id, **changed_fields}
             result = await self._vikingdb.update(updated_record, ctx=ctx)
             if not result.ok:
@@ -881,9 +891,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Write to vector database
                 try:
                     raw_upsert_options = inserted_data.pop("_upsert_options", {})
-                    extracted_memory_type = raw_upsert_options.pop(
-                        "extracted_memory_type", None
-                    )
+                    extracted_memory_type = raw_upsert_options.pop("extracted_memory_type", None)
                     # Reuse the actual vector-store ID when a semantic plan
                     # rebuilds an existing same-level record. Only genuinely new
                     # records derive an ID locally from (account, uri, level).
@@ -955,10 +963,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             )
                         )
                     else:
-                        result = await self._vikingdb.upsert(
-                            inserted_data,
-                            ctx=ctx,
-                            options=upsert_options,
+                        from openviking.service.ttl_indexing import upsert_content
+
+                        result = await upsert_content(
+                            None, self._vikingdb, inserted_data, ctx, upsert_options
                         )
                     record_id = result
                     if record_id:

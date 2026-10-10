@@ -173,6 +173,9 @@ class _OpsMixin:
         else:
             raw = b""
 
+        await self._ttl_check_file_read(
+            uri, None, real_ctx, raw if offset == 0 and size == -1 else None
+        )
         return raw
 
     async def write(
@@ -188,7 +191,9 @@ class _OpsMixin:
             data = data.encode("utf-8")
 
         # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+        result = await self._async_agfs.write(path, data)
+        await self._ttl_after_write(uri, ctx, data)
+        return result
 
     async def mkdir(
         self,
@@ -1959,6 +1964,53 @@ class _OpsMixin:
 
     # ========== Other Preserved Methods ==========
 
+    async def _ttl_check_file_read(self, uri, stat, ctx, raw=None):
+        if getattr(self, "runtime_config_manager", None) is None:
+            return
+        from openviking.config.ttl import resolve_loaded_ttl_config
+        from openviking.storage.ttl import scope_and_root, deletion_uri, expires_at
+        from datetime import datetime, timezone
+
+        config = resolve_loaded_ttl_config(self, ctx.account_id)
+        if not config.enabled:
+            return
+        target = scope_and_root(uri)
+        if target is None or config.resolve_uri_policy(uri, target[0]).mode != "days":
+            return
+        if stat is None:
+            stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+        if target[0] != "sessions":
+            # Date-directory aggregates have no independent valid deadline.
+            if uri.endswith(("/.abstract.md", "/.overview.md")):
+                raise NotFoundError(uri, "file")
+            stamp = stat.get("modTime")
+        else:
+            import json
+
+            session = deletion_uri(uri)
+            if session is None:
+                return
+            meta_uri = session + "/.meta.json"
+            meta = (
+                raw
+                if uri == meta_uri and raw is not None
+                else self._handle_agfs_read(
+                    await self._async_agfs.read(self._uri_to_path(meta_uri, ctx=ctx))
+                )
+            )
+            stamp = json.loads(meta).get("created_at")
+        deadline = expires_at(config, uri, stamp)
+        if deadline is None or deadline <= datetime.now(timezone.utc):
+            cleanup = getattr(self, "ttl_cleanup", None)
+            if cleanup is not None:
+                cleanup.on_access(ctx)
+            raise NotFoundError(uri, "file")
+
+    async def _ttl_after_write(self, uri, ctx, content=None):
+        cleanup = getattr(self, "ttl_cleanup", None)
+        if cleanup is not None and cleanup.settings.enabled:
+            await cleanup.on_write(uri, self._ctx_or_default(ctx), content=content)
+
     async def write_file(
         self,
         uri: str,
@@ -1986,6 +2038,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._ttl_after_write(uri, ctx, content)
 
     async def read_file(
         self,
@@ -1993,6 +2046,8 @@ class _OpsMixin:
         offset: int = 0,
         limit: int = -1,
         ctx: Optional[RequestContext] = None,
+        *,
+        _metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Read single file, optionally sliced by line range.
 
@@ -2045,6 +2100,10 @@ class _OpsMixin:
                 raise NotFoundError(uri, "file") from exc
             raise
 
+        if _metadata is None:
+            await self._ttl_check_file_read(uri, stat, real_ctx, raw)
+        if _metadata is not None:
+            _metadata.update(stat)
         if offset == 0 and limit == -1:
             return text
         lines = text.splitlines(keepends=True)
@@ -2082,6 +2141,7 @@ class _OpsMixin:
             )
         try:
             raw = self._handle_agfs_read(await self._async_agfs.read(path))
+            await self._ttl_check_file_read(uri, stat, real_ctx, raw)
             return raw
         except Exception as exc:
             if is_not_found_error(exc):
@@ -2112,6 +2172,7 @@ class _OpsMixin:
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
             auto_pathlock=auto_pathlock,
         )
+        await self._ttl_after_write(uri, ctx, content)
 
     async def append_file(
         self,
@@ -2154,6 +2215,7 @@ class _OpsMixin:
                 final_content,
                 fs_ctx=fs_ctx,
             )
+            await self._ttl_after_write(uri, ctx, final_content)
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")

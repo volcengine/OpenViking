@@ -53,6 +53,28 @@ class ConfigPatchError(ValueError):
         super().__init__(message)
 
 
+def normalize_config_keys(model: type[BaseModel], data: dict, *, by_alias: bool = True) -> dict:
+    """Canonicalize declared aliases without filling defaults or losing PATCH nulls."""
+    if not isinstance(data, dict):
+        raise ConfigPatchError("patch must be a JSON object")
+    fields = _model_fields(model)
+    names = {getattr(field, "alias", None) or name: name for name, field in fields.items()}
+    result = {}
+    for key, value in data.items():
+        name = names.get(key, key)
+        field = fields.get(name)
+        target = (getattr(field, "alias", None) or name) if by_alias else name
+        if target in result:
+            raise ConfigPatchError("use either a field name or its alias, not both", path=(key,))
+        nested = _unwrap_model(_field_annotation(field))
+        result[target] = (
+            normalize_config_keys(nested, value, by_alias=by_alias)
+            if nested is not None and isinstance(value, dict)
+            else value
+        )
+    return result
+
+
 def validate_patch(
     model: type[BaseModel],
     patch: dict[str, Any],
@@ -76,6 +98,7 @@ def validate_patch(
     """
     if not isinstance(patch, dict):
         raise ConfigPatchError("patch must be a JSON object")
+    patch = normalize_config_keys(model, patch, by_alias=False)
     allowed = collect_runtime_field_paths(model)
     frozen = collect_frozen_paths(model)
     _walk(patch, (), allowed, frozen, model, creating)
@@ -99,9 +122,7 @@ def filter_runtime_fields(model: type[BaseModel], settings: dict[str, Any] | Non
     def walk(cls: type[Any], node: dict[str, Any]) -> dict:
         fields = _model_fields(cls)
         aliases = {
-            field.alias: name
-            for name, field in fields.items()
-            if getattr(field, "alias", None)
+            field.alias: name for name, field in fields.items() if getattr(field, "alias", None)
         }
         result: dict = {}
         for key, value in node.items():
@@ -188,11 +209,7 @@ def _validate_model_list(
         return
 
     fields = _model_fields(element_model)
-    aliases = {
-        item.alias: name
-        for name, item in fields.items()
-        if getattr(item, "alias", None)
-    }
+    aliases = {item.alias: name for name, item in fields.items() if getattr(item, "alias", None)}
     for index, item in enumerate(values):
         if not isinstance(item, dict):
             # Pydantic will report the element type error when the merged
@@ -239,11 +256,7 @@ def _validate_model_object(
 ) -> None:
     """Validate a model nested inside a typed list element."""
     fields = _model_fields(model)
-    aliases = {
-        item.alias: name
-        for name, item in fields.items()
-        if getattr(item, "alias", None)
-    }
+    aliases = {item.alias: name for name, item in fields.items() if getattr(item, "alias", None)}
     for key, value in node.items():
         if not isinstance(key, str):
             raise ConfigPatchError("patch keys must be strings", path=path)
@@ -280,9 +293,7 @@ def _validate_subtree_delete(
         return
     for descendant in _model_field_paths(nested_model, path):
         if descendant not in allowed:
-            raise ConfigPatchError(
-                "field is not modifiable by the config API", path=descendant
-            )
+            raise ConfigPatchError("field is not modifiable by the config API", path=descendant)
         if not creating and descendant in frozen:
             raise ConfigPatchError(
                 "field is create-only and cannot be changed after creation",
