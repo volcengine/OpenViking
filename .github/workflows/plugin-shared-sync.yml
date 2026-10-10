@@ -17,6 +17,7 @@ on:
       - "examples/memory-plugin-shared/sync.mjs"
       - "examples/skills/**"
       - "examples/claude-code-memory-plugin/**"
+      - "examples/codebuddy-memory-plugin/**"
       - "examples/codex-memory-plugin/**"
       - "examples/openclaw-plugin/**"
       - "agent-plugins/**"
