@@ -37,6 +37,10 @@ jobs:
         with:
           node-version: '24'
 
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '12'
+
       - name: Generate the shared runtime copies
         run: node examples/memory-plugin-shared/sync.mjs
 
