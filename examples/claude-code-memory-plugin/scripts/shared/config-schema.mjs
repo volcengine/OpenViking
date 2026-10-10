@@ -92,6 +92,10 @@ export const KNOBS = [
   { name: "recallContextTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS", capability: "recall" },
   { name: "logRankingDetails", type: "bool", default: false, env: "OPENVIKING_LOG_RANKING_DETAILS", capability: "recall" },
   { name: "recallLedger", type: "bool", default: true, env: "OPENVIKING_RECALL_LEDGER", capability: "recall" },
+  // Hosts that fetch recall alongside the send rather than before it (opencode
+  // v2): how long after the send the model call may wait for it. Recall that
+  // lands later is skipped for that turn; 0 injects only what is already there.
+  { name: "recallWaitMs", type: "int", default: 5000, min: 0, max: 60000, env: "OPENVIKING_RECALL_WAIT_MS", capability: "recall" },
   { name: "recallQueryFilters", type: "list", default: [], env: "OPENVIKING_RECALL_QUERY_FILTERS", capability: "recall" },
   // Subtree URIs the recall search must never return. Without this there is no
   // way to keep generated directory files (viking://user/<space>/skills,
