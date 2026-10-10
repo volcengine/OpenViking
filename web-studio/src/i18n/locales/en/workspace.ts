@@ -792,7 +792,7 @@ const workspace = {
       validateFailed: 'Configuration validation failed.',
       validating: 'Validating...',
       fileScope:
-        'Both editors share one configuration draft. Form edits cover VLM and Embedding; the file editor covers all settings. Saving updates ov.conf and requires a server restart. It does not restart the service or update runtime overrides.',
+        'Both editors share one configuration draft. Form edits cover VLM and Embedding; the file editor covers the full configuration as standard JSON. Web Studio does not support environment variable configuration. If your configuration uses environment variables, maintain ov.conf directly on the server. Saving updates ov.conf and requires a server restart. It does not restart the service or update runtime overrides.',
       invalidJsonObject: 'Enter a valid JSON object',
       copyModelId: 'Copy model ID',
       copied: 'Model ID copied',
@@ -815,7 +815,7 @@ const workspace = {
       parameters: 'Model parameters',
       advanced: 'Advanced settings',
       environmentObject:
-        'This configuration contains environment references or escaped reference symbols. The form is read-only; use the file editor to preserve the original text.',
+        'This configuration contains environment references or escaped reference symbols. The form is read-only. Web Studio does not support environment variable configuration. If your configuration uses environment variables, maintain ov.conf directly on the server.',
       embeddingContract:
         'Model identity, dimensions and input type are fixed at account creation.',
       fields: {

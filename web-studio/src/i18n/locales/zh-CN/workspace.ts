@@ -760,7 +760,7 @@ const workspace = {
       validateFailed: '配置校验失败。',
       validating: '校验中...',
       fileScope:
-        '两种编辑模式共享同一份配置草稿。表单编辑提供 VLM 和 Embedding 常用字段，文件编辑支持全部配置。保存后需重启服务才能生效，不会自动重启或更新运行时覆盖配置。',
+        '两种编辑模式共享同一份配置草稿。表单编辑提供 VLM 和 Embedding 常用字段，文件编辑支持完整的普通 JSON 配置。Web Studio 不提供环境变量配置支持；依赖环境变量时，请直接在服务器上维护 ov.conf。保存后需重启服务才能生效，不会自动重启或更新运行时覆盖配置。',
       invalidJsonObject: '请输入有效的 JSON 对象',
       copyModelId: '复制模型 ID',
       copied: '模型 ID 已复制',
@@ -780,7 +780,7 @@ const workspace = {
       parameters: '模型参数',
       advanced: '高级配置',
       environmentObject:
-        '配置含环境变量引用或转义的引用符号，表单只读。请使用文件模式编辑，以保留原文。',
+        '配置含环境变量引用或转义的引用符号，表单只读。Web Studio 不提供环境变量配置支持；依赖环境变量时，请直接在服务器上维护 ov.conf。',
       embeddingContract:
         '模型身份、向量维度与输入类型为创建时配置，不能在此修改。',
       fields: {
