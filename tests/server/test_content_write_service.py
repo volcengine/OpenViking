@@ -1897,3 +1897,49 @@ async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
     assert "semantic_status" not in result
     assert "vector_status" not in result
     assert "queue_status" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize("peer", [False, True])
+async def test_direct_events_return_decay_details(service, batch, peer):
+    """Real write/queue/index/search contract for both entry points and namespaces."""
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    root = f"viking://user/{ctx.user.user_space_name()}"
+    if peer:
+        root += "/peers/memories"
+    root += "/memories/events"
+    uri = root + "/event.md"
+    body = "Completed the database failover drill."
+    if batch:
+        # batch-write requires its root directory to exist.
+        await service.viking_fs.mkdir(root, exist_ok=True, ctx=ctx)
+        await service.fs.batch_write(
+            root_uri=root,
+            operations=[{"uri": uri, "content": body, "mode": "create"}],
+            ctx=ctx,
+            wait=True,
+        )
+    else:
+        await service.fs.write(uri, body, ctx=ctx, mode="create", wait=True)
+    for protection in [None, "0", "7d"]:
+        result = await service.search.search(
+            query=body,
+            ctx=ctx,
+            target_uri=root,
+            limit=10,
+            score_threshold=0,
+            events_time_decay_protection=protection,
+        )
+        event = next(item for item in result.to_dict()["memories"] if item["uri"] == uri)
+        assert "memory_type=events" in event["tags"]
+        if protection is None:
+            assert "origin_score" not in event and "time_score" not in event
+        else:
+            assert event["score"] == pytest.approx(
+                event["origin_score"] * event["time_score"], abs=1e-6
+            )
+            if protection == "0":
+                assert 0 < event["time_score"] < 1
+            else:
+                assert event["time_score"] == 1

@@ -334,6 +334,8 @@ ov write viking://resources/docs/api.md \
 
 ---
 
+- 单条和批量直接写入规范 User／Peer `memories/events/` 正文时，系统在 L2 向量上维护 `memory_type=events`，用户标签的 replace／append／clear 不能覆盖该类型。目录摘要／概览和其他记忆类型不自动打事件标签。检索传 `events_time_decay_protection="0"` 时，这些事件立即参与衰减并返回 `origin_score` 和 `time_score`。不回填未修改的历史记录；历史正文实际更新时按新规则维护标签。
+
 ### batch_write()
 
 在一个 Resource 或 Memory 目录下写入多个文件；全部写完后，再统一刷新一次受影响的语义与向量索引。

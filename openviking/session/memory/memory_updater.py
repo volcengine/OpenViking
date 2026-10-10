@@ -51,7 +51,7 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, NotFoundError
-from openviking_cli.utils import VikingURI, get_logger
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -826,6 +826,11 @@ class MemoryUpdater:
         try:
             from openviking.session.memory.memory_type_registry import get_default_registry
 
+            # Direct writes own event classification at the canonical write boundary.
+            # Other types retain their existing tag behavior.
+            direct_event = cls.memory_type_from_uri(uri) == "events"
+            if direct_event:
+                memory_type = "events"
             result = MemoryUpdateResult()
             result.add_written(uri)
             updater = cls(registry=get_default_registry(), vikingdb=vikingdb)
@@ -834,6 +839,7 @@ class MemoryUpdater:
                 result,
                 ctx,
                 uri_memory_type_map={uri: memory_type} if memory_type else {},
+                search_tags_by_uri={uri: ["memory_type=events"]} if direct_event else {},
                 ingest_options=ingest_options,
             )
             return attempted > 0
@@ -845,14 +851,15 @@ class MemoryUpdater:
 
     @staticmethod
     def memory_type_from_uri(uri: str) -> Optional[str]:
-        parts = [part for part in VikingURI(uri).full_path.split("/") if part]
-        try:
-            memories_idx = parts.index("memories")
-        except ValueError:
+        from openviking.core.namespace import classify_uri
+
+        namespace = classify_uri(uri)
+        if not namespace.is_memory or namespace.content_index is None:
             return None
-        if len(parts) <= memories_idx + 1:
+        type_index = namespace.content_index + 1
+        if len(namespace.parts) <= type_index:
             return None
-        return parts[memories_idx + 1]
+        return namespace.parts[type_index]
 
     @tracer()
     async def apply_operations(
@@ -1847,6 +1854,7 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
+                    transient_tags = search_tags_by_uri.get(uri)
                     if getattr(ingest_options, "search_tags", None) is not None:
                         embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {
@@ -1854,17 +1862,18 @@ class MemoryUpdater:
                                 ingest_options.search_tag_mode
                             )
                         }
-                    else:
-                        transient_tags = search_tags_by_uri.get(uri)
-                        if transient_tags:
-                            embedding_msg.context_data["search_tags"] = list(transient_tags)
-                            embedding_msg.context_data["_upsert_options"] = {
-                                "search_tag_mode": "append"
-                            }
-                            if memory_type:
-                                embedding_msg.context_data["_upsert_options"][
-                                    "extracted_memory_type"
-                                ] = memory_type
+                    elif transient_tags:
+                        embedding_msg.context_data["search_tags"] = list(transient_tags)
+                        embedding_msg.context_data["_upsert_options"] = {
+                            "search_tag_mode": "append"
+                        }
+                    # Apply the trusted type after user tag replace/append/clear.
+                    # Both extraction and direct event writes supply transient tags.
+                    # Keep the existing queue key for mixed-version workers.
+                    if transient_tags and memory_type:
+                        embedding_msg.context_data.setdefault("_upsert_options", {})[
+                            "extracted_memory_type"
+                        ] = memory_type
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

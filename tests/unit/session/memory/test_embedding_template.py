@@ -204,7 +204,8 @@ class TestEmbeddingTextConstruction:
         }
 
     @pytest.mark.asyncio
-    async def test_direct_refresh_does_not_infer_the_memory_type_from_a_peer_path(self):
+    @pytest.mark.parametrize("tag_mode", [None, "replace", "append", "clear"])
+    async def test_direct_event_refresh_handles_peer_named_memories(self, tag_mode):
         uri = "viking://user/alice/peers/memories/memories/events/event.md"
         viking_fs = Mock(read_file=AsyncMock(return_value="# Event body"))
         vikingdb = Mock(has_queue_manager=True)
@@ -219,11 +220,25 @@ class TestEmbeddingTextConstruction:
                 uri=uri,
                 memory_type="memories",
                 ctx=SimpleNamespace(user=None, account_id="default"),
+                ingest_options=IngestOptions.from_search_tags(
+                    ["team=search", "memory_type=preferences"], mode=tag_mode
+                )
+                if tag_mode
+                else None,
             )
         assert refreshed
         message = vikingdb.enqueue_embedding_msg.await_args.args[0]
-        assert "search_tags" not in message.context_data
-        assert "_upsert_options" not in message.context_data
+        assert message.context_data["search_tags"] == (
+            ["memory_type=events"]
+            if tag_mode is None
+            else []
+            if tag_mode == "clear"
+            else ["team=search", "memory_type=preferences"]
+        )
+        assert message.context_data["_upsert_options"] == {
+            "search_tag_mode": "append" if tag_mode in (None, "append") else "replace",
+            "extracted_memory_type": "events",
+        }
 
     @pytest.mark.asyncio
     async def test_embedding_template_overrides_plain_content(self):

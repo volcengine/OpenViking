@@ -334,6 +334,8 @@ ov write viking://resources/docs/api.md \
 
 ---
 
+- Direct single and batch writes to canonical User/Peer `memories/events/` content maintain the system tag `memory_type=events` on the L2 vector. User tag replace/append/clear cannot override this type. This excludes directory abstracts/overviews and other memory types. With `events_time_decay_protection="0"`, these events immediately participate in decay and return `origin_score` and `time_score`. Untouched historical records are not backfilled; an actual content update applies the new tagging rule.
+
 ### batch_write()
 
 Write multiple files below one Resource or Memory directory, then refresh the affected semantic and vector indexes once after all writes finish.
