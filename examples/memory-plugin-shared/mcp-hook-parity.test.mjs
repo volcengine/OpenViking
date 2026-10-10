@@ -24,6 +24,8 @@ import { HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
 import { readProxyConfig as agentHookProxy } from "../agent-hook-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
 import { readProxyConfig as claudeCodeProxy } from "../claude-code-memory-plugin/servers/mcp-proxy.mjs";
+import { loadConfig as loadCodebuddy } from "../codebuddy-memory-plugin/scripts/config.mjs";
+import { readProxyConfig as codebuddyProxy } from "../codebuddy-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mcp-proxy.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
@@ -59,6 +61,14 @@ const HARNESSES = [
     rootKeyFallback: true,
     hook: ({ env, cwd }) => loadClaudeCode(cwd, { env }),
     proxy: ({ env }) => claudeCodeProxy(env),
+  },
+  {
+    name: "codebuddy",
+    dir: "codebuddy-memory-plugin",
+    section: "codebuddy",
+    rootKeyFallback: true,
+    hook: ({ env, cwd }) => loadCodebuddy(cwd, { env }),
+    proxy: ({ env }) => codebuddyProxy(env),
   },
   {
     name: "opencode",

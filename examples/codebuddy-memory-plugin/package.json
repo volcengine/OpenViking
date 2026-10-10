@@ -4,7 +4,7 @@
   "description": "OpenViking memory plugin for the CodeBuddy Code CLI — semantic long-term memory",
   "type": "module",
   "scripts": {
-    "test": "node --test scripts/"
+    "test": "node --test scripts/*.test.mjs"
   },
   "private": true
 }
