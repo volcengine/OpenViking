@@ -103,7 +103,7 @@ export class OpenVikingRuntime {
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
-      state.config,
+      { ...state.config, includeActorPeerMemories: true },
     );
     state.profileBlock = profile?.block
       ? [
