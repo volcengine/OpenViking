@@ -144,25 +144,27 @@ class ToolResultStore:
         try:
             existing_metadata = await self.read_metadata(tool_result_id)
             if existing_metadata.get("sha256") == digest:
-                synopsis_data = existing_metadata.get("synopsis")
-                synopsis = (
-                    ToolResultSynopsis.from_dict(synopsis_data)
-                    if isinstance(synopsis_data, dict)
-                    else generate_tool_result_synopsis(
-                        content,
-                        preview_chars=preview_chars,
-                        tool_name=tool_name,
-                        mime_type=mime_type,
+                existing_content = await self._viking_fs.read_file(output_uri, ctx=self._ctx)
+                if sha256_text(existing_content) == digest:
+                    synopsis_data = existing_metadata.get("synopsis")
+                    synopsis = (
+                        ToolResultSynopsis.from_dict(synopsis_data)
+                        if isinstance(synopsis_data, dict)
+                        else generate_tool_result_synopsis(
+                            content,
+                            preview_chars=preview_chars,
+                            tool_name=tool_name,
+                            mime_type=mime_type,
+                        )
                     )
-                )
-                return StoredToolResult(
-                    tool_result_id=tool_result_id,
-                    storage_uri=storage_uri,
-                    output_uri=output_uri,
-                    metadata_uri=metadata_uri,
-                    metadata=existing_metadata,
-                    synopsis=synopsis,
-                )
+                    return StoredToolResult(
+                        tool_result_id=tool_result_id,
+                        storage_uri=storage_uri,
+                        output_uri=output_uri,
+                        metadata_uri=metadata_uri,
+                        metadata=existing_metadata,
+                        synopsis=synopsis,
+                    )
         except NotFoundError:
             pass
 
