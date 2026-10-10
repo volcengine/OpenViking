@@ -130,8 +130,8 @@ class _LockedWriteTarget:
 
 
 @dataclass(frozen=True)
-class _PreparedBatchResource:
-    """One ordinary resource operation compiled before any batch F commit."""
+class _PreparedInlineResource:
+    """One file-scoped RNFV plan compiled from final bytes and locked facts."""
 
     uri: str
     existed: bool
@@ -309,8 +309,8 @@ class ContentWriteCoordinator:
         sidecar_directories: set[str] = set()
         pending: list[tuple[dict[str, Any], bool, str]] = []
         conflicts: list[dict[str, str]] = []
-        prepared_resources: dict[str, _PreparedBatchResource] = {}
-        committed_resource_plans: list[_PreparedBatchResource] = []
+        prepared_resources: dict[str, _PreparedInlineResource] = {}
+        committed_resource_plans: list[_PreparedInlineResource] = []
         write_error: Exception | None = None
         lock_released = False
         try:
@@ -479,20 +479,18 @@ class ContentWriteCoordinator:
                         if refresh_kinds
                         else None
                     )
+                    # The production helper always returns _BatchRefreshOutcome;
+                    # keep the empty outcome fallback for lightweight callers
+                    # and test doubles that deliberately perform no refresh.
                     legacy_outcome = (
                         legacy_refresh_result
                         if isinstance(legacy_refresh_result, _BatchRefreshOutcome)
                         else _BatchRefreshOutcome(queue_status=None)
                     )
-                    legacy_queue_status = (
-                        legacy_refresh_result
-                        if isinstance(legacy_refresh_result, dict)
-                        else legacy_outcome.queue_status
-                    )
                     queue_status = (
                         await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                         if wait and request_registered
-                        else legacy_queue_status
+                        else legacy_outcome.queue_status
                     )
                     if wait and queue_status is not None:
                         self._raise_refresh_errors(queue_status)
@@ -974,7 +972,7 @@ class ContentWriteCoordinator:
         pending: list[tuple[dict[str, Any], bool, str]],
         ctx: RequestContext,
         lease: Dict[str, Any],
-    ) -> dict[str, _PreparedBatchResource]:
+    ) -> dict[str, _PreparedInlineResource]:
         """Compile file-scoped RNFV plans before the first batch F mutation.
 
         The legacy fallback is intentionally limited to an absent vector store,
@@ -1022,7 +1020,7 @@ class ContentWriteCoordinator:
             else {}
         )
 
-        prepared: dict[str, _PreparedBatchResource] = {}
+        prepared: dict[str, _PreparedInlineResource] = {}
         for operation, existed, write_mode in resource_pending:
             uri = operation["uri"]
             existing_raw: str | bytes | None = None
@@ -1035,53 +1033,88 @@ class ContentWriteCoordinator:
                 existing_raw=existing_raw,
                 is_new_file=not existed,
             )
-            store = InlineBytesStore(final_bytes)
-            artifact_ref = _InlineArtifactRef(uri)
-            inventory = make_inline_file_inventory(final_bytes)
-            target = AgfsResourceTarget(
-                viking_fs=self._viking_fs,
-                root_uri=uri,
-                ctx=ctx,
-                lease_ref=lease,
-            )
-            rnfv = await build_rnfv_snapshot(
-                viking_fs=self._viking_fs,
-                vikingdb=vector_store,
-                store=store,
-                artifact_ref=artifact_ref,
-                target_uri=uri,
-                ctx=ctx,
-                request_intent=requests[uri],
-                root_is_file=True,
+            prepared[uri] = await self._prepare_inline_resource_plan(
+                uri=uri,
+                final_bytes=final_bytes,
                 target_preexisting=existed,
                 formal_snapshot=(
                     ({"": FormalEntry(is_dir=False)}, True) if existed else ({}, True)
                 ),
-                artifact_inventory=inventory,
-                vector_scope="self",
-                # Explicit write treats missing F as authoritative new state;
-                # an orphan canonical V record is overwritten by UPSERT.
                 vector_inventory=inventories.get(uri, {}) if existed else {},
-            )
-            _, plan = await build_context_update_plan_from_snapshot(
-                snapshot=rnfv,
-                store=store,
-                artifact_ref=artifact_ref,
-                target=target,
-                vikingdb=vector_store,
-                context_type=context_type_for_uri(uri),
-                is_code_repo=False,
-                account_id=ctx.account_id,
+                vector_store=vector_store,
+                request_intent=requests[uri],
                 ctx=ctx,
-                root_preexisting=existed,
-                artifact_paths=inventory.artifact_paths,
-                root_is_file=True,
+                lease=lease,
+                ingest_options=None,
+                include_previous_abstract=True,
             )
-            plan = self._ensure_explicit_write_content_action(
-                plan,
-                md5=inventory.entries[""].md5,
-            )
-            previous_abstract = next(
+        return prepared
+
+    async def _prepare_inline_resource_plan(
+        self,
+        *,
+        uri: str,
+        final_bytes: bytes,
+        target_preexisting: bool,
+        formal_snapshot: tuple[dict[str, FormalEntry], bool],
+        vector_inventory: dict[str, dict[str, Any]] | None,
+        vector_store: Any,
+        request_intent: RequestIntent,
+        ctx: RequestContext,
+        lease: Dict[str, Any],
+        ingest_options: IngestOptions | None,
+        include_previous_abstract: bool = False,
+    ) -> _PreparedInlineResource:
+        """Build one file-scoped RNFV plan from already-locked, final bytes.
+
+        Both public write adapters own their own locking and final-byte render.
+        This helper only turns those immutable facts into the shared inline N/F/V
+        plan; it never reads target content or acquires/releases a lock.
+        """
+        store = InlineBytesStore(final_bytes)
+        artifact_ref = _InlineArtifactRef(uri)
+        inventory = make_inline_file_inventory(final_bytes)
+        target = AgfsResourceTarget(
+            viking_fs=self._viking_fs,
+            root_uri=uri,
+            ctx=ctx,
+            lease_ref=lease,
+        )
+        rnfv = await build_rnfv_snapshot(
+            viking_fs=self._viking_fs,
+            vikingdb=vector_store,
+            store=store,
+            artifact_ref=artifact_ref,
+            target_uri=uri,
+            ctx=ctx,
+            request_intent=request_intent,
+            root_is_file=True,
+            target_preexisting=target_preexisting,
+            formal_snapshot=formal_snapshot,
+            artifact_inventory=inventory,
+            vector_scope="self",
+            # Explicit write treats missing F as authoritative new state; an
+            # orphan canonical V record is overwritten by the later UPSERT.
+            vector_inventory=vector_inventory,
+        )
+        _, plan = await build_context_update_plan_from_snapshot(
+            snapshot=rnfv,
+            store=store,
+            artifact_ref=artifact_ref,
+            target=target,
+            vikingdb=vector_store,
+            context_type=context_type_for_uri(uri),
+            is_code_repo=False,
+            account_id=ctx.account_id,
+            ctx=ctx,
+            root_preexisting=target_preexisting,
+            artifact_paths=inventory.artifact_paths,
+            ingest_options=ingest_options,
+            root_is_file=True,
+        )
+        plan = self._ensure_explicit_write_content_action(plan, md5=inventory.entries[""].md5)
+        previous_abstract = (
+            next(
                 (
                     str(record.fields.get("abstract") or "")
                     for record in rnfv.vectors.records_by_id.values()
@@ -1089,17 +1122,19 @@ class ContentWriteCoordinator:
                 ),
                 "",
             )
-            prepared[uri] = _PreparedBatchResource(
-                uri=uri,
-                existed=existed,
-                final_bytes=final_bytes,
-                plan=plan,
-                store=store,
-                artifact_ref=artifact_ref,
-                target=target,
-                previous_abstract=previous_abstract,
-            )
-        return prepared
+            if include_previous_abstract
+            else ""
+        )
+        return _PreparedInlineResource(
+            uri=uri,
+            existed=target_preexisting,
+            final_bytes=final_bytes,
+            plan=plan,
+            store=store,
+            artifact_ref=artifact_ref,
+            target=target,
+            previous_abstract=previous_abstract,
+        )
 
     async def _write_direct_with_refresh(
         self,
@@ -1165,50 +1200,19 @@ class ContentWriteCoordinator:
                 processing_mode=processing_mode,
                 ingest_options=ingest_options,
             )
-            inline_store = InlineBytesStore(final_bytes)
-            inline_ref = _InlineArtifactRef(uri)
-            inline_inventory = make_inline_file_inventory(final_bytes)
-            target = AgfsResourceTarget(
-                viking_fs=self._viking_fs,
-                root_uri=uri,
-                ctx=ctx,
-                lease_ref=lease,
-            )
-            rnfv = await build_rnfv_snapshot(
-                viking_fs=self._viking_fs,
-                vikingdb=self._vikingdb,
-                store=inline_store,
-                artifact_ref=inline_ref,
-                target_uri=uri,
-                ctx=ctx,
-                request_intent=request,
-                root_is_file=True,
+            prepared = await self._prepare_inline_resource_plan(
+                uri=uri,
+                final_bytes=final_bytes,
                 target_preexisting=target_preexisting,
                 formal_snapshot=target_state.formal_snapshot,
-                artifact_inventory=inline_inventory,
-                vector_scope="self",
                 # This write owns the complete new-file state. Do not read or
                 # inherit an orphan V record when locked F is absent.
                 vector_inventory={} if not target_preexisting else None,
-            )
-            _, plan = await build_context_update_plan_from_snapshot(
-                snapshot=rnfv,
-                store=inline_store,
-                artifact_ref=inline_ref,
-                target=target,
-                vikingdb=self._vikingdb,
-                context_type=context_type,
-                is_code_repo=False,
-                account_id=ctx.account_id,
+                vector_store=self._vikingdb,
+                request_intent=request,
                 ctx=ctx,
-                root_preexisting=target_preexisting,
-                artifact_paths=inline_inventory.artifact_paths,
+                lease=lease,
                 ingest_options=ingest_options,
-                root_is_file=True,
-            )
-            plan = self._ensure_explicit_write_content_action(
-                plan,
-                md5=inline_inventory.entries[""].md5,
             )
 
             if wait and telemetry_id:
@@ -1216,11 +1220,11 @@ class ContentWriteCoordinator:
                 request_registered = True
 
             work = await commit_and_enqueue_plan(
-                plan,
+                prepared.plan,
                 ctx=ctx,
-                inline_store=inline_store,
-                inline_ref=inline_ref,
-                target=target,
+                inline_store=prepared.store,
+                inline_ref=prepared.artifact_ref,
+                target=prepared.target,
                 ingest_options=ingest_options,
                 file_created=not target_preexisting,
                 # Synchronous writes force parent aggregation; asynchronous writes

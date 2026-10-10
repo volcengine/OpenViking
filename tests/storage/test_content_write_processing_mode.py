@@ -283,6 +283,55 @@ async def test_direct_write_commits_final_bytes_when_rnfv_content_is_unchanged(m
 
 
 @pytest.mark.asyncio
+async def test_prepare_inline_resource_plan_reuses_locked_facts_and_preloaded_inventory(
+    monkeypatch, ctx
+):
+    """Single and batch adapters share one file-scoped RNFV plan builder."""
+    uri = "viking://resources/demo.md"
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    vector_store = object()
+    captured = {}
+    existing_record = SimpleNamespace(
+        uri=uri,
+        level=2,
+        fields={"abstract": "existing L2 abstract"},
+    )
+
+    async def _snapshot(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(vectors=SimpleNamespace(records_by_id={"a-l2": existing_record}))
+
+    async def _plan(**kwargs):
+        captured["plan_kwargs"] = kwargs
+        return None, ContextUpdatePlan(uri, "resource")
+
+    monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", _snapshot)
+    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", _plan)
+
+    prepared = await coordinator._prepare_inline_resource_plan(
+        uri=uri,
+        final_bytes=b"new bytes",
+        target_preexisting=True,
+        formal_snapshot=({"": content_write_module.FormalEntry(is_dir=False)}, True),
+        vector_inventory={"a-l2": {"id": "a-l2"}},
+        vector_store=vector_store,
+        request_intent=content_write_module.RequestIntent(uri, "semantic_and_vectors"),
+        ctx=ctx,
+        lease=SimpleNamespace(id="lock-1"),
+        ingest_options=IngestOptions(),
+        include_previous_abstract=True,
+    )
+
+    assert prepared.final_bytes == b"new bytes"
+    assert prepared.previous_abstract == "existing L2 abstract"
+    assert captured["root_is_file"] is True
+    assert captured["vector_scope"] == "self"
+    assert captured["formal_snapshot"] == ({"": content_write_module.FormalEntry(False)}, True)
+    assert captured["vector_inventory"] == {"a-l2": {"id": "a-l2"}}
+
+
+@pytest.mark.asyncio
 async def test_missing_append_starts_from_empty_content(monkeypatch, ctx):
     fake_fs = _FakeVikingFS()
     fake_fs.stat = AsyncMock(side_effect=NotFoundError("viking://resources/new.md", "file"))
