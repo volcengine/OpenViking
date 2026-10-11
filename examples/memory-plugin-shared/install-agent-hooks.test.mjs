@@ -77,6 +77,129 @@ function runUninstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
+test("Grok installs native hooks, MCP, and skills without replacing unrelated config", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-grok-install-"));
+  try {
+    const configPath = join(home, ".grok", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, [
+      "[mcp_servers.third_party]",
+      'url = "https://example.com/mcp"',
+      "",
+    ].join("\n"));
+
+    runInstall(home, "grok");
+    runInstall(home, "grok");
+
+    const hooksPath = join(home, ".grok", "hooks", "openviking-memory.json");
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+    assert.deepEqual(Object.keys(hooks.hooks), [
+      "SessionStart",
+      "UserPromptSubmit",
+      "PostToolUse",
+      "PostToolUseFailure",
+      "Stop",
+    ]);
+    for (const command of hookCommands(hooks)) {
+      assert.match(command, /OPENVIKING_HOOK_SOURCE='grok'/u);
+      assert.match(command, /# openviking-memory$/u);
+    }
+
+    const config = readFileSync(configPath, "utf8");
+    assert.match(config, /\[mcp_servers\.third_party\]/u);
+    assert.equal((config.match(/\[mcp_servers\.openviking\]/gu) || []).length, 1);
+    assert.equal((config.match(/openviking-memory:begin/gu) || []).length, 1);
+    assert.match(config, /agent-integrations\/grok\/servers\/mcp-proxy\.mjs/u);
+    assert.match(config, /OPENVIKING_HOOK_SOURCE = "grok"/u);
+
+    for (const skill of ["openviking-memory", "openviking-skills", "ov-experience-memory"]) {
+      assert.ok(existsSync(join(home, ".grok", "skills", skill, "SKILL.md")), skill);
+    }
+    const manifest = JSON.parse(readFileSync(
+      join(home, ".openviking", "agent-integrations", "grok", "integration.json"),
+      "utf8",
+    ));
+    assert.equal(manifest.client, "grok");
+    assert.equal(manifest.hooksConfig, hooksPath);
+    assert.equal(manifest.mcpConfig, configPath);
+    assert.deepEqual(manifest.capabilities, ["hooks", "mcp", "skills"]);
+
+    writeFileSync(configPath, config
+      .replace("\n\n# openviking-memory:begin", "\n# openviking-memory:begin")
+      .replace(
+        "# openviking-memory:end\n",
+        "# openviking-memory:end\n[mcp_servers.after]\nurl = \"https://after.example/mcp\"\n",
+      ));
+    runUninstall(home, "grok");
+    assert.equal(existsSync(hooksPath), false);
+    const remaining = readFileSync(configPath, "utf8");
+    assert.match(remaining, /\[mcp_servers\.third_party\]/u);
+    assert.match(remaining, /example\.com\/mcp"\n\[mcp_servers\.after\]/u);
+    assert.doesNotMatch(remaining, /openviking-memory|mcp_servers\.openviking/u);
+    assert.equal(existsSync(join(home, ".grok", "skills", "openviking-memory")), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "grok")), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Grok install refuses to replace an unmanaged openviking MCP table", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-grok-conflict-"));
+  try {
+    const configPath = join(home, ".grok", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    const original = [
+      "[mcp_servers.openviking]",
+      'url = "https://third-party.example/mcp"',
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original);
+
+    const result = runInstaller(home, [
+      "--harness", "grok",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(readFileSync(configPath, "utf8"), original);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Grok install refuses malformed managed markers without changing config", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-grok-markers-"));
+  try {
+    const configPath = join(home, ".grok", "config.toml");
+    mkdirSync(dirname(configPath), { recursive: true });
+    const original = [
+      "# openviking-memory:end",
+      "[mcp_servers.third_party]",
+      'url = "https://example.com/mcp"',
+      "# openviking-memory:begin",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original);
+
+    const result = runInstaller(home, [
+      "--harness", "grok",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(readFileSync(configPath, "utf8"), original);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("Kimi installs a self-contained native bundle without legacy config edits", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-kimi-hooks-"));
   try {

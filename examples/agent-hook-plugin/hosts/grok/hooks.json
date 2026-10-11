@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs session-start __OPENVIKING_CLIENT_ID__",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs user-prompt-submit __OPENVIKING_CLIENT_ID__",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs post-tool-use __OPENVIKING_CLIENT_ID__",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs post-tool-use-failure __OPENVIKING_CLIENT_ID__",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs stop __OPENVIKING_CLIENT_ID__",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

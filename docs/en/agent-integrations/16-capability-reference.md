@@ -31,6 +31,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [Claude Code](#claude-code) | Plugin with hooks and an MCP proxy | Server MCP tools |
 | [Codex, TraeCode CLI 2.0](#codex-and-traecode-cli-2-0) | Codex plugin with hooks and an MCP proxy | Server MCP tools |
 | [Cursor](#cursor) | Hook and MCP configuration, plus a rule | Server MCP tools |
+| [Grok Build](#grok-build) | Hook and MCP configuration, plus native skills | Server MCP tools |
 | [TRAE, TRAE CN](#trae-and-trae-cn) | Hook and MCP configuration | Server MCP tools |
 | [ZCode](#zcode) | Hook and MCP configuration | Server MCP tools |
 | [Kimi Code](#kimi-code) | Kimi Code plugin with hooks and an MCP proxy | Server MCP tools |
@@ -50,6 +51,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Codex | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Codex 0.145+; otherwise at the next start | Commits, then the host summarizes |
 | TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Only if the build has `SessionEnd`; otherwise at the next start | Same as Codex |
 | Cursor | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | No | Commits, then the host summarizes |
+| Grok Build | Cached at each prompt; delivered after the first tool result | Profile, memory index, and skills are cached at the first prompt and delivered after the first tool result | Every completed turn | No exit event; completed turns are already committed | No pre-compaction event |
 | TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Only when `SessionEnd` captures new messages | Commits newly captured messages |
@@ -184,6 +186,7 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 | Claude Code | Every `UserPromptSubmit` | The prompt, trimmed | `<openviking-context>` in `additionalContext` |
 | Codex, TraeCode CLI 2.0 | Every `UserPromptSubmit`; the whole hook has a 120-second deadline | The prompt | `<openviking-context source="auto-recall">` |
 | Cursor | `beforeSubmitPrompt` | The prompt; repeated events within 500 ms reuse the previous result | `additional_context` |
+| Grok Build | Recall runs at `UserPromptSubmit`; delivery runs once at the first `PostToolUse` or `PostToolUseFailure` | The prompt | Cached at prompt time, then returned as `additionalContext`. A turn with no tool call receives no automatic context |
 | TRAE, TRAE CN | `UserPromptSubmit` | The prompt, with earlier injected blocks removed | `additionalContext` |
 | ZCode | `UserPromptSubmit` | The prompt, with three kinds of injected block removed, including `<system-reminder>` | `additionalContext`, strict JSON |
 | Kimi Code | `UserPromptSubmit` | The prompt | Plain context text, not JSON |
@@ -220,6 +223,7 @@ When each integration injects it:
 | Claude Code | `SessionStart`, every source |
 | Codex | `SessionStart` on startup, clear, and resume |
 | Cursor, TRAE, TRAE CN, ZCode | `SessionStart` |
+| Grok Build | Prepared with the first prompt and delivered at that turn's first tool-result event |
 | Kimi Code | The first prompt; retried on later prompts until it succeeds |
 | OpenCode | The first message of each session; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
 | DSH | Once per session; not sent again after compaction |
@@ -247,6 +251,7 @@ The server stops query expansion after 5 seconds (`retrieval.recall_intent_timeo
 | Claude Code | 15 seconds, inside a 60-second hook limit |
 | Codex | A 120-second deadline for the whole hook, including a local compressor of up to 110 seconds |
 | Cursor, TRAE, TRAE CN, ZCode | 15 seconds, inside a 20-second host limit |
+| Grok Build | A 17-second request budget inside the 20-second prompt hook |
 | OpenCode | 30 seconds |
 | DSH | 10 seconds, raised to at least 15 with query expansion. Recall blocks the pre-step |
 | pi | 15 seconds |
@@ -272,7 +277,7 @@ A recall digest asks a model to rewrite recall results into a short list of cite
 | `client` | Use a local compressor; Claude Code and Codex only |
 | `auto` | Claude Code and Codex use a local compressor when one is available and otherwise send `rewrite: "auto"`. Other integrations send `rewrite: "auto"` |
 
-Claude Code and Codex default to `auto`; the other integrations default to `off`. Server digests are supported by Claude Code, Codex, OpenCode, DSH, pi, Cursor, TRAE, TRAE CN, ZCode, OpenClaw, and the Hermes external plugin, and need a server with context-search rewrite support. The bundled Hermes provider does not support recall digests. The legacy values `1` and `0` mean `auto` and `off`. A `no_relevant` result suppresses injection; the plugin must not fall back to the raw block.
+Claude Code and Codex default to `auto`; the other integrations default to `off`. Server digests are supported by Claude Code, Codex, OpenCode, DSH, pi, Cursor, Grok Build, TRAE, TRAE CN, ZCode, OpenClaw, and the Hermes external plugin, and need a server with context-search rewrite support. The bundled Hermes provider does not support recall digests. The legacy values `1` and `0` mean `auto` and `off`. A `no_relevant` result suppresses injection; the plugin must not fall back to the raw block.
 
 Local compressors:
 
@@ -297,7 +302,7 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 
 - **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID. DSH is the only integration that creates its sessions explicitly.
 - **A commit has two phases.** `POST /api/v1/sessions/{id}/commit` returns after phase 1 archives the messages. Its response includes a `task_id` for phase 2, memory extraction, which runs in the background. A successful commit response does not mean extraction has finished.
-- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
+- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, Grok Build, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
 - **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send no policy, so without one of these settings the client is the only thing that commits.
 - **Writes are batched.** The shared plugins send up to 100 messages per `POST /messages/batch`, matching the server limit, and fall back to one message at a time when the batch endpoint returns 404 or 405.
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
@@ -315,6 +320,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Codex | `Stop` at 20,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
 | TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
 | Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
+| Grok Build | Every `Stop` that captured content | None. `StopCancelled` and `StopFailure` are not capture events | No pre-compaction event |
 | TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
 | Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit when they capture new messages | `PreCompact` commits when it captures new messages |
@@ -338,6 +344,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Codex | Commits | Conditional | No | No | No | A double Ctrl+C quits cleanly and fires `SessionEnd`; a single one does not. Anything missed is committed at the next `SessionStart` on startup or clear: at once if the end marker survived, otherwise after 30 minutes idle |
 | TraeCode CLI 2.0 | No, unless the build has `SessionEnd` | No | No | No | No | The 30-minute idle sweep at the next `SessionStart` |
 | Cursor | No | No | No | No | No | Closing or switching a chat fires no event. `sessionEnd` fires only on window close, after the host has already stopped running hook commands. Messages below the 8-message threshold wait for later messages in the same session |
+| Grok Build | No | No | No | No | No | Every completed turn's `Stop` already committed. An interrupted, cancelled, failed, or in-progress turn is not captured |
 | TRAE, TRAE CN | No | No | No | No | No | Every `Stop` already committed, so at most the turn in progress is lost |
 | ZCode | No | Conditional | No | No | No | Ctrl+C after that turn's `Stop` fired lets the detached worker finish. Every `Stop` commits, and missed turns are caught up at the next `Stop` |
 | Kimi Code | Conditional | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit only when they capture new messages; a tail already captured by `Stop` waits for the next commit |
@@ -353,7 +360,7 @@ What this means in practice:
 
 - **Commits at a normal exit:** Claude Code, Codex 0.145+, OpenCode, DSH, pi with takeover off, and Hermes. The others rely on the recovery in the last column.
 - **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins do not configure one.
-- **TRAE, TRAE CN, and ZCode** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
+- **Grok Build, TRAE, TRAE CN, and ZCode** have the simplest exit behavior because every completed turn commits, at the cost of a full archive and extraction on every `Stop`.
 
 <a id="_3-3-4-pending-queue-offline-compensation-comparison"></a>
 
@@ -361,7 +368,7 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Claude Code, Cursor, Grok Build, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
 | Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
@@ -379,7 +386,7 @@ What this means in practice:
 | OpenCode | Subagents get `oc-<parent>__subagent-<child>` sessions. Session-start context is skipped for them; recall is not |
 | DSH | Each subagent is a separate `dsh-<id>` session with no link to its parent, and each gets its own session-start context |
 | Hermes | Delegated tasks run with `skip_memory=True`, so the subagent has no OpenViking session, recall, or tools, and its output is not captured |
-| Cursor, TRAE, ZCode, Kimi Code, pi, OpenClaw | No special handling. A subagent with its own session ID gets its own session; otherwise its messages join the main session. OpenClaw can exclude sessions with `bypassSessionPatterns` |
+| Cursor, Grok Build, TRAE, ZCode, Kimi Code, pi, OpenClaw | No special handling. A subagent with its own session ID gets its own session; otherwise its messages join the main session. OpenClaw can exclude sessions with `bypassSessionPatterns` |
 | Log ingestion | The Claude Code adapter skips sidechain and meta records, so subagent conversations are not imported |
 
 <a id="_3-4-compaction-takeover"></a><a id="_3-4-1-decision-matrix"></a>
@@ -393,7 +400,7 @@ When the host shortens its context, most integrations make sure the dropped mess
 | Claude Code | Host summarizes | `PreCompact` commits synchronously; this is the one write that never runs in the background, because the host rewrites the transcript right after | `SessionStart` with `source="compact"` injects the archive overview and up to 5 summaries |
 | Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | The archive summary is injected on resume |
 | Cursor | Host summarizes | `preCompact` commits | Nothing |
-| TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
+| Grok Build, TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
 | Kimi Code | Host summarizes | `PreCompact` commits newly captured messages | Nothing |
 | OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
 | DSH | Not observed | Nothing. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
@@ -445,6 +452,7 @@ Recall errors are handled so the host can continue without injected memories. Re
 | Claude Code | Every hook catches the error and lets the host continue; session start skips queue replay | Context-search marker for 6 hours, local CLI check for 7 days, health for 5 seconds | Recall waits for its request or deadline before continuing. URI guard denials are intentional and separate from recall failures |
 | Codex, TraeCode CLI 2.0 | Every hook catches the error and does nothing | Context-search marker; a failed local compressor stays off until the next start | Recall waits for its request or deadline, then the prompt continues |
 | Cursor, TRAE, TRAE CN, ZCode | Request errors are swallowed and nothing is injected. A hook that cannot get its lock within 5 seconds skips silently | Context-search marker only, so every turn waits the full 15-second recall timeout | Up to the recall timeout each turn |
+| Grok Build | Request errors are swallowed and no block is cached. A hook that cannot get its lock within 5 seconds skips silently | Context-search marker | Up to the 17-second prompt budget; a later tool-result event has nothing to deliver |
 | OpenCode | Recall, capture, and cleanup errors are caught and logged | Context-search marker; health checks are not cached | Recall awaits network requests; cleanup can also wait until its deadline |
 | DSH | The plugin swallows errors. Session setup failures are not cached, so each pre-step makes two 5-second health calls | Context-search marker; the user-space lookup is cached for the life of the process | Pre-step runs profile and recall in sequence, and session flush blocks |
 | pi | If the health check fails at start, no tools are registered and later prompts retry quietly. A failed MCP handshake alone does not stop recall, sync, or takeover; the status line shows `tools ✗` and `/viking` prints the error | Context-search marker. The MCP handshake is retried once per turn and can use its 5-second budget before recall starts | Recall waits for its request or deadline. `session_shutdown` waits up to 30 seconds without takeover, and a network error at `turn_end` waits 10 seconds per message |
@@ -470,6 +478,7 @@ The session ID prefix tells you which integration wrote a session on the server.
 | Codex | Unified installer (`--harness codex`) or `codex plugin marketplace add` | `cx-<id>`, derived from the Codex session | Shared settings, `plugin.codex` |
 | TraeCode CLI 2.0 | Unified installer (`--harness trae-cli`), which runs the Codex flow against `traecli` | Same as Codex | Same as Codex |
 | Cursor | Unified installer; writes `~/.cursor/hooks.json` and `mcp.json` | `cu-<conversation id>` | Shared settings, `plugin.cursor` |
+| Grok Build | Unified installer (`--harness grok`); writes `~/.grok/hooks/openviking-memory.json`, a managed block in `~/.grok/config.toml`, and native skills | `gr-<session id>` | Shared settings, `plugin.grok` |
 | TRAE, TRAE CN | Unified installer; writes `~/.trae/` or `~/.trae-cn/` hooks and MCP files | `tr-` or `trcn-` | Shared settings, `plugin.trae` or `plugin.trae_cn` |
 | ZCode | Unified installer; merges into `~/.zcode/cli/config.json` and turns hooks on | `zc-<id>` | Shared settings, `plugin.zcode` |
 | Kimi Code | Unified installer; managed Kimi Code plugin | `kc-<id>` | Shared settings, `plugin.kimicode` |
@@ -486,13 +495,13 @@ The session ID prefix tells you which integration wrote a session on the server.
 
 ### Unified installer
 
-`examples/memory-plugin-shared/install.sh` installs Claude Code, Codex, TraeCode CLI 2.0, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, pi, and DSH. OpenClaw and Hermes have their own channels. Things worth knowing:
+`examples/memory-plugin-shared/install.sh` installs Claude Code, Codex, TraeCode CLI 2.0, Cursor, Grok Build, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, pi, and DSH. OpenClaw and Hermes have their own channels. Things worth knowing:
 
 - Without `--harness`, it shows a multi-select menu. The setup helpers bundled with each plugin pass `--harness` for you. When piped from `curl`, it reads answers from `/dev/tty`.
 - It downloads from the documentation site, or uses the local checkout when run from one.
 - Hook and MCP entries carry an `OPENVIKING_INTEGRATION_ID` marker, so a rerun replaces its own entries and leaves other tools' entries alone. Each changed file is backed up to `.bak` and replaced atomically with mode `0600`.
 - The credential step writes `~/.openviking/ovcli.conf` for a local server, OpenViking Service, or a custom URL. Existing values are shown, with the API key masked, before you choose to keep or change them.
-- `--uninstall` covers Cursor, TRAE, TRAE CN, ZCode, and Kimi Code. Remove the others through the host's own plugin manager.
+- `--uninstall` covers Cursor, Grok Build, TRAE, TRAE CN, ZCode, and Kimi Code. Remove the others through the host's own plugin manager.
 - Node.js 18 or later is required.
 
 <a id="_3-1-3-credential-systems"></a>
@@ -503,7 +512,7 @@ Four credential systems exist, each with its own variable names and headers. Whe
 
 | Used by | Server URL | API key | Identity | Auth header |
 |---|---|---|---|---|
-| Shared plugin code: Claude Code, Codex, Cursor, TRAE, ZCode, Kimi Code, OpenCode, DSH, pi, Agent Plugins | `OPENVIKING_URL`, then `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`, then `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID` | `Authorization: Bearer` only |
+| Shared plugin code: Claude Code, Codex, Cursor, Grok Build, TRAE, ZCode, Kimi Code, OpenCode, DSH, pi, Agent Plugins | `OPENVIKING_URL`, then `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN`, then `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID` | `Authorization: Bearer` only |
 | OpenClaw | `OPENVIKING_BASE_URL`, then `OPENVIKING_URL` | `OPENVIKING_API_KEY`, or a SecretRef | `OPENVIKING_ACCOUNT_ID`, `OPENVIKING_USER_ID` | `X-API-Key` |
 | Hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT` | Both `X-API-Key` and `Bearer`. With a key, tenant headers are omitted unless the server asks for them, then retried once |
 | ov CLI | `ovcli.conf` | `ovcli.conf` | `--account`, `--user`, `--actor-peer-id` | `X-API-Key`; Basic or Bearer depending on `auth_mode`. A key with two or more dots is also sent as Bearer |
@@ -540,6 +549,7 @@ Settings that apply only to some integrations:
 | Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `ov-memory-doctor` | Yes |
 | Codex, TraeCode CLI 2.0 | No | None | Same four as Claude Code | Yes |
 | Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
+| Grok Build | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory` | Installer menu |
 | TRAE, TRAE CN, ZCode | No | None | None | Installer menu |
 | OpenCode | No | None | The same three as Cursor, only when the plugin registers its MCP server | Yes |
 | DSH | No | None | The same three as Cursor | No |
@@ -586,6 +596,17 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - Capture is text-only, so `ov-experience-memory` can find and apply Experience but cannot link its reads back to the Experience used.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
+
+<a id="grok-build"></a>
+
+### Grok Build
+
+[Grok Build](./20-grok-build.md). Native Hook and MCP configuration with 5 events (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, and `Stop`) and 3 native skills.
+
+- Grok discards allowed `UserPromptSubmit` stdout. The adapter therefore caches prompt recall and the first-prompt profile block, then returns them once as `additionalContext` from the first tool-result event.
+- A turn with no tool call receives no automatic context. MCP tools remain available for explicit retrieval.
+- `Stop` pairs the cached prompt with Grok's native `lastAssistantMessage`, captures the completed turn, and commits it. Cancelled and failed stops are not captured.
+- The installer preserves unrelated Hook and TOML settings. It refuses to replace an unmanaged `mcp_servers.openviking` table.
 
 <a id="trae-trae-cn-ide-editions"></a>
 
@@ -800,7 +821,7 @@ The comparisons above were checked against these locations. They help when you n
 - Write and delete checks: `openviking/storage/content_write.py` and `openviking/storage/viking_fs/_access.py`.
 - Server auto-commit: `openviking_cli/utils/config/memory_config.py` and `openviking/session/auto_commit_policy.py`.
 - Plugin settings and defaults: `examples/memory-plugin-shared/lib/config-schema.mjs`.
-- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
+- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, Grok Build, TRAE, ZCode, and Kimi Code.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
 - Hermes: the bundled provider from earlier releases at the pinned commit linked

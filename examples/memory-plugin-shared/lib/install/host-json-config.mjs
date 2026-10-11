@@ -8,7 +8,9 @@
  * without clobbering what could not be parsed, decide which entries are this
  * installer's, and write back atomically. Three copies of that had already
  * drifted — the uninstall side learned to reclaim the URI-guard entries and the
- * install side never did, so a rename left a stale guard hook behind.
+ * install side never did, so a rename left a stale guard hook behind. Grok's
+ * native hooks are JSON too, while its MCP server lives in a managed TOML
+ * block handled by the same renderer below.
  *
  * Installer-only: nothing under lib/ imports it, so it stays out of the runtime
  * closure sync.mjs vendors into the plugins.
@@ -45,9 +47,8 @@ export function readJson(file) {
   return parsed;
 }
 
-function atomicWrite(file, value, { backup = true } = {}) {
+function atomicWriteText(file, next, { backup = true } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const next = JSON.stringify(value, null, 2) + "\n";
   let previous = "";
   try { previous = fs.readFileSync(file, "utf8"); } catch {}
   if (previous === next) return;
@@ -55,6 +56,10 @@ function atomicWrite(file, value, { backup = true } = {}) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, next, { mode: 0o600 });
   fs.renameSync(tmp, file);
+}
+
+function atomicWrite(file, value, options) {
+  atomicWriteText(file, JSON.stringify(value, null, 2) + "\n", options);
 }
 
 function shellArg(value) {
@@ -109,7 +114,16 @@ function isKnownLegacyOpenVikingServer(value) {
 }
 
 /** Render the host's hook and MCP templates into the user's own config files. */
-export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode }) {
+export function writeHostJsonConfigs({
+  kind,
+  hooksPath,
+  mcpPath,
+  root,
+  clientId,
+  nodeBin,
+  sourceMode,
+  manifestMcpPath = mcpPath,
+}) {
   // One plugin serves every config-driven host; `kind` names the host directory
   // this client's configuration templates live in.
   const hostDir = path.join(root, "hosts", kind);
@@ -196,7 +210,7 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
   const unchangedInstall = previousManifest.version === packageManifest.version
     && previousManifest.source === sourceMode
     && previousManifest.hooksConfig === hooksPath
-    && previousManifest.mcpConfig === mcpPath;
+    && previousManifest.mcpConfig === manifestMcpPath;
   atomicWrite(installedManifestPath, {
     schemaVersion: 1,
     id: packageManifest.id,
@@ -206,10 +220,111 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
     source: sourceMode,
     capabilities: packageManifest.capabilities,
     hooksConfig: hooksPath,
-    mcpConfig: mcpPath,
+    mcpConfig: manifestMcpPath,
     installedAt: previousManifest.installedAt || now,
     updatedAt: unchangedInstall ? previousManifest.updatedAt || previousManifest.installedAt || now : now,
   });
+}
+
+const GROK_MCP_BEGIN = "# openviking-memory:begin";
+const GROK_MCP_END = "# openviking-memory:end";
+const GROK_MCP_SECTION = /^[\t ]*\[[\t ]*mcp_servers[\t ]*\.[\t ]*(?:openviking|"openviking"|'openviking')[\t ]*\][\t ]*(?:#.*)?$/mu;
+
+function readText(file) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw new Error(`Cannot safely update ${file}: ${error.message}`);
+  }
+}
+
+function removeGrokManagedBlock(text, file) {
+  let next = text;
+  while (next.includes(GROK_MCP_BEGIN) || next.includes(GROK_MCP_END)) {
+    const begin = next.indexOf(GROK_MCP_BEGIN);
+    const end = next.indexOf(GROK_MCP_END);
+    if (begin < 0 || end < begin) {
+      throw new Error(`Cannot safely update ${file}: malformed OpenViking managed block`);
+    }
+    const after = end + GROK_MCP_END.length;
+    const lineStart = begin;
+    let lineEnd = after;
+    if (next.slice(lineEnd, lineEnd + 2) === "\r\n") lineEnd += 2;
+    else if (next[lineEnd] === "\n") lineEnd += 1;
+    next = next.slice(0, lineStart) + next.slice(lineEnd);
+  }
+  return next;
+}
+
+function assertGrokMcpSlot(configPath) {
+  const unmanaged = removeGrokManagedBlock(readText(configPath), configPath);
+  if (GROK_MCP_SECTION.test(unmanaged)) {
+    throw new Error(
+      `Cannot safely update ${configPath}: mcp_servers.openviking exists and is not managed by OpenViking`,
+    );
+  }
+  return unmanaged;
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function renderGrokMcpBlock(server) {
+  if (!server || typeof server !== "object" || Array.isArray(server)
+    || typeof server.command !== "string" || !Array.isArray(server.args)) {
+    throw new Error("Invalid Grok MCP server template");
+  }
+  const lines = [
+    GROK_MCP_BEGIN,
+    "[mcp_servers.openviking]",
+    `command = ${tomlString(server.command)}`,
+    `args = [${server.args.map(tomlString).join(", ")}]`,
+    "enabled = true",
+  ];
+  const env = server.env && typeof server.env === "object" && !Array.isArray(server.env)
+    ? server.env : {};
+  if (Object.keys(env).length) {
+    lines.push("", "[mcp_servers.openviking.env]");
+    for (const key of Object.keys(env).sort()) lines.push(`${key} = ${tomlString(env[key])}`);
+  }
+  lines.push(GROK_MCP_END);
+  return lines.join("\n");
+}
+
+export function writeGrokConfigs({ root, hooksPath, configPath, clientId, nodeBin, sourceMode }) {
+  assertGrokMcpSlot(configPath);
+  const stagingMcpPath = path.join(root, ".grok-mcp.json");
+  try {
+    writeHostJsonConfigs({
+      kind: "grok",
+      hooksPath,
+      mcpPath: stagingMcpPath,
+      root,
+      clientId,
+      nodeBin,
+      sourceMode,
+      manifestMcpPath: configPath,
+    });
+    const server = readJson(stagingMcpPath).mcpServers?.openviking;
+    const base = assertGrokMcpSlot(configPath).trimEnd();
+    const next = `${base ? `${base}\n\n` : ""}${renderGrokMcpBlock(server)}\n`;
+    atomicWriteText(configPath, next);
+  } finally {
+    fs.rmSync(stagingMcpPath, { force: true });
+    fs.rmSync(`${stagingMcpPath}.bak`, { force: true });
+  }
+}
+
+export function removeGrokConfigs({ hooksPath, configPath }) {
+  fs.rmSync(hooksPath, { force: true });
+  const current = readText(configPath);
+  if (current.includes(GROK_MCP_BEGIN) || current.includes(GROK_MCP_END)) {
+    atomicWriteText(configPath, removeGrokManagedBlock(current, configPath), { backup: false });
+  }
+  fs.rmSync(`${hooksPath}.bak`, { force: true });
+  fs.rmSync(`${configPath}.bak`, { force: true });
 }
 
 /**
@@ -289,6 +404,9 @@ const COMMANDS = {
     writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode }),
   remove: ([hooksPath, mcpPath]) => removeHostJsonConfigs({ hooksPath, mcpPath }),
   "merge-zcode": ([configPath, hooksPath, mcpPath]) => mergeZcodeConfig({ configPath, hooksPath, mcpPath }),
+  "write-grok": ([root, hooksPath, configPath, clientId, nodeBin, sourceMode]) =>
+    writeGrokConfigs({ root, hooksPath, configPath, clientId, nodeBin, sourceMode }),
+  "remove-grok": ([hooksPath, configPath]) => removeGrokConfigs({ hooksPath, configPath }),
 };
 
 function isDirectRun() {
