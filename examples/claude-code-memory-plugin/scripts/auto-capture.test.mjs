@@ -126,6 +126,112 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
   }
 });
 
+test("incremental capture keeps every new turn and its source timestamp", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-timestamps-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const sessionId = "capture-timestamps";
+  const stateDir = join(root, "openviking-cc-capture-state");
+  const batches = [];
+  const entries = [
+    {
+      type: "user",
+      timestamp: "2025-01-01T00:00:00.000Z",
+      message: { role: "user", content: "first request" },
+    },
+    {
+      type: "assistant",
+      timestamp: "2025-01-01T00:00:01.000Z",
+      message: { role: "assistant", content: "starting the task" },
+    },
+    {
+      type: "assistant",
+      timestamp: "2025-01-01T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [{
+          type: "tool_use",
+          id: "toolu_timestamp",
+          name: "Read",
+          input: { file_path: "/tmp/example" },
+        }],
+      },
+    },
+    {
+      type: "user",
+      timestamp: "2025-01-01T00:00:03.000Z",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_timestamp",
+          content: [{ type: "text", text: "tool output" }],
+        }],
+      },
+    },
+    {
+      type: "assistant",
+      timestamp: "2025-01-01T00:00:04.000Z",
+      message: { role: "assistant", content: "final answer" },
+    },
+  ];
+
+  try {
+    await writeFile(transcriptPath, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, `${sessionId}.json`),
+      JSON.stringify({ capturedTurnCount: 2 }),
+    );
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        batches.push(body);
+        writeJson(res, { status: "ok", result: { added: body.messages.length } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cc-capture-timestamps") {
+        writeJson(res, {
+          status: "ok",
+          result: { message_count: 3, pending_tokens: 10, commit_count: 0 },
+        });
+        return;
+      }
+      writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: sessionId, transcript_path: transcriptPath, cwd: root },
+        hookEnv(root, baseUrl),
+      );
+    });
+
+    assert.equal(batches.length, 1);
+    assert.deepEqual(
+      batches[0].messages.map((message) => message.role),
+      ["assistant", "user", "assistant"],
+    );
+    assert.deepEqual(
+      batches[0].messages.map((message) => message.created_at),
+      entries.slice(2).map((entry) => entry.timestamp),
+    );
+    assert.equal(
+      batches[0].messages[1].parts.find((part) => part.type === "tool")?.tool_output,
+      "tool output",
+    );
+    const state = JSON.parse(
+      await readFile(join(stateDir, `${sessionId}.json`), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, entries.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("threshold commit archives every captured message", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-commit-"));
   const transcriptPath = join(root, "transcript.jsonl");
@@ -461,8 +567,16 @@ test("subagent capture sanitizes injected text before filtering and sending", as
   const batches = [];
   try {
     await writeFile(transcriptPath, [
-      JSON.stringify({ role: "user", content: "<system-reminder>approved</system-reminder>ignore this" }),
-      JSON.stringify({ role: "user", content: "<system-reminder>secret</system-reminder>approved SECRET123" }),
+      JSON.stringify({
+        role: "user",
+        content: "<system-reminder>approved</system-reminder>ignore this",
+        timestamp: "2025-02-03T04:05:06.000Z",
+      }),
+      JSON.stringify({
+        role: "user",
+        content: "<system-reminder>secret</system-reminder>approved SECRET123",
+        timestamp: "2025-02-03T04:05:07.000Z",
+      }),
     ].join("\n"));
     await withMockOpenViking(async (req, res) => {
       const url = new URL(req.url, "http://127.0.0.1");
@@ -489,6 +603,7 @@ test("subagent capture sanitizes injected text before filtering and sending", as
     assert.deepEqual(batches[0].messages.map((message) => message.parts), [
       [{ type: "text", text: "approved [redacted]" }],
     ]);
+    assert.equal(batches[0].messages[0].created_at, "2025-02-03T04:05:07.000Z");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

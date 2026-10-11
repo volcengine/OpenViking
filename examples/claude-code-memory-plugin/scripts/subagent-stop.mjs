@@ -86,6 +86,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
+    if (turn.createdAt) payload.created_at = turn.createdAt;
     if (enqueueOnly) {
       const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
       if (res.ok) queued++;

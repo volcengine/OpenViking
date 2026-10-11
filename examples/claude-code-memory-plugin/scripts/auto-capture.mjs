@@ -171,6 +171,7 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "", cfg = {}) {
 
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
+    if (turn.createdAt) payload.created_at = turn.createdAt;
     payloads.push(payload);
   }
   const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
@@ -194,6 +195,7 @@ async function enqueueTurnsToPending(ovSessionId, turns, peerId = "", cfg = {}) 
 
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
+    if (turn.createdAt) payload.created_at = turn.createdAt;
     const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
     if (res.ok) queued++;
     else failed++;

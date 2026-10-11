@@ -103,6 +103,9 @@ function normalizeMessage(message, cfg) {
     content: Array.isArray(content)
       ? content.map((block) => normalizeBlock(block, cfg))
       : content,
+    createdAt: typeof message.timestamp === "string" && message.timestamp.trim()
+      ? message.timestamp
+      : undefined,
   };
 }
 
@@ -140,7 +143,9 @@ export function extractCaptureTurns(messages, cfg = {}) {
     // "[truncated, N more chars]" note that cap just appended.
     const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
     if (parts.length === 0) continue;
-    turns.push({ role, text: textFromParts(parts), parts });
+    const turn = { role, text: textFromParts(parts), parts };
+    if (payload.createdAt) turn.createdAt = payload.createdAt;
+    turns.push(turn);
   }
   return turns;
 }
