@@ -774,32 +774,34 @@ export function UserManagementPanel() {
                                 </TooltipContent>
                               </Tooltip>
                             ) : null}
-                            <div className="ml-1 flex items-center border-l border-border/70 pl-1.5">
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-xs"
-                                      aria-label={t('actions.regenerate')}
-                                      onClick={() =>
-                                        setPendingRegenerateUser(user)
-                                      }
-                                      disabled={
-                                        regenerateKey.isPending ||
-                                        Boolean(switchingIdentityKey)
-                                      }
-                                    />
-                                  }
-                                >
-                                  <RotateCwIcon />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {t('actions.regenerate')}
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
+                            {serverMode !== 'trusted' && (
+                              <div className="ml-1 flex items-center border-l border-border/70 pl-1.5">
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        aria-label={t('actions.regenerate')}
+                                        onClick={() =>
+                                          setPendingRegenerateUser(user)
+                                        }
+                                        disabled={
+                                          regenerateKey.isPending ||
+                                          Boolean(switchingIdentityKey)
+                                        }
+                                      />
+                                    }
+                                  >
+                                    <RotateCwIcon />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {t('actions.regenerate')}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>

@@ -253,6 +253,7 @@ class TrustedAuthPlugin(AuthPlugin):
             root_key=config.root_api_key or "",
             viking_fs=service.viking_fs,
             api_key_hashing_enabled=config.api_key_hashing_enabled,
+            issue_user_keys=False,
         )
         await api_key_manager.load()
         self._api_key_manager = api_key_manager

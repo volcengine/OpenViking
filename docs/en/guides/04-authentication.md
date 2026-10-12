@@ -506,6 +506,8 @@ curl https://openviking.example.com/api/v1/fs/ls?uri=viking:// \
 
 ## Trusted Mode
 
+Trusted mode manages user identities and roles without personal credentials. Creating accounts (including the first administrator) or users generates no personal key, hash, or key index. Resetting a personal key returns HTTP 412 (`FAILED_PRECONDITION`). Studio can select users without personal keys; Bot authenticates with the deployment root key and sends user identity separately. Existing personal keys are not automatically deleted and are not used for trusted authentication.
+
 Trusted mode skips user-key lookup and instead trusts explicit identity headers on each request:
 
 ```json

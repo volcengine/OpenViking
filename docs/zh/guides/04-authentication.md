@@ -445,6 +445,8 @@ rank 用于降权检查，不会继承 ADMIN 的接口权限。`require_role()` 
 
 ### Trusted 模式
 
+Trusted 模式只管理用户身份和角色。创建账号（包括首个管理员）和创建用户都不生成个人密钥、哈希或密钥索引；重置个人密钥返回 HTTP 412（`FAILED_PRECONDITION`）。Studio 可选择没有个人密钥的用户；Bot 使用部署配置的 root key 认证，并单独传递用户身份。已有个人密钥不会被自动删除，也不用于 trusted 认证。
+
 trusted 模式的普通数据面请求无需预先注册 user 或创建 user API Key。服务端会异步批量注册
 该 account/user，使其最终出现在既有 account/user 管理接口中（默认五分钟刷盘）。注册不会
 创建 user API Key，也不会修改 group 或已有 user 的角色。设置

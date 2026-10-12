@@ -1,4 +1,5 @@
 import { getOvResult, ovClient } from '#/lib/ov-client'
+import type { ServerMode } from '#/hooks/use-server-mode'
 
 export type Connection = {
   id: string
@@ -128,7 +129,7 @@ export function rotateCredentials(
   )
 }
 
-export async function getBotUsers() {
+export async function getBotUsers(serverMode: ServerMode) {
   const { accountId } = ovClient.getConnection()
   if (!accountId) throw new Error('Select an account before managing bots')
   const users = await getOvResult<
@@ -141,7 +142,7 @@ export async function getBotUsers() {
   )
   return users.map((user) => ({
     user_id: user.user_id,
-    available: user.api_key_available,
+    available: serverMode === 'trusted' || user.api_key_available,
   }))
 }
 

@@ -53,6 +53,10 @@ from openviking.session.memory.session_extract_context_provider import SessionEx
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    OpenVikingConfigSingleton,
+)
 
 
 def _uid() -> str:
@@ -190,6 +194,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
 @pytest_asyncio.fixture(scope="function")
 async def lightweight_admin_app(monkeypatch):
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
     app = _build_lightweight_admin_test_app()
     await app.state.fake_service.runtime_config_manager.initialize()
     await app.state.api_key_manager.load()
@@ -3131,26 +3136,17 @@ async def test_session_storage_uses_canonical_uri(
 
 
 @pytest_asyncio.fixture(scope="function")
-async def trusted_admin_app(admin_service):
+async def trusted_admin_app(lightweight_admin_app):
     from openviking.server.auth.plugins import TrustedAuthPlugin
-    from openviking.server.auth.registry import get_registry
 
-    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
-    app = create_app(config=config, service=admin_service)
-    set_service(admin_service)
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
-    await manager.load()
-    # Create test users for trusted mode tests if they don't exist
-    if "platform" not in manager._accounts:
-        await manager.create_account("platform", "gateway-admin")
-    app.state.api_key_manager = manager
-
-    # Set auth plugin (lifespan not triggered in ASGI tests)
-    registry = get_registry()
-    if registry.get("trusted") is None:
-        registry.register(TrustedAuthPlugin)
-    app.state.auth_plugin = registry.get("trusted")()
-
+    app = lightweight_admin_app
+    config = ServerConfig(
+        auth_mode="trusted", root_api_key=ROOT_KEY, trusted_identity_flush_interval_seconds=0
+    )
+    app.state.config = config
+    app.state.auth_plugin = TrustedAuthPlugin()
+    await app.state.auth_plugin.initialize(app, app.state.fake_service, config)
+    await app.state.api_key_manager.create_account("platform", "gateway-admin")
     return app
 
 
@@ -3186,11 +3182,20 @@ async def test_trusted_mode_root_can_create_account(
     assert "user_key" not in body["result"]
 
 
+@pytest.mark.parametrize("hashing_enabled", [False, True])
 async def test_trusted_mode_admin_can_register_user_in_own_account(
     trusted_admin_client: httpx.AsyncClient,
     trusted_admin_app,
+    monkeypatch,
+    hashing_enabled,
 ):
     """Trusted ADMIN requests should be able to manage users in their own account."""
+    manager = trusted_admin_app.state.api_key_manager
+    manager._legacy._api_key_hashing_enabled = hashing_enabled
+    monkeypatch.setattr(
+        "openviking.server.api_keys.new.generate_api_key",
+        Mock(side_effect=AssertionError("trusted must not generate personal credentials")),
+    )
     acct = _uid()
     create_resp = await trusted_admin_client.post(
         "/api/v1/admin/accounts",
@@ -3216,6 +3221,18 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
     assert resp.json()["result"]["account_id"] == acct
     assert resp.json()["result"]["user_id"] == "bob"
     assert "user_key" not in resp.json()["result"]
+
+    before = deepcopy(manager._accounts[acct].users)
+    assert before == {"alice": {"role": "admin"}, "bob": {"role": "user"}}
+    response = await trusted_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/bob/key", headers=root_headers()
+    )
+    assert response.status_code == 412
+    assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
+    assert response.json()["error"]["message"] == "Personal API keys are disabled in trusted mode"
+    await manager.reload()
+    assert manager._accounts[acct].users == before
+    assert manager._legacy._prefix_index == {}
 
 
 async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(

@@ -94,6 +94,8 @@ class NewAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        *,
+        issue_user_keys: bool = True,
     ):
         """Initialize NewAPIKeyManager.
 
@@ -102,7 +104,9 @@ class NewAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            issue_user_keys: Whether this auth plugin issues personal credentials.
         """
+        self._issue_user_keys = issue_user_keys
         # Delegate to legacy manager for all core functionality
         self._legacy = LegacyAPIKeyManager(
             root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled
@@ -195,12 +199,36 @@ class NewAPIKeyManager:
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)
 
+    def _issue_user_key(
+        self, account_id: str, user_id: str, user_info: dict, seed: Optional[str]
+    ) -> str:
+        """Generate, store and index one personal credential."""
+        key = generate_api_key(account_id, user_id, seed)
+        is_hashed = self._legacy._api_key_hashing_enabled
+        stored_key = self._legacy._hash_api_key(key) if is_hashed else key
+        prefix = self._legacy._get_key_prefix(key)
+        user_info["key"] = stored_key
+        if is_hashed:
+            user_info["key_prefix"] = prefix
+        else:
+            user_info.pop("key_prefix", None)
+        self._legacy._prefix_index.setdefault(prefix, []).append(
+            UserKeyEntry(
+                account_id=account_id,
+                user_id=user_id,
+                role=Role(user_info["role"]),
+                key_or_hash=stored_key,
+                is_hashed=is_hashed,
+            )
+        )
+        return key
+
     async def create_account(
         self,
         account_id: str,
         admin_user_id: str,
         seed: Optional[str] = None,
-    ) -> str:
+    ) -> str | None:
         async with self._legacy.mutation_lock:
             return await self._create_account_unlocked(account_id, admin_user_id, seed)
 
@@ -209,10 +237,10 @@ class NewAPIKeyManager:
         account_id: str,
         admin_user_id: str,
         seed: Optional[str] = None,
-    ) -> str:
+    ) -> str | None:
         """Create a new account (workspace) with its first admin user.
 
-        Returns the admin user's API key in new format.
+        Returns the admin user's API key when personal credentials are enabled.
         """
         # Validate account_id and user_id format
         verr = validate_account_id(account_id)
@@ -221,13 +249,6 @@ class NewAPIKeyManager:
         verr = validate_user_id(admin_user_id)
         if verr:
             raise InvalidArgumentError(verr)
-
-        # Generate new format key
-        key = generate_api_key(account_id, admin_user_id, seed)
-
-        # Use legacy to create account but with our new key
-        # We temporarily replace the generate method, call, then restore
-        # Instead, we implement the create_account with new key format
 
         # Check existence first
         if account_id in self._legacy._accounts:
@@ -240,21 +261,12 @@ class NewAPIKeyManager:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        if self._legacy._api_key_hashing_enabled:
-            stored_key = self._legacy._hash_api_key(key)
-            is_hashed = True
-            key_prefix = self._legacy._get_key_prefix(key)
-        else:
-            stored_key = key
-            is_hashed = False
-            key_prefix = self._legacy._get_key_prefix(key)
-
-        user_info = {
-            "role": "admin",
-            "key": stored_key,
-        }
-        if self._legacy._api_key_hashing_enabled:
-            user_info["key_prefix"] = key_prefix
+        user_info = {"role": "admin"}
+        key = (
+            self._issue_user_key(account_id, admin_user_id, user_info, seed)
+            if self._issue_user_keys
+            else None
+        )
 
         # Add to legacy's data structures
         self._legacy._accounts[account_id] = AccountInfo(
@@ -262,19 +274,6 @@ class NewAPIKeyManager:
             users={admin_user_id: user_info},
             groups={},
         )
-
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=admin_user_id,
-            role=Role.ADMIN,
-            key_or_hash=stored_key,
-            is_hashed=is_hashed,
-        )
-
-        if key_prefix:
-            if key_prefix not in self._legacy._prefix_index:
-                self._legacy._prefix_index[key_prefix] = []
-            self._legacy._prefix_index[key_prefix].append(entry)
 
         account_was_created = False
         try:
@@ -311,7 +310,7 @@ class NewAPIKeyManager:
         user_id: str,
         role: str = "user",
         seed: Optional[str] = None,
-    ) -> str:
+    ) -> str | None:
         async with self._legacy.mutation_lock:
             return await self._register_user_unlocked(account_id, user_id, role, seed)
 
@@ -321,8 +320,8 @@ class NewAPIKeyManager:
         user_id: str,
         role: str = "user",
         seed: Optional[str] = None,
-    ) -> str:
-        """Register a new user in an account. Returns the user's API key in new format."""
+    ) -> str | None:
+        """Register a user, issuing a personal credential only when enabled."""
         resolved_role = validate_account_user_role(role)
         # Validate user_id format
         verr = validate_user_id(user_id)
@@ -341,39 +340,13 @@ class NewAPIKeyManager:
 
             raise AlreadyExistsError(user_id, "user")
 
-        # Generate new format key
-        key = generate_api_key(account_id, user_id, seed)
-
-        if self._legacy._api_key_hashing_enabled:
-            stored_key = self._legacy._hash_api_key(key)
-            is_hashed = True
-            key_prefix = self._legacy._get_key_prefix(key)
-        else:
-            stored_key = key
-            is_hashed = False
-            key_prefix = self._legacy._get_key_prefix(key)
-
-        user_info = {
-            "role": resolved_role,
-            "key": stored_key,
-        }
-        if self._legacy._api_key_hashing_enabled:
-            user_info["key_prefix"] = key_prefix
-
-        account.users[user_id] = user_info
-
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=user_id,
-            role=resolved_role,
-            key_or_hash=stored_key,
-            is_hashed=is_hashed,
+        user_info = {"role": resolved_role}
+        key = (
+            self._issue_user_key(account_id, user_id, user_info, seed)
+            if self._issue_user_keys
+            else None
         )
-
-        if key_prefix:
-            if key_prefix not in self._legacy._prefix_index:
-                self._legacy._prefix_index[key_prefix] = []
-            self._legacy._prefix_index[key_prefix].append(entry)
+        account.users[user_id] = user_info
 
         try:
             await self._legacy._save_users_json(
@@ -458,6 +431,9 @@ class NewAPIKeyManager:
 
         Generates new format key regardless of original format.
         """
+        if not self._issue_user_keys:
+            raise FailedPreconditionError("Personal API keys are disabled in trusted mode")
+
         # Check account and user exist
         self._legacy.ensure_account_active(account_id)
         account = self._legacy._accounts.get(account_id)
@@ -473,55 +449,8 @@ class NewAPIKeyManager:
             raise FailedPreconditionError("User deletion is in progress")
 
         old_user_info = account.users[user_id]
-        old_key_or_hash = old_user_info.get("key", "")
-
-        # Get old key_prefix
-        old_key_prefix = old_user_info.get("key_prefix", "")
-        if not old_key_prefix and old_key_or_hash:
-            old_key_prefix = self._legacy._get_key_prefix(old_key_or_hash)
-
-        # Remove old key from prefix index
-        if old_key_prefix in self._legacy._prefix_index:
-            self._legacy._prefix_index[old_key_prefix] = [
-                entry
-                for entry in self._legacy._prefix_index[old_key_prefix]
-                if not (entry.account_id == account_id and entry.user_id == user_id)
-            ]
-            if not self._legacy._prefix_index[old_key_prefix]:
-                del self._legacy._prefix_index[old_key_prefix]
-
-        # Generate new key in new format
-        new_key = generate_api_key(account_id, user_id, seed)
-
-        if self._legacy._api_key_hashing_enabled:
-            new_stored_key = self._legacy._hash_api_key(new_key)
-            new_is_hashed = True
-            new_key_prefix = self._legacy._get_key_prefix(new_key)
-        else:
-            new_stored_key = new_key
-            new_is_hashed = False
-            new_key_prefix = self._legacy._get_key_prefix(new_key)
-
-        # Update user info
-        account.users[user_id]["key"] = new_stored_key
-        if self._legacy._api_key_hashing_enabled:
-            account.users[user_id]["key_prefix"] = new_key_prefix
-        else:
-            if "key_prefix" in account.users[user_id]:
-                del account.users[user_id]["key_prefix"]
-
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=user_id,
-            role=Role(account.users[user_id]["role"]),
-            key_or_hash=new_stored_key,
-            is_hashed=new_is_hashed,
-        )
-
-        if new_key_prefix:
-            if new_key_prefix not in self._legacy._prefix_index:
-                self._legacy._prefix_index[new_key_prefix] = []
-            self._legacy._prefix_index[new_key_prefix].append(entry)
+        self._legacy._remove_key_index_entry(account_id, user_id, old_user_info)
+        new_key = self._issue_user_key(account_id, user_id, old_user_info, seed)
 
         await self._legacy._save_users_json(account_id, {user_id: account.users[user_id]})
         return new_key
@@ -561,7 +490,7 @@ class NewAPIKeyManager:
             limit=limit,
             name_filter=name_filter,
             role_filter=role_filter,
-            expose_key=expose_key,
+            expose_key=expose_key and self._issue_user_keys,
             page=page,
         )
 
@@ -580,7 +509,7 @@ class NewAPIKeyManager:
             limit=limit,
             name_filter=name_filter,
             role_filter=role_filter,
-            expose_key=expose_key,
+            expose_key=expose_key and self._issue_user_keys,
             page=page,
             query_filter=query_filter,
         )
