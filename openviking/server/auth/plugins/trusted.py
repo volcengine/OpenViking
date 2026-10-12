@@ -104,9 +104,16 @@ class TrustedAuthPlugin(AuthPlugin):
     ) -> ResolvedIdentity:
         configured_root_api_key = request.app.state.config.root_api_key
         if not api_key:
-            raise UnauthenticatedError("Missing API Key in trusted mode.")
+            raise UnauthenticatedError(
+                "Missing API Key in trusted mode. Send X-API-Key with the value of "
+                "server.root_api_key from the server's ov.conf. In Web Studio, enter "
+                "this value in Connection settings > Root or Admin API Key."
+            )
         if not configured_root_api_key or not hmac.compare_digest(api_key, configured_root_api_key):
-            raise UnauthenticatedError("Invalid API Key in trusted mode.")
+            raise UnauthenticatedError(
+                "Invalid API Key in trusted mode. The supplied key must match "
+                "server.root_api_key in the server's ov.conf."
+            )
         asserted_role = _asserted_role_from_header(request)
 
         explicit_account_id, explicit_user_id = _explicit_identity_from_request(request)
@@ -170,8 +177,9 @@ class TrustedAuthPlugin(AuthPlugin):
         if config.root_api_key and config.root_api_key.strip():
             return
         logger.error(
-            "server.auth_mode='trusted' requires a non-empty server.root_api_key, "
-            "including on localhost."
+            "Cannot start OpenViking: trusted mode requires a non-empty server.root_api_key, "
+            "including on localhost. Set server.root_api_key in the server's ov.conf and "
+            "restart. Configure clients and Web Studio to use the same key."
         )
         sys.exit(1)
 

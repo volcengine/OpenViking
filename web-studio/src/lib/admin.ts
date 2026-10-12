@@ -71,6 +71,7 @@ export type CapabilityDetailCode =
   | 'rootAvailable'
   | 'tenantDataAvailable'
   | 'trustedIdentityRequired'
+  | 'trustedKeyRequired'
 
 export type CapabilityProbeResult = {
   detail?: string
@@ -202,7 +203,10 @@ async function probeAdminAccess(
   const controlKey = input.adminApiKey.trim()
   if (!controlKey) {
     return {
-      detailCode: 'controlKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'controlKeyRequired',
       state: 'skipped',
     }
   }
@@ -254,7 +258,10 @@ async function probeDataAccess(
     input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : '')
   if (input.serverMode !== 'dev' && !apiKey) {
     return {
-      detailCode: 'dataKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'dataKeyRequired',
       state: 'skipped',
     }
   }

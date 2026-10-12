@@ -349,7 +349,11 @@ function ConnectionSettingsPanel() {
                       {...PLAIN_INPUT_PROPS}
                     />
                     <FieldDescription>
-                      {t('connection.rootHint')}
+                      {t(
+                        serverMode === 'trusted'
+                          ? 'connection.trustedRootHint'
+                          : 'connection.rootHint',
+                      )}
                     </FieldDescription>
                   </FieldContent>
                 </Field>
@@ -367,7 +371,11 @@ function ConnectionSettingsPanel() {
                       placeholder={t('placeholders.userApiKey')}
                     />
                     <FieldDescription>
-                      {t('connection.userHint')}
+                      {t(
+                        serverMode === 'trusted'
+                          ? 'connection.trustedUserHint'
+                          : 'connection.userHint',
+                      )}
                     </FieldDescription>
                   </FieldContent>
                 </Field>

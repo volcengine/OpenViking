@@ -47,7 +47,7 @@ describe('trusted connection probes', () => {
         })
         expect(result.admin).toMatchObject({
           state: 'skipped',
-          detailCode: 'controlKeyRequired',
+          detailCode: 'trustedKeyRequired',
         })
         if (apiKey) {
           expect(result.data).toMatchObject({
@@ -61,7 +61,7 @@ describe('trusted connection probes', () => {
         } else {
           expect(result.data).toMatchObject({
             state: 'skipped',
-            detailCode: 'dataKeyRequired',
+            detailCode: 'trustedKeyRequired',
           })
           expect(requests).toEqual([])
         }

@@ -368,7 +368,11 @@ class TrustedAuthChecker(AuthHealthChecker):
                 HealthCheckResult(
                     name="trusted_config_valid",
                     status=HealthStatus.FAIL,
-                    message="Trusted mode requires a non-empty server.root_api_key, including on localhost",
+                    message=(
+                        "Trusted mode requires a non-empty server.root_api_key, including on "
+                        "localhost. Set it in the server's ov.conf, restart, and configure "
+                        "clients to use the same key."
+                    ),
                 )
             ]
         return [
