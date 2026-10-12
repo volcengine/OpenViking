@@ -97,6 +97,10 @@ class FailedPreconditionError(OpenVikingError):
         super().__init__(message, code="FAILED_PRECONDITION", details=details)
 
 
+class IdentityDeletingError(FailedPreconditionError):
+    """The account or user is fenced while its data is being deleted."""
+
+
 class AbortedError(OpenVikingError):
     """Operation was aborted, typically due to a concurrency conflict."""
 

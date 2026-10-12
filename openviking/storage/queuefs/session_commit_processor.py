@@ -16,6 +16,7 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from openviking.telemetry.span_models import create_root_span_attributes
+from openviking_cli.exceptions import IdentityDeletingError
 from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
@@ -110,7 +111,12 @@ class SessionCommitProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
 
-        await self._finalize_cancelled(msg, ctx)
+        try:
+            await self._finalize_cancelled(msg, ctx)
+        except IdentityDeletingError:
+            # Deletion owns the archive cleanup; it must not wait on a marker
+            # write forbidden by its own identity fence.
+            pass
         return ProcessResult.cancelled()
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
@@ -121,5 +127,11 @@ class SessionCommitProcessor(DequeueHandlerBase):
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
-        processed = await self._process(msg, ctx)
+        try:
+            processed = await self._process(msg, ctx)
+        except IdentityDeletingError as exc:
+            # A fenced cancellation-marker write can replace CancelledError.
+            # Settle through the result/ACK path; the tracker keeps a task
+            # already cancelling as cancelled, otherwise records failure.
+            return ProcessResult.failed(str(exc))
         return ProcessResult.success() if processed else ProcessResult.requeued()
