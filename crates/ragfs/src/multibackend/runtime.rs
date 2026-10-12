@@ -445,6 +445,9 @@ impl FlushWorker {
 
     /// Check account membership through the user registry when the primary view is available.
     async fn account_exists(&self, account_id: &str) -> Result<bool> {
+        if account_id == SYSTEM_DIR {
+            return Ok(true);
+        }
         let Some(primary) = &self.primary else {
             return self.store.account_exists(account_id).await;
         };

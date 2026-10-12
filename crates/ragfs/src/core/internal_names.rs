@@ -38,6 +38,13 @@ pub fn is_multiwrite_internal_path(path: &str) -> bool {
     ) {
         return true;
     }
+    if matches!(
+        components.as_slice(),
+        ["local", "_system", name] if name.starts_with(".multiwrite.catch-up.")
+    ) || matches!(components.as_slice(), ["local", "_system", "_system", ..])
+    {
+        return true;
+    }
     matches!(
         components.as_slice(),
         ["local", account, "_system", "partitions", ..] if !account.is_empty()

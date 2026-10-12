@@ -121,7 +121,8 @@ type CatchUpResult<T> = std::result::Result<T, CatchUpFailure>;
 impl CatchUpLease {
     /// Acquire the mount-level Exact lease for one logical backup id.
     async fn acquire(store: Arc<MetadataStore>, backend_id: &str) -> Result<Self> {
-        let path =format!("{MULTIWRITE_MOUNT_PREFIX}/{SYSTEM_DIR}/.multiwrite.catch-up.{backend_id}");
+        let path =
+            format!("{MULTIWRITE_MOUNT_PREFIX}/{SYSTEM_DIR}/.multiwrite.catch-up.{backend_id}");
         let manager = store.pathlock_manager();
         let lease = manager
             .acquire_exact(
@@ -236,16 +237,17 @@ impl CatchUpWorker {
         }
     }
 
-    /// Reconcile system state, registry membership, and one fixed partition window.
+    /// Reconcile registry membership and one fixed partition window per scope.
     async fn run_round(&self, lease: &Arc<CatchUpLease>) -> CatchUpResult<()> {
         let guarded = LeaseGuardedFileSystem {
             inner: self.backup.clone(),
             lease: lease.clone(),
         };
-        self.reconcile_with_retry(&guarded, &lease, SYSTEM_DIR, "/_system", true)
-            .await?;
-        let accounts = self.read_accounts().await?;
+        let mut accounts = self.read_accounts().await?;
         self.remove_extra_accounts(&guarded, &accounts).await?;
+        if !accounts.iter().any(|account| account == SYSTEM_DIR) {
+            accounts.insert(0, SYSTEM_DIR.to_string());
+        }
 
         for account in accounts {
             let path = self.store.paths().account_manifest(&account)?.0;
@@ -300,7 +302,10 @@ impl CatchUpWorker {
     /// Read sorted account ids from the encrypted mount-level registry.
     async fn read_accounts(&self) -> Result<Vec<String>> {
         let bytes = self
-            .with_context(SYSTEM_DIR,self.primary.read("/_system/accounts.json", 0, 0))
+            .with_context(
+                SYSTEM_DIR,
+                self.primary.read("/_system/accounts.json", 0, 0),
+            )
             .await?;
         let value: Value = serde_json::from_slice(&bytes)?;
         let accounts = value
@@ -857,7 +862,10 @@ async fn remove_stale_paths(
 /// Recognize internal paths in either logical or mount-relative path space.
 fn is_catch_up_internal_path(path: &str) -> bool {
     is_multiwrite_internal_path(path)
-        || is_multiwrite_internal_path(&format!("{MULTIWRITE_MOUNT_PREFIX}/{}",path.trim_start_matches('/')))
+        || is_multiwrite_internal_path(&format!(
+            "{MULTIWRITE_MOUNT_PREFIX}/{}",
+            path.trim_start_matches('/')
+        ))
 }
 
 /// Ensure one backup path is a directory with the requested mode.

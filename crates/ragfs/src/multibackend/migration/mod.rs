@@ -8,7 +8,7 @@ use crate::core::context::{FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
 use crate::core::internal_names::is_multiwrite_internal_path;
-use crate::multibackend::constants::MULTIWRITE_MOUNT_PREFIX;
+use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, SYSTEM_DIR};
 use crate::multibackend::meta::MetadataStore;
 use crate::multibackend::model::{
     PendingEvent, PendingEventKind, ProtocolState, ProtocolStatus, ProtocolVersion,
@@ -94,6 +94,7 @@ impl FullDataImporter {
             .into_iter()
             .collect::<Vec<_>>();
         accounts.sort();
+        self.import_scope(SYSTEM_DIR).await?;
         for account in &accounts {
             if !read_active_accounts(self.primary.as_ref())
                 .await?
@@ -101,19 +102,7 @@ impl FullDataImporter {
             {
                 continue;
             }
-            let partitions = self
-                .store
-                .initialize_account(account, self.initial_partitions, &self.backup_names)
-                .await?;
-            bootstrap_account(
-                self.provider.as_ref(),
-                self.store.as_ref(),
-                account,
-                &partitions,
-            )
-            .await?;
-            let context = Arc::new(FsContextInner::new(account).with_auto_pathlock_disabled());
-            FS_CTX.scope(context, self.import_account(account)).await?;
+            self.import_scope(account).await?;
         }
         self.cleanup_v1_metadata().await?;
 
@@ -137,6 +126,23 @@ impl FullDataImporter {
                 "multi-write protocol changed during full-data import",
             ))
         }
+    }
+
+    /// Initialize one V2 scope and import its current file states.
+    async fn import_scope(&self, account: &str) -> Result<()> {
+        let partitions = self
+            .store
+            .initialize_account(account, self.initial_partitions, &self.backup_names)
+            .await?;
+        bootstrap_account(
+            self.provider.as_ref(),
+            self.store.as_ref(),
+            account,
+            &partitions,
+        )
+        .await?;
+        let context = Arc::new(FsContextInner::new(account).with_auto_pathlock_disabled());
+        FS_CTX.scope(context, self.import_account(account)).await
     }
 
     /// Scan one account through the business filesystem.

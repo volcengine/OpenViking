@@ -28,7 +28,7 @@ use crate::multibackend::model::{
     ProtocolStatus, ProtocolVersion, SegmentEventType, SegmentManifest,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
-use crate::multibackend::runtime::{read_active_accounts, MultiWriteRuntime};
+use crate::multibackend::runtime::MultiWriteRuntime;
 
 const COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -148,7 +148,7 @@ impl MultiWriteWrappedFSBuilder {
             .detect()
             .await?;
         let configured_backups = backup_names.iter().collect::<BTreeSet<_>>();
-        for account in read_active_accounts(self.primary_backend.as_ref()).await? {
+        for account in metadata_store.initialized_accounts().await? {
             let path = metadata_store.paths().account_manifest(&account)?.0;
             let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
                 Ok(manifest) => manifest,
@@ -375,9 +375,6 @@ impl MultiWriteWrappedFS {
     ) -> Result<Option<PendingEvent>> {
         let ctx = self.resolve_context(path)?;
         let account_id = ctx.account_id().to_string();
-        if account_id == "_system" {
-            return Ok(None);
-        }
         let mut path = logical_path(&account_id, path)?;
         let mut destination_path = destination_path
             .map(|destination| logical_path(&account_id, destination))
