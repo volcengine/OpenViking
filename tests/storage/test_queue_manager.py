@@ -63,13 +63,13 @@ def test_queue_worker_closes_loop_scoped_clients_before_closing_its_loop() -> No
     class Queue:
         name = "Test"
 
-        async def size(self):
+        async def dequeue_raw(self):
             cache.get(Client)
             stop_event.set()
-            return 0
+            return None
 
         def has_dequeue_handler(self):
-            return False
+            return True
 
     QueueManager(agfs=object())._queue_worker_loop(Queue(), stop_event)
 
@@ -280,7 +280,8 @@ async def test_init_queue_manager_forwards_constructor_middlewares(transport, mo
 
 
 @pytest.mark.parametrize("fail", [False, True])
-async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail):
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail, concurrency):
     events = []
     stop = threading.Event()
 
@@ -308,7 +309,7 @@ async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail
         return reads.pop(0) if reads else b"{}"
 
     transport.read.side_effect = read
-    await manager._worker_async_concurrent(queue, stop, 2)
+    await manager._worker_async_concurrent(queue, stop, concurrency)
     assert queue._processed == (not fail)
     assert queue._error_count == fail
     assert events == (["process"] if fail else ["process", "ack"])
@@ -316,6 +317,97 @@ async def test_concurrent_worker_uses_process_and_ack_middleware(transport, fail
         transport.write.assert_not_awaited()
     else:
         transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
+
+
+@pytest.mark.asyncio
+async def test_single_worker_recovers_queue_initialization_before_processing(transport):
+    stop = threading.Event()
+    events = []
+    model = AsyncMock(return_value="summary")
+
+    class Recorder(QueueMiddleware):
+        async def process(self, ctx, call_next):
+            events.append("process")
+            return await call_next(ctx)
+
+        async def ack(self, ctx, call_next):
+            events.append("ack")
+            return await call_next(ctx)
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            await model()
+            stop.set()
+            return ProcessResult.success(data)
+
+    manager = QueueManager(object(), middlewares=[Recorder()])
+    manager._poll_interval = 0.001
+    queue = manager.get_queue("Test", dequeue_handler=Handler(), allow_create=True)
+    transport.mkdir.side_effect = [RuntimeError("503 initializing queue"), None]
+    transport.read.return_value = b'{"id":"message-1","data":"{}"}'
+
+    await asyncio.wait_for(manager._worker_async_concurrent(queue, stop, 1), timeout=1)
+
+    assert transport.mkdir.await_count == 2
+    transport.read.assert_awaited_once_with("/queue/Test/dequeue")
+    model.assert_awaited_once()
+    assert events == ["process", "ack"]
+    assert queue._processed == 1
+    assert queue._error_count == 0
+    transport.write.assert_awaited_once_with("/queue/Test/ack", b"message-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_shutdown_cancels_admission_without_acknowledging_delivery(concurrency):
+    from openviking.utils.circuit_breaker import CircuitBreaker
+
+    entered, cancelled = threading.Event(), threading.Event()
+    acknowledged = []
+    breaker = CircuitBreaker(failure_threshold=1, reset_timeout=60)
+    breaker.record_failure(RuntimeError("503 unavailable"))
+
+    class Queue:
+        name = QueueManager.EMBEDDING
+        dispatched = False
+
+        def has_dequeue_handler(self):
+            return True
+
+        async def dequeue_raw(self):
+            if self.dispatched:
+                return None
+            self.dispatched = True
+            return {"id": "waiting-message", "data": "{}"}
+
+        async def process_dequeued(self, data):
+            entered.set()
+            try:
+                await breaker.wait_until_ready()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return ProcessResult.success()
+
+        async def ack(self, *args):
+            acknowledged.append(args)
+
+    manager = QueueManager(object(), max_concurrent_embedding=concurrency)
+    manager._poll_interval = 0.001
+    manager._queues = {Queue.name: Queue()}
+    manager.start()
+    threads = list(manager._queue_threads.values())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        await asyncio.wait_for(asyncio.to_thread(manager.stop), timeout=8)
+        assert cancelled.is_set()
+        assert acknowledged == []
+        assert all(not thread.is_alive() for thread in threads)
+        assert manager._embedding_worker_stopped.is_set()
+        assert breaker._failure_count == 1
+    finally:
+        if manager.is_running():
+            await asyncio.to_thread(manager.stop)
 
 
 async def test_bootstrap_restores_legacy_messages_into_middleware_index(transport):

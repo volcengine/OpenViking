@@ -14,11 +14,12 @@ import json
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Iterator, Mapping, Optional
 from uuid import uuid4
 
 from openviking.service.task_processing_time import ProcessingClock, processing_owner
+from openviking.utils.retry_budget import RetryBudget
 
 TASK_WORK_ID_FIELD = "_task_work_id"
 
@@ -32,6 +33,7 @@ class TaskExecutionContext:
     task_id: str
     account_id: str
     user_id: str
+    work_index: TaskWorkIndex | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -53,13 +55,19 @@ def bind_task_context(
     task_id: str,
     account_id: str,
     user_id: str,
+    *,
+    work_index: TaskWorkIndex | None = None,
 ) -> Iterator[None]:
     """Propagate task ownership to queue messages produced by this coroutine."""
+    parent = _current_task_context.get()
+    if work_index is None and parent is not None and parent.task_id == str(task_id):
+        work_index = parent.work_index
     token = _current_task_context.set(
         TaskExecutionContext(
             task_id=str(task_id),
             account_id=str(account_id),
             user_id=str(user_id),
+            work_index=work_index,
         )
     )
     try:
@@ -161,6 +169,9 @@ class TaskWorkIndex:
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
         self._failures: Dict[str, str] = {}
         self._processing: Dict[str, ProcessingClock] = {}
+        # Retained with the task record, including failed ACKs and redelivery.
+        # QueueFS cannot rebuild consumed retries after a process restart.
+        self._retry_budgets: Dict[str, RetryBudget] = {}
         self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
         self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
@@ -295,6 +306,18 @@ class TaskWorkIndex:
     def clear_failure(self, task_id: str) -> None:
         with self._lock:
             self._failures.pop(task_id, None)
+
+    def retry_budget(self, task_id: str, max_retries: int) -> RetryBudget:
+        with self._lock:
+            budget = self._retry_budgets.get(task_id)
+            if budget is None:
+                budget = self._retry_budgets[task_id] = RetryBudget(max_retries)
+            return budget
+
+    def forget_retry_budget(self, task_id: str) -> None:
+        with self._lock:
+            if not self._work.get(task_id) and not self._active.get(task_id):
+                self._retry_budgets.pop(task_id, None)
 
     def init_processing(self, task_id: str) -> None:
         with self._lock:

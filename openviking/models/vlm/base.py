@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking.utils.model_call import delegate_model_call, run_model_async, run_model_sync
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
@@ -759,9 +760,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -818,12 +817,10 @@ class MultiCredentialVLM(VLMBase):
             "model": first.model,
             "provider": first.provider,
             "temperature": first.temperature,
-            "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
+            "max_retries": first.max_retries,
         }
         super().__init__(config)
 
@@ -837,102 +834,58 @@ class MultiCredentialVLM(VLMBase):
         )
 
     def _get_completion_with_failover(self, method_name: str, *args, **kwargs):
-        """Execute a VLM method with multi-credential failover support.
-
-        Args:
-            method_name: Name of the method to call on VLM instances
-            *args: Positional arguments to pass to the method
-            **kwargs: Keyword arguments to pass to the method
-
-        Returns:
-            The result from the VLM method
-
-        Raises:
-            AllCredentialsFailedError if all credentials fail
-        """
-        aggregated_errors = []
-
-        # Start from the current (possibly failed-back) active credential, then
-        # cycle through the whole ring once. This means an unavailable active
-        # credential (e.g. the last one) does not block the request: a working
-        # credential found this cycle serves it and becomes the new active one
-        # (fast failover). The slow, sticky failback to higher priority is still
-        # handled by maybe_failback() across requests.
+        """One logical call, one total budget across ordered credentials."""
         start = self._switcher.maybe_failback()
-        n = self._switcher.n
 
-        for offset in range(n):
-            idx = (start + offset) % n
-            credential_id = self._credential_ids[idx]
-            vlm_instance = self._vlm_instances[idx]
-
-            try:
-                method = getattr(vlm_instance, method_name)
-                result = method(*args, **kwargs)
+        def candidate(idx):
+            def execute_once():
+                instance = self._vlm_instances[idx]
+                try:
+                    with delegate_model_call(instance):
+                        result = getattr(instance, method_name)(*args, **kwargs)
+                except Exception as error:
+                    _annotate_vlm_error(error, instance)
+                    raise
                 self._switcher.commit_success(idx)
                 return result
-            except Exception as exc:
-                _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                if self._switcher.is_fail_fast(error_class):
-                    # Request-level failure (400 / input too large / content
-                    # safety): re-raise the original exception so callers can
-                    # react to its type; trying other credentials is useless.
-                    raise
+            return execute_once
 
-                self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
-                )
-
-        raise AllCredentialsFailedError(aggregated_errors)
+        callbacks = [candidate((start + i) % self._switcher.n) for i in range(self._switcher.n)]
+        return run_model_sync(
+            callbacks[0],
+            alternatives=callbacks[1:],
+            model_type="vlm",
+            max_retries=self.max_retries,
+            adapter=self,
+        )
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
-        """Execute an async VLM method with multi-credential failover support.
-
-        Args:
-            method_name: Name of the async method to call on VLM instances
-            *args: Positional arguments to pass to the method
-            **kwargs: Keyword arguments to pass to the method
-
-        Returns:
-            The result from the async VLM method
-
-        Raises:
-            AllCredentialsFailedError if all credentials fail
-        """
-        aggregated_errors = []
-
-        # See the sync variant for the ring-traversal rationale.
+        """One logical call, one total budget across ordered credentials."""
         start = self._switcher.maybe_failback()
-        n = self._switcher.n
 
-        for offset in range(n):
-            idx = (start + offset) % n
-            credential_id = self._credential_ids[idx]
-            vlm_instance = self._vlm_instances[idx]
-
-            try:
-                method = getattr(vlm_instance, method_name)
-                result = await method(*args, **kwargs)
+        def candidate(idx):
+            async def execute_once():
+                instance = self._vlm_instances[idx]
+                try:
+                    with delegate_model_call(instance):
+                        result = await getattr(instance, method_name)(*args, **kwargs)
+                except Exception as error:
+                    _annotate_vlm_error(error, instance)
+                    raise
                 self._switcher.commit_success(idx)
                 return result
-            except Exception as exc:
-                _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                if self._switcher.is_fail_fast(error_class):
-                    # Request-level failure: re-raise the original exception;
-                    # trying other credentials is useless.
-                    raise
+            return execute_once
 
-                self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
-                )
-
-        raise AllCredentialsFailedError(aggregated_errors)
+        callbacks = [candidate((start + i) % self._switcher.n) for i in range(self._switcher.n)]
+        return await run_model_async(
+            callbacks[0],
+            alternatives=callbacks[1:],
+            model_type="vlm",
+            max_retries=self.max_retries,
+            adapter=self,
+        )
 
     async def stream_with_failover(
         self,

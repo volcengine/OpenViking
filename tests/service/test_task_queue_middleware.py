@@ -24,6 +24,11 @@ from openviking.storage.queuefs.queue_middleware import QueueMiddleware
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.utils.log_correlation import log_correlation
+from openviking.utils.model_call import (
+    current_model_workload,
+    model_workload,
+    run_model_async,
+)
 
 
 @pytest.fixture
@@ -151,6 +156,67 @@ async def test_failed_ack_or_clear_restores_work(tracked_queue, operation, failu
         assert await invoke() is None
     finalize.assert_awaited_once()
     assert index.has_work("task-1")
+
+
+async def test_retry_budget_survives_failed_ack_redelivery_and_next_queue(
+    tracked_queue, monkeypatch
+):
+    queue, index, transport, finalize, _ = tracked_queue
+    message = await enqueue_task(queue, transport)
+    monkeypatch.setattr("openviking.utils.model_call.random.uniform", lambda *_: 0)
+    budgets = []
+    attempts = []
+
+    class Handler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            local_attempts = 0
+
+            async def io():
+                nonlocal local_attempts
+                local_attempts += 1
+                attempts.append(get_task_context().task_id)
+                if local_attempts == 1:
+                    raise TimeoutError("provider timed out")
+                return "ok"
+
+            with model_workload("add_resource", max_retries=2):
+                budgets.append(current_model_workload().retry_budget)
+                try:
+                    await run_model_async(io, model_type="embedding")
+                except TimeoutError as error:
+                    assert error.model_call_error.reason == "retry_budget"
+                    return ProcessResult.failed(str(error))
+            return ProcessResult.success(data)
+
+    queue.set_dequeue_handler(Handler())
+    assert (await queue.process_dequeued(message)).outcome is ProcessOutcome.SUCCESS
+    budget = budgets[0]
+    assert budget.retry_count == 1
+    transport.write.side_effect = OSError("ACK failed")
+    await queue.ack("message-1", message)
+    finalize.assert_awaited_once()
+    assert index.has_work("task-1")
+    assert index.retry_budget("task-1", 99) is budget
+    assert (await queue.process_dequeued(message)).outcome is ProcessOutcome.SUCCESS
+    assert budget.retry_count == 2
+
+    transport.write.side_effect = None
+    downstream = NamedQueue(
+        object(), "/queue", "Embedding", middlewares=[TaskWorkQueueMiddleware(index)]
+    )
+    downstream.set_dequeue_handler(Handler())
+    child = await enqueue_task(downstream, transport)
+    await queue.ack("message-1", message)
+    index.forget_retry_budget("task-1")  # Pending downstream work protects it.
+    assert (await downstream.process_dequeued(child)).outcome is ProcessOutcome.FAILED
+    assert all(item is budget for item in budgets)
+    assert len(attempts) == 3 + 2
+    assert budget.retry_count == 2
+    await downstream.ack("message-1", child)
+    assert not index.has_work("task-1")
+    assert index.retry_budget("task-1", 99) is budget
+    index.forget_retry_budget("task-1")  # Task-record deletion may now release it.
+    assert index.retry_budget("task-1", 2) is not budget
 
 
 @pytest.mark.parametrize("operation", ["ack", "clear"])

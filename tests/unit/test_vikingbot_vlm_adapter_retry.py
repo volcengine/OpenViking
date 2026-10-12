@@ -138,6 +138,23 @@ async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_chat_does_not_retry_terminal_rate_limit_error(monkeypatch):
+    async def _sleep(_delay: float):
+        raise AssertionError("a terminal model outcome must not receive a new retry budget")
+
+    monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
+    terminal = RuntimeError("Error code: 429 - TooManyRequests")
+    terminal.model_retry_terminal = True
+    fake_vlm = _FakeVLM([terminal])
+    adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
+
+    response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
+
+    assert response.finish_reason == "error"
+    assert fake_vlm.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_chat_accepts_string_response_from_openai_backend_with_tools(monkeypatch):
     async def create(**_kwargs):
         return "plain string response"

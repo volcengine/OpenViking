@@ -3,7 +3,10 @@
 
 """Comprehensive tests for circuit breaker utility."""
 
+import asyncio
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -204,6 +207,65 @@ class TestCircuitBreaker:
         # Should transition to HALF_OPEN and allow probe
         cb.check()  # Should not raise
 
+    def test_half_open_allows_only_one_concurrent_probe(self):
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+        cb.record_failure(Exception("500 Error"))
+        barrier = threading.Barrier(12)
+
+        def check_once():
+            barrier.wait()
+            try:
+                cb.check()
+                return True
+            except CircuitBreakerOpen:
+                return False
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            admitted = list(pool.map(lambda _: check_once(), range(12)))
+
+        assert admitted.count(True) == 1
+        assert admitted.count(False) == 11
+
+    def test_stale_success_cannot_close_a_new_half_open_generation(self):
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+        cb.check()  # lease for an ordinary request in the original generation
+
+        opener = threading.Thread(target=lambda: cb.record_failure(Exception("500 Error")))
+        opener.start()
+        opener.join()
+
+        probe_admitted = threading.Event()
+        finish_probe = threading.Event()
+
+        def probe():
+            cb.check()
+            probe_admitted.set()
+            finish_probe.wait(timeout=2)
+            cb.record_success()
+
+        probe_thread = threading.Thread(target=probe)
+        probe_thread.start()
+        assert probe_admitted.wait(timeout=2)
+
+        cb.record_success()  # late success from the original CLOSED generation
+        with pytest.raises(CircuitBreakerOpen, match="probe in progress"):
+            cb.check()
+
+        finish_probe.set()
+        probe_thread.join(timeout=2)
+        assert not probe_thread.is_alive()
+        cb.check()
+
+    def test_abandoned_half_open_probe_allows_a_new_probe(self):
+        cb = CircuitBreaker(failure_threshold=1, reset_timeout=0)
+        cb.record_failure(Exception("500 Error"))
+
+        cb.check()
+        cb.abandon()
+        cb.check()
+        cb.record_success()
+        cb.check()
+
     def test_half_open_to_closed_on_success(self):
         """Test HALF_OPEN transitions to CLOSED on success."""
         cb = CircuitBreaker(failure_threshold=1, reset_timeout=0.1)
@@ -365,3 +427,79 @@ class TestCircuitBreakerEdgeCases:
 
         with pytest.raises(CircuitBreakerOpen):
             cb.check()
+
+
+@pytest.mark.parametrize(
+    "message", ["400 invalid parameter", "413 payload too large", "content policy rejected"]
+)
+def test_request_rejection_does_not_change_breaker_health(message):
+    cb = CircuitBreaker(failure_threshold=1)
+    cb.record_failure(RuntimeError(message))
+    cb.check()
+    assert cb._failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_waits_one_existing_cooldown_then_allows_work(monkeypatch):
+    now = [100.0]
+    waits = []
+    monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: now[0])
+
+    async def sleep(delay):
+        waits.append(delay)
+        now[0] += delay
+
+    monkeypatch.setattr("openviking.utils.circuit_breaker.asyncio.sleep", sleep)
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=65)
+    cb.record_failure(RuntimeError("503 unavailable"))
+    await cb.wait_until_ready()
+    assert waits == [30, 30, 5]
+    assert cb._failure_count == 1
+    cb.record_success()
+    cb.check()
+
+
+@pytest.mark.asyncio
+async def test_other_failures_cannot_extend_admission_wait(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: now[0])
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10)
+    cb.record_failure(RuntimeError("503 unavailable"))
+
+    async def sleep(delay):
+        now[0] += delay
+        cb.record_failure(RuntimeError("503 unavailable"))
+
+    monkeypatch.setattr("openviking.utils.circuit_breaker.asyncio.sleep", sleep)
+    with pytest.raises(CircuitBreakerOpen, match="after admission wait"):
+        await cb.wait_until_ready()
+    assert now[0] == 110
+
+
+@pytest.mark.asyncio
+async def test_admission_respects_earlier_absolute_deadline(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("openviking.utils.circuit_breaker.time.time", lambda: now[0] + 900)
+
+    async def sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr("openviking.utils.circuit_breaker.asyncio.sleep", sleep)
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=60)
+    cb.record_failure(RuntimeError("503 unavailable"))
+    with pytest.raises(CircuitBreakerOpen, match="deadline"):
+        await cb.wait_until_ready(deadline_at=1005)
+    assert now[0] == 105
+
+
+@pytest.mark.asyncio
+async def test_admission_wait_is_cancellable_without_changing_health():
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=60)
+    cb.record_failure(RuntimeError("503 unavailable"))
+    task = asyncio.create_task(cb.wait_until_ready())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cb._failure_count == 1

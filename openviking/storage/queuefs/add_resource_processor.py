@@ -25,6 +25,7 @@ from openviking.telemetry import (
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
 from openviking.utils.log_correlation import log_correlation
+from openviking.utils.model_call import model_workload
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
@@ -228,6 +229,7 @@ class AddResourceProcessor(DequeueHandlerBase):
 
         with (
             bind_execution_context(),
+            model_workload("add_resource", root_task_id=msg.task_id),
             bind_telemetry(telemetry),
             bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
         ):

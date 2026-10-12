@@ -301,6 +301,7 @@ class TaskTracker:
 
         for tid in capacity_evicted:
             self._work_index.forget_processing(tid)
+            self._work_index.forget_retry_budget(tid)
 
         if evicted_count:
             logger.debug("[TaskTracker] Evicted %d expired tasks", evicted_count)
@@ -346,6 +347,7 @@ class TaskTracker:
             with self._lock:
                 self._tasks.pop(task_id, None)
             self._work_index.forget_processing(task_id)
+            self._work_index.forget_retry_budget(task_id)
             return True
 
     @staticmethod
@@ -821,6 +823,7 @@ class TaskTracker:
         for task_id in task_ids:
             self._work_index.clear_failure(task_id)
             self._work_index.forget_processing(task_id)
+            self._work_index.forget_retry_budget(task_id)
 
     async def delete_user_tasks(self, account_id: str, user_id: str) -> int:
         """Delete terminal task records for one user from storage and cache."""
@@ -862,6 +865,7 @@ class TaskTracker:
                     self._tasks.pop(task.task_id, None)
                 self._work_index.forget_processing(task.task_id)
                 self._work_index.clear_failure(task.task_id)
+                self._work_index.forget_retry_budget(task.task_id)
                 deleted += 1
         return deleted
 
@@ -919,6 +923,10 @@ class TaskTracker:
     def has_work(self, task_id: str) -> bool:
         """Return whether a task still owns durable or active queue work."""
         return self._work_index.has_work(task_id)
+
+    def model_retry_budget(self, task_id: str, max_retries: int):
+        """Resolve the task's shared budget, including downstream queue deliveries."""
+        return self._work_index.retry_budget(task_id, max_retries)
 
     def register_running_task(self, task_id: str) -> None:
         """Register the current asyncio task so cancellation can interrupt it."""
@@ -988,6 +996,7 @@ class TaskTracker:
             with self._lock:
                 self._tasks.pop(task.task_id, None)
             self._work_index.forget_processing(task.task_id)
+            self._work_index.forget_retry_budget(task.task_id)
             return True
 
     async def list_page(

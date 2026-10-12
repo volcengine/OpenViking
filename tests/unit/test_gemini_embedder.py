@@ -198,7 +198,7 @@ class TestGeminiErrorMessages:
             (401, "Invalid API key"),
             (403, "Permission denied"),
             (404, "Model not found"),
-            (429, "Quota exceeded"),
+            (429, "Check the provider's error details"),
             (500, "service error"),
         ],
     )

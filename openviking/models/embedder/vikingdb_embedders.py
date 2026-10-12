@@ -64,11 +64,7 @@ class VikingDBClientMixin:
 
         try:
             response = self.client.do_req("POST", path, req_body=req_body)
-            if response.status_code != 200:
-                logger.warning(
-                    f"VikingDB API returned bad code: {response.status_code}, message: {response.text}"
-                )
-                return []
+            response.raise_for_status()
 
             result = response.json()
             return result.get("result", {}).get("data", [])
@@ -101,13 +97,7 @@ class VikingDBClientMixin:
             headers=req.headers,
             content=req.body,
         )
-        if response.status_code != 200:
-            logger.warning(
-                "VikingDB API returned bad code: %s, message: %s",
-                response.status_code,
-                response.text,
-            )
-            return []
+        response.raise_for_status()
 
         result = response.json()
         return result.get("result", {}).get("data", [])

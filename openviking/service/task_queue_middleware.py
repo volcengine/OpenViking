@@ -51,7 +51,9 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
             return await call_next(ctx)
 
         active_task = asyncio.current_task()
-        with bind_task_context(metadata.task_id, metadata.account_id, metadata.user_id):
+        with bind_task_context(
+            metadata.task_id, metadata.account_id, metadata.user_id, work_index=self._index
+        ):
             if self._index.cancellation_requested(metadata.task_id):
                 result = await ctx.cancel()
                 if result.outcome is ProcessOutcome.FAILED:

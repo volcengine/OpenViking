@@ -27,7 +27,7 @@ try:
 except ImportError:
     openai = None
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_call import run_model_async, run_model_sync
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
@@ -358,9 +358,11 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
-        return retry_sync(
+        return run_model_sync(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="OpenAI VLM completion",
         )
@@ -396,9 +398,11 @@ class OpenAIVLM(VLMBase):
             + format_messages(redact_image_data_urls(kwargs.get("messages", [])))
         )
 
-        return await retry_async(
+        return await run_model_async(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="OpenAI VLM async completion",
         )
@@ -479,9 +483,11 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
-        return retry_sync(
+        return run_model_sync(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="OpenAI VLM vision completion",
         )
@@ -511,9 +517,11 @@ class OpenAIVLM(VLMBase):
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
-        return await retry_async(
+        return await run_model_async(
             _call,
+            model_type="vlm",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name="OpenAI VLM async vision completion",
         )

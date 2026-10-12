@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from openviking.service.task_work_index import TaskWorkIndex
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.queuefs.embedding_msg import (
     DeletePayload,
@@ -14,6 +16,7 @@ from openviking.storage.queuefs.embedding_msg import (
     UpdateFieldsPayload,
 )
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
+from openviking.utils.model_call import model_workload
 
 
 def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
@@ -46,6 +49,21 @@ def test_embedding_msg_roundtrip_preserves_queue_enqueue_time():
     )
 
     assert EmbeddingMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
+
+
+def test_embedding_msg_roundtrip_preserves_root_task_attribution(monkeypatch):
+    index = TaskWorkIndex()
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: SimpleNamespace(model_retry_budget=index.retry_budget),
+    )
+    with model_workload("add_resource", root_task_id="task-embedding"):
+        msg = EmbeddingMsg(
+            "hello",
+            {"uri": "viking://resources/demo", "account_id": "default"},
+        )
+
+    assert EmbeddingMsg.from_json(msg.to_json()).root_task_id == "task-embedding"
 
 
 def test_legacy_embedding_msg_without_account_id_is_rejected():
