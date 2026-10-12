@@ -50,6 +50,7 @@ class SemanticMsg:
     status: str = "pending"  # pending/processing/completed
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
     queue_enqueued_at: float = 0.0
+    failure_requeue_count: int = 0
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
@@ -114,10 +115,12 @@ class SemanticMsg:
         file_abstracts: Optional[Dict[str, str]] = None,
         plan: SemanticPlan | Dict[str, Any] | None = None,
         queue_enqueued_at: float = 0.0,
+        failure_requeue_count: int = 0,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
         self.queue_enqueued_at = max(float(queue_enqueued_at or 0.0), 0.0)
+        self.failure_requeue_count = max(int(failure_requeue_count or 0), 0)
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive
@@ -227,6 +230,7 @@ class SemanticMsg:
             ),
             plan=data.get("plan") if isinstance(data.get("plan"), dict) else None,
             queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
+            failure_requeue_count=data.get("failure_requeue_count", 0),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

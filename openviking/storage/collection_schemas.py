@@ -35,6 +35,7 @@ from openviking.storage.queuefs.embedding_msg import (
 )
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
+from openviking.storage.queuefs.retry_policy import MAX_FAILURE_REQUEUE_COUNT
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
@@ -824,6 +825,19 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         self._log_embedding_error(logging.WARNING, error_msg, embedding_msg)
                         execute_status = "requeued"
                         if self._vikingdb.has_queue_manager:
+                            if embedding_msg.failure_requeue_count >= MAX_FAILURE_REQUEUE_COUNT:
+                                terminal_error = (
+                                    f"{error_msg} (failure requeue limit reached: "
+                                    f"{MAX_FAILURE_REQUEUE_COUNT})"
+                                )
+                                self._log_embedding_error(
+                                    logging.ERROR, terminal_error, embedding_msg
+                                )
+                                self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                                execute_status = "error"
+                                request_failed_message = terminal_error
+                                return ProcessResult.failed(terminal_error)
+                            embedding_msg.failure_requeue_count += 1
                             try:
                                 await self._reenqueue_embedding_msg(embedding_msg)
                                 self._merge_request_stats(

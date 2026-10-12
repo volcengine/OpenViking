@@ -113,6 +113,21 @@ def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():
     assert SemanticMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
 
 
+def test_semantic_msg_roundtrip_preserves_failure_requeue_count():
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        failure_requeue_count=1,
+    )
+
+    restored = SemanticMsg.from_dict(msg.to_dict())
+    legacy = msg.to_dict()
+    legacy.pop("failure_requeue_count")
+
+    assert restored.failure_requeue_count == 1
+    assert SemanticMsg.from_dict(legacy).failure_requeue_count == 0
+
+
 def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
     msg = SemanticMsg(
         uri="viking://resources/x",

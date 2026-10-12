@@ -48,6 +48,21 @@ def test_embedding_msg_roundtrip_preserves_queue_enqueue_time():
     assert EmbeddingMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
 
 
+def test_embedding_msg_roundtrip_preserves_failure_requeue_count():
+    msg = EmbeddingMsg(
+        "hello",
+        {"uri": "viking://resources/demo", "account_id": "default"},
+        failure_requeue_count=1,
+    )
+
+    restored = EmbeddingMsg.from_dict(msg.to_dict())
+    legacy = msg.to_dict()
+    legacy.pop("failure_requeue_count")
+
+    assert restored.failure_requeue_count == 1
+    assert EmbeddingMsg.from_dict(legacy).failure_requeue_count == 0
+
+
 def test_legacy_embedding_msg_without_account_id_is_rejected():
     with pytest.raises(ValueError, match="account_id"):
         EmbeddingMsg.from_dict(
@@ -305,6 +320,7 @@ def test_legacy_upsert_discards_historically_ignored_fields():
         "id",
         "telemetry_id",
         "queue_enqueued_at",
+        "failure_requeue_count",
         "action",
         "payload",
     }
