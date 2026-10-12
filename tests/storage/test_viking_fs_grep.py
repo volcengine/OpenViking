@@ -1039,6 +1039,23 @@ async def test_grep_in_files_generates_context_from_single_read(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_grep_in_files_numbers_lines_like_fs_grep(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    content = "form \f feed\nline \u2028 separator\ntarget"
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value=content.encode()))
+
+    result = await fs._grep_in_files(
+        ["viking://resources/a.md"],
+        pattern="target",
+        case_insensitive=False,
+        node_limit=None,
+        ctx=None,
+    )
+
+    assert [match["line"] for match in result["matches"]] == [3]
+
+
+@pytest.mark.asyncio
 async def test_grep_parallel_limits_context_construction_per_file(monkeypatch):
     fs = VikingFS(agfs=_DummyAgfs())
     lines = ["hit"] * 400

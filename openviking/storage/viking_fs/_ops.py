@@ -2045,11 +2045,9 @@ class _OpsMixin:
                 raise NotFoundError(uri, "file") from exc
             raise
 
-        if offset == 0 and limit == -1:
-            return text
-        lines = text.splitlines(keepends=True)
-        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-        return "".join(sliced)
+        from openviking.session.memory.utils.line_numbers import slice_lines_keepends
+
+        return slice_lines_keepends(text, offset, limit)
 
     async def read_file_bytes(
         self,
