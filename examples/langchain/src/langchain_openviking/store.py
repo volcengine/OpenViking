@@ -160,7 +160,7 @@ class OpenVikingStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: dict[str, Any],
+        value: dict[str, Any] | None,
         index: bool | list[str] | None = None,
         *,
         ttl: Any = None,
@@ -170,6 +170,10 @@ class OpenVikingStore(BaseStore):
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
+        if value is None:
+            # LangGraph's BaseStore contract treats a None value as a deletion.
+            self.delete(namespace, key)
+            return
         namespace = tuple(namespace)
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
