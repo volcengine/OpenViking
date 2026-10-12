@@ -9,6 +9,7 @@ import asyncio
 import inspect
 import json
 import re
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
@@ -93,6 +94,40 @@ _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
 _MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
+_DEFAULT_STALLED_PREDECESSOR_TIMEOUT_SECONDS = 1800.0
+# Successors report a blocking predecessor after half the stall timeout, or after
+# this long when automatic cancellation is disabled.
+_STALLED_PREDECESSOR_WARN_SECONDS = 1800.0
+_STALLED_PREDECESSOR_WARN_INTERVAL_SECONDS = 300.0
+_PHASE2_KEEPALIVE_INTERVAL_SECONDS = 60.0
+_stalled_predecessor_warned_at: Dict[str, float] = {}
+
+
+def _stalled_predecessor_timeout_seconds() -> float:
+    try:
+        value = get_openviking_config().queue_workers.session_commit
+        value = value.stalled_predecessor_timeout_seconds
+    except Exception:
+        return _DEFAULT_STALLED_PREDECESSOR_TIMEOUT_SECONDS
+    try:
+        return max(float(value), 0.0)
+    except (TypeError, ValueError):
+        return _DEFAULT_STALLED_PREDECESSOR_TIMEOUT_SECONDS
+
+
+async def _report_progress_until_cancelled(tracker: Any, task_id: str) -> None:
+    while True:
+        tracker.report_progress(task_id)
+        await asyncio.sleep(_PHASE2_KEEPALIVE_INTERVAL_SECONDS)
+
+
+def _record_commit_stall_metric(status: str) -> None:
+    try:
+        from openviking.metrics.datasources.session import SessionLifecycleDataSource
+
+        SessionLifecycleDataSource.record_lifecycle(action="commit_stall", status=status)
+    except Exception:
+        logger.debug("Failed to record session commit stall metric", exc_info=True)
 
 
 def _load_render_prompt() -> Callable[..., str]:
@@ -2070,6 +2105,7 @@ class Session:
                             checkpoint_requests,
                             summary_result.checkpoint_summaries,
                         )
+                        tracker.report_progress(task_id)
                         summary = summary_result.overview
                         if checkpoint_requests and not summary.strip():
                             raise ValueError(
@@ -2142,6 +2178,7 @@ class Session:
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
                         result = await _run_retryable_phase2_step(operation_name, fn)
+                        tracker.report_progress(task_id)
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2338,6 +2375,9 @@ class Session:
                                     exc,
                                 )
 
+                # This wait is bounded by its own timeout, so keep the task
+                # visibly alive while queued semantic/embedding work drains.
+                keepalive = asyncio.create_task(_report_progress_until_cancelled(tracker, task_id))
                 try:
                     await request_wait_tracker.wait_for_request(
                         telemetry.telemetry_id,
@@ -2355,6 +2395,8 @@ class Session:
                         telemetry.telemetry_id,
                         _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
+                finally:
+                    keepalive.cancel()
             finally:
                 request_wait_tracker.cleanup(telemetry.telemetry_id)
                 unregister_telemetry(telemetry.telemetry_id)
@@ -2431,10 +2473,15 @@ class Session:
             snapshot = telemetry.finish("cancelled")
             _publish_telemetry_summary_best_effort(snapshot)
             if tracker.is_cancellation_requested(task_id):
+                cancelled_task = await tracker.get(
+                    task_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
                 await self._write_failed_marker(
                     archive_uri,
                     stage="cancelled",
-                    error="session commit cancelled",
+                    error=(cancelled_task and cancelled_task.error) or "session commit cancelled",
                 )
             raise
         except Exception as e:
@@ -2751,7 +2798,7 @@ class Session:
 
         tracker = get_task_tracker()
         if tracker.has_work(str(task_id)):
-            return False
+            return await self._resolve_stalled_predecessor(predecessor_uri, str(task_id))
 
         error = "Session commit queue work is missing"
         await self._write_failed_marker(
@@ -2768,6 +2815,107 @@ class Session:
         logger.warning(
             "Skipped orphaned Session archive without QueueFS work: %s",
             predecessor_uri,
+        )
+        return True
+
+    async def _resolve_stalled_predecessor(self, predecessor_uri: str, task_id: str) -> bool:
+        """Release the serial chain from a running predecessor that stopped progressing.
+
+        Only a predecessor executing in this process is considered: queued work
+        that has not started yet is not stalled, and work owned by another process
+        cannot be observed or cancelled from here. Returns True only when this
+        Archive may run now.
+        """
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
+
+        tracker = get_task_tracker()
+        if not tracker.is_executing(task_id):
+            return False
+        task = await tracker.get(
+            task_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
+        )
+        if task is None or task.status not in (TaskStatus.RUNNING, TaskStatus.CANCELLING):
+            return False
+        last_progress = tracker.last_progress_at(task_id)
+        if last_progress is None:
+            return False
+
+        now = time.time()
+        idle_seconds = now - last_progress
+        timeout = _stalled_predecessor_timeout_seconds()
+        warn_after = timeout / 2 if timeout > 0 else _STALLED_PREDECESSOR_WARN_SECONDS
+        if idle_seconds < warn_after:
+            return False
+        if timeout <= 0 or idle_seconds < timeout:
+            warned_at = _stalled_predecessor_warned_at.get(task_id)
+            if warned_at is None or now - warned_at >= _STALLED_PREDECESSOR_WARN_INTERVAL_SECONDS:
+                for warned_task_id, previous in list(_stalled_predecessor_warned_at.items()):
+                    if now - previous >= _STALLED_PREDECESSOR_WARN_INTERVAL_SECONDS:
+                        _stalled_predecessor_warned_at.pop(warned_task_id, None)
+                _stalled_predecessor_warned_at[task_id] = now
+                _record_commit_stall_metric("blocked")
+                logger.warning(
+                    "Session commit chain for session %s is blocked: predecessor task %s "
+                    "(%s) has made no progress for %.0fs (status=%s, stall timeout=%s)",
+                    self.session_id,
+                    task_id,
+                    predecessor_uri,
+                    idle_seconds,
+                    task.status.value,
+                    f"{timeout:.0f}s" if timeout > 0 else "disabled",
+                )
+            return False
+
+        _stalled_predecessor_warned_at.pop(task_id, None)
+        error = (
+            f"Session commit made no progress for {idle_seconds:.0f}s "
+            f"(stall timeout {timeout:.0f}s); cancelled so later commits can proceed"
+        )
+        if task.status == TaskStatus.RUNNING:
+            # Cancel through the task lifecycle so the stalled coroutine unwinds
+            # and records the Archive as failed itself. This Archive runs only
+            # after that marker exists, so the two never execute concurrently.
+            logger.error(
+                "Cancelling stalled session commit task %s (%s) for session %s: %s",
+                task_id,
+                predecessor_uri,
+                self.session_id,
+                error,
+            )
+            _record_commit_stall_metric("cancelled")
+            await tracker.fail(
+                task_id,
+                error,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            try:
+                await tracker.cancel(
+                    task_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+            except ValueError as exc:
+                logger.warning("Could not cancel stalled session commit %s: %s", task_id, exc)
+            return False
+
+        # A cancellation was requested a full stall timeout ago and the task still
+        # has not unwound. Record the Archive as failed and stop waiting for it.
+        logger.error(
+            "Abandoning session commit task %s (%s) for session %s: it did not finish "
+            "cancelling within %.0fs; later commits will proceed",
+            task_id,
+            predecessor_uri,
+            self.session_id,
+            timeout,
+        )
+        _record_commit_stall_metric("abandoned")
+        await self._write_failed_marker(
+            predecessor_uri,
+            stage="stalled",
+            error=task.error or error,
         )
         return True
 

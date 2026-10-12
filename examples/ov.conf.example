@@ -110,7 +110,10 @@
             "max_concurrent": 4,
             "file_vectorization_concurrency": 8
         },
-        "session_commit": {"max_concurrent": 8},
+        "session_commit": {
+            "max_concurrent": 8,
+            "stalled_predecessor_timeout_seconds": 1800
+        },
         "external_task": {"max_concurrent": 10},
     },
     "compile_api": {

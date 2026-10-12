@@ -240,6 +240,14 @@ class VLMBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        # A completed model response is a liveness signal for the task that
+        # issued it (for example, a running session commit's Phase 2).
+        try:
+            from openviking.service.task_tracker import report_task_progress
+
+            report_task_progress()
+        except Exception:
+            pass
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
             from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -161,6 +162,7 @@ class TaskWorkIndex:
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
         self._failures: Dict[str, str] = {}
         self._processing: Dict[str, ProcessingClock] = {}
+        self._progress: Dict[str, float] = {}
         self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
         self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
@@ -308,6 +310,22 @@ class TaskWorkIndex:
     def forget_processing(self, task_id: str) -> None:
         with self._lock:
             self._processing.pop(task_id, None)
+            self._progress.pop(task_id, None)
+
+    def touch_progress(self, task_id: str) -> None:
+        """Record that work owned by this task is still making progress."""
+        with self._lock:
+            self._progress[task_id] = time.time()
+
+    def last_progress(self, task_id: str) -> Optional[float]:
+        """Return the wall-clock time of the last progress signal seen in this process."""
+        with self._lock:
+            return self._progress.get(task_id)
+
+    def is_active(self, task_id: str) -> bool:
+        """Return whether a coroutine in this process is currently executing task work."""
+        with self._lock:
+            return bool(self._active.get(task_id))
 
     @contextmanager
     def pause_processing(self, task_id: str, *, worker: Any = None) -> Iterator[None]:
@@ -351,6 +369,7 @@ class TaskWorkIndex:
             cancelled = self.cancellation_requested(task_id)
             if not cancelled:
                 self._active.setdefault(task_id, set()).add(active_task)
+                self._progress[task_id] = time.time()
                 clock = self._processing.get(task_id)
                 if clock is not None:
                     clock.enter(active_task)
