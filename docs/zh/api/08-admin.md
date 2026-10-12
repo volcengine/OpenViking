@@ -445,6 +445,67 @@ PATCH 会先做结构校验，再构造合并后的配置：未知路径和运�
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
 配置层更新成功，不保证所有派生客户端都已完成切换。配置存储和重载行为见[运行时配置来源与重载行为](../guides/01-configuration.md#runtime-configuration-source)。
 
+文件保存始终提交完整 `content` 和旧 `revision`。
+草稿预览（`source=file&dry_run=true`）可附带 VLM/Embedding 表单 `settings`；
+其他配置节通过完整文件编辑。
+
+文件含美元符号、Windows `%VAR%` 引用或转义的美元/百分号时，读取和预览返回 `form_readonly: true`，不返回模型表单数据，并拒绝表单修改。请使用文件模式编辑原文，包括带引号和未带引号的环境变量引用。验证沿用启动时对原文展开环境变量的流程，保存不会重新序列化文档。文件校验会应用 CLI 启动参数覆盖，与重启时的处理一致。
+
+#### 服务端重启
+
+仅 ROOT 可以重启通过单 worker `openviking-server` CLI 启动的进程。
+多 worker 和嵌入式 ASGI 启动模式不支持远程重启。
+
+```http
+POST /api/v1/admin/restart
+Content-Type: application/json
+X-API-Key: <root-api-key>
+
+{"revision": "<已保存文件的版本>"}
+```
+
+`revision` 是必填的非空字符串。通过
+`GET /api/v1/admin/configuration?source=file` 获取当前文件版本和重启能力；
+`result.restart` 包含 `supported`、`instance_id` 和 `restarting`。
+重启接口不保存配置。修改配置时，先通过
+`PATCH /api/v1/admin/configuration?source=file` 提交 `content` 和旧 `revision`，
+再将保存响应中的新版本提交给重启接口。
+
+服务端接受重启前会核对当前文件版本并校验配置。
+版本过期或文件无效返回 `INVALID_ARGUMENT`；启动模式不支持或文件不可读返回
+`FAILED_PRECONDITION`。这些检查失败时不会请求重启。
+
+接受请求后，在优雅关闭前返回 **HTTP 202**：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "supported": true,
+    "instance_id": "current-instance-id",
+    "restarting": true
+  }
+}
+```
+
+CLI 等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和
+工作目录替换当前进程。接受重启后拒绝文件保存请求。HTTP 202 只表示请求已接受，
+不代表服务已恢复；应轮询文件配置读取接口，直到 `instance_id` 改变且
+`restarting` 为 false。外部依赖仍可能阻止启动。如果地址、端口或 ROOT 凭证发生
+变化，需要先更新客户端连接设置再轮询。详见[服务端配置](../configuration/01-server.md)。
+
+CLI 在接受重启前保存当前进程启动时实际加载的文件原文，作为独立的私有恢复备份
+（0600，包含敏感配置）。新进程在配置加载、Bot 启动、应用初始化或监听端口时失败，
+会原子恢复此前运行的配置并重新启动一次；恢复后的配置读取响应中
+`result.restart.rolled_back` 为 true，Studio 会提示已回滚。
+应用初始化和端口绑定成功后删除恢复备份，不对后续运行期故障自动回滚。
+远程重启不能切换为多 worker；应通过部署平台执行这种变更。
+
+恢复备份与每次保存生成的 `.studio.bak` 不同：后者仅保留上一次保存前的文件，
+未必曾成功启动。自动恢复只回滚配置文件，不撤销存储或外部系统中的副作用，
+也不处理启动卡死、进程被强制终止或机器故障。若重启后文件被外部修改，拒绝覆盖；
+若恢复后的配置仍无法启动，不再重试，需要管理员在服务器上恢复服务。
+
 #### Account Configuration 接口参考
 
 Account 配置通过创建接口的 `settings` 初始化，并通过 configuration 接口读取和更新：

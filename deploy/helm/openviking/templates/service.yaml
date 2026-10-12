@@ -7,11 +7,11 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    {{- if .Values.contextGateway.enabled }}
-    - port: {{ .Values.contextGateway.port }}
-      targetPort: context-gateway
+    {{- if .Values.gateway.enabled }}
+    - port: {{ .Values.gateway.port }}
+      targetPort: gateway
       protocol: TCP
-      name: context-gateway
+      name: gateway
     {{- end }}
     - port: {{ .Values.service.port }}
       targetPort: http

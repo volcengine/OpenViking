@@ -395,10 +395,16 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["read"],
         purpose: "Read exact Level 2 file content from a Viking URI.",
-        examples: &[HelpItem {
-            label: "ov read viking://projects/acme/spec.md",
-            description: "Print exact file content.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov read viking://projects/acme/spec.md",
+                description: "Print exact file content.",
+            },
+            HelpItem {
+                label: "ov read viking://projects/acme/spec.md --offset 10 --limit 5",
+                description: "Read lines 11 through 15 (offset is zero-based).",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov write <uri> --content \"...\"",
@@ -868,7 +874,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     },
     CommandHelpSpec {
         path: &["compile"],
-        purpose: "Use a Skill to compile OpenViking materials into Wiki pages or a Skill package, or `--skill memory` to consolidate existing memories in place.",
+        purpose: "Use a required VikingBot Skill to transform materials into reports, JSON, Wiki pages or other Skill-defined files, or `--skill memory` to consolidate existing memories in place.",
         examples: &[
             HelpItem {
                 label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",

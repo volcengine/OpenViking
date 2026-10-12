@@ -1,0 +1,344 @@
+"""Reduce candidate work sets into records or revision-bound files.
+
+Automatic overflow aggregation and same-path candidate synthesis belong to Reduce;
+Finalize prepares accepted files for publication and repairs invalid Skill packages.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from functools import partial
+from typing import TYPE_CHECKING
+
+from openviking.core.namespace import relative_uri_path
+from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
+from vikingbot.compile import file_ops
+from vikingbot.compile.hashing import content_hash, digest
+from vikingbot.compile.ops import common
+from vikingbot.compile.pipeline_io import ModelCallError, bounded_jobs, retry_allowed
+from vikingbot.compile.plan import Node, Transform
+from vikingbot.compile.results import CombineResponse, FileDraft, FileResponse, Group, Record
+
+if TYPE_CHECKING:
+    from vikingbot.compile.pipeline import Pipeline
+
+
+# Reduce guidance is independent of Map, including intermediate record output.
+_RECORDS = """Do not add plausible business consequences, instructions or definitions that the
+sources do not establish. Do not turn examples into rules. Retain ambiguity in the actor of a
+condition, conjunctions, slash notation and missing units; quote an unclear clause instead of
+selecting a plausible interpretation or inventing an obligation.
+Transform supplied inputs into the declared record fields, preserving the Skill.
+Use record_fields names and descriptions as a guide for payload facts, which may contain structured JSON.
+Use short scope keys with evidence-based values; scope_fields explains each suggested field.
+Omit unavailable fields and add useful fields when the evidence calls for them.
+Each record.inputs lists ONLY supplied input IDs supporting its payload; runtime assigns IDs,
+stores complete source evidence and propagates provenance. Return records; runtime tracks
+unreferenced inputs. References establish provenance, not semantic completeness.
+Source text uses shard-local 1-based line numbers; source_range is the raw input ID. Optional top-level
+evidence_spans use inclusive start_line/end_line. Include relevant conditions, exceptions, headings
+and table headers/notes; omit uncertain locations.
+Read all supplied text; preserve required detail, citations, exceptions and applicability conditions.
+Include a short routing_text describing subject, contribution and relationships for later
+grouping or historical recall; it must remain understandable without opening payload or a draft.
+Ready drafts are allowed.
+If ready_content is non-null, ready_path MUST be a non-empty relative file
+path under the compile target.
+Put both fields at the record's top level, never inside payload.
+Before calling emit, check this pairing for every record.
+Independent finished files use ready_content with
+ready_path and concise identity/scope/relationship payloads. Evidence details already in the body
+need not be repeated in payload. Check finished content against originals and every Skill rule.
+Fragments requiring joint synthesis retain full necessary evidence in payload and no ready content.
+"""
+
+_FILES = """# File generation
+Follow the Skill, user instruction and assigned stage task for file count, paths, format and
+content organization. This assignment contributes to the overall task's deliverables.
+
+## Evidence
+Check derived records against original sources and distinguish source facts from inference.
+original_evidence entries marked complete=false are excerpts; read more with read_evidence
+when the supplied text is insufficient.
+
+## Related context
+- related_outputs: a partial catalog of confirmed output files; an omitted page may still exist.
+- related_subjects: topics assigned elsewhere, not confirmed files or link destinations.
+Use known destinations for links.
+
+## Submission
+Submit files through emit using its field definitions.
+"""
+
+_EXISTING_FILES = """
+## Existing files
+historical_files supplies paths, content and revision hashes. Update only relevant files,
+using their supplied paths and base_hash values. Use patches for local edits or complete
+content for a full replacement. If only a section is supplied, patch within that section
+and preserve the rest of the file.
+Binary history supplies only metadata and hashes; generate a complete replacement with tools.
+"""
+
+
+async def run(runtime: Pipeline, node: Node, groups: list[Group]) -> list[Record] | list[str]:
+    """Transform groups concurrently; only resolved file candidates become publishable."""
+    outputs = await bounded_jobs(
+        groups,
+        partial(reduce_job, runtime, node),
+        concurrency=runtime.limits.merge_concurrency,
+        metrics=runtime.metrics,
+        failures=runtime.failures,
+    )
+    references = [item for output in outputs for item in output]
+    if getattr(runtime.contract, node.task).output == "records":
+        return references
+    return await resolve_files(runtime, references)
+
+
+async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
+    """Accept unique paths and resolve collisions using the Skill and request.
+
+    Concurrent decisions reserve renamed paths before saving; a competing reservation
+    uses the shared retry allowance with the current path set. Failed decisions stay unpublished; successful
+    unrelated outputs remain available for partial recovery. Candidates stay on disk.
+    """
+    candidates = {}
+    for reference in references:
+        artifact = await runtime.files.get(reference)
+        candidates.setdefault(artifact["path"], []).append((reference, artifact))
+    reserved, result = {path: path for path in candidates}, []
+    for items in candidates.values():
+        if len(items) == 1:
+            result.append(items[0][0])
+    await file_ops.accept_files(runtime, result)
+
+    async def resolve(items):
+        """Resolve one collision, reserving every selected path before yielding to storage."""
+        path = items[0][1]["path"]
+        inputs = {i for _, artifact in items for i in artifact["inputs"]}
+        records = [runtime.records[i] for i in sorted(inputs)]
+        group = Group("merge-" + digest([ref for ref, _ in items]), records)
+        snapshots = dict(items)
+
+        def validate(response):
+            file_ops.reuse_files(response, snapshots)
+            file_ops.validate_files(runtime, response, group, records, {})
+            blocked = {d.path for d in response.files if reserved.get(d.path, path) != path}
+            if blocked:
+                raise ValueError(f"Output paths are reserved by other jobs: {sorted(blocked)}")
+            if {i for draft in response.files for i in draft.inputs} != inputs:
+                raise ValueError(
+                    "Resolved files must account for every candidate's supporting input"
+                )
+
+        try:
+            transform = Transform(
+                output="files",
+                execution="direct",
+                instructions=(
+                    "Resolve candidate path collisions following the Skill and instruction. "
+                    "Combine compatible contributions, deduplicate equivalents, or rename independent "
+                    "files. Preserve required detail and input independence. Submit complete files "
+                    "with supporting inputs, without patches or base_hash; outputs create new files. "
+                    "Preserve binary candidates using their supplied content_ref; never generate Base64."
+                ),
+            )
+            retries = Counter()
+            while True:
+                unavailable = sorted(p for p, owner in reserved.items() if owner != path)
+                try:
+                    response = await runtime.model.ask(
+                        "reduce_merge",
+                        runtime.system + "\n" + transform.instructions,
+                        {
+                            "candidates": [file_ops.file_view(a, ref) for ref, a in items],
+                            "reserved_paths": unavailable,
+                            "inputs": [await common.payload(runtime, r) for r in records],
+                        },
+                        FileResponse,
+                        validate,
+                        agent=transform.execution == "agent",
+                    )
+                    validate(response)
+                except ValueError as exc:
+                    if unavailable == sorted(
+                        p for p, owner in reserved.items() if owner != path
+                    ) or not retry_allowed(retries, str(exc)):
+                        raise
+                else:
+                    reserved.update((draft.path, path) for draft in response.files)
+                    break
+            resolved = await file_ops.save_files(runtime, response, group, records, {}, origin=path)
+            await file_ops.accept_files(runtime, resolved)
+            return resolved
+        except (OSError, ValueError) as exc:
+            runtime.failures.append(f"Unresolved output path {path}: {exc}")
+            for record in records:
+                runtime.status[record.record_id] = "failed"
+            return []
+
+    resolved = await bounded_jobs(
+        (items for items in candidates.values() if len(items) > 1),
+        resolve,
+        concurrency=runtime.limits.merge_concurrency,
+        metrics=runtime.metrics,
+    )
+    return result + [reference for batch in resolved for reference in batch]
+
+
+async def reduce_job(runtime: Pipeline, node, group: Group):
+    """Synthesize a work set into records or any supported collection of files."""
+    return await common.job(
+        runtime,
+        f"{node.name}-{group.group_id}",
+        group.records,
+        lambda: reduce_group(runtime, node, group),
+    )
+
+
+async def ready_file(runtime: Pipeline, group):
+    """Reuse only a solitary complete draft with no historical comparison to perform."""
+    if group.target_uris or len(group.records) != 1 or not group.records[0].ready_ref:
+        return None
+    return await runtime.files.get(group.records[0].ready_ref)
+
+
+async def reduce_group(
+    runtime: Pipeline,
+    node,
+    group: Group,
+    *,
+    stage="reduce",
+    file_prompt: str = _FILES,
+    system: str | None = None,
+):
+    """Generate a work set using the caller's file prompt or Reduce record guidance.
+
+    Map may supply its complete system prompt. Reduce combines after provider input
+    overflow, at most three times; Map propagates overflow.
+    """
+    transform = getattr(runtime.contract, node.task)
+    records, old = group.records, {}
+    if transform.output == "files":
+        for uri in group.target_uris:
+            path = relative_uri_path(runtime.target, uri)
+            if not path:
+                raise ValueError("Historical context is outside the target")
+            content = await file_ops.load_old(runtime, path)
+            if content is None:
+                raise ValueError(f"Recalled historical file no longer exists: {uri}")
+            old[path] = content
+    ready = (
+        await ready_file(runtime, group)
+        if stage == "reduce" and transform.output == "files"
+        else None
+    )
+    if ready is not None:
+        previous = await file_ops.load_old(runtime, ready["path"])
+        if previous is not None:
+            old[ready["path"]] = previous
+        else:
+            response = FileResponse(
+                files=[
+                    FileDraft(
+                        path=ready["path"],
+                        content=ready["content"],
+                        content_base64=ready.get("content_base64"),
+                        inputs=[records[0].record_id],
+                    )
+                ],
+            )
+            file_ops.validate_files(runtime, response, group, records, old)
+            runtime.metrics["direct_reuse"] += 1
+            return await file_ops.save_files(runtime, response, group, records, old)
+    evidence = sorted({ref for r in records for ref in r.source_refs})
+    extra = {
+        "group": {"id": group.group_id},
+        "scope_fields": runtime.contract.distinguish,
+        "unique_source_count": len({runtime.evidence[ref]["uri"] for ref in evidence}),
+    }
+    if transform.output == "files":
+        related = [
+            entry
+            for path, entry in runtime.catalog.items()
+            if set(entry["source_refs"]) & set(evidence)
+        ]
+        extra["related_outputs"] = [
+            {k: v for k, v in entry.items() if k != "source_refs"}
+            for entry in sorted(related, key=lambda e: e["path"])[:12]
+        ]
+        extra["related_subjects"] = [
+            {"scope": r.scope, "description": r.routing_text}
+            for r in runtime.records.values()
+            if r.schema == records[0].schema
+            and r not in records
+            and set(r.source_refs) & set(evidence)
+        ][:12]
+    if old:
+        extra["historical_files"] = [
+            {
+                "path": path,
+                "content": content if isinstance(content, str) else None,
+                "binary": isinstance(content, bytes),
+                "base_hash": content_hash(content),
+            }
+            for path, content in old.items()
+        ]
+    if transform.output == "records":
+        extra.update(record_fields=transform.fields, scope_fields=runtime.contract.distinguish)
+    if system is None:
+        system = (
+            runtime.system + "\n\n# Stage task\n" + transform.instructions + "\n\n" + file_prompt
+        )
+    if old:
+        system += _EXISTING_FILES
+    snapshots = {r.ready_ref: await runtime.files.get(r.ready_ref) for r in records if r.ready_ref}
+
+    def validate_files(response):
+        """Resolve assigned ready drafts before ordinary lineage and revision validation."""
+        file_ops.reuse_files(response, snapshots)
+        file_ops.validate_files(runtime, response, group, records, old)
+
+    for depth in range(4):
+        data = {**extra, "inputs": [await common.payload(runtime, r) for r in records]}
+        try:
+            if transform.output == "records":
+                return await common.transform(
+                    runtime, "reduce", transform, records, extra, prompt=_RECORDS
+                )
+            response = await runtime.model.ask(
+                stage,
+                system,
+                data,
+                FileResponse,
+                validate_files,
+                agent=transform.execution == "agent",
+            )
+            break
+        except ModelCallError as exc:
+            if (
+                classify_api_error(exc) != ERROR_CLASS_INPUT_TOO_LARGE
+                or depth == 3
+                or stage == "map"
+            ):
+                raise
+        chunks = await common.pack(
+            runtime,
+            records,
+            common._COMBINE,
+            CombineResponse,
+        )
+        reduced = []
+        for chunk in chunks:
+            reduced.extend(
+                await common.transform(runtime, "combine", None, chunk, prompt=common._COMBINE)
+            )
+        if not reduced:
+            raise ValueError("Overflow aggregation cannot discard all required contributions")
+        extra["candidates"] = [
+            file_ops.file_view(saved, ref)
+            for ref, saved in snapshots.items()
+            if saved.get("content_base64") is not None
+        ]
+        records = reduced
+    return await file_ops.save_files(runtime, response, group, records, old)

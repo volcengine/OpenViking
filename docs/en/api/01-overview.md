@@ -496,6 +496,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 |--------|------|-------------|
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
+| POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
 | GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
 | GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
@@ -531,14 +532,14 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### [Context Gateway Management](25-context-gateway.md)
+### [OpenViking Gateway Management](25-gateway.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/context-gateway/{path}` | Read gateway overview, logs, upstreams, context profiles, keys or tools for the caller's account |
-| POST | `/api/v1/admin/context-gateway/{path}` | Issue a gateway key, test an upstream or reset conversation saving |
-| PUT | `/api/v1/admin/context-gateway/{path}` | Create or replace an upstream or context profile |
-| DELETE | `/api/v1/admin/context-gateway/{path}` | Delete an upstream or context profile, revoke a key or delete a user's gateway data |
+| GET | `/api/v1/admin/gateway/{path}` | Read gateway overview, logs, upstreams, context profiles, keys or tools for the caller's account |
+| POST | `/api/v1/admin/gateway/{path}` | Issue a gateway key, test an upstream or reset conversation saving |
+| PUT | `/api/v1/admin/gateway/{path}` | Create or replace an upstream or context profile |
+| DELETE | `/api/v1/admin/gateway/{path}` | Delete an upstream or context profile, revoke a key or delete a user's gateway data |
 
 ### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 
@@ -554,6 +555,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |

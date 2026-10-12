@@ -491,6 +491,7 @@ JSON 输出 - 错误：
 |------|------|------|
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
+| POST | `/api/v1/admin/restart` | 请求支持该能力的服务进程优雅重启（仅 ROOT） |
 | GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
 | GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
@@ -526,14 +527,14 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [上下文网关管理](25-context-gateway.md)
+### [OpenViking 网关管理](25-gateway.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/admin/context-gateway/{path}` | 读取调用方账号的网关概览、日志、上游、上下文配置、密钥或工具 |
-| POST | `/api/v1/admin/context-gateway/{path}` | 签发网关密钥、测试上游或重置对话保存 |
-| PUT | `/api/v1/admin/context-gateway/{path}` | 创建或替换上游、上下文配置 |
-| DELETE | `/api/v1/admin/context-gateway/{path}` | 删除上游或上下文配置、吊销密钥或删除用户的网关数据 |
+| GET | `/api/v1/admin/gateway/{path}` | 读取调用方账号的网关概览、日志、上游、上下文配置、密钥或工具 |
+| POST | `/api/v1/admin/gateway/{path}` | 签发网关密钥、测试上游或重置对话保存 |
+| PUT | `/api/v1/admin/gateway/{path}` | 创建或替换上游、上下文配置 |
+| DELETE | `/api/v1/admin/gateway/{path}` | 删除上游或上下文配置、吊销密钥或删除用户的网关数据 |
 
 ### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 
@@ -549,6 +550,7 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |

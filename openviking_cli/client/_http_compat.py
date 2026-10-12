@@ -173,6 +173,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
         retention_mode: str | None = None,
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
@@ -185,6 +186,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
             "telemetry": telemetry,
         }
         optional = {
+            "enable_working_memory": enable_working_memory,
             "retention_mode": retention_mode,
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
@@ -229,6 +231,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
         telemetry: Any = False,
         *,
         keep_recent_count: int = 0,
+        enable_working_memory: bool | None = None,
         retention_mode: str | None = None,
         keep_recent_turn_count: int | None = None,
         retained_message_token_budget: int | None = None,
@@ -240,6 +243,7 @@ class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):
                 session_id,
                 telemetry=telemetry,
                 keep_recent_count=keep_recent_count,
+                enable_working_memory=enable_working_memory,
                 retention_mode=retention_mode,
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,

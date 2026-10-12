@@ -859,10 +859,22 @@ async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.Asy
     assert body["error"]["message"]
 
 
-async def test_find_with_invalid_time_field_returns_invalid_argument(client: httpx.AsyncClient):
+@pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"time_field": "published_at", "since": "2h"},
+        {"limit": 0},
+        {"limit": -1},
+        {"node_limit": 0},
+        {"node_limit": -1},
+        {"limit": 0, "node_limit": 5},
+    ],
+)
+async def test_search_rejects_invalid_request_fields(client: httpx.AsyncClient, endpoint, fields):
     resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "time_field": "published_at", "since": "2h"},
+        endpoint,
+        json={"query": "sample", **fields},
     )
 
     assert resp.status_code == 400
@@ -870,6 +882,7 @@ async def test_find_with_invalid_time_field_returns_invalid_argument(client: htt
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert body["error"]["message"]
+    assert body["error"]["details"]["validation_errors"]
 
 
 async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(

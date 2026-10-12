@@ -60,6 +60,10 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
 | ov CLI | No | No | Only `ov session commit` | Not applicable | Not applicable |
 
+Rows labeled **Hermes (bundled)** describe the pinned in-tree provider
+from earlier Hermes releases. Catalog-based releases use the external plugin.
+Its different lifecycle behavior is listed in [Hermes](#hermes).
+
 How to read this table:
 
 - **Session-aware recall** sends the session ID so the server can use the conversation to interpret the query. The shared plugins’ context mode also expands the query and tracks recently injected memories to avoid repeating them. Hermes uses list mode, which has no injection ledger. OpenClaw uses context search with the session ID but turns deduplication off, because its injected context is rebuilt every turn and never stored in the history. See [How recall reaches the server](#how-recall-reaches-the-server) for the request paths and fallbacks.
@@ -293,7 +297,7 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 
 - **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID. DSH is the only integration that creates its sessions explicitly.
 - **A commit has two phases.** `POST /api/v1/sessions/{id}/commit` returns after phase 1 archives the messages. Its response includes a `task_id` for phase 2, memory extraction, which runs in the background. A successful commit response does not mean extraction has finished.
-- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, and DSH send 10 on threshold commits; Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 10 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
+- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
 - **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send no policy, so without one of these settings the client is the only thing that commits.
 - **Writes are batched.** The shared plugins send up to 100 messages per `POST /messages/batch`, matching the server limit, and fall back to one message at a time when the batch endpoint returns 404 or 405.
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
@@ -666,28 +670,40 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Hermes
 
-[Hermes Agent](./05-hermes.md). Two OpenViking memory providers exist for Hermes, and both register under the provider name `openviking`:
+[Hermes Agent](./05-hermes.md). Depending on its version, Hermes uses the catalog
+plugin or the built-in provider named `openviking`:
 
-- The **bundled provider** ships inside Hermes under `plugins/memory/openviking` and needs no installation; `hermes memory setup openviking` configures it. The Hermes rows on this page describe the bundled provider as of [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
-- The **external plugin** is maintained in this repository under [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) and installed with `hermes plugins install`. According to its README, a Hermes release that still bundles the provider loads the bundled copy, and the external plugin becomes active only after the bundled copy is removed. Configuration and stored data carry over.
+- The **catalog plugin** is maintained in this repository under
+  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).
+  Install it with `hermes plugins install openviking --enable`, then run
+  `hermes memory setup openviking`.
+- The **bundled provider** exists in earlier Hermes releases under
+  `plugins/memory/openviking` and needs no installation. The Hermes rows on this
+  page describe that provider at
+  [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
+
+A release that still includes the bundled provider loads it first. When an
+update removes the bundle from a profile already configured for OpenViking,
+Hermes attempts to install the catalog plugin automatically. The provider name,
+configuration, and stored data do not change.
 
 The two are separate code bases. Where their behavior differs:
 
 | | Bundled provider (Hermes `989798c`) | External plugin (this repository) |
 |---|---|---|
-| Commits during a session | None; only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
+| Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
 | `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |
-| Cron, subagent, and flush contexts | Not documented at that commit | Recall works; automatic writes and mirroring are skipped |
+| Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
 
-Behavior of the bundled provider:
+Behavior of the pinned bundled provider:
 
 - Recall runs before every model call, through session-aware `search/search`, with `/find` as a fallback. Defaults: 6 results, score threshold 0.15, 4,000 characters, 4 seconds in total and 3 seconds per request.
-- `viking_remember` sends the fact unchanged through its own session and commits it; it returns `status: submitted`.
+- `viking_remember` sends the fact unchanged through its own session and commits it. It returns `status: submitted`.
 - Commits leave no live messages (`keep_recent_count` 0). Uploads are not durable, but pending-commit markers let a later start commit sessions from a dead run on POSIX.
 - Memories are written under `viking://user/<uid>/memories/`, or `viking://user/<uid>/peers/<peer>/memories/` when a peer is set.
-- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`; back up a YAML-linked file separately.
+- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`. Back up a YAML-linked file separately.
 
 <a id="_5-ov-cli-command-reference"></a><a id="_5-1-command-tree"></a><a id="_5-2-global-options-and-unique-mechanisms"></a><a id="_5-3-capabilities-only-the-cli-has"></a>
 
@@ -787,7 +803,9 @@ The comparisons above were checked against these locations. They help when you n
 - Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
-- Hermes: the bundled provider at the pinned Hermes commit linked in [Hermes](#hermes), and the external plugin's [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
+- Hermes: the bundled provider from earlier releases at the pinned commit linked
+  in [Hermes](#hermes), and the catalog plugin's
+  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
 
 ## See also
 

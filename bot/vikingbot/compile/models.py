@@ -15,37 +15,40 @@ DEFAULT_COMPILE_INSTRUCTION = (
     "into the outputs required by the Skill."
 )
 COMPILE_STAGING_ROOT = "__compile_staging__"
-COMPILE_TARGET_CHECKOUT_ROOT = f"{COMPILE_STAGING_ROOT}/target_checkout"
-COMPILE_MATERIALIZED_ROOT = "compile_resources"
-COMPILE_MANIFEST_NAME = "_manifest.tsv"
+COMPILE_OUTPUT_ROOT = f"{COMPILE_STAGING_ROOT}/output"
+COMPILE_DRAFT_ROOT = f"{COMPILE_STAGING_ROOT}/drafts"
 OKF_VERSION = "0.1"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
+    """Bound task execution and source loading; output size is checked per submission."""
+
     model_config = ConfigDict(frozen=True)
 
-    source_roots: int = 16
-    source_catalog_entries: int = 200
-    source_files: int = 5000
-    source_total_bytes: int = 1024 * 1024 * 1024
-    target_total_bytes: int = 1024 * 1024 * 1024
-    skill_files: int = 128
-    skill_file_bytes: int = 8 * 1024 * 1024
-    skill_total_bytes: int = 32 * 1024 * 1024
-    target_inventory_entries: int = 2000
-    target_catalog_pages: int = 10
-    initial_prompt_chars: int = 300_000
-    agent_context_chars: int = 240_000
-    agent_iterations: int = 60
-    tool_uri_count: int = 32
-    tool_result_bytes: int = 1024 * 1024
-    tool_total_result_bytes: int = 8 * 1024 * 1024
-    output_pages: int = 128
-    output_files: int = 128
-    output_operations: int = 256
-    output_total_bytes: int = 4 * 1024 * 1024
+    # Estimated complete input tokens, including tools and repair/read history, before planning.
+    direct_input_tokens: int = Field(default=110_000, ge=1)
+    # Soft request budget for prompt, input JSON, emit schema and estimated output space.
+    # Larger indivisible records may exceed it; this is not the model's token limit.
+    merge_input_chars: int = Field(default=60_000, ge=1)
+    # Source text plus repeated context per range/read batch, independent of request packing.
+    source_batch_chars: int = Field(default=40_000, ge=1)
+    agent_iterations: int = 120
+    # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
+    subagent_iterations: int = Field(default=70, ge=1)
+    # Wall-clock limits include provider capacity waits, transport retries and tool reads.
+    pipeline_call_seconds: float = Field(default=600, gt=0)
+    pipeline_plan_seconds: float = Field(default=600, gt=0)
+    pipeline_agent_seconds: float = Field(default=1200, gt=0)
+    # Per-task Map workers, also used for Resource source subagents.
+    source_concurrency: int = Field(default=6, ge=1)
+    # Per-task Shuffle routing workers and embedding batches.
+    shuffle_concurrency: int = Field(default=6, ge=1)
+    # Maximum primary records per routing request, including retried records.
+    shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
+    # Per-task Reduce workers, also used for consolidating same-path candidate files.
+    merge_concurrency: int = Field(default=10, ge=1)
     concurrent_tasks: int = 10
     accepted_tasks: int = 40
     accepted_tasks_per_principal: int = 10
@@ -83,6 +86,10 @@ class SanitizedCompileRequest(BaseModel):
     instruction: str
     instruction_provided: bool = False
     skill: str
+    # Inclusive source modification cutoff in UTC; None compiles all source files.
+    last_compile_time: datetime | None = None
+    # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
+    wiki_links: bool = Field(default=False, strict=True)
 
 
 class WikiPageDraft(BaseModel):
@@ -104,8 +111,8 @@ class WikiPageDraft(BaseModel):
     body_workspace_path: str | None = Field(
         default=None,
         description=(
-            f"Relative path under {COMPILE_TARGET_CHECKOUT_ROOT}/ for an editable "
-            "UTF-8 Markdown Wiki page in the target checkout."
+            f"Relative path under {COMPILE_OUTPUT_ROOT}/ for an editable "
+            "UTF-8 Markdown Wiki page in the output directory."
         ),
     )
     source_ids: list[str] = Field(
@@ -207,8 +214,12 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
+    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
+    # Path diagnostics are informational and never consume the agent repair budget.
+    link_report: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -251,9 +262,13 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
+    """Status or cancellation request scoped by the authenticated caller and session ID."""
+
     model_config = ConfigDict(extra="forbid")
 
     session_id: str = Field(min_length=1)
+    # Original task args forwarded by OpenViking; optional and unused for session lookup.
+    args: dict[str, Any] | None = None
 
 
 class CompileFailure(RuntimeError):

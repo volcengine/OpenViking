@@ -59,7 +59,7 @@ COPY crates/ crates/
 COPY openviking/ openviking/
 COPY --from=web-studio-builder /app/web-studio/dist/ openviking/web_studio/dist/
 COPY openviking_cli/ openviking_cli/
-COPY context_gateway/ context_gateway/
+COPY openviking_gateway/ openviking_gateway/
 COPY src/ src/
 COPY third_party/ third_party/
 
@@ -83,13 +83,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra context-gateway \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra gateway \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra context-gateway \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra gateway \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
@@ -112,7 +112,7 @@ WORKDIR /app/.openviking
 
 COPY --from=py-builder /app/.venv /app/.venv
 # Fail the image build if VikingBot and the separately released SDK drift apart.
-RUN /app/.venv/bin/python -I -c "import inspect; from importlib.metadata import version; from openviking_sdk.client import AsyncHTTPClient; signature = inspect.signature(AsyncHTTPClient.get_skill); raise SystemExit(0 if 'include_integrity' in signature.parameters else f\"incompatible openviking-sdk {version('openviking-sdk')}: AsyncHTTPClient.get_skill{signature} lacks include_integrity\")"
+RUN /app/.venv/bin/python -I -c "import inspect; from importlib.metadata import version; from openviking_sdk.client import AsyncHTTPClient; signature = inspect.signature(AsyncHTTPClient.get_skill); ls_signature = inspect.signature(AsyncHTTPClient.ls); raise SystemExit(0 if 'include_integrity' in signature.parameters and 'offset' in ls_signature.parameters else f\"incompatible openviking-sdk {version('openviking-sdk')}: AsyncHTTPClient.get_skill{signature} / ls{ls_signature} lacks include_integrity or offset\")"
 RUN /app/.venv/bin/python -I -c "from importlib.util import find_spec; from pathlib import Path; spec = find_spec('openviking.web_studio'); locations = list(spec.submodule_search_locations or ()) if spec else []; root = Path('/app/.venv').resolve(); p = (Path(locations[0]).resolve() / 'dist/index.html').resolve() if len(locations) == 1 else None; valid = p is not None and p.is_file() and p.is_relative_to(root); raise SystemExit(0 if valid else f'missing or misplaced Studio bundle: spec_found={spec is not None}, locations={locations!r}, resource={p}')"
 COPY deploy/docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
 COPY deploy/docker/pending_health_server.py /usr/local/bin/openviking-pending-health

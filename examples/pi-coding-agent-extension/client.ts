@@ -122,7 +122,7 @@ export class OVClient {
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
   async commitSessionResponse(
     sessionId: string,
-    keepRecentCount = this.cfg.commitKeepRecentCount,
+    keepRecentCount = 0,
     timeoutMs = 30000,
     enableWorkingMemory?: boolean,
   ): Promise<OVCommitResponse> {

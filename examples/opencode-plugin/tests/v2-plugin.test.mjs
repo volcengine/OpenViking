@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { resolve } from "node:path"
 import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
@@ -62,7 +63,7 @@ test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
   const { ctx, hooks, registered, skillSources } = contextFixture()
   const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
 
-  assert.deepEqual(skillSources, [{ type: "directory", path: "/tmp/ov/skills" }])
+  assert.deepEqual(skillSources, [{ type: "directory", path: resolve("/tmp/ov", "skills") }])
   assert.equal(registered[0][0], "openviking")
   assert.equal(registered[0][1].type, "local")
   assert.equal(registered[0][1].codemode, false)

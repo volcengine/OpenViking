@@ -60,6 +60,9 @@
 | Hermes（内置） | 是，带会话，有回退路径 | profile 与记忆清单 | 否；只在会话边界 | 是，前提是待上传内容在 10 秒内完成 | fork 型压缩时提交 |
 | ov CLI | 否 | 否 | 只有 `ov session commit` | 不适用 | 不适用 |
 
+标为 **Hermes（内置）** 的行描述旧版 Hermes 中固定提交的内置 provider。
+使用目录插件的版本会加载外部插件，其不同的生命周期行为见 [Hermes](#hermes)。
+
 表格说明：
 
 - **带会话的召回**会发送会话 ID，服务端借助对话内容理解查询。共享插件的 context 模式还会扩写查询，并记录最近注入过的记忆，避免重复注入。Hermes 用 list 模式，没有注入台账。OpenClaw 用 context search 并发送会话 ID，但关闭去重，因为它注入的上下文每轮重建，不写入历史。请求路径和回退见[召回请求如何到达服务端](#召回请求如何到达服务端)。
@@ -293,7 +296,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 - **会话隐式创建**。服务端收到某个会话的第一条消息时创建该会话；带该会话 ID 的第一次 context 模式召回也会创建。DSH 是唯一显式创建会话的集成。
 - **提交分两个阶段**。`POST /api/v1/sessions/{id}/commit` 在第一阶段归档消息后返回。响应中带有第二阶段（记忆抽取）的 `task_id`，抽取在后台运行。提交请求成功不代表抽取已经完成。
-- **`keep_recent_count`** 决定提交后会话中保留多少条最近的消息。服务端默认 0，即全部归档。Claude Code、Codex、OpenCode 和 DSH 在阈值提交时发送 10；Cursor、TRAE、TRAE CN、ZCode 和 Hermes 发送 0；pi 在 takeover 模式下发送最近 3 个用户轮对应的确切消息数，其他情况发送 10；OpenClaw 在阈值提交时发送 10，在 reset、`memory_store` 和压缩时发送 0。
+- **`keep_recent_count`** 决定提交后会话中保留多少条最近的消息。服务端默认 0，即全部归档。Claude Code、Codex、OpenCode、DSH、Cursor、TRAE、TRAE CN、ZCode 和 Hermes 发送 0；pi 在 takeover 模式下发送最近 3 个用户轮对应的确切消息数，其他情况发送 0；OpenClaw 在阈值提交时发送 10，在 reset、`memory_store` 和压缩时发送 0。
 - **服务端自动提交默认关闭**。`memory.session_auto_commit.enabled` 默认 `false`，关闭时空闲扫描器不会启动。新会话仍可以从 `server.user_config_defaults.auto_commit_policy` 获得策略，也可以通过 `POST /api/v1/sessions`、`PATCH /api/v1/sessions/{id}/config`、SDK，或 `ov session new --auto-commit-policy-json` 与 `ov session config set` 显式设置。策略的默认值是：待提交 token 150,000（严格大于）、100 条消息、86,400 秒空闲超时、`keep_recent_count` 0、无最小间隔。空闲超时还需要 `memory.session_auto_commit.enabled=true`。记忆插件不发送策略，所以没有上述设置时，只有客户端会提交。
 - **批量写入**。共享插件每次 `POST /messages/batch` 最多发送 100 条消息，与服务端上限一致；批量接口返回 404 或 405 时改为逐条发送。
 - **大块工具输出单独存放**。服务端把超过 20,000 字符的工具输出移到单独的记录中，留下 `tool_output_ref`。插件把自己的上限（`captureToolMaxChars`）提高到 1,000,000，只作为兜底。
@@ -666,10 +669,20 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 
 ### Hermes
 
-[Hermes](./05-hermes.md)。Hermes 有两个 OpenViking memory provider，都以 provider 名 `openviking` 注册：
+[Hermes](./05-hermes.md)。Hermes 通过两种分发方式提供名为 `openviking` 的
+memory provider：
 
-- **内置 provider** 位于 Hermes 的 `plugins/memory/openviking`，无需安装，用 `hermes memory setup openviking` 配置。本页的 Hermes 行描述的是 [Hermes 提交 `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking) 时的内置 provider。
-- **外部插件**在本仓库的 [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) 维护，用 `hermes plugins install` 安装。据其 README，仍内置该 provider 的 Hermes 版本会加载内置副本，外部插件要在内置副本移除后才生效。配置和已存数据可以沿用。
+- **目录插件**在本仓库的
+  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin)
+  中维护。先运行 `hermes plugins install openviking --enable`，再运行
+  `hermes memory setup openviking`。
+- **内置 provider** 存在于旧版 Hermes 的 `plugins/memory/openviking` 中，
+  无需安装。本页的 Hermes 行描述
+  [Hermes 提交 `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking)
+  时的内置 provider。
+
+仍包含内置 provider 的版本会优先加载内置副本。当更新移除内置副本时，已配置
+OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置和已存数据均保持不变。
 
 两者是独立的代码库。行为差异如下：
 
@@ -681,7 +694,7 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 | `viking_forget` | 带明确用户 ID 的用户记忆文件 | 还接受 `viking://~/`，拒绝不带用户 ID 的路径，删除前检查归属 |
 | cron、子代理和 flush 上下文 | 该提交中没有说明 | 召回可用；跳过自动写入和镜像 |
 
-内置 provider 的行为：
+上述固定提交中内置 provider 的行为：
 
 - 每次模型调用前召回，走带会话的 `search/search`，以 `/find` 作为回退。默认值：6 条结果、分数阈值 0.15、4,000 字符、总计 4 秒、单请求 3 秒。
 - `viking_remember` 把事实原样通过独立会话发送并提交，返回 `status: submitted`。
@@ -787,7 +800,8 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 - hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode 和 Kimi Code。
 - pi takeover：`examples/pi-coding-agent-extension/lib/takeover-core.mjs`。
 - OpenClaw 工具和生命周期 hook：`examples/openclaw-plugin/registries/openviking-tools.ts` 和 `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`。
-- Hermes：[Hermes](#hermes) 中链接的固定 Hermes 提交里的内置 provider，以及外部插件的 [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md)。
+- Hermes：[Hermes](#hermes) 中链接的旧版内置 provider 固定提交，以及目录插件的
+  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md)。
 
 ## 参见
 

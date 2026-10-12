@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
 from collections import defaultdict
 from dataclasses import dataclass, replace
@@ -57,11 +58,11 @@ from openviking.utils.path_safety import (
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    ConflictError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
-    ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -83,9 +84,6 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
         ".ts",
     }
 )
-_BATCH_MAX_OPERATIONS = 256
-_BATCH_MAX_FILE_BYTES = 8 * 1024 * 1024
-_BATCH_MAX_TOTAL_BYTES = 16 * 1024 * 1024
 
 # Subtrees directly under a user root that OpenViking manages itself; only
 # memories/, resources/, and plain files may be written under a user root.
@@ -225,6 +223,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         wait: bool = True,
         timeout: Optional[float] = None,
+        skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
         """Write a bundle under one directory, then refresh it as a batch.
 
@@ -232,6 +231,11 @@ class ContentWriteCoordinator:
         ``upsert`` is available for callers that already hold the desired final tree.
         All target files stay locked from state validation through the last write,
         while unrelated files remain writable. Refresh starts after the locks are released.
+        Derived summaries are generated once per batch. Operation count and content size have
+        no application-level quotas; all operations undergo access and path validation.
+        With skip_conflicts, changed, missing or occupied targets are returned in
+        conflicts and left untouched; compatible files still commit under the same locks.
+        Permission, transport and write failures remain errors, not skipped conflicts.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
@@ -259,6 +263,7 @@ class ContentWriteCoordinator:
         file_abstracts: dict[str, str] = {}
         sidecar_directories: set[str] = set()
         pending: list[tuple[dict[str, Any], bool, str]] = []
+        conflicts: list[dict[str, str]] = []
         write_error: Exception | None = None
         lock_released = False
         try:
@@ -266,7 +271,7 @@ class ContentWriteCoordinator:
                 uri = operation["uri"]
                 stat = await self._safe_stat(uri, ctx=ctx, allow_not_found=True)
                 exists = not stat.get("not_found")
-                if exists and stat.get("isDir"):
+                if exists and stat.get("isDir") and not skip_conflicts:
                     raise InvalidArgumentError(f"batch-write target must be a file: {uri}")
 
                 requested_mode = operation["mode"]
@@ -279,10 +284,31 @@ class ContentWriteCoordinator:
                         raise InvalidArgumentError(
                             f"cannot create generated abstract overview directly: {uri}"
                         )
-                if write_mode == "create" and exists:
-                    raise AlreadyExistsError(uri, "file")
-                if write_mode in {"replace", "append"} and not exists:
-                    raise NotFoundError(uri, "file")
+                try:
+                    if exists and stat.get("isDir"):
+                        raise ConflictError(f"Target is a directory: {uri}")
+                    if write_mode == "create" and exists:
+                        raise AlreadyExistsError(uri, "file")
+                    if write_mode in {"replace", "append"} and not exists:
+                        raise NotFoundError(uri, "file")
+                    expected = operation.get("expected_sha256")
+                    if expected is not None:
+                        if not exists:
+                            raise ConflictError(f"Expected content no longer exists: {uri}")
+                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
+                        if hashlib.sha256(current).hexdigest() != expected:
+                            raise ConflictError(f"Content revision changed: {uri}")
+                        desired = operation["content"]
+                        if isinstance(desired, str):
+                            desired = desired.encode("utf-8")
+                        if skip_conflicts and write_mode == "replace" and current == desired:
+                            unchanged.append(uri)
+                            continue
+                except (AlreadyExistsError, NotFoundError, ConflictError) as exc:
+                    if not skip_conflicts:
+                        raise
+                    conflicts.append({"uri": uri, "code": exc.code, "message": str(exc)})
+                    continue
                 pending.append((operation, exists, write_mode))
 
             file_abstracts = await self._load_file_abstracts(
@@ -406,6 +432,8 @@ class ContentWriteCoordinator:
             "unchanged": unchanged,
             "queue_status": queue_status,
         }
+        if skip_conflicts:
+            result["conflicts"] = conflicts
         if refresh_outcome is not None:
             semantic_status, vector_status = refresh_outcome.statuses(wait=wait)
             result["semantic_status"] = semantic_status
@@ -452,15 +480,10 @@ class ContentWriteCoordinator:
     ) -> list[dict[str, Any]]:
         if not operations:
             raise InvalidArgumentError("batch-write operations must not be empty")
-        if len(operations) > _BATCH_MAX_OPERATIONS:
-            raise ResourceExhaustedError(
-                f"batch-write supports at most {_BATCH_MAX_OPERATIONS} operations"
-            )
 
         context_type = context_type_for_uri(root_uri)
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
-        total_bytes = 0
         for raw in operations:
             if not isinstance(raw, dict):
                 raise InvalidArgumentError("batch-write operation must be an object")
@@ -487,7 +510,8 @@ class ContentWriteCoordinator:
                 content = raw.get("content")
                 if not isinstance(content, str):
                     raise InvalidArgumentError(f"batch-write content must be a string: {uri}")
-                encoded_content = content.encode("utf-8")
+                # Reject invalid UTF-8 before any operation writes to the target tree.
+                content.encode("utf-8")
             else:
                 if context_type == "memory":
                     raise InvalidArgumentError(
@@ -499,20 +523,20 @@ class ContentWriteCoordinator:
                         f"batch-write content_base64 must be a string: {uri}"
                     )
                 try:
-                    encoded_content = base64.b64decode(content_base64, validate=True)
+                    content = base64.b64decode(content_base64, validate=True)
                 except (binascii.Error, ValueError) as exc:
                     raise InvalidArgumentError(
                         f"batch-write content_base64 is invalid: {uri}"
                     ) from exc
-                content = encoded_content
-            content_size = len(encoded_content)
-            if content_size > _BATCH_MAX_FILE_BYTES:
-                raise ResourceExhaustedError(f"batch-write file exceeds size limit: {uri}")
-            total_bytes += content_size
-            if total_bytes > _BATCH_MAX_TOTAL_BYTES:
-                raise ResourceExhaustedError("batch-write total content exceeds size limit")
 
             mode = raw.get("mode", "replace")
+            expected = raw.get("expected_sha256")
+            if expected is not None and (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(c not in "0123456789abcdef" for c in expected)
+            ):
+                raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
@@ -527,6 +551,7 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
+                    "expected_sha256": raw.get("expected_sha256"),
                 }
             )
         return sorted(normalized, key=lambda operation: operation["uri"])

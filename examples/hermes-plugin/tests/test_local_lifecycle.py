@@ -493,16 +493,17 @@ def test_port_probe_rejects_active_listener(modules):
     "system,machine",
     [("Darwin", "arm64"), ("Linux", "x86_64"), ("Linux", "aarch64"), ("Windows", "AMD64")],
 )
-def test_supported_binary_requirements_pin_both_archives_by_hash(
+def test_supported_binary_requirements_keep_native_embedding_hash(
     modules, monkeypatch, system, machine
 ):
-    _home, _p, _m, _ql, _life, packages = modules
+    _home, _p, _m, ql, _life, packages = modules
     monkeypatch.setattr(packages.platform, "system", lambda: system)
     monkeypatch.setattr(packages.platform, "machine", lambda: machine)
     monkeypatch.setattr(packages.platform, "mac_ver", lambda: ("14.0", (), ""))
     monkeypatch.setattr(packages.platform, "libc_ver", lambda: ("glibc", "2.31"))
     requirements = packages.install_requirements()
-    assert all("#sha256=" in requirement for requirement in requirements[:2])
+    assert requirements[0] == ql.OPENVIKING_REQUIREMENT
+    assert "#sha256=" in requirements[1]
     assert "metal" in requirements[1] if system == "Darwin" else "metal" not in requirements[1]
 
 
@@ -653,11 +654,16 @@ def test_changed_native_pins_reinstall_an_existing_runtime(modules, monkeypatch)
     monkeypatch.setattr(ql, "openviking_install_satisfies_requirement", lambda _paths: True)
     monkeypatch.setattr(ql, "_pm_available", lambda: False)
     monkeypatch.setattr(packages, "verified_requirements", lambda values, _cache: values)
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.4.23"
+    )
     engine = ql.QuickLocalSetup(health_check=lambda _url: (False, ""))
     install = MagicMock()
     monkeypatch.setattr(engine, "_install_with_uv", install)
     assert engine._ensure_openviking_installed(paths)
-    install.assert_called_once_with(paths, packages.install_requirements())
+    requirements = packages.install_requirements()
+    requirements[0] = packages.resolve_server_requirement()
+    install.assert_called_once_with(paths, requirements)
     assert not engine._ensure_openviking_installed(paths)
     assert install.call_count == 1
 

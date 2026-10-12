@@ -37,6 +37,7 @@ test("client sends OpenViking identity headers and preserves response trace ids"
   assert.equal(response.ok, true);
   assert.equal(response.traceId, "trace-123");
   assert.equal(seen.url, "http://127.0.0.1:1933/api/v1/sessions/dsh-1/commit");
+  assert.deepEqual(JSON.parse(seen.init.body), { keep_recent_count: 0 });
   assert.equal(seen.init.headers.Authorization, "Bearer secret");
   assert.equal(seen.init.headers["X-OpenViking-Account"], "account-a");
   assert.equal(seen.init.headers["X-OpenViking-User"], "user-a");
@@ -60,7 +61,6 @@ test("per-session actor peer overrides the process default", async () => {
     peerId: "process-peer",
     userAgent: "",
     requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
   });
 
   await client.ensureSessionResult("dsh-2", "workspace-peer");
@@ -84,7 +84,6 @@ test("client normalizes non-2xx OpenViking envelopes", async () => {
     peerId: "",
     userAgent: "",
     requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
   });
   const response = await client.fetchJSON("/probe");
 

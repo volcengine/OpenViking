@@ -63,7 +63,7 @@ function emit(additionalContext) {
       hookEventName: "UserPromptSubmit",
       additionalContext: [wrappedContext, usageTurnId ? answerContext({
         recalled: parseRecall(wrappedContext), lookups: [],
-      }, usageTurnId) : ""].filter(Boolean).join("\n"),
+      }, usageTurnId, cfg) : ""].filter(Boolean).join("\n"),
     },
   });
 }

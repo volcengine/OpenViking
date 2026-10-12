@@ -28,15 +28,15 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
-          {{- if $.Values.contextGateway.enabled }}
-          {{- range list "/v1" "/api/v3" "/api/compatible/v1" "/context-gateway/uploads" }}
+          {{- if $.Values.gateway.enabled }}
+          {{- range list "/v1" "/api/v3" "/api/compatible/v1" "/gateway/uploads" }}
           - path: {{ . }}
             pathType: Prefix
             backend:
               service:
                 name: {{ include "openviking.fullname" $ }}
                 port:
-                  name: context-gateway
+                  name: gateway
           {{- end }}
           {{- end }}
           {{- range .paths }}

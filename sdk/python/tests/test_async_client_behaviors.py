@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from openviking_sdk import (
     AsyncHTTPClient,
@@ -118,6 +120,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
         "demo-session",
         options={
             "retention_mode": "turn_budget",
+            "enable_working_memory": True,
             "keep_recent_turn_count": 3,
             "retained_message_token_budget": 12_000,
             "min_raw_tail_steps": 1,
@@ -133,6 +136,7 @@ async def test_async_http_client_sends_message_semantics_and_turn_retention():
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
         "keep_recent_count": 0,
+        "enable_working_memory": True,
         "retention_mode": "turn_budget",
         "keep_recent_turn_count": 3,
         "retained_message_token_budget": 12_000,
@@ -1321,6 +1325,40 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
             "limit": 5,
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("level_limit", [None, 0, 1])
+async def test_grep_sends_optional_depth_through_public_clients(sync, level_limit):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {"matches": []}})
+
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    kwargs = {} if level_limit is None else {"level_limit": level_limit}
+    try:
+        if sync:
+            result = client.grep("viking://resources", "needle", **kwargs)
+        else:
+            result = await client.grep("viking://resources", "needle", **kwargs)
+        assert result == {"matches": []}
+        assert len(requests) == 1
+        assert requests[0].method == "POST"
+        assert requests[0].url.path == "/api/v1/search/grep"
+        payload = json.loads(requests[0].content)
+        if level_limit is None:
+            assert "level_limit" not in payload
+        else:
+            assert payload["level_limit"] == level_limit
+    finally:
+        await async_client.close()
 
 
 @pytest.mark.asyncio

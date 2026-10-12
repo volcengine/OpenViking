@@ -474,7 +474,7 @@ export default async function (pi: ExtensionAPI) {
           const reason = config.takeoverEnabled
             ? takeover.lastFailure
             : skipped
-              ? describeSkip(String(commitResult?.reason || ""), config.commitKeepRecentCount)
+              ? describeSkip(String(commitResult?.reason || ""))
               : sync.lastCommitError;
           logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
           if (reason.startsWith("nothing")) {

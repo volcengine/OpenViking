@@ -113,7 +113,6 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
       "recallTokenBudget": 2000,
       "minQueryLength": 3,
       "commitTokenThreshold": 20000,
-      "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
       "skillCatalog": true,
       "skillCatalogTokenBudget": 1200,

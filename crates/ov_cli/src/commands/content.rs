@@ -6,13 +6,16 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
+/// Print the requested line range; propagate request and output errors to the CLI.
 pub async fn read(
     client: &HttpClient,
     uri: &str,
+    offset: i64,
+    limit: i64,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let content = client.read_profiled(uri).await?;
+    let content = client.read_profiled(uri, offset, limit).await?;
     output_content_result(content, output_format, compact)
 }
 

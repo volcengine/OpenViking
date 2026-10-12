@@ -295,6 +295,8 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert "POST /api/v1/tasks/{task_id}/cancel" in legacy_cancel.json()["detail"]
     assert calls["connection"] == {
         "api_key": "active-user-key",
+        "account_id": "acct",
+        "user_id": "alice",
         **({"request_id": request_id} if request_id else {}),
     }
     assert calls["owner"] == ("acct", "alice")
@@ -320,10 +322,11 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     ],
     ids=["no-args", "empty-args", "empty-key", "private-only", "full-args"],
 )
+@pytest.mark.parametrize("identity", [{}, {"account_id": "acct", "user_id": "alice"}])
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
-    monkeypatch, tmp_path, caplog, finish, args
+    monkeypatch, tmp_path, caplog, finish, args, identity
 ):
-    """Runtime calls retain saved args and request ID through polling, cancellation, and recovery."""
+    """Runtime calls retain args, identity, and request ID through polling, cancellation, and recovery."""
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -411,7 +414,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         "get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
-    connection = {"api_key": "active-user-key", "request_id": "compile-request-123"}
+    connection = {"api_key": "active-user-key", "request_id": "compile-request-123", **identity}
     owner = {"account_id": "acct", "user_id": "alice"}
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
     task = await service.create(
@@ -471,6 +474,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
     assert forwarded[0]["headers"]["Idempotency-Key"] == task.task_id
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
+    for request in forwarded:
+        assert request["headers"].get("X-OpenViking-Account") == identity.get("account_id")
+        assert request["headers"].get("X-OpenViking-User") == identity.get("user_id")
     assert forwarded[0]["body"] == {
         "task_type": "compile",
         "payload": {

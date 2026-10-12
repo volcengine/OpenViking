@@ -472,7 +472,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
-    const body = { keep_recent_count: config.commitKeepRecentCount }
+    const body = { keep_recent_count: 0 }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),

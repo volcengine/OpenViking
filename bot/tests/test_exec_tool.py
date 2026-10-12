@@ -44,3 +44,13 @@ async def test_exec_tool_runs_in_selected_directory(tmp_path, relative_dir):
         await sandbox.stop()
 
     assert result.strip() == str(working_dir)
+
+
+def test_compile_exec_requires_opt_in():
+    from vikingbot.compile.service import BotCompileService
+    from vikingbot.config.schema import Config
+
+    service = SimpleNamespace(config=Config())
+    assert not BotCompileService._compile_capabilities(service).exec_enabled
+    service.config.sandbox.backends.direct.allow_compile_exec = True
+    assert BotCompileService._compile_capabilities(service).exec_enabled

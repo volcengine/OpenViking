@@ -392,10 +392,17 @@ class MemoryStore:
             if use_type_budgets and memory_type == "events" and content:
                 summary = self._extract_event_summary(content, fallback=abstract)
                 if summary:
-                    grouped_memories.setdefault(memory_type, []).append(
-                        self._format_summary_memory(idx, uri, score, summary)
-                    )
-                    continue
+                    summary_memory_str = self._format_summary_memory(idx, uri, score, summary)
+                    summary_chars = len(summary_memory_str) + bool(any(grouped_memories.values()))
+                    if (
+                        type_chars[memory_type] + summary_chars
+                        <= max(0, int(type_char_budgets.get(memory_type, 0)))
+                        and total_chars + summary_chars <= max_chars
+                    ):
+                        grouped_memories.setdefault(memory_type, []).append(summary_memory_str)
+                        type_chars[memory_type] += summary_chars
+                        total_chars += summary_chars
+                        continue
 
             if include_uri_entries:
                 grouped_memories.setdefault(memory_type, []).append(

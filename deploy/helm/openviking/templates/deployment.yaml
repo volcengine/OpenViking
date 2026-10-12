@@ -47,11 +47,11 @@ spec:
           image: {{ include "openviking.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            {{- if .Values.contextGateway.enabled }}
-            - name: OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN
+            {{- if .Values.gateway.enabled }}
+            - name: OPENVIKING_GATEWAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "contextGateway.existingSecret is required" .Values.contextGateway.existingSecret }}
+                  name: {{ required "gateway.existingSecret is required" .Values.gateway.existingSecret }}
                   key: admin-token
             {{- end }}
             - name: OPENVIKING_CONFIG_FILE
@@ -86,32 +86,32 @@ spec:
               mountPath: {{ printf "%s/ov.conf" .Values.persistence.mountPath | quote }}
               subPath: ov.conf
               readOnly: true
-        {{- if .Values.contextGateway.enabled }}
-        - name: context-gateway
+        {{- if .Values.gateway.enabled }}
+        - name: gateway
           image: {{ include "openviking.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["openviking-context-gateway"]
+          command: ["openviking-gateway"]
           args: ["--config", {{ printf "%s/ov.conf" .Values.persistence.mountPath | quote }}]
           env:
-            - name: OPENVIKING_CONTEXT_GATEWAY_ADMIN_TOKEN
+            - name: OPENVIKING_GATEWAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.contextGateway.existingSecret }}
+                  name: {{ .Values.gateway.existingSecret }}
                   key: admin-token
-            - name: OPENVIKING_CONTEXT_GATEWAY_ENCRYPTION_KEY
+            - name: OPENVIKING_GATEWAY_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.contextGateway.existingSecret }}
+                  name: {{ .Values.gateway.existingSecret }}
                   key: encryption-key
           ports:
-            - name: context-gateway
-              containerPort: {{ .Values.contextGateway.port }}
+            - name: gateway
+              containerPort: {{ .Values.gateway.port }}
           readinessProbe:
             httpGet:
               path: /health
-              port: context-gateway
+              port: gateway
           resources:
-            {{- toYaml .Values.contextGateway.resources | nindent 12 }}
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}

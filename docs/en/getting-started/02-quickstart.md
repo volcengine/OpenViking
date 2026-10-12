@@ -10,13 +10,13 @@ Otherwise, choose one:
 
 ### Managed service on Volcengine
 
-Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) and obtain your key from **User Management → API Key**. The service endpoint is:
+Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_02-quickstart) and obtain your key from **User Management → API Key**. The service endpoint is:
 
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-No server installation or local model configuration is needed. See the [product page](https://www.volcengine.com/product/openviking-service) and [service documentation](https://docs.volcengine.com/docs/84313/2374478) for managed-service usage and limits. Continue to step 2.
+No server installation or local model configuration is needed. See the [product page](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_02-quickstart) and [service documentation](https://docs.volcengine.com/docs/84313/2374478) for managed-service usage and limits. Continue to step 2.
 
 ### Self-host a server
 
