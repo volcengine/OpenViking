@@ -1235,7 +1235,7 @@ class FSService:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        """Write to an existing file and refresh semantics/vectors."""
+        """Create or update a file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
         coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
         return await coordinator.write(

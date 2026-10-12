@@ -9,7 +9,9 @@ import pytest
 
 from openviking.parse.output import AgfsParseOutputStore, ParseArtifactRef
 from openviking.storage.resource_diff import (
+    InlineBytesStore,
     build_rnfv_snapshot,
+    make_inline_file_inventory,
     prepare_artifact_inventory,
     read_target_file_snapshot,
 )
@@ -82,10 +84,26 @@ class _FakeVikingDB:
             if uri == target_uri or uri.startswith(prefix)
         }
 
-    async def get_incremental_inventory_under_uri(self, target_uri, *, ctx, output_fields=None):
-        del ctx
+    async def get_incremental_inventory_under_uri(
+        self,
+        target_uri,
+        *,
+        ctx,
+        output_fields=None,
+        recursive=True,
+        include_direct_children=False,
+    ):
+        del ctx, include_direct_children
         self.inventory_output_fields = list(output_fields or [])
-        prefix = target_uri.rstrip("/") + "/"
+        self.inventory_depth = -1 if recursive else 0
+        base = target_uri.rstrip("/")
+        prefix = base + "/"
+
+        def in_scope(uri: str) -> bool:
+            if uri == base or uri.startswith(base + "#"):
+                return True
+            return recursive and uri.startswith(prefix)
+
         return {
             str(value.get("id") or f"id-{index}"): {
                 key: item
@@ -99,7 +117,7 @@ class _FakeVikingDB:
                 if not output_fields or key in output_fields
             }
             for index, (uri, value) in enumerate(self._records.items())
-            if uri == target_uri or uri.startswith(prefix)
+            if in_scope(uri)
         }
 
 
@@ -350,9 +368,7 @@ async def test_build_rnfv_snapshot_projects_tags_only_for_effective_request_inte
     )
 
     snapshot = await build_rnfv_snapshot(
-        viking_fs=_FakeVikingFS(
-            [{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}]
-        ),
+        viking_fs=_FakeVikingFS([{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}]),
         vikingdb=vikingdb,
         store=store,
         artifact_ref=ref,
@@ -479,3 +495,111 @@ async def test_build_rnfv_snapshot_cancels_sibling_reads_after_failure(tmp_path,
     with pytest.raises(RuntimeError, match="inventory failed"):
         await task
     assert cancelled == {"formal", "vectors"}
+
+
+def test_make_inline_file_inventory_uses_final_byte_md5():
+    from openviking.utils.content_hash import content_md5
+
+    inventory = make_inline_file_inventory(b"hello world")
+    assert set(inventory.entries) == {""}
+    entry = inventory.entries[""]
+    assert entry.is_dir is False
+    assert entry.md5 == content_md5(b"hello world")
+    assert inventory.artifact_paths == {"": ""}
+
+
+@pytest.mark.asyncio
+async def test_inline_bytes_store_returns_preset_bytes():
+    store = InlineBytesStore(b"payload")
+    assert await store.read_bytes(object(), "ignored") == b"payload"
+    assert await store.read_bytes(None, "") == b"payload"
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_uses_locked_formal_snapshot_without_second_stat(monkeypatch):
+    root = "viking://resources/x/a.py"
+
+    async def _unexpected_formal_read(*args, **kwargs):
+        raise AssertionError("locked formal state must be reused")
+
+    async def _empty_inventory(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff.read_target_file_snapshot", _unexpected_formal_read
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_diff._read_incremental_vector_inventory", _empty_inventory
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=_FakeVikingDB({}),
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=make_inline_file_inventory(b"new"),
+        root_is_file=True,
+        target_preexisting=True,
+        formal_snapshot=({"": FormalEntry(is_dir=False)}, True),
+        vector_scope="self",
+    )
+
+    assert snapshot.formal.entries == {"": FormalEntry(is_dir=False)}
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_self_scope_reads_only_target_uri():
+    root = "viking://resources/x/a.py"
+    vikingdb = _FakeVikingDB(
+        {
+            root: {"id": "self-l2", "level": 2, "md5": "old"},
+            "viking://resources/x/b.py": {"id": "sibling-l2", "level": 2, "md5": "sib"},
+        }
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=vikingdb,
+        store=InlineBytesStore(b"new"),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=make_inline_file_inventory(b"new"),
+        root_is_file=True,
+        target_preexisting=False,
+        vector_scope="self",
+    )
+
+    assert vikingdb.inventory_depth == 0
+    # Only the target file's own record is visible; the sibling is never read.
+    assert {record.uri for record in snapshot.vectors.records_by_id.values()} == {root}
+
+
+@pytest.mark.asyncio
+async def test_build_rnfv_snapshot_default_scope_reads_subtree():
+    root = "viking://resources/x"
+    vikingdb = _FakeVikingDB(
+        {
+            f"{root}/a.py": {"id": "a-l2", "level": 2, "md5": "a"},
+            f"{root}/sub/b.py": {"id": "b-l2", "level": 2, "md5": "b"},
+        }
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS([]),
+        vikingdb=vikingdb,
+        store=InlineBytesStore(b""),
+        artifact_ref=object(),
+        target_uri=root,
+        ctx=_Ctx(),
+        artifact_inventory=make_inline_file_inventory(b""),
+        target_preexisting=False,
+    )
+
+    assert vikingdb.inventory_depth == -1
+    assert {record.uri for record in snapshot.vectors.records_by_id.values()} == {
+        f"{root}/a.py",
+        f"{root}/sub/b.py",
+    }
