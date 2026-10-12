@@ -35,6 +35,7 @@ from openviking.session.memory.utils.line_numbers import (
 
 _PYTHON_FENCE_RE = re.compile(r"```python[ \t]*\r?\n(?P<code>[\s\S]*?)```", re.IGNORECASE)
 _PYTHON_FENCE_START_RE = re.compile(r"```python[ \t]*\r?\n", re.IGNORECASE)
+_GENERIC_FENCE_RE = re.compile(r"```[ \t]*\r?\n(?P<code>[\s\S]*?)```")
 _HIDDEN_MEMORY_FIELDS = {
     "source_extraction_id",
     "source_extraction_ids",
@@ -1462,6 +1463,12 @@ def _extract_python_code(content: str) -> str:
     starts = list(_PYTHON_FENCE_START_RE.finditer(stripped))
     if len(starts) == 1 and stripped.count("```") == 1:
         return stripped[starts[0].end() :].strip()
+    generic_matches = list(_GENERIC_FENCE_RE.finditer(stripped))
+    if len(generic_matches) == 1:
+        match = generic_matches[0]
+        surrounding_text = stripped[: match.start()] + stripped[match.end() :]
+        if "```" not in surrounding_text:
+            return match.group("code").rstrip()
     if "```" in stripped:
         raise ExtractionOutputProtocolError(
             "Python output may contain only one complete ```python code fence"
