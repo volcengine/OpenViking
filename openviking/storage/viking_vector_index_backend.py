@@ -1724,6 +1724,11 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         backend = await self._get_backend_for_context(ctx)
+        acl_enabled = await self._acl_enabled(ctx)
+        filter = self._merge_filters(
+            filter,
+            self._tenant_filter(ctx, acl_enabled=acl_enabled),
+        )
         return await backend.scroll(
             filter=filter,
             limit=limit,
@@ -1824,6 +1829,11 @@ class VikingVectorIndexBackend:
     ) -> int:
         if ctx:
             backend = await self._get_backend_for_context(ctx)
+            acl_enabled = await self._acl_enabled(ctx)
+            filter = self._merge_filters(
+                filter,
+                self._tenant_filter(ctx, acl_enabled=acl_enabled),
+            )
         else:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)

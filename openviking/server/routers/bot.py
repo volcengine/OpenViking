@@ -119,14 +119,6 @@ def _attach_openviking_connection(
     server_url = get_server_url_from_server_data(getattr(request.app.state, "config", None))
     if not api_key:
         if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
-            if effective_auth_mode == "trusted":
-                enriched["openviking_connection"] = _build_openviking_connection(
-                    api_key="",
-                    ctx=ctx,
-                    effective_auth_mode=effective_auth_mode,
-                    server_url=server_url,
-                )
-                return enriched
             if include_legacy_user_id:
                 enriched.setdefault("user_id", ctx.user.user_id)
             return enriched

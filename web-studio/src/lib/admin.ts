@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { fetchServerHealth } from '#/hooks/use-server-mode'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
@@ -72,6 +71,7 @@ export type CapabilityDetailCode =
   | 'rootAvailable'
   | 'tenantDataAvailable'
   | 'trustedIdentityRequired'
+  | 'trustedKeyRequired'
 
 export type CapabilityProbeResult = {
   detail?: string
@@ -84,7 +84,6 @@ export type CapabilityProbeResult = {
 export type StudioConnectionProbe = {
   admin: CapabilityProbeResult
   data: CapabilityProbeResult
-  rootApiKeyRequired?: boolean
 }
 
 export type ProbeConnectionInput = {
@@ -204,7 +203,10 @@ async function probeAdminAccess(
   const controlKey = input.adminApiKey.trim()
   if (!controlKey) {
     return {
-      detailCode: 'controlKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'controlKeyRequired',
       state: 'skipped',
     }
   }
@@ -252,9 +254,14 @@ async function probeDataAccess(
   if (input.serverMode === 'checking' || input.serverMode === 'offline') {
     return { state: 'skipped' }
   }
-  if (input.serverMode === 'api_key' && !input.apiKey) {
+  const apiKey =
+    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : '')
+  if (input.serverMode !== 'dev' && !apiKey) {
     return {
-      detailCode: 'dataKeyRequired',
+      detailCode:
+        input.serverMode === 'trusted'
+          ? 'trustedKeyRequired'
+          : 'dataKeyRequired',
       state: 'skipped',
     }
   }
@@ -270,10 +277,7 @@ async function probeDataAccess(
 
   const client = createProbeClient(input.baseUrl)
   const headers: Record<string, string> = {}
-  setApiKeyHeader(
-    headers,
-    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : ''),
-  )
+  setApiKeyHeader(headers, apiKey)
 
   if (input.serverMode === 'trusted') {
     setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
@@ -301,29 +305,11 @@ async function probeDataAccess(
 export async function probeStudioConnection(
   input: ProbeConnectionInput,
 ): Promise<StudioConnectionProbe> {
-  const headers: Record<string, string> = {}
-  setApiKeyHeader(headers, input.adminApiKey || input.apiKey)
-  setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
-  setOptionalHeader(headers, 'X-OpenViking-User', input.userId)
-  const [admin, data, health] = await Promise.all([
+  const [admin, data] = await Promise.all([
     probeAdminAccess(input),
     probeDataAccess(input),
-    Promise.allSettled(
-      input.serverMode === 'trusted'
-        ? [fetchServerHealth(input.baseUrl, headers)]
-        : [],
-    ),
   ])
-  const metadata =
-    health[0]?.status === 'fulfilled' ? health[0].value : undefined
-  return {
-    admin,
-    data,
-    rootApiKeyRequired:
-      typeof metadata?.root_api_key_required === 'boolean'
-        ? metadata.root_api_key_required
-        : undefined,
-  }
+  return { admin, data }
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {

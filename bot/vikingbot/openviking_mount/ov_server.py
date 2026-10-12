@@ -156,12 +156,6 @@ class VikingClient:
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 

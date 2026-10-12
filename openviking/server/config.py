@@ -547,7 +547,9 @@ def validate_server_config(config: ServerConfig) -> None:
     if config.root_api_key == "":
         logger.error(
             "Invalid server.root_api_key: empty string is not allowed. "
-            "Either set a non-empty root_api_key or remove the setting entirely."
+            "Set a non-empty server.root_api_key in ov.conf and restart. "
+            "Only remove this setting if the selected auth mode does not require a root key; "
+            "trusted and api_key modes require it even on localhost."
         )
         sys.exit(1)
 

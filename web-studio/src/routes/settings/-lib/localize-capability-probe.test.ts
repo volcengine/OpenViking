@@ -12,6 +12,7 @@ const translations: Record<string, string> = {
   'health.detail.rootAvailable': 'Root 管理权限可用',
   'health.detail.tenantDataAvailable': '租户数据访问可用',
   'health.detail.trustedIdentityRequired': '需要账号和用户信息',
+  'health.detail.trustedKeyRequired': '需要 Root API 密钥，请配置 server.root_api_key',
 }
 
 const t = ((key: string) => translations[key] ?? key) as TFunction<'settings'>

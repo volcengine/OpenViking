@@ -1122,9 +1122,9 @@ const workspace = {
         learnMore: '查看 API 密钥获取方式',
         trusted: {
           primary:
-            '当前 Trusted 服务启用了 Root API 密钥校验。浏览器需要配置相同的密钥，才能访问管理接口和租户数据接口。',
+            'Trusted 模式必须使用 Root API 密钥，localhost 也不例外。请在上方“Root 或管理员 API 密钥”中填入服务端的 root key。',
           secondary:
-            '请向部署管理员索取 Root API 密钥；它位于服务端 ov.conf 的 server.root_api_key。Trusted 模式的数据身份由账号和用户断言确定，不需要用户 API 密钥。',
+            '请向部署管理员索取密钥。如果服务端还没配置，请在服务端 ov.conf 中设置非空的 server.root_api_key，然后重启服务，并在这里填写同一个值。无需另外生成用户 API 密钥。',
           title: 'Trusted 服务需要 Root API 密钥',
         },
       },
@@ -1136,6 +1136,10 @@ const workspace = {
         primary: '该服务器配置了 {{mode}} 认证。',
         title: '不支持的认证模式',
       },
+      trustedRootHint:
+        '填写服务端 ov.conf 中的 server.root_api_key；Trusted 模式的管理和数据访问都使用它。',
+      trustedUserHint:
+        'Trusted 模式无需单独的用户 API 密钥，数据身份由账号和用户名决定。',
       userHint: '供文件系统和租户数据 API 使用。',
     },
     connectionPage: {
@@ -1206,6 +1210,8 @@ const workspace = {
         dataKeyRequired: '需要用户或账号管理员 API 密钥',
         rootAvailable: 'Root 管理权限可用',
         tenantDataAvailable: '租户数据访问可用',
+        trustedKeyRequired:
+          '需要 Root API 密钥，请填写服务端 ov.conf 中的 server.root_api_key',
         trustedIdentityRequired: 'Trusted 模式的数据访问需要账号和用户信息',
       },
       state: {

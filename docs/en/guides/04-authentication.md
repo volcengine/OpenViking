@@ -11,7 +11,7 @@ API Key mode is recommended for most deployments; it is auto-selected when no mo
 | **API Key Mode** | `api_key` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment |
 | **OIDC Mode** | `oidc` | JWT tokens from external identity providers | Enterprise SSO integration with Okta/Auth0/Keycloak |
 | **LDAP Mode** | `ldap` | Enterprise LDAP/AD directory services | Integrate with existing enterprise user directory |
-| **Trusted Mode** | `trusted` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
+| **Trusted Mode** | `trusted` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on every deployment. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
 | **Dev Mode** | `dev` | No authentication, always ROOT | Local development only |
 
 If `auth_mode` is not explicitly configured:
@@ -514,10 +514,13 @@ Trusted mode skips user-key lookup and instead trusts explicit identity headers 
 {
   "server": {
     "auth_mode": "trusted",
+    "root_api_key": "your-secret-root-key",
     "host": "127.0.0.1"
   }
 }
 ```
+
+A missing, empty, or whitespace-only `server.root_api_key` prevents startup, including on localhost.
 
 ### Rules in Trusted Mode
 
@@ -526,9 +529,9 @@ Trusted mode skips user-key lookup and instead trusts explicit identity headers 
 - A trusted upstream may also send `X-OpenViking-Role: user` or `X-OpenViking-Role: admin` to assert the request role. This header is accepted only when `root_api_key` is configured and the request presents the matching API key. `root` is not an allowed asserted value; ROOT is reserved for validated Admin API fallback.
 - `/api/v1/admin/*` is special: when a configured `root_api_key` is presented, trusted mode treats the request as ROOT. Explicit account/user headers are allowed only when they are complete and match the target URL.
 - For ordinary trusted data APIs, role is determined by `X-OpenViking-Role` when present and authorized; otherwise by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
-- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it acts as proof that the caller is an approved trusted upstream.
+- Trusted identity comes from the headers, not from a user key. The required `root_api_key` authenticates the trusted upstream.
 - Trusted data-plane identities are asynchronously registered in batches (five minutes by default) so they eventually appear in the existing account/user management APIs. Registration creates no user API key and never changes groups or an existing user's role. Set `server.trusted_identity_flush_interval_seconds` to `0` to disable registration entirely; `/api/v1/admin/*` requests are never registered.
-- If `root_api_key` is also configured, every request must still provide a matching API key.
+- Every authenticated request must provide the matching root API key. Anonymous `/health` probes remain available for liveness checks.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
 
 ### Trusted Deployment Admin API
@@ -561,12 +564,13 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 }
 ```
 
-The curl and SDK examples below use the localhost configuration without a root key. If one is configured, also provide it as `X-API-Key` or SDK `api_key`.
+Provide the configured root key as `X-API-Key` or SDK `api_key`, including when connecting to localhost.
 
 **curl Example**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: your-secret-root-key" \
   -H "X-OpenViking-Account: acme" \
   -H "X-OpenViking-User: alice"
 ```
@@ -578,6 +582,7 @@ import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
+    api_key="your-secret-root-key",
     account="acme",
     user="alice",
 )
@@ -620,11 +625,11 @@ Or explicitly:
 
 Regular resource operations in this table are still subject to resource ACLs. Account roles determine identity administration and implicit management of public resources; [Resource Access Control (ACL)](../concepts/15-acl.md) determines `read/write/manage` permissions on individual directories and files.
 
-In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
+In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes grant ROOT only after validating the root key, with or without explicit identity headers.
 
 ## Unauthenticated Endpoints
 
-The `/health` endpoint never requires authentication. This allows load balancers and monitoring tools to check server health.
+Anonymous `/health` requests require no credentials, allowing load balancers and monitoring tools to check server health. Supplying credentials or complete trusted identity headers triggers authentication.
 
 ```bash
 curl http://localhost:1933/health

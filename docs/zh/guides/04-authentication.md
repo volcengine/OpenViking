@@ -584,18 +584,19 @@ root key 请求上携带身份 header。
 
 ## Trusted 模式
 
-Trusted 模式不会查询 user key，而是直接信任每个请求显式携带的身份请求头：
+Trusted 模式使用 root API key 验证上游，再从每个请求显式携带的身份请求头解析用户，不查询 user key：
 
 ```json
 {
   "server": {
     "auth_mode": "trusted",
+    "root_api_key": "your-secret-root-key",
     "host": "127.0.0.1"
   }
 }
 ```
 
-数据请求必须提供 `X-OpenViking-Account` 和 `X-OpenViking-User`。若配置了 `root_api_key`，请求还必须携带匹配的 API Key，以验证上游网关。
+`server.root_api_key` 缺失、为空或仅含空白时拒绝启动，localhost 也不例外。数据请求必须提供 `X-OpenViking-Account`、`X-OpenViking-User` 和匹配的 API Key，以验证上游网关。匿名 `/health` 存活探测仍可使用。
 
 角色默认从已注册用户查询，未注册时为 USER。配置并验证 root key 后，上游可用 `X-OpenViking-Role: user` 或 `admin` 断言角色，不接受 `root`。Admin API 的 ROOT 授权来自部署 root key。
 

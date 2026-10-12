@@ -103,13 +103,12 @@ async def test_health_endpoint_without_api_key():
     assert "role" not in body
 
 
-@pytest.mark.parametrize("root_key", [None, "test-root-key"])
 @pytest.mark.parametrize(
     "credentials", ["anonymous", "partial", "trusted", "keyed", "malformed", "asserted-root"]
 )
-async def test_health_trusted_identity_contract(root_key, credentials, caplog, service):
+async def test_health_trusted_identity_contract(credentials, caplog, service):
     app = create_app(
-        config=ServerConfig(auth_mode="trusted", host="127.0.0.1", root_api_key=root_key),
+        config=ServerConfig(auth_mode="trusted", host="127.0.0.1", root_api_key="test-root-key"),
         service=service,
     )
     await _initialize_auth_plugin(app, service, app.state.config)
@@ -129,16 +128,16 @@ async def test_health_trusted_identity_contract(root_key, credentials, caplog, s
     ) as client:
         response = await client.get("/health", headers=headers)
     body = response.json()
-    expected_status = 401 if root_key and credentials in ("trusted", "malformed") else 200
+    expected_status = 401 if credentials in ("trusted", "malformed") else 200
     assert response.status_code == expected_status
     if expected_status == 401:
         assert body["error"]["code"] == "UNAUTHENTICATED"
         return
-    if credentials == "keyed" or (credentials == "trusted" and not root_key):
+    if credentials == "keyed":
         assert (body["account_id"], body["user_id"], body["role"]) == ("account-a", "alice", "user")
     else:
         assert "role" not in body
-    assert body["root_api_key_required"] is bool(root_key)
+    assert body["root_api_key_required"] is True
     if credentials in ("anonymous", "partial"):
         assert "Failed to resolve identity" not in caplog.text
 
