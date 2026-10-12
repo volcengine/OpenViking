@@ -379,6 +379,7 @@ class TestOpenAPIAuth:
             return {
                 "status": "ok",
                 "auth_mode": "trusted",
+                "root_api_key_required": True,
                 "role": "user",
                 "account_id": request.headers["X-OpenViking-Account"],
                 "user_id": request.headers["X-OpenViking-User"],
@@ -1265,7 +1266,157 @@ class TestOpenAPIAuth:
         assert response.status_code == 401
         assert response.json()["detail"] == "OpenViking API key header required"
 
-    def test_compile_status_accepts_trusted_identity_when_no_root_key_is_configured(
+    def test_compile_status_rejects_untrusted_identity_when_no_root_key_is_configured(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="",
+                account_id="",
+                admin_user_id="",
+            ),
+        )
+        compile_service = SimpleNamespace()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=compile_service,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                raise AssertionError("untrusted keyless identity must not hit upstream health")
+
+        async def fake_get_task(task_id, principal_scope):
+            raise AssertionError("compile task must not be read for untrusted keyless identity")
+
+        compile_service.get_task = fake_get_task
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        client = _make_client(channel)
+
+        response = client.get(
+            "/bot/v1/compile/cmp_1",
+            headers={
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+        assert response.status_code == 401
+        assert (
+            response.json()["detail"]
+            == "Trusted OpenViking identity requires a trusted local proxy or configured root API key"
+        )
+
+    @pytest.mark.parametrize(
+        ("root_api_key_required", "expected_status"),
+        [(False, 401), (True, 200)],
+        ids=["rootless-rejects-request-key", "root-key-validates-request-key"],
+    )
+    def test_compile_status_validates_request_key_when_not_statically_configured(
+        self,
+        message_bus,
+        temp_workspace,
+        monkeypatch,
+        root_api_key_required,
+        expected_status,
+    ):
+        config = SimpleNamespace(
+            gateway=SimpleNamespace(host="127.0.0.1", token=""),
+            ov_server=SimpleNamespace(
+                server_url="http://ov.local",
+                effective_auth_mode="trusted",
+                api_key_type="root",
+                api_key="",
+                account_id="",
+                admin_user_id="",
+            ),
+        )
+        compile_service = SimpleNamespace()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+            global_config=config,
+            compile_service=compile_service,
+        )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, url, headers=None):
+                assert headers["X-API-Key"] == "request-root-key"
+                assert headers["X-OpenViking-Account"] == "acct"
+                assert headers["X-OpenViking-User"] == "alice"
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "ok",
+                        "auth_mode": "trusted",
+                        "root_api_key_required": root_api_key_required,
+                        "role": "user",
+                        "account_id": "acct",
+                        "user_id": "alice",
+                    },
+                    headers={"content-type": "application/json"},
+                )
+
+        async def fake_get_task(task_id, principal_scope):
+            if not root_api_key_required:
+                raise AssertionError("rootless request key must not authorize compile access")
+            assert task_id == "cmp_1"
+            assert principal_scope == channel._principal_scope("openviking:acct:alice")
+            return {
+                "task_id": task_id,
+                "status": "running",
+                "stage": "agent",
+                "created_at": "2026-07-20T00:00:00Z",
+                "updated_at": "2026-07-20T00:00:01Z",
+            }
+
+        compile_service.get_task = fake_get_task
+        monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
+        client = _make_client(channel)
+
+        response = client.get(
+            "/bot/v1/compile/cmp_1",
+            headers={
+                "X-API-Key": "request-root-key",
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+        assert response.status_code == expected_status
+        if not root_api_key_required:
+            assert (
+                response.json()["detail"]
+                == "Trusted OpenViking identity requires a trusted local proxy or upstream-validated root API key"
+            )
+
+    def test_compile_status_accepts_local_trusted_identity_when_no_root_key_is_configured(
         self, message_bus, temp_workspace, monkeypatch
     ):
         config = SimpleNamespace(
@@ -1327,7 +1478,10 @@ class TestOpenAPIAuth:
 
         compile_service.get_task = fake_get_task
         monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
-        client = _make_client(channel)
+        app = FastAPI()
+        app.include_router(channel.get_router(), prefix="/bot/v1")
+        app.include_router(channel.get_gateway_router())
+        client = TestClient(app, client=("127.0.0.1", 50000))
 
         response = client.get(
             "/bot/v1/compile/cmp_1",

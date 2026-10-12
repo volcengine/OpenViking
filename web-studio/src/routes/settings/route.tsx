@@ -30,10 +30,36 @@ import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { cn } from '#/lib/utils'
 import { localizeCapabilityDetail } from './-lib/localize-capability-probe'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
+import { ServerConfigurationEditor } from './-components/server-configuration'
 
 export const Route = createFileRoute('/settings')({
   component: ConnectionSettingsRoute,
 })
+
+function ConnectionSettingsRoute() {
+  const { t } = useTranslation('settings')
+  const { identityScopeKey } = useAppConnection()
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-5">
+      <h1 className="text-2xl font-semibold">{t('pageTitle')}</h1>
+      <Tabs defaultValue="connection" className="min-w-0 gap-5">
+        <TabsList variant="line">
+          <TabsTrigger value="connection">{t('tabs.connection')}</TabsTrigger>
+          <TabsTrigger value="configuration">
+            {t('tabs.configuration')}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="connection">
+          <ConnectionSettingsPanel />
+        </TabsContent>
+        <TabsContent value="configuration" keepMounted>
+          <ServerConfigurationEditor key={identityScopeKey} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
 
 function getCapabilityIcon(result: CapabilityProbeResult | undefined) {
   if (!result) {
@@ -124,7 +150,7 @@ function UserApiKeyInput({
   )
 }
 
-function ConnectionSettingsRoute() {
+function ConnectionSettingsPanel() {
   const { i18n, t } = useTranslation('settings')
   const { connection, saveConnection, serverMode } = useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionDraft>(connection)
@@ -241,15 +267,6 @@ function ConnectionSettingsRoute() {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {t('connectionPage.title')}
-        </h1>
-        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          {t('connectionPage.description')}
-        </p>
-      </header>
-
       <Card className="gap-0 overflow-hidden border-primary/25 bg-primary/[0.025] py-0 shadow-sm ring-1 ring-primary/10">
         <CardHeader className="gap-2 border-b border-primary/15 bg-primary/[0.07] px-5 py-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">

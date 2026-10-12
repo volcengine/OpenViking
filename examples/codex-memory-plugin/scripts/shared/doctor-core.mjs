@@ -423,7 +423,7 @@ export function runCommand(command, args = [], { timeoutMs = 10000, env = proces
 
 export function whichCommand(name) {
   const result = runCommand(process.platform === "win32" ? "where" : "which", [name], { timeoutMs: 5000 });
-  return result.ok ? result.stdout.split("\n")[0] : "";
+  return result.ok ? result.stdout.split(/\r?\n/)[0] : "";
 }
 
 export function parseNodeMajor(version) {

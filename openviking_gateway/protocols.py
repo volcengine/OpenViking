@@ -163,6 +163,22 @@ def prefix_chain(messages: list[dict]) -> list[str]:
     return result
 
 
+def client_texts(body: dict) -> list[str]:
+    """The system prompt and the client-written messages, without replies or tool output."""
+    texts = [text_content({"content": body.get("system", "")}), body.get("instructions", "")]
+    for field in ("messages", "input"):
+        messages = body.get(field, [])
+        if isinstance(messages, str):
+            texts.append(messages)
+        elif isinstance(messages, list):
+            texts.extend(
+                text_content(m)
+                for m in messages
+                if isinstance(m, dict) and m.get("role") in {"user", "system", "developer"}
+            )
+    return [text for text in texts if isinstance(text, str)]
+
+
 def plugin_present(body: dict, headers: dict) -> bool:
     if headers.get("x-openviking-plugin"):
         return True
@@ -184,29 +200,72 @@ def plugin_present(body: dict, headers: dict) -> bool:
         )
         return any(re.search(rf"<{re.escape(tag)}(?:\s|>)", text, re.I) for tag in PLUGIN_TAGS)
 
-    texts = [text_content({"content": body.get("system", "")}), body.get("instructions", "")]
-    for field in ("messages", "input"):
-        messages = body.get(field, [])
-        if isinstance(messages, str):
-            texts.append(messages)
-        elif isinstance(messages, list):
-            texts.extend(
-                text_content(m)
-                for m in messages
-                if isinstance(m, dict) and m.get("role") in {"user", "system", "developer"}
-            )
-    if any(marked(text) for text in texts if isinstance(text, str)):
-        return True
-    # Only tool definitions identify plugin ownership. File names, tool results
-    # and assistant prose must never permanently disable a session.
-    for tool in [*body.get("tools", []), *body.get("additional_tools", [])]:
+    # Plugins mark the context they inject. OpenViking tools alone, as from an MCP
+    # connection, only keep the gateway's tools out (see client_openviking_tools).
+    return any(marked(text) for text in client_texts(body))
+
+
+OPENVIKING_WORD = r"(?<![a-z0-9])openviking(?![a-z0-9])"
+
+
+def client_openviking_tools(body: dict, names) -> bool:
+    """Whether the client already exposes OpenViking tools, whatever its MCP server is named.
+
+    ``names`` are the bare OpenViking tool names, such as ``read`` and ``add_resource``.
+    """
+    if not names:
+        return False
+    pending = []
+    for key in ("tools", "additional_tools", "mcp_servers"):
+        if isinstance(body.get(key), list):
+            pending.extend(("", tool) for tool in body[key])
+    if isinstance(body.get("input"), list):
+        for item in body["input"]:
+            if isinstance(item, dict) and item.get("type") == "additional_tools":
+                if isinstance(item.get("tools"), list):
+                    pending.extend(("", tool) for tool in item["tools"])
+    # Prefixed like mcp__ov__read or ov_read; a bare Read is a client's own tool.
+    alternatives = "|".join(map(re.escape, names))
+    ending = re.compile(rf"[^a-z0-9](?:{alternatives})$", re.I)
+    while pending:
+        parent, tool = pending.pop()
         if not isinstance(tool, dict):
             continue
         definition = tool.get("function", tool)
-        name = definition.get("name", definition.get("namespace", ""))
-        if isinstance(name, str) and re.search(r"(^|__)openviking(?:_|__|$)", name, re.I):
+        if not isinstance(definition, dict):
+            continue
+        labels = [
+            parent + definition[key]
+            for key in ("name", "namespace", "server_label", "mcp_server_name")
+            if isinstance(definition.get(key), str)
+        ]
+        if isinstance(definition.get("tools"), list):
+            # A namespace's tools are named without it, as in mcp__kb + glob; they
+            # decide, not the namespace name.
+            prefix = (labels[0] + "__") if labels else ""
+            pending.extend((prefix, child) for child in definition["tools"])
+            continue
+        # Hosted MCP servers (Responses mcp, Anthropic mcp_servers and mcp_toolset) list
+        # no tools, so their name is all there is.
+        server = definition.get("type") in {"mcp", "mcp_toolset", "url"}
+        named_tool = isinstance(definition.get("name"), str) and not server
+        # A tool must be one of OpenViking's, so a connector's authenticate tool is not.
+        if any(
+            re.search(OPENVIKING_WORD, label, re.I) and (not named_tool or ending.search(label))
+            for label in labels
+        ):
             return True
-    return False
+        # A renamed server's tools keep their names and mention viking:// URIs, while
+        # a container such as a skill list may quote an OpenViking description too.
+        if (
+            any(ending.search(label) for label in labels)
+            and "viking://" in orjson.dumps(definition).decode().lower()
+        ):
+            return True
+    # Deferred MCP tools, as in Claude Code's tool search, are listed only by name, one
+    # per line; a name mentioned in prose is not a tool.
+    deferred = rf"^[ \t]*mcp__[\w-]*?{OPENVIKING_WORD}[\w-]*__(?:{alternatives})[ \t]*$"
+    return any(re.search(deferred, text, re.I | re.M) for text in client_texts(body))
 
 
 def is_user(message):

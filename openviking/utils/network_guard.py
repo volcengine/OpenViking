@@ -127,7 +127,10 @@ def ensure_public_remote_target(source: str) -> None:
 
     resolved_addresses = _resolve_host_addresses(host)
     if not resolved_addresses:
-        return
+        raise PermissionDeniedError(
+            "HTTP server only accepts public remote resource targets; "
+            f"host '{host}' could not be resolved to a verifiable public address."
+        )
 
     non_public = sorted(addr for addr in resolved_addresses if not _is_public_ip(addr))
     if non_public:

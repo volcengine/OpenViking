@@ -6,7 +6,7 @@ OpenViking runs as an HTTP service. Choose who operates it before installing a s
 
 | Service | What you need |
 | --- | --- |
-| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing), then connect with the independent CLI. No local server or model configuration is needed. |
+| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment), then connect with the independent CLI. No local server or model configuration is needed. |
 | An existing team or remote deployment | Obtain the service URL and a user/admin key from its administrator. |
 | Self-hosted OpenViking | Install and configure the server using the instructions below. |
 

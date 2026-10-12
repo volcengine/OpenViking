@@ -227,9 +227,16 @@ class OpenVikingAsyncClientHandle:
         return bool(client is not None and _async_client_is_initialized(client))
 
     async def initialize(self) -> None:
-        """Initialize the underlying client once."""
+        """Initialize the underlying client once.
 
-        await self.get()
+        Creating the client does not initialize it when the connection has
+        ``auto_initialize`` disabled, so an explicit request must run the
+        once-only async initialization itself.
+        """
+
+        client = await self.get()
+        if hasattr(client, "initialize"):
+            await _ainitialize_client(client)
 
     async def close(self) -> None:
         owner_loop = self._loop

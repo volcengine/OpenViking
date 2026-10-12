@@ -6,7 +6,7 @@ OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行
 
 | 服务方式 | 你需要准备什么 |
 | --- | --- |
-| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
+| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_03-deployment)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
 | 团队已有服务或他人部署 | 向管理员获取服务地址和 user/admin key。 |
 | 自建 OpenViking | 按下文安装、配置和运行服务端。 |
 

@@ -47,7 +47,7 @@ description: 把任何使用 API Key 的模型客户端指向 OpenViking 网关�
 
 | 你要做的 | 你会得到 | 额外开销 | 需要留意 |
 | --- | --- | --- | --- |
-| 把 Base URL 改成网关地址，API Key 换成网关密钥。Claude Code 还要设置 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`，给子 Agent 和后台请求加上标记，避免为它们召回和保存。 | 每条新消息都补充相关记忆，对话开头还提供用户画像；对话保存回 OpenViking 并提取成新记忆；长对话自动压缩；可选：模型主动检索、读取和写入 OpenViking（见[下一节](#让任意客户端拥有-agentic-记忆)）。 | 每条新消息的第一次模型调用最多多等 2 秒；补充的记忆按输入 token 计费，之后的请求里大部分按缓存价计费；触发压缩的那一轮多一次模型调用。 | 补充的记忆在客户端里看不到（服务商看得到），Studio 的请求日志也只记条数和耗时；没有设置上下文窗口时，网关按 1,000,000 token 的窗口决定何时压缩，使用窗口更小的模型时要请管理员填上实际窗口，否则长对话会因过长被服务商拒绝；客户端装了 OpenViking 插件或名为 `openviking` 的 MCP 服务器时，网关不为这段对话召回、保存，也不提供 OpenViking 工具。 |
+| 把 Base URL 改成网关地址，API Key 换成网关密钥。Claude Code 还要设置 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`，给子 Agent 和后台请求加上标记，避免为它们召回和保存。 | 每条新消息都补充相关记忆，对话开头还提供用户画像；对话保存回 OpenViking 并提取成新记忆；长对话自动压缩；可选：模型主动检索、读取和写入 OpenViking（见[下一节](#让任意客户端拥有-agentic-记忆)）。 | 每条新消息的第一次模型调用最多多等 2 秒；补充的记忆按输入 token 计费，之后的请求里大部分按缓存价计费；触发压缩的那一轮多一次模型调用。 | 补充的记忆在客户端里看不到（服务商看得到），Studio 的请求日志也只记条数和耗时；没有设置上下文窗口时，网关按 1,000,000 token 的窗口决定何时压缩，使用窗口更小的模型时要请管理员填上实际窗口，否则长对话会因过长被服务商拒绝；客户端装了 OpenViking 插件时，网关不为这段对话召回、保存，也不提供 OpenViking 工具；只接了 OpenViking MCP 工具时，网关照常召回和保存，但不再提供自己的工具。 |
 
 ![一轮对话里发生了什么：网关识别对话和请求类型，把之前补充的记忆原样放回，只为新消息召回，再用同一种 API 转发给上游，并把这一轮放进待保存队列；下方说明原样放回如何让提示缓存持续命中，以及跨轮的保存和长对话压缩](../../images/gateway/one-turn.zh.svg)
 
@@ -141,7 +141,7 @@ Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
 
 - **默认只提供只读工具。** 新建的上下文配置默认打开 **OpenViking 工具**，“使用推荐设置创建”也一样。默认勾选的是只读工具：`find`、`search`、`grep`、`glob`、`list`、`tree`、`read`、`list_watches`、`get_acl`、`list_users`、`list_groups` 和 `health`。会修改数据的工具默认不勾选：`remember`、`write`、`edit`、`add_resource`、`add_skill`、`forget`、`set_acl` 和 `cancel_watch`。想让模型保存记忆，就勾选 `remember`；想让它导入网页或附件，就勾选 `add_resource`。OpenViking 以后新增的工具会自动勾选。已有的上下文配置保留原来的设置。全部工具定义约占 3,500 个输入 token，会随对话中的每个请求发送，所以取消用不到的工具也能节省 token。改动只影响新对话。
 - **上限。** 工具轮数、**总时长**和 **Token 预算**默认都不限：模型会一直使用 OpenViking 工具直到完成。流式请求中，用户可以随时中断回复；非流式请求在客户端断开后仍会继续执行，如果客户端发送非流式请求，建议设置**总时长**。设置了工具轮数或 Token 预算的，用完后网关拒绝之后的 OpenViking 调用，模型用已有结果继续回答；模型被拒后仍坚持调用，这个请求就会报错。设置了**总时长**的，请求超过这个时长就会失败。单次调用超过 30 秒，这次调用向模型返回错误。
-- **客户端要求。** 客户端要每轮回传完整历史；使用 OpenAI Responses 时要设置 `store: false`。客户端强制指定某个工具或要求结构化输出、上游关闭了**允许 OpenViking 工具**，或者上游是 DeepSeek、关闭了**补全推理内容回传**而请求又没有关闭思考模式时，网关不提供 OpenViking 工具。DeepSeek 要求带工具的请求回传之前每条回复的推理内容，而很多客户端不会发回来；DeepSeek 上游默认开启**补全推理内容回传**，由网关补回这部分内容，所以保持思考模式也能使用工具，见[上游](22-gateway-operations.md#上游)。对话是否带工具，在它的第一个请求时就决定了。
+- **客户端要求。** 客户端要每轮回传完整历史；使用 OpenAI Responses 时要设置 `store: false`。客户端强制指定某个工具或要求结构化输出、上游关闭了**允许 OpenViking 工具**，或者上游是 DeepSeek、关闭了**补全推理内容回传**而请求又没有关闭思考模式时，网关不提供 OpenViking 工具。DeepSeek 要求带工具的请求回传之前每条回复的推理内容，而很多客户端不会发回来；DeepSeek 上游默认开启**补全推理内容回传**，由网关补回这部分内容，所以保持思考模式也能使用工具，见[上游](22-gateway-operations.md#上游)。对话是否带工具，由它第一个能用工具的请求决定；如果客户端自己也接了 OpenViking 工具，网关会关掉自己的工具。
 
 完整的条件、上限设置、文件导入方式和失败处理，见[OpenViking 工具](22-gateway-operations.md#openviking-工具)。
 
@@ -183,13 +183,14 @@ OpenViking 也可以通过运行在 Agent 内部的插件接入 Claude Code、Co
 
 Claude Code、Codex 和 pi 如果需要按项目区分记忆，或者要求每次工具调用都能看到并确认，就继续用插件。没有插件的客户端，以及想集中管理服务商、密钥和记忆设置的场景，用网关。
 
-**两者同时使用。** 请求中出现 OpenViking 插件的迹象时，网关会停止为这段对话补充记忆、保存对话和提供 OpenViking 工具，只负责转发，这样同一份内容不会被补充两次或保存两次。网关根据以下三类迹象判断：
+**两者同时使用。** 请求中出现 OpenViking 插件的迹象时，网关会停止为这段对话补充记忆、保存对话和提供 OpenViking 工具，只负责转发，这样同一份内容不会被补充两次或保存两次。网关根据以下两类迹象判断：
 
 - 插件插入提示词的记忆块：`<openviking-context>`、`<relevant-memories>`、`<relevant-memory>` 或 `<memory-context>`；
-- 名称中带 `openviking` 段的客户端工具，例如 `openviking_search` 或 `mcp__openviking__find`，所以把 OpenViking MCP 服务器配置成 `openviking` 这个名字的客户端也算在内；
 - `X-OpenViking-Plugin` 请求头，插件和应用的作者可以发送它，明确表示不需要网关补充记忆。
 
 这个判断对这段对话一直有效；想重新用上网关记忆，需要在不带插件的情况下开始新对话。其他对话不受影响。在 Studio 的“请求日志”标签页里，这些请求会标上**检测到 OpenViking 插件**。
+
+只接了 OpenViking MCP 工具、没有装插件的客户端不算：网关照常补充记忆和保存对话，只是不再提供自己的 OpenViking 工具，免得模型看到两套（即[网关运维](22-gateway-operations.md)里的 `tool_name_collision`）。
 
 ## 快速开始
 
@@ -355,7 +356,7 @@ export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 - Claude Code 会发送自己的会话 ID，所以网关能自动识别对话，`--resume` 之后也一样。
 - 上游必须接受 Claude Code 请求的模型名。可以把上游的模型列表留空、列出这些名称，或者用模型别名把它们映射到服务商提供的模型。
 - Claude 订阅登录无法通过网关使用，携带订阅令牌的请求会被拒绝。请为上游配置服务商的 API Key。
-- 如果 Claude Code 同时装了 OpenViking 插件或 OpenViking MCP 服务器，网关会让出这些对话（见[网关还是插件](#网关还是插件)）。
+- 如果 Claude Code 同时装了 OpenViking 插件，网关会让出这些对话（见[网关还是插件](#网关还是插件)）。只接了 OpenViking MCP 服务器时，网关照常补充记忆，OpenViking 工具交给 MCP 服务器。
 
 ### Codex CLI
 

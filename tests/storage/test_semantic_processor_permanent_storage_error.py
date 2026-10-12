@@ -16,6 +16,7 @@ from openviking.service.task_work_index import TaskWorkIndex
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
+from openviking.storage.queuefs.retry_policy import MAX_FAILURE_REQUEUE_COUNT
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -235,7 +236,9 @@ async def test_retryable_errors_keep_existing_behavior(
 
     assert result.outcome is ProcessOutcome.REQUEUED
     env.retry_queue.enqueue.assert_awaited_once()
-    assert env.retry_queue.enqueue.call_args.args[0].id == msg.id
+    requeued = env.retry_queue.enqueue.call_args.args[0]
+    assert requeued.id == msg.id
+    assert requeued.failure_requeue_count == (0 if isinstance(error, LockAcquisitionError) else 1)
     assert not env.tracker.is_complete(msg.telemetry_id)
     assert env.tracker.build_queue_status(msg.telemetry_id)["Semantic"]["requeue_count"] == 1
     if trips_breaker:
@@ -245,6 +248,55 @@ async def test_retryable_errors_keep_existing_behavior(
     else:
         breaker.check()
         sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_semantic_failure_requeue_limit_is_terminal(semantic_env):
+    env = semantic_env
+    msg = env.message(failure_requeue_count=MAX_FAILURE_REQUEUE_COUNT)
+    error = TimeoutError("API timeout")
+    env.dag.run.side_effect = error
+
+    result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
+
+    terminal_error = f"{error} (failure requeue limit reached: {MAX_FAILURE_REQUEUE_COUNT})"
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == terminal_error
+    env.retry_queue.enqueue.assert_not_awaited()
+    await asyncio.wait_for(env.tracker.wait_for_request(msg.telemetry_id), timeout=1)
+    assert env.tracker.build_queue_status(msg.telemetry_id)["Semantic"] == {
+        "processed": 0,
+        "requeue_count": 0,
+        "error_count": 1,
+        "errors": [{"message": terminal_error}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_semantic_failure_requeue_stops_after_three_attempts(semantic_env):
+    env = semantic_env
+    msg = env.message()
+    work = SimpleNamespace(reenqueue_after_error=AsyncMock())
+    error = TimeoutError("API timeout")
+
+    results = []
+    for _ in range(3):
+        msg = SemanticMsg.from_dict(msg.to_dict())
+        results.append(
+            await env.processor._requeue_semantic_msg_after_error(
+                msg,
+                error,
+                work=work,
+            )
+        )
+
+    assert [result.outcome for result in results] == [
+        ProcessOutcome.REQUEUED,
+        ProcessOutcome.REQUEUED,
+        ProcessOutcome.FAILED,
+    ]
+    assert msg.failure_requeue_count == MAX_FAILURE_REQUEUE_COUNT
+    assert work.reenqueue_after_error.await_count == MAX_FAILURE_REQUEUE_COUNT
 
 
 @pytest.mark.asyncio

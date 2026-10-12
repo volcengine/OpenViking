@@ -130,8 +130,8 @@ class FindRequest(BaseModel):
     image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
-    limit: int = DEFAULT_LIMIT
-    node_limit: Optional[int] = None
+    limit: int = Field(default=DEFAULT_LIMIT, ge=1)
+    node_limit: Optional[int] = Field(default=None, ge=1)
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
@@ -224,8 +224,8 @@ class SearchRequest(BaseModel):
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     session_id: Optional[str] = None
-    limit: int = DEFAULT_LIMIT
-    node_limit: Optional[int] = None
+    limit: int = Field(default=DEFAULT_LIMIT, ge=1)
+    node_limit: Optional[int] = Field(default=None, ge=1)
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False

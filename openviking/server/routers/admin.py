@@ -6,7 +6,8 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
+from fastapi import Response as HTTPResponse
 from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
@@ -138,6 +139,8 @@ class ConfigPatchRequest(BaseModel):
     """
 
     settings: dict[str, Any] = Field(default_factory=dict)
+    revision: str | None = None
+    content: str | None = None
 
 
 _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
@@ -804,12 +807,81 @@ async def patch_account_configuration(
 @require_auth_root
 async def get_cluster_configuration(
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
+    account_id: str | None = Query(None),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Return the cluster layer's explicit runtime configuration."""
     runtime_config = _get_runtime_config_manager()
+    if source == "file":
+        from openviking.config.config_file import read_config_file
+
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = await asyncio.to_thread(
+                read_config_file, getattr(request.app.state, "server_config_overrides", None)
+            )
+        except (ValueError, OSError) as exc:
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
+        cluster = await runtime_config.get_settings(ConfigScope.cluster())
+        account = (
+            await runtime_config.get_settings(ConfigScope.account(account_id)) if account_id else {}
+        )
+        model_kinds = ("vlm", "embedding", "query_planner", "rerank")
+        result["overrides"] = {
+            "cluster": [key for key in model_kinds if (cluster or {}).get(key) is not None],
+            "account": [key for key in model_kinds if (account or {}).get(key) is not None],
+        }
+        result["restart"] = request.app.state.restart_controller.status()
+        return Response(status="ok", result=result)
     settings = await runtime_config.get_settings(ConfigScope.cluster())
     return Response(status="ok", result={"settings": settings})
+
+
+class RestartRequest(BaseModel):
+    revision: str = Field(min_length=1)
+
+
+@router.post("/restart", status_code=202)
+@require_auth_root
+async def restart_server(
+    body: RestartRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    from openviking.config.config_file import preview_config_file, read_config_file
+
+    controller = request.app.state.restart_controller
+    server_overrides = getattr(request.app.state, "server_config_overrides", None)
+    if controller.shutdown is None:
+        raise FailedPreconditionError(
+            "Remote restart requires the single-worker openviking-server CLI"
+        )
+    async with controller.lock:
+        try:
+            config = await asyncio.to_thread(read_config_file, server_overrides)
+            if config["revision"] != body.revision:
+                raise ValueError("ov.conf changed; reload before restarting")
+            await asyncio.to_thread(preview_config_file, config["content"], {}, server_overrides)
+            if controller.recovery is not None and not controller.requested:
+                await asyncio.to_thread(controller.recovery.prepare, body.revision)
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        except OSError as exc:
+            raise FailedPreconditionError(
+                "Cannot read the server startup configuration file"
+            ) from exc
+        # Runs after the accepted response has been sent. Uvicorn drains active
+        # requests and the CLI cleans up its managed Bot before replacing itself.
+        result = controller.request()
+        background_tasks.add_task(controller.stop)
+        response.headers["Cache-Control"] = "no-store"
+        return Response(status="ok", result=result)
 
 
 @router.patch("/configuration")
@@ -817,9 +889,42 @@ async def get_cluster_configuration(
 async def patch_cluster_configuration(
     body: ConfigPatchRequest,
     request: Request,
+    response: HTTPResponse,
+    source: str = Query("runtime", pattern="^(runtime|file)$"),
+    dry_run: bool = Query(False),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Apply a three-state PATCH to the cluster configuration layer."""
+    if dry_run and (source != "file" or body.content is None):
+        raise InvalidArgumentError("dry_run requires source=file and full file content")
+    if source == "file":
+        from openviking.config.config_file import preview_config_file, save_config_file
+
+        server_overrides = getattr(request.app.state, "server_config_overrides", None)
+        async with request.app.state.restart_controller.lock:
+            if request.app.state.restart_controller.requested:
+                raise FailedPreconditionError("Server restart is already in progress")
+            response.headers["Cache-Control"] = "no-store"
+            try:
+                if dry_run:
+                    result = await asyncio.to_thread(
+                        preview_config_file, body.content, body.settings, server_overrides
+                    )
+                else:
+                    if body.content is None or body.settings:
+                        raise ValueError("File saves require full content and no model settings")
+                    result = await asyncio.to_thread(
+                        save_config_file, body.content, body.revision or "", server_overrides
+                    )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            except OSError as exc:
+                raise FailedPreconditionError(
+                    "Cannot write ov.conf; check file and directory permissions"
+                ) from exc
+            return Response(status="ok", result=result)
+    if body.content is not None:
+        raise InvalidArgumentError("Full file content requires source=file")
     runtime_config = _get_runtime_config_manager()
     try:
         await runtime_config.patch_cluster(body.settings)

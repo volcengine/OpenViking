@@ -540,9 +540,10 @@ async def test_native_budget_keeps_client_tools_and_output_limit(
     assert logs[0]["tool_stop_reason"] == "token_budget"
 
 
+@pytest.mark.parametrize("own_session", [False, True])
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 async def test_subagent_resending_tool_history_replays_it_but_cannot_call(
-    running_gateway, protocol
+    running_gateway, protocol, own_session
 ):
     app, client, admin, key, _, _ = running_gateway
     await enable_tools(client, admin)
@@ -572,10 +573,12 @@ async def test_subagent_resending_tool_history_replays_it_but_cannot_call(
         else [{"role": "assistant", "content": visible["content"]}]
     )
     body[field].append({"role": "user", "content": "Explore"})
-    # A forked sub-agent resends the main history, including the hidden tool round.
-    response = await client.post(
-        PATHS[protocol], headers={**headers, "X-Claude-Code-Agent-Id": "child"}, json=body
-    )
+    # A forked sub-agent resends the main history, including the hidden tool round,
+    # possibly under a session of its own that never had a request owning tools.
+    child = {**headers, "X-Claude-Code-Agent-Id": "child"}
+    if own_session:
+        child.update({"X-OpenViking-Session": "child-thread", "X-Codex-Parent-Thread-Id": "fork"})
+    response = await client.post(PATHS[protocol], headers=child, json=body)
     assert response.status_code == 200, response.text
     replay = requests[2]
     assert replay["tools"] == requests[0]["tools"]
@@ -1063,6 +1066,122 @@ async def test_anthropic_blocked_tools_preserve_client_thinking(
         assert not result.tools_active
         assert result.body["messages"] == [prepared.body["messages"][0], *body["messages"][1:]]
         assert result.metrics.get("degradation") != "hidden_tool_history_unavailable"
+
+
+def test_exact_tool_name_clash_skips_replayed_gateway_tools():
+    from types import SimpleNamespace
+
+    from openviking_gateway.kernel import MemoryKernel
+    from openviking_gateway.models import Policy
+    from openviking_gateway.records import RecordKind as K
+
+    tool = {"type": "function", "function": {"name": "openviking_search", "parameters": {}}}
+    body = {"model": "m", "messages": [], "tools": [{"name": "openviking_search"}]}
+    request = SimpleNamespace(
+        root={"tools": [tool]},
+        metrics={},
+        protocol="anthropic",
+        disabled=True,
+        strip_replayed_thinking=False,
+        thinking_as_text=False,
+        original=body,
+        body=copy.deepcopy(body),
+        upstream={},
+        records={(K.HIDDEN, "a"): {}},
+        body_chain=["a"],
+        tools_active=False,
+        hidden_history_unavailable=False,
+    )
+    MemoryKernel.configure_tools(request, Policy(), owner=False)
+    assert request.metrics["tool_skip_reason"] == "tool_name_collision"
+    assert request.body["tools"] == body["tools"]
+
+
+async def test_title_request_first_does_not_decide_tools(setup_kernel, credential, policy):
+    kernel, _, _, _ = setup_kernel
+    policy.update(gateway_tools=True, recall=False, capture=False)
+    header, upstream = {"x-openviking-session": "title-first"}, {"id": "u"}
+    # Claude Code sends the title request, with structured output and no tools, first.
+    title = {
+        "model": "small",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "Find blue"}],
+        "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
+    }
+    result = await kernel.prepare(title, "anthropic", header, credential, upstream, policy)
+    assert not result.tools_active
+    body = request_body("anthropic", False)
+    result = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert result.tools_active
+
+
+async def test_client_openviking_tools_turn_gateway_tools_off(setup_kernel, credential, policy):
+    kernel, store, _, _ = setup_kernel
+    policy.update(gateway_tools=True, recall=False, capture=False)
+    upstream = {"id": "u"}
+    mcp = {"name": "mcp__ov__read", "description": "Read viking:// URIs", "input_schema": {}}
+    body = request_body("anthropic", False)
+    body["tools"].append(mcp)
+    header = {"x-openviking-session": "client-ov"}
+    result = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert not result.tools_active
+    assert result.metrics["tool_skip_reason"] == "tool_name_collision"
+
+    # An MCP server that connects after the first turn turns them off for good.
+    body = request_body("anthropic", False)
+    header = {"x-openviking-session": "late-mcp"}
+    first = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert first.tools_active
+    body["messages"] += [
+        {"role": "assistant", "content": "Done"},
+        {"role": "user", "content": "Why does mcp__openviking__search fail?"},
+    ]
+    assert (
+        await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    ).tools_active
+    body["tools"].append(mcp)
+    later = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert not later.tools_active
+    body["tools"].pop()
+    assert not (
+        await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    ).tools_active
+
+    # Once the model called a gateway tool, its history keeps the tools.
+    body = request_body("anthropic", False)
+    header = {"x-openviking-session": "used"}
+    first = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    await store.replay.put(
+        first.scope,
+        first.session,
+        "hidden",
+        first.body_chain[0],
+        {"messages": [], "visible_count": 1},
+    )
+    body["tools"].append(mcp)
+    kept = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert kept.tools_active
+    # Another branch turns them off, and the branch that used them still keeps them.
+    other = request_body("anthropic", False)
+    other["messages"][0]["content"] = "Find green"
+    other["tools"].append(mcp)
+    assert not (
+        await kernel.prepare(other, "anthropic", header, credential, upstream, policy)
+    ).tools_active
+    kept = await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    assert kept.tools_active
+
+    # A token count may cover only some of the client's tools and never turns them off.
+    body = request_body("anthropic", False)
+    header = {"x-openviking-session": "count"}
+    assert (
+        await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    ).tools_active
+    counted = {**body, "tools": [mcp]}
+    await kernel.prepare(counted, "anthropic", header, credential, upstream, policy, counting=True)
+    assert (
+        await kernel.prepare(body, "anthropic", header, credential, upstream, policy)
+    ).tools_active
 
 
 @pytest.mark.parametrize("arguments", [None, "", "{}", "{broken"])

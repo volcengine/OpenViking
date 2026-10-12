@@ -58,8 +58,8 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        bootstrap.uvicorn,
-        "run",
+        bootstrap,
+        "_run_restartable_server",
         lambda app, host, port, log_config=None, **kwargs: captured.update(
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
@@ -112,8 +112,8 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        bootstrap.uvicorn,
-        "run",
+        bootstrap,
+        "_run_restartable_server",
         lambda app, host, port, log_config=None, **kwargs: captured.update(
             {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
         ),
@@ -167,7 +167,7 @@ def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
 
     monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", _fake_start)
     monkeypatch.setattr(bootstrap, "_stop_vikingbot_gateway", lambda process: None)
-    monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bootstrap, "_run_restartable_server", lambda *args, **kwargs: False)
 
     bootstrap.main()
 
@@ -359,3 +359,157 @@ def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
     )
 
     app_module._configure_default_executor(ServerConfig())
+
+
+def test_restartable_server_drains_uvicorn_before_returning(monkeypatch):
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    server = SimpleNamespace(should_exit=False)
+
+    def run():
+        assert app.state.restart_controller.status()["supported"]
+        app.state.restart_controller.request()
+        app.state.restart_controller.stop()
+        assert server.should_exit
+
+    server.run = run
+    monkeypatch.setattr(bootstrap.uvicorn, "Server", lambda config: server)
+    assert bootstrap._run_restartable_server(app, host="127.0.0.1", port=1933)
+
+
+@pytest.mark.parametrize("app_startup_fails", [False, True])
+def test_main_restart_cleans_up_bot_and_preserves_launch_command(monkeypatch, app_startup_fails):
+    import sys
+
+    config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
+    steps = []
+    monkeypatch.setattr(sys, "argv", ["openviking-server", "--with-bot", "--bot-port", "19000"])
+    original_argv = [sys.executable, "/venv/bin/openviking-server", *sys.argv[1:]]
+    monkeypatch.setattr(sys, "orig_argv", original_argv)
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda path: config)
+    monkeypatch.setattr(bootstrap, "resolve_config_path", lambda *a: Path("/tmp/explicit.conf"))
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton, "initialize", classmethod(lambda cls, **kw: None)
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.ollama.detect_ollama_in_config", lambda c: (False, "", 0)
+    )
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
+    monkeypatch.setattr(bootstrap, "create_app", lambda *a, **kw: "app")
+    monkeypatch.setattr(bootstrap, "_abort_if_port_in_use", lambda *a: None)
+    monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", lambda *a, **kw: "bot")
+    monkeypatch.setattr(
+        bootstrap, "_stop_vikingbot_gateway", lambda bot: steps.append(("stop", bot))
+    )
+    monkeypatch.setattr(bootstrap, "_run_restartable_server", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        os, "execv", lambda executable, args: steps.append(("exec", executable, args))
+    )
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/explicit.conf")
+    if app_startup_fails:
+        def fail_app(*args, **kwargs):
+            raise RuntimeError("application initialization failed")
+
+        monkeypatch.setattr(bootstrap, "create_app", fail_app)
+        with pytest.raises(RuntimeError, match="application initialization failed"):
+            bootstrap.main()
+        assert steps == [("stop", "bot")]
+        return
+    bootstrap.main()
+    assert steps == [("stop", "bot"), ("exec", sys.executable, original_argv)]
+    assert os.environ["OPENVIKING_CONFIG_FILE"] == "/tmp/explicit.conf"
+
+
+@pytest.mark.parametrize("failure", ["bind", "lifespan", "bootstrap", "success", "retry_failure"])
+def test_restart_recovery_through_real_exec(tmp_path, monkeypatch, failure):
+    """Exercise socket/lifespan failures and a single recovery with real execv."""
+    import hashlib
+    import json
+    import socket
+    import subprocess
+    import sys
+    import textwrap
+
+    from openviking.server.restart import RestartRecovery
+
+    path = tmp_path / "ov.conf"
+    original = b'{"port":0,"stage":"original"}\n'
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file_content", original)
+    monkeypatch.delenv("OPENVIKING_RESTART_RECOVERY", raising=False)
+    monkeypatch.delenv("OPENVIKING_RESTART_ROLLED_BACK", raising=False)
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        path.write_text(json.dumps({"port": occupied.getsockname()[1], "stage": failure}))
+        # A normal save backup may contain an intermediate, never-started draft.
+        path.with_name("ov.conf.studio.bak").write_bytes(b'{"stage":"intermediate"}')
+        RestartRecovery().prepare(hashlib.sha256(path.read_bytes()).hexdigest())
+        backup = Path(json.loads(os.environ["OPENVIKING_RESTART_RECOVERY"])["backup"])
+        assert backup.read_bytes() == original
+        if os.name != "nt":
+            assert backup.stat().st_mode & 0o777 == 0o600
+        script = tmp_path / "restart_probe.py"
+        script.write_text(
+            textwrap.dedent("""\
+            import asyncio, json, sys
+            from contextlib import asynccontextmanager
+            from pathlib import Path
+            from fastapi import FastAPI
+            import openviking.server.bootstrap as bootstrap
+
+            def run(recovery):
+                path = Path(sys.argv[1])
+                config = json.loads(path.read_text())
+                if config['stage'] in ('bootstrap', 'retry_failure') or (sys.argv[2] == 'retry_failure' and recovery.rolled_back):
+                    raise SystemExit(1)
+                @asynccontextmanager
+                async def lifespan(app):
+                    if config['stage'] == 'lifespan':
+                        raise RuntimeError('startup failed')
+                    asyncio.get_running_loop().call_later(0.2, lambda: setattr(app.state.restart_controller, 'requested', True))
+                    asyncio.get_running_loop().call_later(0.3, lambda: app.state.restart_controller.stop())
+                    yield
+                app = FastAPI(lifespan=lifespan)
+                bootstrap._run_restartable_server(app, recovery=recovery, host='127.0.0.1',
+                    port=config['port'] if config['stage'] == 'bind' else 0, log_config=None)
+                print('RECOVERED' if recovery.rolled_back else 'APPLIED')
+            bootstrap._main = run
+            bootstrap.main()
+        """)
+        )
+        result = subprocess.run(
+            [sys.executable, str(script), str(path), failure],
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+    if failure == "retry_failure":
+        assert result.returncode != 0
+        assert result.stderr.count("retrying once") == 1
+        assert path.read_bytes() == original
+    else:
+        assert result.returncode == 0, result.stderr
+        assert ("APPLIED" if failure == "success" else "RECOVERED") in result.stdout
+        assert (path.read_bytes() == original) == (failure != "success")
+    assert not backup.exists()
+
+
+def test_restart_recovery_does_not_overwrite_external_changes(tmp_path, monkeypatch):
+    import hashlib
+
+    from openviking.server.restart import RestartRecovery
+
+    path = tmp_path / "ov.conf"
+    path.write_bytes(b"new configuration")
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file_content", b"startup configuration")
+    monkeypatch.delenv("OPENVIKING_RESTART_RECOVERY", raising=False)
+    RestartRecovery().prepare(hashlib.sha256(path.read_bytes()).hexdigest())
+    recovery = RestartRecovery()
+    path.write_bytes(b"external edit")
+    with pytest.raises(RuntimeError, match="refusing to overwrite"):
+        recovery.rollback()
+    assert path.read_bytes() == b"external edit"

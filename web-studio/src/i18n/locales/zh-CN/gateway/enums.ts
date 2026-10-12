@@ -63,9 +63,9 @@ const enums = {
     tools_forced_choice: '客户端指定了必须调用的工具',
     deepseek_reasoning_history_required:
       'DeepSeek 开启了思考模式，但之前回复的推理内容补不回来',
-    tool_name_collision: '客户端定义了同名工具',
-    tools_unavailable: '这段对话开始时无法加载 OpenViking 工具清单',
-    tools_not_selected_at_session_start: '这段对话开始时还没有启用工具',
+    tool_name_collision: '客户端已接入 OpenViking 工具',
+    tools_unavailable: '这段对话首次需要工具时无法加载 OpenViking 工具清单',
+    tools_not_selected_at_session_start: '这段对话没有 OpenViking 工具',
   },
   toolStopReason: {
     token_budget: '工具 Token 预算已用完',

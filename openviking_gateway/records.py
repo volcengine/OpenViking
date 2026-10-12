@@ -9,6 +9,9 @@ class RecordKind(str, Enum):
     ROOT = "root"
     INJECTION = "injection"
     DISABLED = "disabled"
+    # The gateway tools frozen for the session, and the one-way switch that turns them off.
+    TOOLS = "tools"
+    TOOLS_CLOSED = "tools_closed"
     HIDDEN = "hidden"
     REPLACEMENT = "replacement"
     # The session whose model produced the reply ending at the anchor.

@@ -198,6 +198,8 @@ async def test_kernel_and_capture_work_with_kv_ports(credential, protocol):
         K.ROOT,
         K.INJECTION,
         K.DISABLED,
+        K.TOOLS,
+        K.TOOLS_CLOSED,
         K.HIDDEN,
         K.REPLACEMENT,
         K.REPLY,

@@ -156,8 +156,8 @@ All plugin behavior is controlled by `OPENVIKING_*` environment variables. Conne
 # ~/.zshrc — examples
 export OPENVIKING_RECALL_LIMIT=10
 export OPENVIKING_RECALL_COMPRESS=1
-export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-5.3-codex-spark
-export OPENVIKING_RECALL_COMPRESS_THINKING=default
+export OPENVIKING_RECALL_COMPRESS_MODEL=gpt-6-luna
+export OPENVIKING_RECALL_COMPRESS_THINKING=low
 export OPENVIKING_RECALL_COMPRESS_BASE_URL=https://api.example.com/v1
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
@@ -338,7 +338,7 @@ and removes injected context from newly captured messages.
 The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
 
 1. configured `OPENVIKING_RECALL_COMPRESS_MODEL` + `OPENVIKING_RECALL_COMPRESS_THINKING`
-2. `gpt-5.3-codex-spark` with thinking `default`
+2. `gpt-6-luna` with thinking `low`
 3. `gpt-5.6-luna` with thinking `low`
 4. off (deterministic digest, no `codex exec` compression)
 
@@ -350,7 +350,7 @@ Config knobs:
 | `OPENVIKING_RECALL_COMPRESS` | `auto` | `server`: cloud rewrite, never launches `codex exec`; `client`: local only; `auto`: local when available, otherwise cloud; `off` / `0`: uncompressed. `1` aliases `auto`. |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable the local compressor (`auto` then uses cloud compression). |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
-| `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. Use this when `--ignore-user-config` prevents the compressor from reading the main Codex provider configuration. |
+| `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. When unset, the compressor reuses the custom `model_provider` selected in `config.toml`, including its auth settings. |
 | `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | Skip the nested compressor below this recalled-context size. Set `0` to compress every non-empty result. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP` | `1` | Recreate/cache compressor profile in `SessionStart`. |
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS` | `15000` | Per-candidate startup probe timeout. |

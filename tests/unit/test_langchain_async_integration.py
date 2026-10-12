@@ -205,6 +205,82 @@ async def test_injected_async_client_is_initialized_only_once_across_adapters():
     assert client.initialize_calls == 1
 
 
+class _GuardedAsyncHTTPClient:
+    """HTTP client stand-in that rejects calls made before initialization."""
+
+    def __init__(self, **_kwargs: Any):
+        self.initialize_calls = 0
+        self._initialized = False
+        self.closed = False
+
+    async def initialize(self) -> None:
+        self.initialize_calls += 1
+        self._initialized = True
+
+    async def close(self) -> None:
+        self.closed = True
+        self._initialized = False
+
+    async def find(self, query: str, **_kwargs: Any) -> dict[str, Any]:
+        if not self._initialized:
+            raise RuntimeError("Client is not initialized")
+        return {"memories": [], "resources": [], "skills": []}
+
+
+@pytest.mark.asyncio
+async def test_async_handle_explicit_initialize_initializes_owned_client(monkeypatch):
+    import openviking_sdk as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", _GuardedAsyncHTTPClient)
+
+    handle = OpenVikingAsyncClientHandle(
+        OpenVikingConnection(
+            url="http://localhost:1933",
+            api_key="test-key",
+            user_id="test-user",
+            auto_initialize=False,
+        )
+    )
+
+    await handle.initialize()
+    client = await handle.get()
+    assert client.initialize_calls == 1
+    assert handle._initialized is True
+
+    assert await acall_openviking(handle, "find", query="async") == {
+        "memories": [],
+        "resources": [],
+        "skills": [],
+    }
+
+    await handle.initialize()
+    assert client.initialize_calls == 1
+
+    await handle.close()
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_retriever_explicit_initialize_enables_manual_http_retriever(monkeypatch):
+    import openviking_sdk as client_module
+
+    monkeypatch.setattr(client_module, "AsyncHTTPClient", _GuardedAsyncHTTPClient)
+
+    retriever = OpenVikingRetriever(url="http://localhost:1933", auto_initialize=False)
+    handle = await retriever.get_async_client()
+    assert isinstance(handle, OpenVikingAsyncClientHandle)
+
+    await handle.initialize()
+    assert await retriever.ainvoke("remember durable control") == []
+
+    client = await handle.get()
+    assert client.initialize_calls == 1
+    await handle.initialize()
+    assert client.initialize_calls == 1
+
+    await retriever.aclose()
+
+
 @pytest.mark.asyncio
 async def test_acall_openviking_adapts_flat_kwargs_to_sdk_options():
     calls = []
