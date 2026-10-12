@@ -33,12 +33,6 @@ def _auth_mode(request: Request) -> str:
     return AuthMode.API_KEY.value
 
 
-def _configured_root_api_key(request: Request) -> Optional[str]:
-    config = getattr(request.app.state, "config", None)
-    key = getattr(config, "root_api_key", None)
-    return key if key != "" else None
-
-
 def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
     if not isinstance(x_api_key, str):
         x_api_key = None

@@ -29,37 +29,33 @@ vi.mock('react-i18next', () => ({
 }))
 afterEach(cleanup)
 
-it.each([false, undefined, true])(
-  'bases the Root key guide on server metadata: %s',
-  async (required) => {
-    probe.mockResolvedValue({
-      admin: {
-        state: 'error',
-        statusCode: 403,
-        detail: 'Management unavailable',
-      },
-      data: { state: 'ok', detailCode: 'tenantDataAvailable' },
-      rootApiKeyRequired: required,
-    })
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    })
-    const Settings = Route.options.component as ComponentType & {
-      preload?: () => Promise<unknown>
-    }
-    await Settings.preload?.()
-    render(
-      <QueryClientProvider client={client}>
-        <Settings />
-      </QueryClientProvider>,
-    )
-    await waitFor(
-      () => expect(screen.getByText('Management unavailable')).toBeTruthy(),
-      { timeout: 5000 },
-    )
-    expect(
-      Boolean(screen.queryByText('connection.keyGuide.trusted.title')),
-    ).toBe(required === true)
-    client.clear()
-  },
-)
+it('shows the Root key guide for trusted mode even when a capability probe fails', async () => {
+  probe.mockResolvedValue({
+    admin: {
+      state: 'error',
+      statusCode: 403,
+      detail: 'Management unavailable',
+    },
+    data: { state: 'ok', detailCode: 'tenantDataAvailable' },
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const Settings = Route.options.component as ComponentType & {
+    preload?: () => Promise<unknown>
+  }
+  await Settings.preload?.()
+  render(
+    <QueryClientProvider client={client}>
+      <Settings />
+    </QueryClientProvider>,
+  )
+  await waitFor(
+    () => expect(screen.getByText('Management unavailable')).toBeTruthy(),
+    { timeout: 5000 },
+  )
+  expect(Boolean(screen.queryByText('connection.keyGuide.trusted.title'))).toBe(
+    true,
+  )
+  client.clear()
+})

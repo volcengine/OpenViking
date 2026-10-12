@@ -232,10 +232,7 @@ function ConnectionSettingsPanel() {
     ? 'https://docs.openviking.ai/zh/guides/04-authentication'
     : 'https://docs.openviking.ai/en/guides/04-authentication'
   const trustedCredentialRequired =
-    serverMode === 'trusted' &&
-    !probeQuery.isFetching &&
-    !hasControlCredential &&
-    probeQuery.data?.rootApiKeyRequired === true
+    serverMode === 'trusted' && !probeQuery.isFetching && !hasControlCredential
   const keyGuide =
     serverMode === 'trusted'
       ? trustedCredentialRequired

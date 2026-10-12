@@ -3482,7 +3482,9 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
                 )
                 assert credentials["users"][0]["api_key"] == "test-key-2832"
                 original_config = lightweight_admin_app.state.config
-                lightweight_admin_app.state.config = ServerConfig(auth_mode="trusted")
+                lightweight_admin_app.state.config = ServerConfig(
+                    auth_mode="trusted", root_api_key=ROOT_KEY
+                )
                 try:
                     with pytest.raises(PermissionDeniedError, match="trusted"):
                         await mcp_endpoint.list_users(context, include_credentials=True)
@@ -3546,7 +3548,7 @@ async def test_server_restart_requires_root_and_valid_revision(
     server = {}
     server_overrides = {}
     if cli_host:
-        server = {"host": "0.0.0.0", "auth_mode": "trusted"}
+        server = {"host": "0.0.0.0", "auth_mode": "trusted", "root_api_key": ROOT_KEY}
         server_overrides = {"host": cli_host}
         lightweight_admin_app.state.server_config_overrides = server_overrides
     path.write_text(
@@ -3610,6 +3612,7 @@ async def test_server_restart_requires_root_and_valid_revision(
         {"port": "invalid"},
         {"root_api_key": ""},
         {"auth_mode": "api_key"},
+        {"auth_mode": "trusted", "host": "127.0.0.1"},
         {"auth_mode": "dev", "host": "0.0.0.0"},
     ],
 )
