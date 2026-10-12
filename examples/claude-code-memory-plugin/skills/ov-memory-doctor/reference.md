@@ -81,7 +81,7 @@ That file and the registry file whose path the doctor prints are the whole surfa
 |---|---|---|
 | `dev` | none needed, any key accepted | `X-OpenViking-Account/User` headers, else `default`; role root |
 | `api_key` | key required | from the key; account/user headers are silently stripped |
-| `trusted` | root key required, including localhost | from the headers; missing → 400 `Trusted mode requests must include X-OpenViking-Account …` |
+| `trusted` | root key optional | from the headers; missing → 400 `Trusted mode requests must include X-OpenViking-Account …` |
 
 Key formats: `base64url(account).base64url(user).base64url(secret)` (three
 segments, identity readable) or a bare 64-hex legacy key (identity only via
