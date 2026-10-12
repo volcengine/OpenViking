@@ -3696,7 +3696,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.14" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.14" },
-    { name = "openviking-sdk", specifier = ">=0.1.9" },
+    { name = "openviking-sdk", specifier = ">=0.1.14" },
     { name = "orjson", marker = "extra == 'gateway'", specifier = ">=3.11.7" },
     { name = "packaging", marker = "extra == 'gateway'", specifier = ">=24.0" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
@@ -3778,14 +3778,14 @@ dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "openviking-sdk"
-version = "0.1.9"
+version = "0.1.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/b0/75e49d6da4183165768a40db4876e75c4c9e4ff6ac9356d5bbabdbd51281/openviking_sdk-0.1.9.tar.gz", hash = "sha256:a4e66cd53cd7179d02332ffffb9116fc2feaa431b0bbd1eb93c6906751068e2a", size = 50752, upload-time = "2026-08-24T11:51:34.103Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/16/b6bef6ad2ad5dd92fa5a1bda3d0777d03d18ad2b75fa6d08f0ae3c1189d0/openviking_sdk-0.1.14.tar.gz", hash = "sha256:1b13fc5019f89954a02991749871c9dc91af3ec386c94544041340e754794179", size = 57277, upload-time = "2026-10-09T15:48:07.921Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/d6/aa82551f9c5d06ce682b9194c784beeb16478ce103d650ed8e8b487b1aa7/openviking_sdk-0.1.9-py3-none-any.whl", hash = "sha256:6057f3ab921cee4697a7b424948347669cb7b8e04439f305503d8ab7132af3ce", size = 30889, upload-time = "2026-08-24T11:51:33.092Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/15/a25c3bb2a4a69d6e6b07fd49ee265bf9d14fe9b0d0906e699d632cf7711e/openviking_sdk-0.1.14-py3-none-any.whl", hash = "sha256:482984351c1bb978d33ec5e6e0e55eaed8944c8df12e08e55b8de707ed067213", size = 34688, upload-time = "2026-10-09T15:48:05.995Z" },
 ]
 
 [[package]]
