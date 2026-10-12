@@ -505,6 +505,22 @@ async fn copy_raw_primary_state(
         .await
 }
 
+/// Build the V2 event specs required to represent one completed rename.
+fn rename_event_specs<'a>(
+    source: &FileInfo,
+    old_path: &'a str,
+    new_path: &'a str,
+) -> Vec<(SegmentEventType, &'a str, Option<&'a str>)> {
+    if source.is_dir {
+        vec![(SegmentEventType::MoveTree, old_path, Some(new_path))]
+    } else {
+        vec![
+            (SegmentEventType::Write, new_path, None),
+            (SegmentEventType::Remove, old_path, None),
+        ]
+    }
+}
+
 #[async_trait]
 impl FileSystem for MultiWriteWrappedFS {
     /// Create a primary file and queue a write event after success.
@@ -587,15 +603,29 @@ impl FileSystem for MultiWriteWrappedFS {
         self.inner.primary.backend.stat(path).await
     }
 
-    /// Rename a primary path and queue one move-tree event after success.
+    /// Rename a primary path and queue file or tree events after success.
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let event = self.pending_event(old_path, SegmentEventType::MoveTree, Some(new_path))?;
+        let old_ctx = self.resolve_context(old_path)?;
+        let new_ctx = self.resolve_context(new_path)?;
+        if old_ctx.account_id() != new_ctx.account_id() {
+            return Err(Error::invalid_path(format!(
+                "rename paths cross accounts: '{}' -> '{}'",
+                old_path, new_path
+            )));
+        }
+        let source = self.inner.primary.backend.stat(old_path).await?;
+        let events = rename_event_specs(&source, old_path, new_path)
+            .into_iter()
+            .map(|(kind, path, destination)| self.pending_event(path, kind, destination))
+            .collect::<Result<Vec<_>>>()?;
         self.inner
             .primary
             .backend
             .rename(old_path, new_path)
             .await?;
-        self.submit_event(event);
+        for event in events {
+            self.submit_event(event);
+        }
         Ok(())
     }
 
