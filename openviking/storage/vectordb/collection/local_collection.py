@@ -1031,12 +1031,9 @@ class LocalCollection(ICollection):
         oldest_version = 0
         for index in self.indexes.get_all().values():
             index_version = index.get_newest_version()
-            if index_version <= 0:
-                # No on-disk snapshot: recovery would replay the whole delta table.
-                return
-            if oldest_version == 0 or index_version < oldest_version:
+            if index_version > 0 and (oldest_version == 0 or index_version < oldest_version):
                 oldest_version = index_version
-        if self.store_mgr and oldest_version > 0:
+        if self.store_mgr:
             self.store_mgr.delete_delta_data_before_ts(oldest_version)
 
     def _expire_timeout_data(self):
