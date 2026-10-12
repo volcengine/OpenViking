@@ -116,3 +116,35 @@ def test_extra_headers_invalid_input_is_ignored(external_provider):
     assert module._parse_extra_headers({"A": {"nested": 1}, "B": 2, "C": True}) == {"B": "2"}
     settings = module._resolve_connection_settings({}, env={"OPENVIKING_EXTRA_HEADERS": "not json"})
     assert settings["extra_headers"] == {}
+
+
+def test_startup_health_probe_carries_extra_headers(external_provider):
+    """The startup health check must use the resolved extra headers.
+
+    A gateway that protects every route (Cloudflare Access, oauth2-proxy) rejects a
+    header-less probe. ``_VikingClient`` snapshots the map at construction, so the
+    provider has to resolve it *before* the first client is built — otherwise the
+    probe is refused, the client is dropped, and the provider stays unusable until
+    some unrelated config change forces a rebuild.
+    """
+    records = []
+    server, worker = _start_server(records, require_header="CF-Access-Client-Id")
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        home, provider, _module, _settings = external_provider("extra-headers-startup")
+        (home / ".env").write_text(
+            "OPENVIKING_ENDPOINT=%s\nOPENVIKING_API_KEY=test-key\nOPENVIKING_EXTRA_HEADERS=%s\n"
+            % (endpoint, json.dumps({"CF-Access-Client-Id": "id.access"})),
+            encoding="utf-8",
+        )
+        provider.initialize(session_id="startup-health", hermes_home=str(home), platform="cli")
+        assert records, "startup should have probed /health"
+        assert any(r.get("CF-Access-Client-Id") == "id.access" for r in records), (
+            "every probe went out without the resolved headers: a gateway would refuse them all"
+        )
+        assert provider._client is not None, "provider dropped the client after a refused probe"
+        assert provider._client._extra_headers == {"CF-Access-Client-Id": "id.access"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)

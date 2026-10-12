@@ -1773,8 +1773,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
             settings = self._resolve_bound_connection_settings(config, env)
         except _OpenVikingEndpointError as exc:
             connection_error = str(exc)
-            settings = dict.fromkeys(_CONNECTION_KEYS, "")
+            settings: dict = dict.fromkeys(_CONNECTION_KEYS, "")
         self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
+        # Resolve extra headers BEFORE any client is built. _VikingClient snapshots them at
+        # construction, and the startup /health probe goes through that client: a gateway that
+        # protects every route (Cloudflare Access, oauth2-proxy) rejects a header-less probe,
+        # which would drop the client and leave the provider unusable until a config change
+        # forced a rebuild. See tests/test_extra_headers.py::test_startup_health_probe_carries_extra_headers.
+        self._extra_headers = _parse_extra_headers(settings.get("extra_headers"))
         # Baseline established — set here, not at the end, so an exception in the
         # connection attempt (swallowed by MemoryManager) can't leave the provider
         # stuck in never-refresh mode.
@@ -1819,7 +1825,6 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         if self._client:
             self._conn_snapshot = self._settings_tuple()
-            self._extra_headers = settings.get("extra_headers") or {}
             self._recover_pending_sessions()
 
         _active_providers_by_home[self._hermes_home] = self  # atexit safety net
@@ -1904,6 +1909,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 return None
 
         self._endpoint, self._api_key, self._account, self._user, self._agent = settings_key
+        # Same ordering rule as initialize(): the client snapshots extra headers at build time,
+        # so refresh them before rebuilding + probing.
+        self._extra_headers = _parse_extra_headers(settings.get("extra_headers"))
         try:
             client = self._build_client()
         except ImportError:

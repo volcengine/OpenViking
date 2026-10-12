@@ -1069,6 +1069,7 @@ def test_managed_connection_ignores_foreign_env_and_saved_paths(tmp_path, monkey
         "account": "default",
         "user": "default",
         "agent": "hermes",
+        "extra_headers": {},
     }
     assert (
         openviking_module._provider_ovcli_config_path({"deployment": quick_local.DEPLOYMENT})

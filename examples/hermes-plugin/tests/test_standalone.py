@@ -1033,7 +1033,8 @@ def reload_provider(external_provider, monkeypatch):
         backend.post.return_value = {"result": {}}
 
     class Client:
-        def __init__(self, endpoint, api_key="", *, account="", user="", agent=""):
+        def __init__(self, endpoint, api_key="", *, account="", user="", agent="", extra_headers=None):
+            self._extra_headers = extra_headers or {}
             self._conn_snapshot = (endpoint, api_key, account, user, agent)
             self.get = backends[user].get
             self.post = backends[user].post
