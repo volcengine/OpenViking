@@ -257,23 +257,26 @@ class StoreManager:
         ):
             yield DeltaRecord.from_bytes(data=bytes_data)
 
-    def delete_delta_data_before_ts(self, ns_ts: int) -> List[DeltaRecord]:
+    def delete_delta_data_before_ts(self, ns_ts: int) -> int:
         """Delete delta records created before a specific timestamp.
 
         Args:
             ns_ts (int): Timestamp in nanoseconds.
 
         Returns:
-            List[DeltaRecord]: List of deleted delta records.
+            int: Number of deleted delta records.
         """
-        delta_kv_list = self.storage.begin_to_seek(
-            str(ns_ts),
-            StoreManager.DeltaTable,
-        )
-        delta_list = [DeltaRecord.from_bytes(data=data[1]) for data in delta_kv_list]
-        delta_keys = [data[0] for data in delta_kv_list]
-        self.storage.delete(delta_keys, StoreManager.DeltaTable)
-        return delta_list
+        # Stream keys through the paged scan instead of materializing every
+        # encoded delta; keys are fixed-width ns timestamps, so they sort in time order.
+        end_key = str(ns_ts)
+        delta_keys = []
+        for key, _ in self.storage.iter_all(StoreManager.DeltaTable):
+            if key >= end_key:
+                break
+            delta_keys.append(key)
+        if delta_keys:
+            self.storage.delete(delta_keys, StoreManager.DeltaTable)
+        return len(delta_keys)
 
     def expire_data(self) -> List[DeltaRecord]:
         """Process expired data based on TTL.

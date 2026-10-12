@@ -1031,9 +1031,12 @@ class LocalCollection(ICollection):
         oldest_version = 0
         for index in self.indexes.get_all().values():
             index_version = index.get_newest_version()
-            if index_version > 0 and (oldest_version == 0 or index_version < oldest_version):
+            if index_version <= 0:
+                # No on-disk snapshot: recovery would replay the whole delta table.
+                return
+            if oldest_version == 0 or index_version < oldest_version:
                 oldest_version = index_version
-        if self.store_mgr:
+        if self.store_mgr and oldest_version > 0:
             self.store_mgr.delete_delta_data_before_ts(oldest_version)
 
     def _expire_timeout_data(self):
@@ -1514,6 +1517,13 @@ class PersistCollection(LocalCollection):
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error(f"Failed to prune delta records: {e}")
         return persisted_count
 
     def _new_index(
