@@ -1284,6 +1284,14 @@ class ContentWriteCoordinator:
         needs_vector = request_intent.vectorize and (
             content_changed or detail is None or index_needs_vector
         )
+        has_detail_abstract = detail is not None and bool(
+            str(detail.fields.get("abstract") or "").strip()
+        )
+        needs_file_refresh = (
+            request_intent.processing_mode != "vectors_only"
+            and request_intent.vectorize
+            and (needs_vector or not has_detail_abstract)
+        )
         if request_intent.processing_mode == "vectors_only" and needs_vector:
             action = IndexAction.MERGE if detail is not None else IndexAction.UPSERT
             direct_actions.append(
@@ -1343,7 +1351,7 @@ class ContentWriteCoordinator:
             direct_index_actions=tuple(direct_actions),
             file_refresh=(
                 FileRefreshIntent(request_intent.target_uri, entry.md5)
-                if request_intent.processing_mode != "vectors_only" and needs_vector
+                if needs_file_refresh
                 else None
             ),
         )

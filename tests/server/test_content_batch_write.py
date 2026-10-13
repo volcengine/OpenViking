@@ -364,6 +364,53 @@ async def test_batch_existing_files_defer_full_vector_reads_to_embedding_worker(
 
 
 @pytest.mark.asyncio
+async def test_batch_same_content_with_missing_abstract_enqueues_file_refresh(monkeypatch):
+    root = "viking://resources/wiki"
+    uri = f"{root}/docs/a.md"
+    vfs = _VFS(root, {uri: "unchanged"})
+
+    class _VikingDB:
+        async def get_incremental_inventory_by_uris(self, uris, **kwargs):
+            del kwargs
+            return {
+                item: {
+                    "a-l2": {
+                        "id": "a-l2",
+                        "uri": item,
+                        "level": 2,
+                        "md5": content_md5(b"unchanged"),
+                        "abstract": "",
+                    }
+                }
+                for item in uris
+            }
+
+    refresh_file_parents = AsyncMock(
+        return_value={"enqueued_count": 1, "parent_actions": {f"{root}/docs": "refresh_now"}}
+    )
+    monkeypatch.setattr(
+        content_write_module.Summarizer,
+        "refresh_file_parents",
+        refresh_file_parents,
+    )
+    coordinator = ContentWriteCoordinator(vfs, vikingdb=_VikingDB())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": uri, "content": "unchanged", "mode": "replace"}],
+        ctx=ctx,
+        wait=False,
+        processing_mode="semantic_and_vectors",
+    )
+
+    changes = refresh_file_parents.await_args.kwargs["changes"]
+    assert [(change.file_uri, change.md5) for change in changes] == [
+        (uri, content_md5(b"unchanged"))
+    ]
+
+
+@pytest.mark.asyncio
 async def test_batch_vectors_only_existing_file_enqueues_merge_patch_without_hydration(monkeypatch):
     root = "viking://resources/wiki"
     uri = f"{root}/a.md"
