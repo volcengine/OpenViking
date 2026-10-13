@@ -767,7 +767,12 @@ class AsyncHTTPClient:
             request_data["path"] = path
 
         request_data = self._compact_request_body(request_data)
-        response = await self._request("POST", "/api/v1/resources", json=request_data)
+        response = await self._request(
+            "POST",
+            "/api/v1/resources",
+            json=request_data,
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def batch_add_messages(
@@ -823,7 +828,12 @@ class AsyncHTTPClient:
                 request_data["data"] = data
         else:
             request_data["data"] = data
-        response = await self._request("POST", "/api/v1/skills", json=request_data)
+        response = await self._request(
+            "POST",
+            "/api/v1/skills",
+            json=request_data,
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def list_skills(
@@ -934,7 +944,12 @@ class AsyncHTTPClient:
                 request_data["data"] = data
         else:
             request_data["data"] = data
-        response = await self._request("PUT", f"/api/v1/skills/{skill_name}", json=request_data)
+        response = await self._request(
+            "PUT",
+            f"/api/v1/skills/{skill_name}",
+            json=request_data,
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
+        )
         return self._handle_response_data(response).get("result", {})
 
     async def delete_skill(
@@ -1274,7 +1289,12 @@ class AsyncHTTPClient:
         params = {"uri": VikingURI.normalize(uri), "recursive": recursive, "wait": wait}
         if timeout is not None:
             params["timeout"] = timeout
-        response = await self._request("DELETE", "/api/v1/fs", params=params)
+        response = await self._request(
+            "DELETE",
+            "/api/v1/fs",
+            params=params,
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
+        )
         self._handle_response(response)
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
@@ -1358,6 +1378,7 @@ class AsyncHTTPClient:
             "POST",
             "/api/v1/content/write",
             json=payload,
+            **self._wait_request_kwargs(wait=wait, timeout=timeout),
         )
         return self._handle_response_data(response).get("result", {})
 
