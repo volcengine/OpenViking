@@ -950,13 +950,13 @@ Create a new workspace with its first admin user.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
-| admin_user_id | str | Yes | - | First admin user ID |
+| admin_user_id | str | Yes | - | First admin user ID; at most 255 UTF-8 bytes for new file-backed users |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 | settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
-- File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. This creation-only check does not change validation or authentication for existing accounts, or user/peer ID rules.
+- File-backed account creation rejects an `account_id` or `admin_user_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. These creation-only checks do not change validation or authentication for existing accounts and users, or peer ID rules.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
@@ -1350,12 +1350,13 @@ Register a new user in a workspace.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
-| user_id | str | Yes | - | User ID |
+| user_id | str | Yes | - | User ID; at most 255 UTF-8 bytes for new file-backed users |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
 
 **Notes:**
+- File-backed user registration rejects a `user_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the user registry. This creation-only check does not change validation or authentication for existing users, or peer ID rules.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
 - ADMIN can only register users in their own account

@@ -52,6 +52,7 @@ ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
 GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
 _MAX_FILE_ACCOUNT_ID_BYTES = 255
+_MAX_FILE_USER_ID_BYTES = 255
 
 
 # Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
@@ -463,6 +464,10 @@ class FileStore(AccountStore):
             )
         if error := validate_user_id(admin_user_id):
             raise InvalidArgumentError(error)
+        if len(admin_user_id.encode("utf-8")) > _MAX_FILE_USER_ID_BYTES:
+            raise InvalidArgumentError(
+                f"user_id must not exceed {_MAX_FILE_USER_ID_BYTES} UTF-8 bytes."
+            )
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
@@ -520,6 +525,10 @@ class FileStore(AccountStore):
         resolved_role = validate_account_user_role(role)
         if error := validate_user_id(user_id):
             raise InvalidArgumentError(error)
+        if len(user_id.encode("utf-8")) > _MAX_FILE_USER_ID_BYTES:
+            raise InvalidArgumentError(
+                f"user_id must not exceed {_MAX_FILE_USER_ID_BYTES} UTF-8 bytes."
+            )
         self._ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:

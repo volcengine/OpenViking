@@ -24,8 +24,15 @@ def _file_store() -> FileStore:
     return FileStore(SimpleNamespace(agfs=InMemoryAGFS()))
 
 
-@pytest.mark.parametrize("account_id", ["acme", "a" * 1024], ids=["normal", "long-existing"])
-async def test_legacy_user_without_role_defaults_to_user_during_authentication(account_id):
+@pytest.mark.parametrize(
+    "account_id,user_id",
+    [
+        pytest.param("acme", "alice", id="normal"),
+        pytest.param("a" * 1024, "alice", id="long-existing-account"),
+        pytest.param("acme", "u" * 1024, id="long-existing-user"),
+    ],
+)
+async def test_legacy_user_without_role_defaults_to_user_during_authentication(account_id, user_id):
     agfs = InMemoryAGFS()
     agfs.write(
         "/local/_system/accounts.json",
@@ -33,7 +40,7 @@ async def test_legacy_user_without_role_defaults_to_user_during_authentication(a
     )
     agfs.write(
         f"/local/{account_id}/_system/users.json",
-        json.dumps({"users": {"alice": {"key": "legacy-key"}}}).encode(),
+        json.dumps({"users": {user_id: {"key": "legacy-key"}}}).encode(),
     )
     manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs))
     await manager.load()
@@ -41,7 +48,7 @@ async def test_legacy_user_without_role_defaults_to_user_during_authentication(a
         identity = await manager.resolve_identity("legacy-key")
         assert (identity.account_id, identity.user_id, identity.role) == (
             account_id,
-            "alice",
+            user_id,
             Role.USER,
         )
     finally:
@@ -74,7 +81,7 @@ async def test_file_account_creation_respects_path_component_limit(issue_user_ke
     )
     await manager.load()
     account_id = "a" * length
-    admin_user_id = "u" * 256
+    admin_user_id = "admin"
     try:
         if length <= 255:
             key = await manager.create_account(account_id, admin_user_id)
@@ -90,6 +97,63 @@ async def test_file_account_creation_respects_path_component_limit(issue_user_ke
             assert agfs._files == before
             assert await manager.get_account(account_id) is None
             assert await manager.get_user(account_id, admin_user_id) is None
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
+@pytest.mark.parametrize("length", [255, 256, 1024])
+async def test_file_admin_user_creation_respects_path_component_limit(issue_user_keys, length):
+    agfs = InMemoryAGFS()
+    manager = build_api_key_manager(
+        "root", SimpleNamespace(agfs=agfs), issue_user_keys=issue_user_keys
+    )
+    await manager.load()
+    account_id = "acme"
+    admin_user_id = "u" * length
+    try:
+        if length <= 255:
+            key = await manager.create_account(account_id, admin_user_id)
+            assert await manager.get_registered_user_role(account_id, admin_user_id) == Role.ADMIN
+            if issue_user_keys:
+                assert (await manager.resolve_identity(key)).user_id == admin_user_id
+            else:
+                assert key is None
+        else:
+            before = dict(agfs._files)
+            with pytest.raises(InvalidArgumentError, match="user_id.*255.*UTF-8 bytes"):
+                await manager.create_account(account_id, admin_user_id)
+            assert agfs._files == before
+            assert await manager.get_account(account_id) is None
+            assert await manager.get_user(account_id, admin_user_id) is None
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
+@pytest.mark.parametrize("length", [255, 256, 1024])
+async def test_file_user_creation_respects_path_component_limit(issue_user_keys, length):
+    agfs = InMemoryAGFS()
+    manager = build_api_key_manager(
+        "root", SimpleNamespace(agfs=agfs), issue_user_keys=issue_user_keys
+    )
+    await manager.load()
+    user_id = "u" * length
+    try:
+        await manager.create_account("acme", "alice")
+        before = dict(agfs._files)
+        if length <= 255:
+            key = await manager.register_user("acme", user_id)
+            assert await manager.get_registered_user_role("acme", user_id) == Role.USER
+            if issue_user_keys:
+                assert (await manager.resolve_identity(key)).user_id == user_id
+            else:
+                assert key is None
+        else:
+            with pytest.raises(InvalidArgumentError, match="user_id.*255.*UTF-8 bytes"):
+                await manager.register_user("acme", user_id)
+            assert agfs._files == before
+            assert await manager.get_user("acme", user_id) is None
     finally:
         await manager.close()
 
