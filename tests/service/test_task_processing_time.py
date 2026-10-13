@@ -1,15 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Processing time excludes idle gaps and unions overlapping workers."""
+"""Processing time measures the wall-clock union of worker-owned execution."""
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from openviking.service.task_processing_time import ProcessingClock
-from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.service.task_work_index import TaskWorkIndex, bind_task_context
+from openviking.service.task_work_index import (
+    QueueTaskMetadata,
+    TaskWorkIndex,
+    bind_task_context,
+)
 from openviking.storage.queuefs.semantic_executor import (
     SemanticTreeExecutor,
     SemanticTreeScheduler,
@@ -17,36 +19,45 @@ from openviking.storage.queuefs.semantic_executor import (
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 
 
-def test_processing_clock_unions_workers_and_excludes_idle_time(monkeypatch):
+def test_work_timestamps_union_worker_occupancy_and_exclude_queue_time(monkeypatch):
     now = [0.0]
-    monkeypatch.setattr("openviking.service.task_processing_time.time.monotonic", lambda: now[0])
-    clock = ProcessingClock()
-    assert clock.seconds() is None
+    monkeypatch.setattr("openviking.service.task_work_index.time.time", lambda: now[0])
+    index = TaskWorkIndex()
+    index.init_processing("task")
+    first = QueueTaskMetadata("task", "first")
+    second = QueueTaskMetadata("task", "second")
+    assert index.register("Semantic", first)
+    assert index.processing_seconds("task") is None
+
     now[0] = 10  # Initial queue wait.
-    clock.enter("parse")
+    first_worker = object()
+    index.register_active("task", first_worker, work_id=first.work_id)
     now[0] = 12
-    clock.enter("embedding")
+    assert index.register("Embedding", second)
+    second_worker = object()
+    index.register_active("task", second_worker, work_id=second.work_id)
     now[0] = 15
-    clock.leave("parse")
+    index.unregister_active("task", first_worker)
     now[0] = 18
-    clock.leave("embedding")
-    assert clock.seconds() == 8
+    index.unregister_active("task", second_worker)
+    assert index.processing_seconds("task") == 8
     now[0] = 40  # No worker: waiting for another queue.
-    assert clock.seconds() == 8
-    clock.enter("semantic")
+    assert index.processing_seconds("task") == 8
+    third_worker = object()
+    index.register_active("task", third_worker)
     now[0] = 43
-    assert clock.seconds() == 11
-    clock.leave("semantic")
+    assert index.processing_seconds("task") == 11
+    index.unregister_active("task", third_worker)
     now[0] = 100
-    assert clock.seconds() == 11
+    assert index.processing_seconds("task") == 11
 
 
 @pytest.mark.asyncio
-async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch):
+async def test_saturated_dag_scheduler_counts_claimed_handler_time(monkeypatch):
     now = [0.0]
     monkeypatch.setattr(
-        "openviking.service.task_processing_time.time",
-        SimpleNamespace(monotonic=lambda: now[0]),
+        "openviking.service.task_work_index.time",
+        SimpleNamespace(time=lambda: now[0]),
     )
     index = TaskWorkIndex()
     scheduler = SemanticTreeScheduler(max_workers=1)
@@ -80,8 +91,13 @@ async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch)
     monkeypatch.setattr(executors["b"], "_schedule_dir", queue_b)
 
     async def coordinate(name):
-        with index.measure_processing(name):
+        worker = asyncio.current_task()
+        assert worker is not None
+        index.register_active(name, worker)
+        try:
             await executors[name].run("viking://resources/" + name)
+        finally:
+            index.unregister_active(name, worker)
 
     first = asyncio.create_task(coordinate("a"))
     await entered["a"].wait()
@@ -89,14 +105,16 @@ async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch)
     await queued.wait()
     now[0] = 20
     assert index.processing_seconds("a") == 20
-    assert index.processing_seconds("b") == 0  # Still queued behind A.
+    # B's QueueFS handler already owns a worker while its internal DAG node
+    # waits for the shared scheduler.
+    assert index.processing_seconds("b") == 20
     release["a"].set()
     await entered["b"].wait()
     now[0] = 25
-    assert index.processing_seconds("b") == 5
+    assert index.processing_seconds("b") == 25
     release["b"].set()
     await asyncio.gather(first, second)
-    assert index.processing_seconds("b") == 5
+    assert index.processing_seconds("b") == 25
     for worker in list(scheduler._workers):
         worker.cancel()
     await asyncio.gather(*scheduler._workers, return_exceptions=True)
@@ -104,11 +122,11 @@ async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["wait_for_request", "wait_for_embeddings"])
-async def test_downstream_wait_pauses_inherited_owner_in_shielded_child(monkeypatch, method):
+async def test_downstream_wait_remains_worker_occupied_time(monkeypatch, method):
     now = [0.0]
     monkeypatch.setattr(
-        "openviking.service.task_processing_time.time",
-        SimpleNamespace(monotonic=lambda: now[0]),
+        "openviking.service.task_work_index.time",
+        SimpleNamespace(time=lambda: now[0]),
     )
     index = TaskWorkIndex()
     index.init_processing("task")
@@ -116,67 +134,35 @@ async def test_downstream_wait_pauses_inherited_owner_in_shielded_child(monkeypa
     request = "processing-time-" + method
     tracker.register_request(request)
     tracker.register_embedding_root(request, "embedding")
-    with index.measure_processing("task"):
+    worker = asyncio.current_task()
+    assert worker is not None
+    index.register_active("task", worker)
+    try:
         now[0] = 3
-        waiter = asyncio.create_task(
-            run_to_completion(lambda: getattr(tracker, method)(request, poll_interval=0.001))
-        )
-        # Let run_to_completion and its shielded child enter the wait loop.
+        waiter = asyncio.create_task(getattr(tracker, method)(request, poll_interval=0.001))
         await asyncio.sleep(0.01)
         now[0] = 20
-        assert index.processing_seconds("task") == 3
+        assert index.processing_seconds("task") == 20
         tracker.mark_embedding_done(request, "embedding")
         await waiter
         now[0] = 22
-        assert index.processing_seconds("task") == 5
+        assert index.processing_seconds("task") == 22
+    finally:
+        index.unregister_active("task", worker)
     tracker.cleanup(request)
 
 
 @pytest.mark.asyncio
-async def test_nested_wait_and_cancellation_restore_processing_owner(monkeypatch):
-    from openviking.service.task_processing_time import pause_task_processing, processing_owner
-
-    now = [0.0]
-    monkeypatch.setattr(
-        "openviking.service.task_processing_time.time",
-        SimpleNamespace(monotonic=lambda: now[0]),
-    )
-    index = TaskWorkIndex()
-    index.init_processing("task")
-    entered = asyncio.Event()
-
-    async def work():
-        with index.measure_processing("task"):
-            now[0] = 2
-            try:
-                with pause_task_processing():
-                    with pause_task_processing():
-                        entered.set()
-                        await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                now[0] += 3  # Cancellation cleanup resumes processing.
-        assert processing_owner.get() is None
-
-    task = asyncio.create_task(work())
-    await entered.wait()
-    now[0] = 20
-    assert index.processing_seconds("task") == 2
-    task.cancel()
-    await task
-    assert index.processing_seconds("task") == 5
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("custom_enqueue", [False, True])
-async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(
+async def test_semantic_retry_cooldown_counts_full_worker_occupied_time(
     monkeypatch, custom_enqueue
 ):
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
     now = [0.0]
     monkeypatch.setattr(
-        "openviking.service.task_processing_time.time",
-        SimpleNamespace(monotonic=lambda: now[0]),
+        "openviking.service.task_work_index.time",
+        SimpleNamespace(time=lambda: now[0]),
     )
     index = TaskWorkIndex()
     index.init_processing("task")
@@ -186,7 +172,7 @@ async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(
     async def sleep(delay):
         assert delay == 30
         now[0] += delay
-        assert index.processing_seconds("task") == 3
+        assert index.processing_seconds("task") == 33
 
     async def enqueue(msg):
         assert msg is message
@@ -218,4 +204,4 @@ async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(
         index.unregister_active("task", worker)
 
     assert enqueued == [message]
-    assert index.processing_seconds("task") == 5
+    assert index.processing_seconds("task") == 35

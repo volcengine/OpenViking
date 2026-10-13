@@ -386,7 +386,7 @@ const workspace = {
       totalDuration: '总耗时',
       processingNotStarted: '未开始',
       processingDurationHelp:
-        '仅累计工序实际处理区间，含模型与 I/O 调用；排除排队和等待下游，并行重叠只计一次。旧任务或重启后记录不完整时显示未记录。',
+        '处理耗时为至少一个 Work 已被 Worker 领取后的墙钟时间，包含模型调用、I/O、下游等待和退避，并行重叠只计一次；等待耗时为总耗时减去处理耗时，主要包含排队和调度空档。',
       processingDuration: '处理耗时',
       waitingDuration: '等待耗时',
       timingUnavailable: '未记录',

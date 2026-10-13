@@ -28,9 +28,19 @@ openviking-server --config ~/.openviking/ov.conf
 curl http://localhost:1933/health
 ```
 
-## 安装方式一：发布包安装
+## 安装方式一：一键安装（推荐）
 
-普通用户推荐通过 OpenCode 的 package plugin 机制启用：
+OpenCode 与其他记忆插件共用同一个安装器。它会询问要安装的宿主和 OpenViking 凭据：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
+
+## 安装方式二：发布包安装
+
+也可以通过 OpenCode 的 package plugin 机制启用：
 
 ```json
 {
@@ -40,7 +50,7 @@ curl http://localhost:1933/health
 
 这份 `plugin` 配置同时兼容 v1 和 v2；v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
 
-## 安装方式二：源码安装
+## 安装方式三：源码安装
 
 用于开发调试或 PR 测试。OpenCode 推荐插件目录：
 

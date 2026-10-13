@@ -4,28 +4,9 @@
 
 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
-
-## 前置条件
-
-- [OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+
-- Node.js 18+
-- OpenViking HTTP server
-- 如果服务端启用了鉴权，需要一个可用的 OpenViking API key
-
-先启动 OpenViking server：
-
-```bash
-openviking-server --config ~/.openviking/ov.conf
-```
-
-在另一个终端检查服务：
-
-```bash
-curl http://localhost:1933/health
-```
-
 ## 安装
+
+前置条件：[OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+、Node.js 18+，以及一个可访问的 OpenViking HTTP server（用 `curl http://localhost:1933/health` 确认）；服务端启用了鉴权时，还需要一个可用的 OpenViking API key。
 
 ### 一键安装（推荐）
 
@@ -152,6 +133,8 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
 OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+
+工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 
 OpenCode 1.15.7 不会调用插件 dispose。v1 的短时 CLI 运行也可能在异步捕获完成前退出，这一行为在 v2 适配前已存在。使用常驻 v1 服务可以让 idle 捕获完成；OpenCode 1.18.32 会在 instance dispose 时调用插件的 dispose。
 

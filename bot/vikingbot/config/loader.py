@@ -218,7 +218,7 @@ def _merge_vlm_model_config(
 
     agents = bot_data.get("agents", {})
     if vlm_data and "timeout" not in agents:
-        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 600.0
 
     if not inherit_model:
         return

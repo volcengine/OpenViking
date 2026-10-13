@@ -58,7 +58,11 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                     self._index.record_failure(metadata.task_id, result.error)
                 return result
             if active_task is not None:
-                self._index.register_active(metadata.task_id, active_task)
+                self._index.register_active(
+                    metadata.task_id,
+                    active_task,
+                    work_id=metadata.work_id,
+                )
             try:
                 result = await call_next(ctx)
             except asyncio.CancelledError:

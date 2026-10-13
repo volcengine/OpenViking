@@ -12,13 +12,12 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Iterable, Iterator, Mapping, Optional
 from uuid import uuid4
-
-from openviking.service.task_processing_time import ProcessingClock, processing_owner
 
 TASK_WORK_ID_FIELD = "_task_work_id"
 
@@ -40,6 +39,15 @@ class QueueTaskMetadata:
     work_id: str
     account_id: str = ""
     user_id: str = ""
+
+
+@dataclass
+class WorkTiming:
+    """Local timestamps matching the future persisted Work timing contract."""
+
+    enqueued_at: float
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
 
 
 _current_task_context: ContextVar[Optional[TaskExecutionContext]] = ContextVar(
@@ -160,7 +168,8 @@ class TaskWorkIndex:
         self._work: Dict[str, set[tuple[str, str]]] = {}
         self._active: Dict[str, set[asyncio.Task[Any]]] = {}
         self._failures: Dict[str, str] = {}
-        self._processing: Dict[str, ProcessingClock] = {}
+        self._work_timings: Dict[str, Dict[str, WorkTiming]] = {}
+        self._active_work_ids: Dict[tuple[str, asyncio.Task[Any]], str] = {}
         self._finalize_before_ack: Optional[Callable[[QueueTaskMetadata], Awaitable[None]]] = None
         self._is_cancellation_requested: Optional[Callable[[str], bool]] = None
 
@@ -201,6 +210,9 @@ class TaskWorkIndex:
             if self.cancellation_requested(metadata.task_id):
                 return False
             self._work.setdefault(metadata.task_id, set()).add((queue_name, metadata.work_id))
+            timings = self._work_timings.get(metadata.task_id)
+            if timings is not None:
+                timings.setdefault(metadata.work_id, WorkTiming(enqueued_at=time.time()))
         return True
 
     def _remove_work(
@@ -232,7 +244,12 @@ class TaskWorkIndex:
         )
         if metadata is None:
             return
-        _removed, became_idle = self._remove_work(queue_name, metadata)
+        removed, became_idle = self._remove_work(queue_name, metadata)
+        if removed:
+            with self._lock:
+                timings = self._work_timings.get(metadata.task_id)
+                if timings is not None:
+                    timings.pop(metadata.work_id, None)
         callback = self._finalize_before_ack
         if became_idle and callback is not None:
             await callback(metadata)
@@ -298,73 +315,69 @@ class TaskWorkIndex:
 
     def init_processing(self, task_id: str) -> None:
         with self._lock:
-            self._processing.setdefault(task_id, ProcessingClock())
+            self._work_timings.setdefault(task_id, {})
 
     def processing_seconds(self, task_id: str) -> Optional[float]:
         with self._lock:
-            clock = self._processing.get(task_id)
-            return clock.seconds() if clock else None
+            timings = self._work_timings.get(task_id)
+            if timings is None:
+                return None
+            now = time.time()
+            intervals: list[tuple[float, float]] = []
+            for timing in timings.values():
+                if timing.started_at is None:
+                    continue
+                end = timing.finished_at if timing.finished_at is not None else now
+                intervals.append((timing.started_at, max(timing.started_at, end)))
+            intervals.sort()
+        if not intervals:
+            return None
+
+        elapsed = 0.0
+        current_start, current_end = intervals[0]
+        for start, end in intervals[1:]:
+            if start <= current_end:
+                current_end = max(current_end, end)
+            else:
+                elapsed += current_end - current_start
+                current_start, current_end = start, end
+        return elapsed + current_end - current_start
 
     def forget_processing(self, task_id: str) -> None:
         with self._lock:
-            self._processing.pop(task_id, None)
-
-    @contextmanager
-    def pause_processing(self, task_id: str, *, worker: Any = None) -> Iterator[None]:
-        worker = worker if worker is not None else asyncio.current_task()
-        with self._lock:
-            clock = self._processing.get(task_id)
-            was_processing = clock is not None and worker in clock.workers
-            if was_processing:
-                clock.leave(worker)
-        try:
-            yield
-        finally:
-            with self._lock:
-                if was_processing and self._processing.get(task_id) is clock:
-                    clock.enter(worker)
-
-    @contextmanager
-    def measure_processing(self, task_id: str) -> Iterator[None]:
-        # Timing ownership is separate from cancellation ownership: a shared DAG
-        # worker must never become cancellable on behalf of one queued task.
-        worker = object()
-        token = processing_owner.set((self, task_id, worker))
-        with self._lock:
-            clock = self._processing.get(task_id)
-            if clock is not None:
-                clock.enter(worker)
-        try:
-            yield
-        finally:
-            with self._lock:
-                if clock is not None:
-                    clock.leave(worker)
-            processing_owner.reset(token)
+            self._work_timings.pop(task_id, None)
 
     def register_active(
         self,
         task_id: str,
         active_task: asyncio.Task[Any],
+        *,
+        work_id: Optional[str] = None,
     ) -> None:
         with self._lock:
             cancelled = self.cancellation_requested(task_id)
             if not cancelled:
                 self._active.setdefault(task_id, set()).add(active_task)
-                clock = self._processing.get(task_id)
-                if clock is not None:
-                    clock.enter(active_task)
-                processing_owner.set((self, task_id, active_task))
+                timings = self._work_timings.get(task_id)
+                if timings is not None:
+                    now = time.time()
+                    timing_id = work_id or f"inline:{id(active_task)}"
+                    timing = timings.setdefault(timing_id, WorkTiming(enqueued_at=now))
+                    if timing.started_at is None:
+                        timing.started_at = now
+                    timing.finished_at = None
+                    self._active_work_ids[(task_id, active_task)] = timing_id
         if cancelled:
             active_task.get_loop().call_soon(active_task.cancel)
 
     def unregister_active(self, task_id: str, active_task: asyncio.Task[Any]) -> None:
-        if processing_owner.get() == (self, task_id, active_task):
-            processing_owner.set(None)
         with self._lock:
-            clock = self._processing.get(task_id)
-            if clock is not None:
-                clock.leave(active_task)
+            timing_id = self._active_work_ids.pop((task_id, active_task), None)
+            timings = self._work_timings.get(task_id)
+            if timing_id is not None and timings is not None:
+                timing = timings.get(timing_id)
+                if timing is not None and timing.started_at is not None:
+                    timing.finished_at = max(timing.started_at, time.time())
             entries = self._active.get(task_id)
             if entries is not None:
                 entries.discard(active_task)

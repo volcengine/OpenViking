@@ -30,7 +30,6 @@ from openviking.service.task_events import (
     TaskEventHistory,
     append_task_event,
 )
-from openviking.service.task_processing_time import pause_task_processing
 from openviking.service.task_store import TaskStore
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
@@ -877,9 +876,8 @@ class TaskTracker:
                     account_id=task.account_id,
                     user_id=task.user_id,
                 )
-        with pause_task_processing():
-            while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
-                await asyncio.sleep(0.05)
+        while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+            await asyncio.sleep(0.05)
 
     async def record_event(
         self,
@@ -1132,7 +1130,7 @@ class TaskTracker:
         # Build history before the same physical write as the state transition.
         if operation == "update" and previous is None:
             raise ValueError("Task updates require the previous snapshot")
-        # Persist the final measured union; restored active tasks have no complete clock.
+        # Persist the final Work interval union; restored active tasks lack full timing coverage.
         if previous is None or previous.status in _ACTIVE_STATUSES:
             task.processing_seconds = self._work_index.processing_seconds(task.task_id)
         kinds = []

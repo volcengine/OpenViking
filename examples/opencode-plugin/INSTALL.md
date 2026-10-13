@@ -28,9 +28,19 @@ Check the service:
 curl http://localhost:1933/health
 ```
 
-## Installation Method 1: Published Package
+## Installation Method 1: One-line Installer (Recommended)
 
-Normal users are recommended to enable it through OpenCode's package plugin mechanism:
+OpenCode shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+
+## Installation Method 2: Published Package
+
+To enable it through OpenCode's package plugin mechanism instead:
 
 ```json
 {
@@ -40,7 +50,7 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
 
 This `plugin` entry works on both v1 and v2. OpenCode v2 normalizes it to the native `plugins` form at load time, so no manual config migration is required.
 
-## Installation Method 2: Source Install
+## Installation Method 3: Source Install
 
 Use this method for development, debugging, or PR testing. OpenCode's recommended plugin directory is:
 

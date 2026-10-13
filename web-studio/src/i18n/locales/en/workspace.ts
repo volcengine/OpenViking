@@ -396,7 +396,7 @@ const workspace = {
       totalDuration: 'Total Time',
       processingNotStarted: 'Not started',
       processingDurationHelp:
-        'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+        'Processing time is wall-clock time after at least one Work is claimed by a worker, including model calls, I/O, downstream waits, and backoff; overlapping workers count once. Waiting time is total time minus processing time, mainly queue and scheduling gaps.',
       processingDuration: 'Processing Time',
       waitingDuration: 'Waiting Time',
       timingUnavailable: 'Not recorded',

@@ -32,6 +32,8 @@ ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
 PROCESSING_VERSION = "compile-pipeline-36"
 # Output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
+# Total attempts per operator job or routing record, including the initial execution.
+MAX_JOB_ATTEMPTS = 4
 
 
 def parse_file_result(text: str) -> Any:

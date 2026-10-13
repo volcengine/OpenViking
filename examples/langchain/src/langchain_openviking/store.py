@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterable
 from urllib.parse import quote, unquote
@@ -160,7 +161,7 @@ class OpenVikingStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: dict[str, Any],
+        value: Mapping[str, Any],
         index: bool | list[str] | None = None,
         *,
         ttl: Any = None,
@@ -173,7 +174,7 @@ class OpenVikingStore(BaseStore):
         namespace = tuple(namespace)
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
-        record = self._write_record(data_uri, namespace, key, value, now)
+        record = self._write_record(data_uri, namespace, key, dict(value), now)
 
         effective_index = self.index if index is None else index
         index_uri = self._index_uri(namespace, key)

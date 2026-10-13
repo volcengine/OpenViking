@@ -7,13 +7,12 @@ import heapq
 import json
 import math
 from array import array
-from collections import Counter
 from collections.abc import Sequence
 from threading import Event
 
 from openviking.core.namespace import relative_uri_path
 from vikingbot.compile.hashing import digest
-from vikingbot.compile.pipeline_io import bounded_jobs, retry_allowed
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
 from vikingbot.compile.plan import Routing
 from vikingbot.compile.results import Group, Record, RouteBatchResponse, RouteDecision
 
@@ -249,7 +248,7 @@ class Shuffle:
         """Assign every record to one work set, allowing cross-path and cross-scope links.
 
         Independent batches compare global candidates, including later records.
-        Only failed primary records retry; successful decisions are persisted immediately.
+        Failed primary records retry within a finite budget; successful decisions persist immediately.
         Unconfirmed candidates never become links. Recall failures
         are recorded without fabricating empty history; cancellation propagates.
         """
@@ -297,7 +296,6 @@ class Shuffle:
             }
 
         accepted, errors = {}, {}
-        retries = {record.record_id: Counter() for record in records}
         system = (
             "Routing rules:\n"
             + (rule.instructions if isinstance(rule, Routing) else rule)
@@ -429,7 +427,7 @@ class Shuffle:
                 state = (
                     "completed"
                     if key in accepted
-                    else ("pending" if retry_allowed(retries[key], errors[key]) else "failed")
+                    else ("pending" if attempt < MAX_JOB_ATTEMPTS else "failed")
                 )
                 entry = {"status": state, "inputs": [key], "attempt": attempt}
                 if key in accepted:
