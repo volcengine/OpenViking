@@ -85,9 +85,6 @@ impl CheckpointWorker {
         let now = now_ns()?;
         let interval_ns = u64::try_from(interval.as_nanos()).unwrap_or(u64::MAX);
         for account in self.store.initialized_accounts().await? {
-            if account == crate::multibackend::constants::SYSTEM_DIR {
-                continue;
-            }
             let path = self.store.paths().account_manifest(&account)?.0;
             let manifest: PartitionsManifest = match self.store.read_json(&path).await {
                 Ok(manifest) => manifest,
