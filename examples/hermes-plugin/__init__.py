@@ -267,6 +267,19 @@ def _status_code_from_error(error: Exception) -> Optional[int]:
     return getattr(getattr(error, "response", None), "status_code", None)
 
 
+def _probe_needs_credentials(status: Optional[int]) -> bool:
+    """True when an anonymous probe's status means a gateway wants credentials.
+
+    401/403 are the ordinary answers. A 3xx means an authenticating gateway answered
+    the probe by redirecting to its own login page (Cloudflare Access, oauth2-proxy,
+    ...): the anonymous probe cannot read that, and retrying once with the resolved
+    headers is what makes those deployments usable.
+    """
+    if status is None:
+        return False
+    return status in (401, 403) or 300 <= status < 400
+
+
 def _format_openviking_exception(error: Exception) -> str:
     return _sanitize_openviking_error_message(str(error), _status_code_from_error(error))
 
@@ -452,12 +465,21 @@ class _VikingClient:
 
     def _anonymous_json(self, path: str) -> dict:
         """Probe server identity without disclosing credentials or tenant IDs."""
-        return self._parse_response(self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0))
+        resp = self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0)
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int) and 300 <= status < 400:
+            # An authenticating gateway answered the anonymous probe with a redirect to
+            # its own login page. Surface the status instead of parsing the HTML body
+            # into an empty dict, so callers can retry with credentials.
+            raise _OpenVikingHTTPError(f"HTTP {status}", status)
+        return self._parse_response(resp)
 
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
         Hosted OpenViking requires auth on /health: when an API key is configured and the
-        anonymous call gets 401/403, retry once with the key (no tenant headers).
+        anonymous call gets 401/403 — or a 3xx redirect to an authenticating gateway's login
+        page (Cloudflare Access, oauth2-proxy, ...) — retry once with the key and any
+        configured gateway headers (no tenant headers).
 
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
@@ -465,7 +487,7 @@ class _VikingClient:
         try:
             return self._anonymous_json("/health")
         except _OpenVikingHTTPError as exc:
-            if not self._api_key or _status_code_from_error(exc) not in {401, 403}:
+            if not self._api_key or not _probe_needs_credentials(_status_code_from_error(exc)):
                 raise
             return self._parse_response(self._httpx.get(f"{self._endpoint}/health", headers=self._headers(include_tenant=False), timeout=3.0))
 
