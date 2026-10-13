@@ -421,11 +421,8 @@ class BotCompileService:
         except (TypeError, ValueError):
             return CompileCapabilities(exec_enabled=False)
         if backend == SandboxBackend.DIRECT:
-            backends = getattr(sandbox, "backends", None)
-            direct = getattr(backends, "direct", None)
-            return CompileCapabilities(
-                exec_enabled=bool(getattr(direct, "allow_compile_exec", False))
-            )
+            direct = sandbox.backends.direct
+            return CompileCapabilities(exec_enabled=direct.allow_exec and direct.allow_compile_exec)
         return CompileCapabilities(exec_enabled=backend in _COMPILE_ISOLATED_EXEC_BACKENDS)
 
     async def _admit(self, principal_scope: str) -> None:
