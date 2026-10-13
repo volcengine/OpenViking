@@ -145,11 +145,17 @@ is built, so the headers also cover the startup `/health` probe.
 
 The identity probe stays anonymous first, so no credential is ever sent to an unknown
 host. Gateways that answer that anonymous request by *redirecting* to their own login
-page are handled like `401`/`403`: Cloudflare Access returns `302` with
-`Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and the
-probe is retried once with the resolved headers. Without that retry a protected server
-looks "reachable but not OpenViking", the client is dropped, and memory stays
-unavailable even though every authenticated request would have worked.
+page are handled like `401`/`403`, but only on a connection that carries gateway headers
+(`extra_headers` / `OPENVIKING_EXTRA_HEADERS`): those headers are what declare that an
+authenticating gateway sits in front of the endpoint. Cloudflare Access returns `302` with
+`Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and such a
+connection's probe is retried once with the resolved headers. Without that retry a
+protected server looks "reachable but not OpenViking", the client is dropped, and memory
+stays unavailable even though every authenticated request would have worked.
+
+A redirect on a connection with *no* gateway headers is not retried: a `3xx` from an
+endpoint that has not been shown to be OpenViking is not authorization to resend the API
+key, so it keeps failing exactly as it did before, and no credential leaves the process.
 
 ### Optional peer identity
 
