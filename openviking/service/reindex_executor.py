@@ -17,6 +17,7 @@ from openviking.core.context import (
     ResourceContentType,
     Vectorize,
 )
+from openviking.core.memory_association import is_association_uri
 from openviking.core.namespace import (
     classify_uri,
     content_owner_context_for_uri,
@@ -337,6 +338,8 @@ class ReindexExecutor:
         return kwargs
 
     def _infer_target_type(self, uri: str) -> str:
+        if is_association_uri(uri):
+            raise InvalidArgumentError("Association metadata cannot be reindexed as memory")
         if not uri.startswith("viking://"):
             raise OpenVikingError(
                 f"Unsupported reindex URI: {uri}",
@@ -385,7 +388,7 @@ class ReindexExecutor:
         show_all_hidden: bool,
         ctx: RequestContext,
     ) -> list[dict[str, Any]]:
-        return await viking_fs.tree(
+        entries = await viking_fs.tree(
             uri,
             output="original",
             show_all_hidden=show_all_hidden,
@@ -393,6 +396,7 @@ class ReindexExecutor:
             level_limit=None,
             ctx=ctx,
         )
+        return [entry for entry in entries if not is_association_uri(entry.get("uri", ""))]
 
     async def _refresh_namespace_resource_semantics(
         self,

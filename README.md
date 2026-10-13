@@ -367,6 +367,66 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 </tr>
 </table>
 
+## Optional file-based memory associations
+
+Memory associations link locally extracted names, quoted titles, noun compounds,
+and technical identifiers to existing memory files. They are disabled by default:
+
+```json
+{"retrieval": {"memory_association": {"enabled": true, "nlp_model": "en_core_web_sm"}}}
+```
+
+Install `openviking[nlp]` and the configured spaCy model before starting the
+service. Requests never download NLP models. Enabling without that model fails
+startup; disabling uses the original filesystem class without loading NLP or
+creating an association queue.
+
+Each Self or Peer memory root has its own readable directory tree:
+
+```text
+memories/.association/
+  Caroline/meta.json
+  classic rock/meta.json
+  张三/meta.json
+```
+
+Each `meta.json` holds `cue`, `cue_type`, and a `memories` list of references with
+`uri`, `source_version`, and `source_fingerprint`. Case variants reuse the first
+directory spelling. Unsafe characters are reversibly percent escaped; names over
+240 UTF-8 bytes are skipped. Hidden `.index.json` stores name/reverse-reference
+mappings; `.pending.json` exists only during an update or recovery. There are no
+per-reference files, association embeddings, or auxiliary vector records. Primary
+memory content, metadata, and vector hashes remain unchanged.
+
+Use the separate `POST /api/v1/search/associations` endpoint with the existing
+request authentication:
+
+```json
+{"query": "What does Caroline play?", "target_uri": "viking://~/memories", "limit": 20}
+```
+
+It returns `associations` entries with `cue`, `cue_type`, `score`, and `memory_uri`.
+Lookup matches normalized extracted cues exactly: `score: 1.0` means an exact cue
+hit, not cosine similarity or answer confidence. `limit` caps distinct memory
+URIs. Each parent must still exist, match its fingerprint, and pass the caller's
+account/user/peer/ACL checks. ROOT callers must specify a target. Original
+Find/Search do not call this endpoint or fuse its results. Association subtrees
+are excluded from ordinary semantic scans, reindexing, and tree sync; filesystem
+`ls/read` remain available under normal filesystem permissions.
+`memories/.association` is a reserved derived directory; the scan exclusion also
+applies while disabled, so leftover metadata cannot enter ordinary retrieval.
+
+Successful memory writes, copies, moves, and deletes enqueue independent derived
+work. Native filesystem locks prevent lost concurrent updates; a redo journal
+recovers interrupted multi-file changes. Associations are eventually consistent:
+Add completion does not mean their queue is drained. Failures retry only the
+derived operation; exhausted deliveries remain unacknowledged for diagnosis.
+Enqueue failures are logged without replaying the committed primary write.
+Operators can repair/backfill using
+`viking_fs.memory_association.refresh_tree(memory_uri, ctx)`; enabling does not
+automatically backfill historical memories, migrate legacy cue vectors, or move
+earlier experimental `memories/association/` directories.
+
 ## Research
 
 **Memory that evolves with your agent.** VikingMem develops an event-driven approach to extracting, updating, and consolidating long-term memory, giving stateful agents a way to retain useful experience as interactions accumulate. OpenViking open-sources a subset of these core capabilities.

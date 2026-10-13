@@ -226,7 +226,13 @@ def init_viking_fs(
 
     global _instance
 
-    _instance = VikingFS(
+    fs_class = VikingFS
+    if retrieval_config is not None and retrieval_config.memory_association.enabled:
+        from openviking.retrieve.memory_association.runtime import AssociationVikingFS
+
+        fs_class = AssociationVikingFS
+
+    _instance = fs_class(
         agfs=agfs,
         query_embedder=query_embedder,
         rerank_config=rerank_config,

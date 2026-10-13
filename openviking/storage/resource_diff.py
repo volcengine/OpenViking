@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Any, Dict, Mapping, Tuple
 
 from openviking.concurrency import bounded_map
+from openviking.core.memory_association import is_association_uri
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.resource_rnfv import (
     CONTROL_BASENAMES,
@@ -398,10 +399,12 @@ async def read_target_file_snapshot(
     files: Dict[str, FormalEntry] = {}
     complete = True
     for entry in entries:
+        rel_path = str(entry.get("rel_path") or "").strip("/")
+        if is_association_uri(target_uri.rstrip("/") + "/" + rel_path):
+            continue
         if entry.get("access") == "denied":
             complete = False
             continue
-        rel_path = str(entry.get("rel_path") or "").strip("/")
         if _is_excluded_rel_path(rel_path):
             continue
         files[rel_path] = FormalEntry(is_dir=bool(entry.get("isDir")))
