@@ -567,7 +567,7 @@ async def test_scheduler_schedules_idle_sessions_still_within_keep_recent_window
 @pytest.mark.asyncio
 async def test_scheduler_uses_logical_identity_from_meta_for_shortened_paths():
     logical_user_id = "user-" + ("u" * 300)
-    logical_session_id = "session-" + ("s" * 300)
+    logical_session_id = "session-" + ("s" * 300) + " "
     physical_user_id = VikingFS._shorten_component(logical_user_id)
     physical_session_id = VikingFS._shorten_component(logical_session_id)
     meta_path = f"/local/acct_a/user/{physical_user_id}/sessions/{physical_session_id}/.meta.json"

@@ -203,7 +203,7 @@ class SessionAutoCommitScheduler:
 
         meta_account_id = meta.get("created_by_account_id")
         if isinstance(meta_account_id, str) and meta_account_id.strip():
-            if meta_account_id.strip() != account_id:
+            if meta_account_id != account_id:
                 logger.warning(
                     "Session meta account does not match its physical path; "
                     "skipping idle auto-commit: %s",
@@ -213,13 +213,13 @@ class SessionAutoCommitScheduler:
 
         meta_session_id = meta.get("session_id")
         session_id = (
-            meta_session_id.strip()
+            meta_session_id
             if isinstance(meta_session_id, str) and meta_session_id.strip()
             else physical_session_id
         )
         meta_user_id = meta.get("created_by_user_id")
         user_id = (
-            meta_user_id.strip()
+            meta_user_id
             if isinstance(meta_user_id, str) and meta_user_id.strip()
             else physical_user_id
         )

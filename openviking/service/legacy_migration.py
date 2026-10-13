@@ -136,7 +136,7 @@ class LegacyDataMigration:
 
         for account_id in sorted(registry_accounts):
             plan.account_users[account_id] = set()
-            registered_physical_users: set[str] = set()
+            logical_users_by_physical: dict[str, str] = {}
             for user_id in sorted(await self._registry_user_ids(account_id)):
                 if await self._ensure_plan_user(account_id, user_id, plan):
                     user_ctx = RequestContext(
@@ -147,12 +147,16 @@ class LegacyDataMigration:
                         canonical_user_root(user_ctx),
                         ctx=user_ctx,
                     )
-                    registered_physical_users.add(user_path.rsplit("/", 1)[-1])
+                    logical_users_by_physical[user_path.rsplit("/", 1)[-1]] = user_id
             if await self._exists(f"/local/{account_id}/session"):
                 physical_users = await self._physical_user_ids(account_id)
-                for user_id in sorted(physical_users - registered_physical_users):
+                for user_id in sorted(physical_users - logical_users_by_physical.keys()):
                     await self._ensure_plan_user(account_id, user_id, plan)
-            await self._plan_sessions(account_id, plan)
+            await self._plan_sessions(
+                account_id,
+                plan,
+                logical_users_by_physical=logical_users_by_physical,
+            )
         return plan
 
     async def run(self) -> dict[str, Any]:
@@ -239,7 +243,13 @@ class LegacyDataMigration:
         entries = await self._ls(f"/local/{account_id}/user")
         return {entry["name"] for entry in entries if entry["is_dir"]}
 
-    async def _plan_sessions(self, account_id: str, plan: MigrationPlan) -> None:
+    async def _plan_sessions(
+        self,
+        account_id: str,
+        plan: MigrationPlan,
+        *,
+        logical_users_by_physical: dict[str, str] | None = None,
+    ) -> None:
         session_root = f"/local/{account_id}/session"
         for entry in await self._ls(session_root):
             if not entry["is_dir"]:
@@ -252,6 +262,7 @@ class LegacyDataMigration:
                     source_path=source_path,
                     owner_hint=None,
                     plan=plan,
+                    logical_users_by_physical=logical_users_by_physical,
                 )
                 continue
             for nested in await self._ls(source_path):
@@ -265,6 +276,7 @@ class LegacyDataMigration:
                         source_path=nested_path,
                         owner_hint=entry["name"],
                         plan=plan,
+                        logical_users_by_physical=logical_users_by_physical,
                     )
 
     async def _plan_one_session(
@@ -275,10 +287,14 @@ class LegacyDataMigration:
         source_path: str,
         owner_hint: str | None,
         plan: MigrationPlan,
+        logical_users_by_physical: dict[str, str] | None = None,
     ) -> None:
         owner = await self._session_owner(source_path)
+        logical_users_by_physical = logical_users_by_physical or {}
+        if owner:
+            owner = logical_users_by_physical.get(owner, owner)
         if not owner and owner_hint:
-            owner = owner_hint
+            owner = logical_users_by_physical.get(owner_hint, owner_hint)
         users = plan.account_users.setdefault(account_id, set())
         if not owner and len(users) == 1:
             owner = next(iter(users))

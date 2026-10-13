@@ -103,7 +103,10 @@ async def test_file_account_creation_respects_path_component_limit(issue_user_ke
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
 @pytest.mark.parametrize("length", [255, 256, 1024])
-async def test_file_admin_user_creation_respects_path_component_limit(issue_user_keys, length):
+async def test_file_account_creation_allows_shortened_admin_user_component(
+    issue_user_keys,
+    length,
+):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
         "root", SimpleNamespace(agfs=agfs), issue_user_keys=issue_user_keys
@@ -112,27 +115,19 @@ async def test_file_admin_user_creation_respects_path_component_limit(issue_user
     account_id = "acme"
     admin_user_id = "u" * length
     try:
-        if length <= 255:
-            key = await manager.create_account(account_id, admin_user_id)
-            assert await manager.get_registered_user_role(account_id, admin_user_id) == Role.ADMIN
-            if issue_user_keys:
-                assert (await manager.resolve_identity(key)).user_id == admin_user_id
-            else:
-                assert key is None
+        key = await manager.create_account(account_id, admin_user_id)
+        assert await manager.get_registered_user_role(account_id, admin_user_id) == Role.ADMIN
+        if issue_user_keys:
+            assert (await manager.resolve_identity(key)).user_id == admin_user_id
         else:
-            before = dict(agfs._files)
-            with pytest.raises(InvalidArgumentError, match="user_id.*255.*UTF-8 bytes"):
-                await manager.create_account(account_id, admin_user_id)
-            assert agfs._files == before
-            assert await manager.get_account(account_id) is None
-            assert await manager.get_user(account_id, admin_user_id) is None
+            assert key is None
     finally:
         await manager.close()
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
 @pytest.mark.parametrize("length", [255, 256, 1024])
-async def test_file_user_creation_respects_path_component_limit(issue_user_keys, length):
+async def test_file_user_creation_allows_shortened_user_component(issue_user_keys, length):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
         "root", SimpleNamespace(agfs=agfs), issue_user_keys=issue_user_keys
@@ -141,19 +136,38 @@ async def test_file_user_creation_respects_path_component_limit(issue_user_keys,
     user_id = "u" * length
     try:
         await manager.create_account("acme", "alice")
-        before = dict(agfs._files)
-        if length <= 255:
-            key = await manager.register_user("acme", user_id)
-            assert await manager.get_registered_user_role("acme", user_id) == Role.USER
-            if issue_user_keys:
-                assert (await manager.resolve_identity(key)).user_id == user_id
-            else:
-                assert key is None
+        key = await manager.register_user("acme", user_id)
+        assert await manager.get_registered_user_role("acme", user_id) == Role.USER
+        if issue_user_keys:
+            assert (await manager.resolve_identity(key)).user_id == user_id
         else:
-            with pytest.raises(InvalidArgumentError, match="user_id.*255.*UTF-8 bytes"):
-                await manager.register_user("acme", user_id)
-            assert agfs._files == before
-            assert await manager.get_user("acme", user_id) is None
+            assert key is None
+    finally:
+        await manager.close()
+
+
+async def test_file_trusted_batch_rejects_oversized_account_before_any_write():
+    agfs = InMemoryAGFS()
+    manager = build_api_key_manager(
+        "root",
+        SimpleNamespace(agfs=agfs),
+        issue_user_keys=False,
+    )
+    await manager.load()
+    oversized_account_id = "a" * 256
+    before = dict(agfs._files)
+    try:
+        with pytest.raises(InvalidArgumentError, match="account_id.*255.*UTF-8 bytes"):
+            await manager.ensure_trusted_identities(
+                {
+                    "valid-account": {"alice"},
+                    oversized_account_id: {"bob"},
+                }
+            )
+
+        assert agfs._files == before
+        assert await manager.get_account("valid-account") is None
+        assert await manager.get_account(oversized_account_id) is None
     finally:
         await manager.close()
 

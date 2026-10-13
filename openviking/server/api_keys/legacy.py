@@ -52,7 +52,6 @@ ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
 GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
 _MAX_FILE_ACCOUNT_ID_BYTES = 255
-_MAX_FILE_USER_ID_BYTES = 255
 
 
 # Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
@@ -72,6 +71,14 @@ def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
     if not isinstance(seed, str) or seed == "":
         raise InvalidArgumentError("seed must not be empty")
     return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
+
+
+def _validate_file_account_id(account_id: str) -> None:
+    """Reject new account IDs that cannot be used as file path components."""
+    if len(account_id.encode("utf-8")) > _MAX_FILE_ACCOUNT_ID_BYTES:
+        raise InvalidArgumentError(
+            f"account_id must not exceed {_MAX_FILE_ACCOUNT_ID_BYTES} UTF-8 bytes."
+        )
 
 
 def _paginate(items: list, limit: int | None, page: int) -> list:
@@ -458,16 +465,9 @@ class FileStore(AccountStore):
         if error := validate_account_id(account_id):
             raise InvalidArgumentError(error)
         # Only new accounts: existing remote-backed identities remain readable.
-        if len(account_id.encode("utf-8")) > _MAX_FILE_ACCOUNT_ID_BYTES:
-            raise InvalidArgumentError(
-                f"account_id must not exceed {_MAX_FILE_ACCOUNT_ID_BYTES} UTF-8 bytes."
-            )
+        _validate_file_account_id(account_id)
         if error := validate_user_id(admin_user_id):
             raise InvalidArgumentError(error)
-        if len(admin_user_id.encode("utf-8")) > _MAX_FILE_USER_ID_BYTES:
-            raise InvalidArgumentError(
-                f"user_id must not exceed {_MAX_FILE_USER_ID_BYTES} UTF-8 bytes."
-            )
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
@@ -525,10 +525,6 @@ class FileStore(AccountStore):
         resolved_role = validate_account_user_role(role)
         if error := validate_user_id(user_id):
             raise InvalidArgumentError(error)
-        if len(user_id.encode("utf-8")) > _MAX_FILE_USER_ID_BYTES:
-            raise InvalidArgumentError(
-                f"user_id must not exceed {_MAX_FILE_USER_ID_BYTES} UTF-8 bytes."
-            )
         self._ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
@@ -644,6 +640,7 @@ class FileStore(AccountStore):
             error = validate_account_id(account_id)
             if error:
                 raise InvalidArgumentError(error)
+            _validate_file_account_id(account_id)
             for user_id in user_ids:
                 error = validate_user_id(user_id)
                 if error:
