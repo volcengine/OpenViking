@@ -24,6 +24,7 @@
  * PreCompact output schema accepts {} as a no-op.
  */
 
+import { healRetiredVersions } from "./cache-heal.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
@@ -31,6 +32,7 @@ import { clearEnded, loadState, saveState, withSessionLock } from "./session-sta
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
+healRetiredVersions();
 let cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact", cfg);
 let activePeerId = cfg.peerId || "";

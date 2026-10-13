@@ -20,6 +20,7 @@
  * SessionEnd output is ignored; we print `{}` for symmetry with the other hooks.
  */
 
+import { healRetiredVersions } from "./cache-heal.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
@@ -35,6 +36,7 @@ import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
+healRetiredVersions();
 let cfg = loadConfig();
 const { log, logError } = createLogger("session-end", cfg);
 let activePeerId = cfg.peerId || "";
