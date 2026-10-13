@@ -3,12 +3,13 @@
 /**
  * Client-side diagnostics for the config-driven hook hosts.
  *
- * Cursor, TRAE, TRAE CN and ZCode are installed by writing into the host's own
- * configuration files rather than through a plugin marketplace, so what can go
- * wrong is different from Claude Code's and Codex's: the host config may have
- * lost the OpenViking entries, the assembled runtime beside the integration may
- * be missing or stale, or the client may simply never have been installed. The
- * configuration and connection sections are the ones every harness shares.
+ * Cursor, TRAE, TRAE CN, VS Code and ZCode are installed by writing into the
+ * host's own configuration files rather than through a plugin marketplace, so
+ * what can go wrong is different from Claude Code's and Codex's: the host
+ * config may have lost the OpenViking entries, the assembled runtime beside
+ * the integration may be missing or stale, or the client may simply never
+ * have been installed. The configuration and connection sections are the ones
+ * every harness shares.
  *
  * Usage:
  *   node ov-memory-doctor.mjs [<client>] [--json] [--offline] [--timeout <ms>] [--no-color]
@@ -48,12 +49,17 @@ const REQUIRED_PLUGIN_FILES = ["plugin.json", "scripts/hook.mjs", "scripts/uri-g
  * Where each client keeps the two things the installer writes.
  *
  * ZCode reads both out of one config file; the rest keep hooks and MCP apart,
- * and TRAE's MCP path is the editor's platform-specific user directory. No
- * client names timeout budgets: each hook's requests share one deadline its
- * host adapter sets inside the hook's timeout, so no knob can make one outlive
- * it.
+ * and TRAE's MCP path is the editor's platform-specific user directory. VS
+ * Code is hooks-only — the installer does not manage an MCP file for it, so
+ * its entry names no mcp and the doctor skips that section. No client names
+ * timeout budgets: each hook's requests share one deadline its host adapter
+ * sets inside the hook's timeout, so no knob can make one outlive it.
+ *
+ * Every config-driven host in hosts/index.mjs must appear here except Kimi
+ * Code, whose managed bundle carries its own doctor invocation; the test in
+ * tests/doctor-clients.test.mjs holds the registry and this table together.
  */
-const CLIENTS = {
+export const CLIENTS = {
   cursor: {
     cliName: "cursor",
     launcherHint: "Cursor",
@@ -80,6 +86,12 @@ const CLIENTS = {
     mcp: () => (process.platform === "darwin"
       ? join(homedir(), "Library", "Application Support", "Trae CN", "User", "mcp.json")
       : join(homedir(), ".trae-cn", "mcp.json")),
+  },
+  vscode: {
+    cliName: "vscode",
+    launcherHint: "VS Code",
+    // VS Code's user-scope Local hook file ("available across Local sessions").
+    hooks: () => join(homedir(), ".copilot", "hooks", "openviking.json"),
   },
   zcode: {
     cliName: "zcode",
@@ -150,19 +162,23 @@ function checkInstall(report) {
     }
   }
 
-  const mcpPath = SPEC.mcp();
-  const mcp = inspectJsonFile(mcpPath);
-  const server = mcp.ok ? (mcp.data.mcpServers?.openviking || mcp.data.mcp?.servers?.openviking) : null;
-  if (!mcp.exists) report.warn(`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", `re-run the installer with --harness ${CLIENT}`);
-  else if (!mcp.ok) report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
-  else if (!server) report.fail(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, "", `re-run the installer with --harness ${CLIENT}`);
-  else {
-    report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
-    const proxy = Array.isArray(server.args) ? server.args.find((arg) => String(arg).endsWith("mcp-proxy.mjs")) : "";
-    if (proxy && !existsPath(proxy)) report.fail("the MCP server points at a proxy that is not on disk", proxy, "re-run the installer");
-    if (server.env?.OPENVIKING_HOOK_SOURCE && server.env.OPENVIKING_HOOK_SOURCE !== CLIENT) {
-      report.warn(`the MCP server is tagged for ${server.env.OPENVIKING_HOOK_SOURCE}`, `this copy serves ${CLIENT}; the proxy reads its configuration under the tagged client`, "re-run the installer");
+  if (typeof SPEC.mcp === "function") {
+    const mcpPath = SPEC.mcp();
+    const mcp = inspectJsonFile(mcpPath);
+    const server = mcp.ok ? (mcp.data.mcpServers?.openviking || mcp.data.mcp?.servers?.openviking) : null;
+    if (!mcp.exists) report.warn(`${homeShort(mcpPath)} not found`, "the MCP memory tools are not wired up", `re-run the installer with --harness ${CLIENT}`);
+    else if (!mcp.ok) report.fail(`${homeShort(mcpPath)} cannot be parsed`, mcp.error, "fix the JSON");
+    else if (!server) report.fail(`no 'openviking' MCP server in ${homeShort(mcpPath)}`, "", `re-run the installer with --harness ${CLIENT}`);
+    else {
+      report.ok(`MCP server 'openviking' in ${homeShort(mcpPath)}`);
+      const proxy = Array.isArray(server.args) ? server.args.find((arg) => String(arg).endsWith("mcp-proxy.mjs")) : "";
+      if (proxy && !existsPath(proxy)) report.fail("the MCP server points at a proxy that is not on disk", proxy, "re-run the installer");
+      if (server.env?.OPENVIKING_HOOK_SOURCE && server.env.OPENVIKING_HOOK_SOURCE !== CLIENT) {
+        report.warn(`the MCP server is tagged for ${server.env.OPENVIKING_HOOK_SOURCE}`, `this copy serves ${CLIENT}; the proxy reads its configuration under the tagged client`, "re-run the installer");
+      }
     }
+  } else {
+    report.info(`no MCP config to check — ${SPEC.launcherHint} is a hooks-only integration; add the OpenViking server to .vscode/mcp.json yourself if you want the MCP tools`);
   }
 
   for (const extra of SPEC.extras?.() || []) {
