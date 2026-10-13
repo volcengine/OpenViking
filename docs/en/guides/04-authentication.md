@@ -631,9 +631,13 @@ In `trusted` mode, ordinary tenant requests default to `USER` unless the account
 
 Anonymous `/health` requests require no credentials, allowing load balancers and monitoring tools to check server health. Supplying credentials or complete trusted identity headers triggers authentication.
 
+Once the auth plugin is initialized, dev-mode `/health` also returns the resolved `account_id`, `user_id`, and `role` without credentials. Explicit identity headers are honored; without them, the auth plugin supplies the default identity. Clients should synchronize the returned identity instead of inferring it from `auth_mode`. Web Studio preserves configured credentials when detecting a server. Its dev identity probe follows its data request headers, retaining the data credential and omitting identity headers, and applies the result only after the target connection is detected. Anonymous probes before auth initialization or in authenticated modes omit identity fields.
+
 ```bash
 curl http://localhost:1933/health
 ```
+
+Saving a Studio connection immediately invalidates its discovery and role probes, so stale responses cannot overwrite the request client, stored connection, or UI before React commits the new connection. Saving unchanged values also restarts discovery.
 
 ## Admin API Reference
 

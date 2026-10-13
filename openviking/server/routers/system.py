@@ -70,7 +70,10 @@ async def health_check(request: Request):
         user = request.headers.get("X-OpenViking-User")
         trusted_identity = effective_auth_mode == AuthMode.TRUSTED.value and account and user
 
-        if x_api_key or authorization or trusted_identity:
+        dev_identity = effective_auth_mode == AuthMode.DEV.value and getattr(
+            request.app.state, "auth_plugin", None
+        ) is not None
+        if dev_identity or x_api_key or authorization or trusted_identity:
             try:
                 from openviking.server.auth import resolve_identity
 

@@ -7,7 +7,7 @@ import { fetchAdminAccounts } from '#/lib/admin'
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
 import {
-  detectServerMode,
+  detectServerConnection,
   fetchServerHealth,
   normalizeBaseUrl,
 } from './use-server-mode'
@@ -158,7 +158,7 @@ function normalizeConnectionDraft(
     // slash here ran on every keystroke and fought the input: typing the "//"
     // of "http://" kept collapsing back to "http:". Trailing slashes are
     // stripped where the URL is actually used instead (ovClient.setOptions,
-    // detectServerMode, detectConnectionRole, and the admin client).
+    // detectServerConnection, detectConnectionRole, and the admin client).
     baseUrl: connection.baseUrl.trim(),
     userId: connection.userId.trim(),
   }
@@ -375,9 +375,12 @@ async function detectConnectionIdentity(
 export function synchronizeResolvedDataIdentity(
   connection: ConnectionDraft,
   identity: ConnectionIdentity,
+  serverMode?: ServerMode,
 ): ConnectionDraft | null {
   if (
-    (identity.role !== 'admin' && identity.role !== 'user') ||
+    (identity.role !== 'admin' &&
+      identity.role !== 'user' &&
+      !(serverMode === 'dev' && identity.role === 'root')) ||
     !identity.accountId ||
     !identity.userId ||
     (connection.accountId === identity.accountId &&
@@ -496,6 +499,8 @@ export function AppConnectionProvider({
 }) {
   const queryClient = useQueryClient()
   const authPromptSuppressedUntilRef = React.useRef(0)
+  const connectionVersionRef = React.useRef(0)
+  const [connectionVersion, setConnectionVersion] = React.useState(0)
   const navigate = useNavigate()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -534,22 +539,57 @@ export function AppConnectionProvider({
   }, [navigate, pathname])
 
   React.useEffect(() => {
+    if (connectionVersionRef.current !== connectionVersion) return
     applyConnection(connection, serverMode)
     persistConnection(connection)
-  }, [connection, serverMode])
+  }, [connection, connectionVersion, serverMode])
 
   React.useEffect(() => {
     let cancelled = false
 
     setServerMode('checking')
-    void detectServerMode(
-      connection.baseUrl,
-      createConnectionHealthHeaders(connection),
-    ).then((mode) => {
-      if (!cancelled) {
-        setServerMode(mode)
-      }
-    })
+    // Keep configured credentials for gateways that also protect /health.
+    const healthHeaders = createConnectionHealthHeaders(connection)
+    void detectServerConnection(connection.baseUrl, healthHeaders).then(
+      async (probe) => {
+        const isCancelled = () =>
+          cancelled || connectionVersionRef.current !== connectionVersion
+        if (isCancelled()) return
+        if (probe.mode === 'dev') {
+          const dataHeaders = createConnectionHealthHeaders(connection, 'data')
+          // Match dev data requests: retain their credential, omit asserted IDs.
+          delete dataHeaders['X-OpenViking-Account']
+          delete dataHeaders['X-OpenViking-User']
+          if (JSON.stringify(dataHeaders) !== JSON.stringify(healthHeaders)) {
+            probe = await detectServerConnection(
+              connection.baseUrl,
+              dataHeaders,
+            )
+          }
+        }
+        const { mode, data } = probe
+        if (!isCancelled()) {
+          if (mode === 'dev') {
+            const resolved = synchronizeResolvedDataIdentity(
+              connection,
+              {
+                accountId:
+                  typeof data.account_id === 'string' ? data.account_id : '',
+                userId: typeof data.user_id === 'string' ? data.user_id : '',
+                role: isConnectionRole(data.role) ? data.role : 'unknown',
+              },
+              mode,
+            )
+            if (resolved) {
+              const next = synchronizeConnectionRuntime(resolved, mode)
+              queryClient.clear()
+              setConnection(next)
+            }
+          }
+          setServerMode(mode)
+        }
+      },
+    )
 
     return () => {
       cancelled = true
@@ -560,11 +600,14 @@ export function AppConnectionProvider({
     connection.apiKey,
     connection.baseUrl,
     connection.userId,
+    connectionVersion,
+    queryClient,
   ])
 
   React.useEffect(() => {
     let cancelled = false
-    const isCancelled = () => cancelled
+    const isCancelled = () =>
+      cancelled || connectionVersionRef.current !== connectionVersion
     const apiKey = connection.adminApiKey || connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
       apiKey,
@@ -649,7 +692,7 @@ export function AppConnectionProvider({
         setConnectionRoleLoading(false)
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!isCancelled()) {
           setConnectionRole('unknown')
           setConnectionRoleLoading(false)
         }
@@ -664,6 +707,7 @@ export function AppConnectionProvider({
     connection.apiKey,
     connection.baseUrl,
     connection.userId,
+    connectionVersion,
     queryClient,
     serverMode,
   ])
@@ -689,11 +733,20 @@ export function AppConnectionProvider({
 
   const value = React.useMemo<AppConnectionContextValue>(() => {
     const commitConnection = (next: ConnectionDraft) => {
+      // Retire old callbacks synchronously, before React flushes effect cleanup.
+      connectionVersionRef.current += 1
+      synchronizedRoleProbeRef.current = null
       authPromptSuppressedUntilRef.current =
         Date.now() + AUTH_PROMPT_SUPPRESSION_MS
-      const normalized = synchronizeConnectionRuntime(next, serverMode)
+      const nextMode =
+        normalizeBaseUrl(next.baseUrl) === normalizeBaseUrl(connection.baseUrl)
+          ? serverMode
+          : 'checking'
+      const normalized = synchronizeConnectionRuntime(next, nextMode)
       queryClient.clear()
       setConnection(normalized)
+      setServerMode(nextMode)
+      setConnectionVersion(connectionVersionRef.current)
     }
 
     return {

@@ -23,6 +23,35 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
+@pytest.mark.parametrize(
+    "headers,expected_identity",
+    [
+        ({}, ("default", "default")),
+        (
+            {"X-OpenViking-Account": "local-team", "X-OpenViking-User": "alice"},
+            ("local-team", "alice"),
+        ),
+    ],
+)
+async def test_health_dev_resolves_identity_without_credentials(headers, expected_identity):
+    service = SimpleNamespace()
+    app = create_app(
+        config=ServerConfig(auth_mode="dev", host="127.0.0.1"),
+        service=service,
+    )
+    await _initialize_auth_plugin(app, service, app.state.config)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["auth_mode"] == "dev"
+    assert (body["account_id"], body["user_id"]) == expected_identity
+    assert body["role"] == "root"
+
+
 async def test_health_endpoint_resolves_identity_with_api_key(caplog, service):
     """When an API key is provided, /health should return identity information."""
     app = create_app(
@@ -236,6 +265,7 @@ async def test_health_responds_during_initialization(monkeypatch):
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
+        assert not {"account_id", "user_id", "role"}.intersection(body)
 
 
 async def test_ready_returns_503_before_initialized(monkeypatch):
