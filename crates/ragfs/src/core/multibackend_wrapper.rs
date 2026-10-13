@@ -551,9 +551,20 @@ impl FileSystem for MultiWriteWrappedFS {
                 }
                 event
             });
-        self.inner.primary.backend.remove_all(path).await?;
-        self.submit_event(event);
-        Ok(())
+        let is_delete_account = event
+            .as_ref()
+            .is_some_and(|event| matches!(event.kind, PendingEventKind::DeleteAccount));
+        match self.inner.primary.backend.remove_all(path).await {
+            Ok(()) => {
+                self.submit_event(event);
+                Ok(())
+            }
+            Err(error @ Error::NotFound(_)) if is_delete_account => {
+                self.submit_event(event);
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Read bytes directly from the primary backend.

@@ -148,6 +148,7 @@ fn decode_record(reader: &mut Reader<'_>) -> Result<SegmentRecord> {
         2 => SegmentEventType::Remove,
         3 => SegmentEventType::RemoveTree,
         4 => SegmentEventType::MoveTree,
+        5 => SegmentEventType::DeleteScope,
         _ => return Err(serialization("unknown segment event type")),
     };
     let flags = reader.read_u8()?;

@@ -71,6 +71,7 @@ pub struct DirectoryEvent {
 pub enum DirectoryOperation {
     RemoveTree,
     MoveTree,
+    DeleteScope,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MarkerPosition {
@@ -115,6 +116,7 @@ pub enum SegmentEventType {
     Remove = 2,
     RemoveTree = 3,
     MoveTree = 4,
+    DeleteScope = 5,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SegmentRecord {
@@ -278,7 +280,7 @@ impl DirectoryEvent {
     pub fn validate(&self) -> Result<()> {
         validate_path(&self.source_path)?;
         match self.operation {
-            DirectoryOperation::RemoveTree => ensure!(
+            DirectoryOperation::RemoveTree | DirectoryOperation::DeleteScope => ensure!(
                 self.destination_path.is_none(),
                 "remove tree has a destination"
             ),
@@ -349,7 +351,7 @@ impl SegmentRecord {
                     Error::Serialization("move marker requires a destination".into())
                 })?)?;
             }
-            SegmentEventType::RemoveTree => {
+            SegmentEventType::RemoveTree | SegmentEventType::DeleteScope => {
                 ensure!(self.op_id.is_some(), "remove marker requires an op_id");
                 ensure!(
                     self.destination_path.is_none(),

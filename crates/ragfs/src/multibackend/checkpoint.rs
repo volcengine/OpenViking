@@ -15,7 +15,10 @@ use crate::core::filesystem::FileSystem;
 use crate::core::internal_names::is_multiwrite_internal_path;
 use crate::multibackend::catch_up::{CheckpointConsumer, CheckpointReadResult, CheckpointSnapshot};
 use crate::multibackend::codec::{decode_checkpoint_chunk, encode_checkpoint_chunk, sha256_hex};
-use crate::multibackend::constants::{CHECKPOINT_CHUNK_FILE_EXTENSION, CHECKPOINT_CHUNK_FILE_PREFIX, CHECKPOINT_DIR_PREFIX,CHECKPOINT_DIR_TIME_FORMAT, MANIFEST_FILE, MAX_CHECKPOINT_NODES, MULTIWRITE_MOUNT_PREFIX,};
+use crate::multibackend::constants::{
+    CHECKPOINT_CHUNK_FILE_EXTENSION, CHECKPOINT_CHUNK_FILE_PREFIX, CHECKPOINT_DIR_PREFIX,
+    CHECKPOINT_DIR_TIME_FORMAT, MANIFEST_FILE, MAX_CHECKPOINT_NODES, MULTIWRITE_MOUNT_PREFIX,
+};
 use crate::multibackend::gc::MetadataGc;
 use crate::multibackend::meta::{MetadataStore, MultiWriteWorker};
 use crate::multibackend::model::{
@@ -82,6 +85,9 @@ impl CheckpointWorker {
         let now = now_ns()?;
         let interval_ns = u64::try_from(interval.as_nanos()).unwrap_or(u64::MAX);
         for account in self.store.initialized_accounts().await? {
+            if account == crate::multibackend::constants::SYSTEM_DIR {
+                continue;
+            }
             let path = self.store.paths().account_manifest(&account)?.0;
             let manifest: PartitionsManifest = match self.store.read_json(&path).await {
                 Ok(manifest) => manifest,
@@ -223,7 +229,10 @@ impl CheckpointBuilder {
             .pathlock_manager()
             .acquire_exact(
                 &pointer_path,
-                self.store.pathlock_manager().default_lock_timeout().max(Duration::from_secs(5)),
+                self.store
+                    .pathlock_manager()
+                    .default_lock_timeout()
+                    .max(Duration::from_secs(5)),
                 None,
             )
             .await?;
@@ -275,7 +284,10 @@ impl CheckpointBuilder {
             .pathlock_manager()
             .acquire_exact(
                 &candidate_path,
-                self.store.pathlock_manager().default_lock_timeout().max(Duration::from_secs(5)),
+                self.store
+                    .pathlock_manager()
+                    .default_lock_timeout()
+                    .max(Duration::from_secs(5)),
                 None,
             )
             .await?;
@@ -341,7 +353,10 @@ impl CheckpointBuilder {
                 .pathlock_manager()
                 .acquire_exact(
                     &pointer_path,
-                    self.store.pathlock_manager().default_lock_timeout().max(Duration::from_secs(5)),
+                    self.store
+                        .pathlock_manager()
+                        .default_lock_timeout()
+                        .max(Duration::from_secs(5)),
                     None,
                 )
                 .await?;
@@ -500,6 +515,7 @@ impl CheckpointBuilder {
                         }
                     }
                 }
+                SegmentEventType::DeleteScope => {}
             }
         }
         Ok(delta)
@@ -850,7 +866,10 @@ impl CheckpointConsumer for CheckpointReader {
             .pathlock_manager()
             .acquire_exact(
                 &pointer_path,
-                self.store.pathlock_manager().default_lock_timeout().max(Duration::from_secs(5)),
+                self.store
+                    .pathlock_manager()
+                    .default_lock_timeout()
+                    .max(Duration::from_secs(5)),
                 None,
             )
             .await?;

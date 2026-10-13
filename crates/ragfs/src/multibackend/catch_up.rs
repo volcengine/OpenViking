@@ -402,8 +402,12 @@ impl CatchUpWorker {
         tail: u64,
         records: Vec<SegmentRecord>,
     ) -> CatchUpResult<u64> {
-        let (mut ordinary, mut delayed_exact, mut prefixes) =
-            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let (mut ordinary, mut delayed_exact, mut prefixes, mut scope_deletes) = (
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
         for record in records {
             match record.event_type {
                 SegmentEventType::Write | SegmentEventType::Remove => {
@@ -444,9 +448,35 @@ impl CatchUpWorker {
                         insert_earliest(&mut prefixes, path, record.seq);
                     }
                 }
+                SegmentEventType::DeleteScope => {
+                    if scope.account_id != SYSTEM_DIR {
+                        return Err(Error::invalid_operation(
+                            "DeleteScope is valid only in the system scope",
+                        )
+                        .into());
+                    }
+                    let (account_id, path) =
+                        delete_scope_target(self.store.as_ref(), &record.path)?;
+                    insert_earliest_scope_delete(&mut scope_deletes, path, account_id, record.seq);
+                }
             }
         }
         let mut failed_from = None;
+        for (path, (account_id, seq)) in scope_deletes {
+            match self
+                .remove_scope_with_retry(backup, lease, &account_id, &path)
+                .await
+            {
+                Ok(()) => {}
+                Err(CatchUpFailure::Cancelled) => return Err(CatchUpFailure::Cancelled),
+                Err(CatchUpFailure::Failed(_)) if !lease.is_valid() => {
+                    return Err(Error::internal("catch-up lease was not refreshed").into());
+                }
+                Err(CatchUpFailure::Failed(_)) => {
+                    failed_from = Some(failed_from.map_or(seq, |failed: u64| failed.min(seq)));
+                }
+            }
+        }
         for (paths, prefix) in [(ordinary, false), (delayed_exact, false), (prefixes, true)] {
             for (path, seq) in paths {
                 match self
@@ -465,6 +495,45 @@ impl CatchUpWorker {
             }
         }
         Ok(failed_from.map_or(tail, |seq| seq.saturating_sub(1).max(synced_seq)))
+    }
+
+    /// Remove one backup scope root with the same bounded retry policy as path sync.
+    async fn remove_scope_with_retry(
+        &self,
+        backup: &LeaseGuardedFileSystem,
+        lease: &CatchUpLease,
+        account_id: &str,
+        path: &str,
+    ) -> CatchUpResult<()> {
+        let mut last_error = None;
+        for attempt in 0..=3 {
+            match self
+                .with_context(account_id, remove_if_present(backup, path))
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+            if !lease.is_valid() || attempt == 3 {
+                break;
+            }
+            let jitter = rand::thread_rng().gen_range(0..=50);
+            let delay_ms = (1u64 << attempt) * 1_000 + jitter;
+            warn!(
+                backend = %self.backend_id,
+                account = %account_id,
+                path = %path,
+                retry = attempt + 1,
+                delay_ms,
+                error = %last_error.as_ref().unwrap(),
+                "multi-write catch-up scope-delete retry"
+            );
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+                _ = self.cancelled() => return Err(CatchUpFailure::Cancelled),
+            }
+        }
+        Err(CatchUpFailure::Failed(last_error.unwrap()))
     }
 
     /// Refresh the lease immediately before a monotonic progress update.
@@ -646,6 +715,31 @@ fn insert_earliest(paths: &mut BTreeMap<String, u64>, path: String, seq: u64) {
         .entry(path)
         .and_modify(|current| *current = (*current).min(seq))
         .or_insert(seq);
+}
+
+/// Insert one scope delete while retaining its earliest dependent sequence.
+fn insert_earliest_scope_delete(
+    paths: &mut BTreeMap<String, (String, u64)>,
+    path: String,
+    account_id: String,
+    seq: u64,
+) {
+    paths
+        .entry(path)
+        .and_modify(|(_, current)| *current = (*current).min(seq))
+        .or_insert((account_id, seq));
+}
+
+/// Convert a logical `/local/{scope}` deletion target into backup path and context.
+fn delete_scope_target(store: &MetadataStore, logical_path: &str) -> Result<(String, String)> {
+    let path = store.paths().raw_backend_path(logical_path)?;
+    let account_id = path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Error::invalid_path(format!("invalid DeleteScope path: {logical_path}")))?;
+    Ok((account_id.to_string(), path))
 }
 
 struct LeaseGuardedFileSystem {

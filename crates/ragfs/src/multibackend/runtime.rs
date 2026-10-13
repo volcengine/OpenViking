@@ -321,17 +321,13 @@ impl FlushWorker {
     /// Flush one batch while recording and dropping failed events.
     async fn flush_batch(&mut self, batch: Vec<PendingEvent>) {
         let mut failed = false;
-        let deleted = batch
-            .iter()
-            .filter(|event| matches!(event.kind, PendingEventKind::DeleteAccount))
-            .map(|event| event.account_id.clone())
-            .collect::<HashSet<_>>();
         let mut accounts = HashMap::<String, Vec<PendingEvent>>::new();
         for event in batch {
             if matches!(event.kind, PendingEventKind::DeleteAccount) {
-                continue;
-            }
-            if deleted.contains(&event.account_id) {
+                accounts
+                    .entry(SYSTEM_DIR.to_string())
+                    .or_default()
+                    .push(Self::delete_scope_event(event));
                 continue;
             }
             accounts
@@ -408,7 +404,9 @@ impl FlushWorker {
                         }
                     }
                     PendingEventKind::Data(
-                        SegmentEventType::RemoveTree | SegmentEventType::MoveTree,
+                        SegmentEventType::RemoveTree
+                        | SegmentEventType::MoveTree
+                        | SegmentEventType::DeleteScope,
                     ) => {
                         if let Err(error) = self.flush_directory_event(&account, &event).await {
                             failed = true;
@@ -441,6 +439,14 @@ impl FlushWorker {
         if failed {
             self.store.record_worker_error(MultiWriteWorker::Flush);
         }
+    }
+
+    /// Convert one account-root deletion into a durable system-scope marker.
+    fn delete_scope_event(mut event: PendingEvent) -> PendingEvent {
+        event.account_id = SYSTEM_DIR.to_string();
+        event.kind = PendingEventKind::Data(SegmentEventType::DeleteScope);
+        event.route_hint = None;
+        event
     }
 
     /// Check account membership through the user registry when the primary view is available.
@@ -549,6 +555,9 @@ impl FlushWorker {
         let operation = match event.kind {
             PendingEventKind::Data(SegmentEventType::RemoveTree) => DirectoryOperation::RemoveTree,
             PendingEventKind::Data(SegmentEventType::MoveTree) => DirectoryOperation::MoveTree,
+            PendingEventKind::Data(SegmentEventType::DeleteScope) => {
+                DirectoryOperation::DeleteScope
+            }
             _ => {
                 return Err(Error::invalid_operation(
                     "directory notification requires a tree event",
@@ -634,6 +643,7 @@ impl FlushWorker {
                 kind: PendingEventKind::Data(match persisted.operation {
                     DirectoryOperation::RemoveTree => SegmentEventType::RemoveTree,
                     DirectoryOperation::MoveTree => SegmentEventType::MoveTree,
+                    DirectoryOperation::DeleteScope => SegmentEventType::DeleteScope,
                 }),
                 path: persisted.source_path.clone(),
                 destination_path: persisted.destination_path.clone(),

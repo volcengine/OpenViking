@@ -301,7 +301,9 @@ impl FilesystemProvider {
         };
         let marker = matches!(
             event_type,
-            SegmentEventType::RemoveTree | SegmentEventType::MoveTree
+            SegmentEventType::RemoveTree
+                | SegmentEventType::MoveTree
+                | SegmentEventType::DeleteScope
         );
         let record = SegmentRecord {
             seq,
@@ -447,7 +449,11 @@ impl FilesystemProvider {
             ));
         }
         match event.kind {
-            PendingEventKind::Data(SegmentEventType::RemoveTree | SegmentEventType::MoveTree) => {}
+            PendingEventKind::Data(
+                SegmentEventType::RemoveTree
+                | SegmentEventType::MoveTree
+                | SegmentEventType::DeleteScope,
+            ) => {}
             _ => {
                 return Err(Error::invalid_operation(
                     "append_marker accepts only directory markers",
@@ -460,9 +466,14 @@ impl FilesystemProvider {
                 event.path
             )));
         }
-        self.store
-            .paths()
-            .backend_path(&scope.account_id, &event.path)?;
+        if !matches!(
+            event.kind,
+            PendingEventKind::Data(SegmentEventType::DeleteScope)
+        ) {
+            self.store
+                .paths()
+                .backend_path(&scope.account_id, &event.path)?;
+        }
         if let Some(destination) = &event.destination_path {
             if is_multiwrite_internal_path(destination) {
                 return Err(Error::invalid_path(format!(

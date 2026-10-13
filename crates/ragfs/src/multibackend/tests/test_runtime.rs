@@ -36,9 +36,9 @@ async fn active_accounts_exclude_completed_deletions() {
     );
 }
 
-/// Verifies delete events do not override the active account registry.
+/// Verifies delete events are persisted in the system scope and remove backup data.
 #[tokio::test]
-async fn delete_account_event_keeps_active_backup_account() {
+async fn delete_account_event_removes_backup_scope() {
     let primary: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
     let backup: Arc<dyn FileSystem> = Arc::new(MemFileSystem::new());
     primary
@@ -90,5 +90,9 @@ async fn delete_account_event_keeps_active_backup_account() {
         .await;
     catch_up.run_once().await.unwrap();
 
-    assert!(backup.stat("/account").await.unwrap().is_dir);
+    assert!(matches!(
+        backup.stat("/account").await.unwrap_err(),
+        Error::NotFound(_)
+    ));
+}
 }
