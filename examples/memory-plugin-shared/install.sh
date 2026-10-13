@@ -62,6 +62,7 @@
 #              installer added to ~/.trae/cli/hooks.json and ~/.trae/traecli.toml
 #   cursor     ~/.cursor/hooks.json, ~/.cursor/mcp.json, ~/.cursor/rules, ~/.cursor/skills
 #   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
+#   vscode     ~/.copilot/hooks/openviking.json (VS Code's user-scope Local hooks)
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
@@ -86,7 +87,7 @@
 # neither a published build nor part of a checkout downloads and runs the
 # published copy of this script.
 #
-# Uninstall: Cursor, TRAE, TRAE CN, ZCode and Kimi Code with
+# Uninstall: Cursor, TRAE, TRAE CN, ZCode, Kimi Code and VS Code with
 #   curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness <list>
 # The other harnesses with the commands the install prints at the end, such as
 #   claude plugin uninstall openviking-memory@openviking && claude plugin marketplace remove openviking
@@ -224,7 +225,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, vscode, zcode, kimicode, opencode, pi, dsh, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
@@ -241,9 +242,10 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations,
-                     plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
-                     pi and dsh are removed with the commands the install prints at the end.
+  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code and VS Code
+                     integrations, plus any legacy TraeCode CLI hook config. Claude Code,
+                     Codex, OpenCode, pi and dsh are removed with the commands the install
+                     prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
 
 Environment:
@@ -498,13 +500,14 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_VSCODE=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
   { [ -d "/Applications/Trae.app" ] || [ -d "/Applications/TRAE.app" ] || [ -d "$HOME/.trae" ]; } && HAVE_TRAE=1
   { [ -d "/Applications/Trae CN.app" ] || [ -d "/Applications/TRAE SOLO CN.app" ] || [ -d "$HOME/.trae-cn" ]; } && HAVE_TRAE_CN=1
   { command -v trae-cli >/dev/null 2>&1 || command -v traecli >/dev/null 2>&1 || command -v traex >/dev/null 2>&1; } && HAVE_TRAE_CLI=1
+  { command -v code >/dev/null 2>&1 || [ -d "/Applications/Visual Studio Code.app" ] || [ -d "$HOME/.vscode" ] || [ -d "$HOME/.config/Code" ]; } && HAVE_VSCODE=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
   command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
@@ -649,6 +652,7 @@ SEL_DSH=0
 SEL_CURSOR_APP=0
 SEL_TRAE=0
 SEL_TRAE_CN=0
+SEL_VSCODE=0
 SEL_ZCODE=0
 SEL_CLI=0
 TUI_CURSOR=0; TUI_LINES=0
@@ -664,7 +668,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 9 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 10 ))
 }
 
 tui_total_count() {
@@ -698,6 +702,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'trae|trae'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'trae-cn|trae-cn'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'vscode|vscode'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'zcode|zcode'; return 0; fi
   i=$((i + 1))
@@ -735,6 +741,7 @@ tui_bin_label() {
     cursor:*) printf 'Cursor' ;;
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
+    vscode:*) printf 'VS Code' ;;
     zcode:*) printf 'ZCode' ;;
     kimicode:*) printf 'Kimi Code' ;;
     cli:*) printf 'CLI (ov)' ;;
@@ -761,6 +768,8 @@ tui_bin_selected() {
     [ "$SEL_TRAE" -eq 1 ]
   elif [ "$kind" = "trae-cn" ]; then
     [ "$SEL_TRAE_CN" -eq 1 ]
+  elif [ "$kind" = "vscode" ]; then
+    [ "$SEL_VSCODE" -eq 1 ]
   elif [ "$kind" = "zcode" ]; then
     [ "$SEL_ZCODE" -eq 1 ]
   elif [ "$kind" = "cli" ]; then
@@ -775,6 +784,7 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     cursor) [ "$HAVE_CURSOR" -eq 1 ] ;;
     trae) [ "$HAVE_TRAE" -eq 1 ] ;;
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
+    vscode) [ "$HAVE_VSCODE" -eq 1 ] ;;
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
     kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
@@ -790,6 +800,7 @@ tui_set_all_bins() {
   SEL_CURSOR_APP=1
   SEL_TRAE=1
   SEL_TRAE_CN=1
+  SEL_VSCODE=1
   SEL_ZCODE=1
   SEL_KIMICODE=1
   SEL_CLI=1
@@ -816,6 +827,8 @@ tui_toggle_bin() {
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
   elif [ "$kind" = "trae-cn" ]; then
     SEL_TRAE_CN=$((1 - SEL_TRAE_CN)); return 0
+  elif [ "$kind" = "vscode" ]; then
+    SEL_VSCODE=$((1 - SEL_VSCODE)); return 0
   elif [ "$kind" = "zcode" ]; then
     SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
   elif [ "$kind" = "cli" ]; then
@@ -900,6 +913,7 @@ tui_reset_bin_selection() {
   SEL_CURSOR_APP=0
   SEL_TRAE=0
   SEL_TRAE_CN=0
+  SEL_VSCODE=0
   SEL_ZCODE=0
   SEL_KIMICODE=0
   SEL_CLI=$((1 - UNINSTALL))
@@ -927,6 +941,7 @@ EOF
   if [ "$HAVE_CURSOR" -eq 1 ]; then SEL_CURSOR_APP=1; any=1; fi
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
+  if [ "$HAVE_VSCODE" -eq 1 ]; then SEL_VSCODE=1; any=1; fi
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
   if [ "$HAVE_KIMICODE" -eq 1 ]; then SEL_KIMICODE=1; any=1; fi
   if [ "$any" -ne 1 ]; then
@@ -1016,7 +1031,7 @@ tui_add_compatible_cli() {
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
-    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
+    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_VSCODE" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
     || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
 
@@ -1032,6 +1047,7 @@ tui_finish_selection() {
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
+  [ "$SEL_VSCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}vscode"
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
   [ "$SEL_KIMICODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}kimicode"
   [ "$SEL_CLI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cli"
@@ -1103,6 +1119,7 @@ select_harnesses() {
   [ "$HAVE_CURSOR" -eq 1 ] && detected="${detected:+$detected,}cursor"
   [ "$HAVE_TRAE" -eq 1 ] && detected="${detected:+$detected,}trae"
   [ "$HAVE_TRAE_CN" -eq 1 ] && detected="${detected:+$detected,}trae-cn"
+  [ "$HAVE_VSCODE" -eq 1 ] && detected="${detected:+$detected,}vscode"
   [ "$HAVE_OPENCODE" -eq 1 ] && detected="${detected:+$detected,}opencode"
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
   [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
@@ -1257,7 +1274,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh|cli) ;;
+      claude|codex|cursor|trae|trae-cn|vscode|opencode|pi|zcode|kimicode|dsh|cli) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1299,7 +1316,7 @@ EOF
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness vscode || contains_harness zcode || contains_harness kimicode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -2309,7 +2326,7 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode"
+AGENT_HOOK_HOSTS="cursor trae vscode zcode kimicode"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
@@ -2439,6 +2456,11 @@ uninstall_agent_integrations() {
     agent_remove_json_configs "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)"
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
     info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
+  fi
+  if contains_harness vscode; then
+    agent_remove_json_configs "$(vscode_hooks_path)"
+    rm -rf "$OV_HOME/agent-integrations/vscode"
+    info "$(t 'Removed the VS Code OpenViking hooks config.' '已移除 VS Code OpenViking hooks 配置。')"
   fi
   if contains_harness trae-cli; then
     local trae_home="${TRAE_HOME:-$HOME/.trae}"
@@ -2691,6 +2713,26 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
   info "$client_id MCP: $mcp_path"
 }
 
+vscode_hooks_path() {
+  # VS Code's user-scope Local hook location (the docs' "Available across
+  # Local sessions" entry); a workspace install would only reach one
+  # .github/hooks directory.
+  printf '%s' "$HOME/.copilot/hooks/openviking.json"
+}
+
+install_vscode() {
+  step_heading "$(t 'VS Code integration' 'VS Code 集成')"
+  local root hooks_path
+  ensure_bundle
+  root="$(assemble_agent_integration vscode vscode)" || return 1
+  hooks_path="$(vscode_hooks_path)"
+  # Hooks only: VS Code takes MCP servers from a .vscode/mcp.json or the
+  # user-scope mcp.json, which this installer does not manage.
+  agent_write_json_configs vscode "$hooks_path" "" "$root" vscode "$NODE_BIN"
+  info "$(t 'VS Code Local hooks installed:' 'VS Code Local hooks 已安装：') $hooks_path"
+  info "$(t 'Hooks run when the chat.useHooks setting is on (default). MCP is not configured; add the OpenViking server to .vscode/mcp.json yourself if you want it.' 'Hooks 在 chat.useHooks 设置开启（默认）时运行。MCP 未配置；如需使用，请自行将 OpenViking 服务加入 .vscode/mcp.json。')"
+}
+
 # ---------------------------------------------------------------------------
 # OpenCode
 # ---------------------------------------------------------------------------
@@ -2832,6 +2874,7 @@ validate_hook_host() { # validate_hook_host <client>
         "$HOME/.cursor/skills/ov-experience-memory/SKILL.md"
       ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
+    vscode) hooks="$(vscode_hooks_path)"; mcp=""; event=SessionStart ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
   esac
   for file in "$@"; do
@@ -2840,7 +2883,7 @@ validate_hook_host() { # validate_hook_host <client>
   grep -q 'scripts/hook.mjs' "$hooks" 2>/dev/null \
     && grep -q 'scripts/uri-guard.mjs' "$hooks" 2>/dev/null \
     && grep -q 'OPENVIKING_INTEGRATION_ID' "$hooks" 2>/dev/null \
-    && grep -q 'mcp-proxy.mjs' "$mcp" 2>/dev/null || complete=0
+    && { [ -z "$mcp" ] || grep -q 'mcp-proxy.mjs' "$mcp" 2>/dev/null; } || complete=0
   if [ "$complete" -eq 0 ]; then
     warn "$client: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
     return 1
@@ -2896,7 +2939,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor trae trae-cn vscode zcode; do
     contains_harness "$client" || continue
     validate_hook_host "$client" || { ok=0; agent_fatal=1; }
   done
@@ -3314,7 +3357,7 @@ EOF
 $CODEX_BINS
 EOF
   fi
-  for client in cursor trae trae-cn zcode; do
+  for client in cursor trae trae-cn vscode zcode; do
     contains_harness "$client" || continue
     label="$(tui_bin_label "$client" "$client")"
     doctor="node $(short_path "$OV_HOME/agent-integrations/$client/scripts/ov-memory-doctor.mjs")"
@@ -3405,6 +3448,7 @@ fi
 if contains_harness cursor; then install_cursor; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
+if contains_harness vscode; then install_vscode; fi
 if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
 if contains_harness opencode; then install_opencode; fi

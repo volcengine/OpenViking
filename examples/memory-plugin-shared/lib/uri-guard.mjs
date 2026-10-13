@@ -123,6 +123,50 @@ export const DEFAULT_TOOL_HINTS = {
     tool: "OpenViking MCP read",
     example: (uri) => `read(uris="${uri}")`,
   },
+  // VS Code names its built-in tools differently from the Claude-family hosts
+  // and documents no stable table (edits moved from insert_edit_into_file to
+  // apply_patch between releases), so the aliases come from observed sessions
+  // and err toward the redirection. A tool that ships under a new name simply
+  // falls back to being unguarded, as any unknown tool does.
+  read_file: {
+    tool: "OpenViking MCP read",
+    example: (uri) => `read(uris="${uri}")`,
+  },
+  list_dir: {
+    tool: "OpenViking MCP list",
+    example: (uri) => `list(uri="${uri}")`,
+  },
+  file_search: {
+    tool: "OpenViking MCP glob or list",
+    example: (uri, input = {}) => (
+      `glob(pattern="${String(input.pattern ?? "**/*").replaceAll('"', '\\"')}", uri="${uri}")`
+    ),
+  },
+  grep_search: {
+    tool: "OpenViking MCP grep or search",
+    example: (uri, input = {}) => (
+      `grep(uri="${uri}", pattern="${String(input.pattern ?? "").replaceAll('"', '\\"')}")`
+    ),
+  },
+  semantic_search: {
+    tool: "OpenViking MCP search",
+    example: (uri) => `search(queries=["${uri.replaceAll('"', '\\"')}"])`,
+  },
+  insert_edit_into_file: {
+    tool: (uri) => (isSkillUri(uri) ? "OpenViking MCP add_skill" : "OpenViking MCP edit"),
+    example: (uri) => (
+      isSkillUri(uri)
+        ? addSkillExample(uri, { edited: true })
+        : `edit(uri="${uri}", old_string="...", new_string="...")`
+    ),
+  },
+  // Not apply_patch: the Codex CLI edits by that name and its guard pins
+  // silence for it — a patch body that mentions a viking:// URI is content,
+  // not a path. The alias lives only where the name means VS Code's editor.
+  run_in_terminal: {
+    tool: "OpenViking MCP read or search",
+    example: (uri) => `read(uris="${uri}")`,
+  },
   glob: {
     tool: "OpenViking MCP glob or list",
     example: (uri, input = {}) => (
@@ -166,12 +210,12 @@ export const DEFAULT_TOOL_HINTS = {
 // Tools whose argument is a command line rather than a location. A viking:// URI
 // in one is data (an `ov` argument, an HTTP payload, a grep pattern) as often as
 // a path the model hoped to open, so the command runs and the model gets a notice.
-const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand"]);
+const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand", "run_in_terminal"]);
 
 // `pattern` is where glob looks but what grep looks for: a grep for the text
 // "viking://" in a local tree is not a path. The generic sweep still reaches
 // glob's pattern.
-const TEXT_ARGS_BY_TOOL = { grep: ["pattern"] };
+const TEXT_ARGS_BY_TOOL = { grep: ["pattern"], grep_search: ["pattern"] };
 
 function resolveGuardedUri(toolName, input, { hints = DEFAULT_TOOL_HINTS } = {}) {
   const name = normalizeToolName(toolName);
