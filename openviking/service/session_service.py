@@ -7,6 +7,8 @@ Provides session management operations: session, sessions, add_message, commit, 
 """
 
 import asyncio
+import json
+import re
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -45,6 +47,8 @@ from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionCon
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
+
+_SHORTENED_COMPONENT_RE = re.compile(r".+_[0-9a-f]{8}\Z")
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
@@ -333,9 +337,15 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions_by_id[name] = {
-                    "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
+                session_id = await self._logical_session_id_from_entry(
+                    session_base_uri,
+                    name,
+                    entry,
+                    ctx,
+                )
+                sessions_by_id[session_id] = {
+                    "session_id": session_id,
+                    "uri": f"{session_base_uri}/{session_id}",
                     "is_dir": entry.get("isDir", False),
                     "mod_time": entry.get("modTime", ""),
                 }
@@ -343,6 +353,42 @@ class SessionService:
             logger.debug("Failed to list sessions", exc_info=True)
 
         return list(sessions_by_id.values())
+
+    async def _logical_session_id_from_entry(
+        self,
+        session_base_uri: str,
+        physical_name: str,
+        entry: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> str:
+        """Recover a shortened session component from its authoritative metadata."""
+        if not entry.get("isDir", False) or not _SHORTENED_COMPONENT_RE.fullmatch(physical_name):
+            return physical_name
+
+        meta_uri = f"{session_base_uri}/{physical_name}/.meta.json"
+        try:
+            raw_meta = await self._viking_fs.read_file(meta_uri, ctx=ctx)
+            meta = json.loads(raw_meta)
+            logical_name = meta.get("session_id") if isinstance(meta, dict) else None
+            if not isinstance(logical_name, str) or not logical_name.strip():
+                return physical_name
+            logical_name = logical_name.strip()
+
+            session_base_path = self._viking_fs._uri_to_path(session_base_uri, ctx=ctx)
+            logical_path = self._viking_fs._uri_to_path(
+                canonical_session_uri(ctx, logical_name),
+                ctx=ctx,
+            )
+            if logical_path != f"{session_base_path}/{physical_name}":
+                return physical_name
+            return logical_name
+        except Exception:
+            logger.debug(
+                "Failed to recover logical session id from %s",
+                meta_uri,
+                exc_info=True,
+            )
+            return physical_name
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

@@ -10,6 +10,7 @@ import openviking.service.session_service as session_service_module
 from openviking.metrics.datasources.session import SessionLifecycleDataSource
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -129,6 +130,84 @@ async def test_sessions_uses_canonical_scope_and_relies_on_storage_compatibility
         },
     ]
     service._viking_fs.ls.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sessions_restores_logical_session_id_from_shortened_entry_meta():
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    logical_session_id = "session-" + ("s" * 300)
+    physical_session_id = VikingFS._shorten_component(logical_session_id)
+    session_base_uri = "viking://user/alice/sessions"
+
+    service._viking_fs.ls = AsyncMock(
+        return_value=[
+            {
+                "name": physical_session_id,
+                "isDir": True,
+                "modTime": "2026-07-13T02:00:00Z",
+            }
+        ]
+    )
+    service._viking_fs.read_file = AsyncMock(
+        return_value=json.dumps({"session_id": logical_session_id})
+    )
+
+    def _uri_to_path(uri, ctx):
+        parts = uri.removeprefix("viking://").split("/")
+        safe_parts = [VikingFS._shorten_component(part) for part in parts]
+        return f"/local/{ctx.account_id}/{'/'.join(safe_parts)}"
+
+    service._viking_fs._uri_to_path = Mock(side_effect=_uri_to_path)
+
+    result = await service.sessions(ctx)
+
+    assert result == [
+        {
+            "session_id": logical_session_id,
+            "uri": f"{session_base_uri}/{logical_session_id}",
+            "is_dir": True,
+            "mod_time": "2026-07-13T02:00:00Z",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "meta_content",
+    [
+        json.dumps({"session_id": "unrelated-session"}),
+        json.dumps({}),
+        "not-json",
+    ],
+)
+async def test_sessions_keeps_physical_name_when_meta_cannot_restore_entry(meta_content):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    logical_session_id = "session-" + ("s" * 300)
+    physical_session_id = VikingFS._shorten_component(logical_session_id)
+    session_base_uri = "viking://user/alice/sessions"
+
+    service._viking_fs.ls = AsyncMock(return_value=[{"name": physical_session_id, "isDir": True}])
+    service._viking_fs.read_file = AsyncMock(return_value=meta_content)
+
+    def _uri_to_path(uri, ctx):
+        parts = uri.removeprefix("viking://").split("/")
+        safe_parts = [VikingFS._shorten_component(part) for part in parts]
+        return f"/local/{ctx.account_id}/{'/'.join(safe_parts)}"
+
+    service._viking_fs._uri_to_path = Mock(side_effect=_uri_to_path)
+
+    result = await service.sessions(ctx)
+
+    assert result == [
+        {
+            "session_id": physical_session_id,
+            "uri": f"{session_base_uri}/{physical_session_id}",
+            "is_dir": True,
+            "mod_time": "",
+        }
+    ]
 
 
 @pytest.mark.asyncio

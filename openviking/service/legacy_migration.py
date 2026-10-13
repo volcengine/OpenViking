@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from openviking.core.namespace import canonical_session_uri, canonical_user_root
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.vector_migration import (
@@ -135,10 +136,21 @@ class LegacyDataMigration:
 
         for account_id in sorted(registry_accounts):
             plan.account_users[account_id] = set()
+            registered_physical_users: set[str] = set()
             for user_id in sorted(await self._registry_user_ids(account_id)):
-                await self._ensure_plan_user(account_id, user_id, plan)
+                if await self._ensure_plan_user(account_id, user_id, plan):
+                    user_ctx = RequestContext(
+                        user=UserIdentifier(account_id, user_id),
+                        role=Role.USER,
+                    )
+                    user_path = self._viking_fs._uri_to_path(
+                        canonical_user_root(user_ctx),
+                        ctx=user_ctx,
+                    )
+                    registered_physical_users.add(user_path.rsplit("/", 1)[-1])
             if await self._exists(f"/local/{account_id}/session"):
-                for user_id in sorted(await self._physical_user_ids(account_id)):
+                physical_users = await self._physical_user_ids(account_id)
+                for user_id in sorted(physical_users - registered_physical_users):
                     await self._ensure_plan_user(account_id, user_id, plan)
             await self._plan_sessions(account_id, plan)
         return plan
@@ -291,7 +303,14 @@ class LegacyDataMigration:
             )
             return
         await self._ensure_plan_user(account_id, owner, plan)
-        target_path = f"/local/{account_id}/user/{owner}/sessions/{session_id}"
+        owner_ctx = RequestContext(
+            user=UserIdentifier(account_id, owner),
+            role=Role.USER,
+        )
+        target_path = self._viking_fs._uri_to_path(
+            canonical_session_uri(owner_ctx, session_id),
+            ctx=owner_ctx,
+        )
         plan.operations.append(
             TreeCopy(
                 source_path=source_path,

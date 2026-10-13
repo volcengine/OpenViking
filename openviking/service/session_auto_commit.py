@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from openviking.core.namespace import canonical_session_uri
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -194,10 +195,57 @@ class SessionAutoCommitScheduler:
             )
             return None
 
-        session_id = _session_id_from_meta_path(meta_path)
         account_id = _account_id_from_meta_path(meta_path)
-        user_id = _user_id_from_meta_path(meta_path)
-        if not session_id or not account_id or not user_id:
+        physical_session_id = _session_id_from_meta_path(meta_path)
+        physical_user_id = _user_id_from_meta_path(meta_path)
+        if not physical_session_id or not account_id or not physical_user_id:
+            return None
+
+        meta_account_id = meta.get("created_by_account_id")
+        if isinstance(meta_account_id, str) and meta_account_id.strip():
+            if meta_account_id.strip() != account_id:
+                logger.warning(
+                    "Session meta account does not match its physical path; "
+                    "skipping idle auto-commit: %s",
+                    meta_path,
+                )
+                return None
+
+        meta_session_id = meta.get("session_id")
+        session_id = (
+            meta_session_id.strip()
+            if isinstance(meta_session_id, str) and meta_session_id.strip()
+            else physical_session_id
+        )
+        meta_user_id = meta.get("created_by_user_id")
+        user_id = (
+            meta_user_id.strip()
+            if isinstance(meta_user_id, str) and meta_user_id.strip()
+            else physical_user_id
+        )
+
+        ctx = RequestContext(
+            user=UserIdentifier(account_id=account_id, user_id=user_id),
+            role=Role.USER,
+        )
+        try:
+            canonical_path = self._session_service.viking_fs._uri_to_path(
+                canonical_session_uri(ctx, session_id),
+                ctx=ctx,
+            )
+        except Exception:
+            logger.warning(
+                "Invalid logical identity in session meta; skipping idle auto-commit: %s",
+                meta_path,
+                exc_info=True,
+            )
+            return None
+        if f"{canonical_path}{SESSION_META_SUFFIX}" != meta_path:
+            logger.warning(
+                "Session meta identity does not match its physical path; "
+                "skipping idle auto-commit: %s",
+                meta_path,
+            )
             return None
         return session_id, account_id, user_id
 
