@@ -119,6 +119,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self,
         model_name: str = "gemini-embedding-2-preview",
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
         query_param: Optional[str] = None,
@@ -136,15 +137,24 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
+        self.api_base = api_base.rstrip("/") if api_base else None
         self._client_kwargs: Dict[str, Any] = {"api_key": api_key}
         if _HTTP_RETRY_AVAILABLE:
-            self._client_kwargs["http_options"] = HttpOptions(
-                retry_options=HttpRetryOptions(
+            http_opts: Dict[str, Any] = {
+                "retry_options": HttpRetryOptions(
                     attempts=max(self.max_retries + 1, 1),
                     initial_delay=0.5,
                     max_delay=8.0,
                     exp_base=2.0,
                 )
+            }
+            if self.api_base:
+                http_opts["base_url"] = self.api_base
+            self._client_kwargs["http_options"] = HttpOptions(**http_opts)
+        elif self.api_base:
+            raise ValueError(
+                "api_base requires google-genai >= 1.39.0 (HttpOptions not available). "
+                "Upgrade with: pip install 'google-genai>=1.39.0'"
             )
         self.client = genai.Client(**self._client_kwargs)
         self.task_type = task_type
@@ -182,12 +192,14 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         return task_type
 
     def __repr__(self) -> str:
-        return (
-            f"GeminiDenseEmbedder("
-            f"model={self.model_name!r}, "
-            f"dim={self._dimension}, "
-            f"task_type={self.task_type!r})"
-        )
+        parts = [
+            f"model={self.model_name!r}",
+            f"dim={self._dimension}",
+            f"task_type={self.task_type!r}",
+        ]
+        if self.api_base:
+            parts.append(f"api_base={self.api_base!r}")
+        return f"GeminiDenseEmbedder({', '.join(parts)})"
 
     def embed(
         self,

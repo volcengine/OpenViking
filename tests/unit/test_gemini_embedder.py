@@ -51,6 +51,24 @@ class TestGeminiDenseEmbedderInit:
         mock_client_class.assert_called_once()
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_api_base_sets_http_options_base_url(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import (
+            GeminiDenseEmbedder,
+            _HTTP_RETRY_AVAILABLE,
+        )
+
+        if not _HTTP_RETRY_AVAILABLE:
+            pytest.skip("HttpOptions not available in this SDK version")
+
+        GeminiDenseEmbedder(
+            "gemini-embedding-2-preview",
+            api_key="key",
+            api_base="https://my-proxy.example.com/v1",
+        )
+        _, kwargs = mock_client_class.call_args
+        assert kwargs["http_options"].base_url == "https://my-proxy.example.com/v1"
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_default_dimension_3072(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
