@@ -143,6 +143,14 @@ map can never assert tenant identity, and the plugin's own headers (authenticati
 tenant, actor) take precedence over the map. The client snapshots the map when it
 is built, so the headers also cover the startup `/health` probe.
 
+The identity probe stays anonymous first, so no credential is ever sent to an unknown
+host. Gateways that answer that anonymous request by *redirecting* to their own login
+page are handled like `401`/`403`: Cloudflare Access returns `302` with
+`Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and the
+probe is retried once with the resolved headers. Without that retry a protected server
+looks "reachable but not OpenViking", the client is dropped, and memory stays
+unavailable even though every authenticated request would have worked.
+
 ### Optional peer identity
 
 New connections use the OpenViking user's memory directory by default. Setup
