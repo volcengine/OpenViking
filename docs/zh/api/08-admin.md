@@ -23,7 +23,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
-| 重新生成 User Key | Y | Y（本 account） | N |
+| 重新生成 User Key（仅 API Key 模式） | Y | Y（本 account） | N |
 | 将用户提升为 ADMIN | Y | Y（本 account） | N |
 
 ## CLI `--sudo` 选项
@@ -827,7 +827,7 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
@@ -1224,7 +1224,7 @@ ov --sudo task status <task_id>
 | user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 
 **说明：**
-- 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
+- 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - ADMIN 只能在自己所属的 account 中注册用户
 - 无法通过用户注册接口直接创建 `"root"` 角色
@@ -1356,7 +1356,7 @@ ov admin register-user acme bob-private --role user \
 | role | str | 否 | null | 按角色过滤 |
 | query | str | 否 | null | 仅 HTTP，按用户 ID 做不区分大小写的字面包含匹配 |
 | include_summary | bool | 否 | false | 仅 HTTP，以对象返回分页用户和账号统计 |
-| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；默认保持现有按鉴权模式返回字段的行为。 |
+| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；仅当服务端能读取完整 key 并用于服务端绑定时 `api_key_available` 才为 true，仅存哈希的凭据返回 false；默认保持现有按鉴权模式返回字段的行为。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
@@ -1675,6 +1675,7 @@ ov --sudo admin set-role acme bob admin
 | seed | str | 否 | `null` | JSON request body 中可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 
 **说明：**
+- `trusted` 模式拒绝此操作，返回 HTTP 412（`FAILED_PRECONDITION`），不生成或修改密钥。
 - ADMIN 只能为自己所属的 account 中的用户重新生成密钥
 - 随机生成或使用新 seed 时，旧密钥立即失效，需要更新使用该密钥的客户端
 - 省略 `seed` 时随机生成新密钥。确定性示例使用 `OV_KEY_SEED` 或 `OV_NEW_KEY_SEED`，运行前需将其设为安全生成的秘密值；Go 示例需导入 `os`。不要把示例变量名直接当作 seed。

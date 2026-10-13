@@ -669,14 +669,11 @@ def create_app(
                 or "http://127.0.0.1:1933"
             )
 
-            # Late-binding role resolver: app.state.api_key_manager is wired
-            # during lifespan, after the provider is constructed. Lambda
-            # closes over `app` and looks up at call time.
-            def _current_role(account_id: str, user_id: str) -> Role:
-                mgr = getattr(app.state, "api_key_manager", None)
-                if mgr is None or not hasattr(mgr, "get_user_role"):
+            async def _current_role(account_id: str, user_id: str) -> Role:
+                manager = getattr(app.state, "api_key_manager", None)
+                if manager is None:
                     return Role.USER
-                return mgr.get_user_role(account_id, user_id)
+                return await manager.get_registered_user_role(account_id, user_id) or Role.USER
 
             _route_provider = OpenVikingOAuthProvider(
                 store=_route_store,

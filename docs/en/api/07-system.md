@@ -13,11 +13,10 @@ documented separately.
 Basic liveness check; no authentication is required. Returns the service version, health status, and auth mode. Supplied credentials trigger identity resolution; successful resolution adds identity fields, and invalid credentials are rejected with an authentication error.
 
 In trusted mode, a complete `X-OpenViking-Account` and `X-OpenViking-User` header pair
-requests identity resolution, including on localhost deployments with `root_api_key`
-omitted. Configured Root keys remain required for authenticated requests. The optional
-`root_api_key_required` boolean reports that trusted-server configuration requirement;
-the resolved `role` describes the caller's permissions. Older servers may omit this field.
-Anonymous health probes return basic liveness information.
+requests identity resolution and requires the matching root API key, including on
+localhost. `root_api_key_required` is always `true` in trusted mode; the resolved `role`
+describes the caller's permissions. Anonymous health probes return basic liveness
+information without identity fields.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:health_check` - HTTP route

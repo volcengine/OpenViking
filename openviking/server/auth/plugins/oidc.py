@@ -352,11 +352,6 @@ class OIDCAuthPlugin(AuthPlugin):
             self._effective_audience,
         )
 
-    def requires_api_key_manager(self) -> bool:
-        """OIDC does not map external identities to admin roles, so no
-        APIKeyManager is needed. Admin API access is gated by role checks."""
-        return False
-
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """OIDC does not declare bot-proxy compatibility until VikingBot
         natively understands the ``oidc`` auth mode and can propagate the

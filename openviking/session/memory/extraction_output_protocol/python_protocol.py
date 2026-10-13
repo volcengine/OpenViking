@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import keyword
 import re
+import tokenize
 from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
 
@@ -33,7 +35,7 @@ from openviking.session.memory.utils.line_numbers import (
     strip_line_numbers,
 )
 
-_PYTHON_FENCE_RE = re.compile(r"```python[ \t]*\r?\n(?P<code>[\s\S]*?)```", re.IGNORECASE)
+_PYTHON_FENCE_RE = re.compile(r"```python[ \t]*\r?\n(?P<code>[\s\S]*)```", re.IGNORECASE)
 _PYTHON_FENCE_START_RE = re.compile(r"```python[ \t]*\r?\n", re.IGNORECASE)
 _HIDDEN_MEMORY_FIELDS = {
     "source_extraction_id",
@@ -1453,20 +1455,54 @@ class _PythonProgramCompiler:
 
 def _extract_python_code(content: str) -> str:
     stripped = str(content or "").strip()
-    matches = list(_PYTHON_FENCE_RE.finditer(stripped))
-    if len(matches) == 1:
-        match = matches[0]
+    if "```" not in stripped:
+        return stripped
+    # A bare program may contain Markdown fences inside its string literals.
+    try:
+        ast.parse(stripped, mode="exec")
+    except SyntaxError:
+        pass
+    else:
+        return stripped
+    match = _PYTHON_FENCE_RE.search(stripped)
+    if match:
+        if _fence_is_python_content(stripped, match.start()):
+            return stripped
         surrounding_text = stripped[: match.start()] + stripped[match.end() :]
         if "```" not in surrounding_text:
-            return match.group("code").rstrip()
+            code = match.group("code").rstrip()
+            if "```" not in code:
+                return code
+            # Match through content fences, but reject separate output blocks.
+            try:
+                ast.parse(code, mode="exec")
+            except SyntaxError:
+                pass
+            else:
+                return code
     starts = list(_PYTHON_FENCE_START_RE.finditer(stripped))
     if len(starts) == 1 and stripped.count("```") == 1:
         return stripped[starts[0].end() :].strip()
-    if "```" in stripped:
-        raise ExtractionOutputProtocolError(
-            "Python output may contain only one complete ```python code fence"
-        )
-    return stripped
+    raise ExtractionOutputProtocolError(
+        "Python output may contain only one complete ```python code fence"
+    )
+
+
+def _fence_is_python_content(source: str, offset: int) -> bool:
+    """Recognize a fence in a string/comment even when later Python is invalid."""
+    position = (source.count("\n", 0, offset) + 1, offset - source.rfind("\n", 0, offset) - 1)
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.start <= position < token.end:
+                # Standalone backticks are individual tokens; strings, f-string
+                # text and comments contain the marker within a larger token.
+                return token.string != "`"
+            if token.start > position:
+                break
+    except (tokenize.TokenError, SyntaxError):
+        # Surrounding explanation is not required to be valid Python.
+        pass
+    return False
 
 
 def _is_string_literal_syntax_error(error: str) -> bool:

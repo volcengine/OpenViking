@@ -31,8 +31,9 @@ def app():
     app = FastAPI()
     app.include_router(gateway.router)
     app.state.api_key_manager = SimpleNamespace(
-        refresh_account_users_from_store=AsyncMock(),
-        get_users=lambda account_id, **kwargs: USERS[account_id],
+        list_users_page=AsyncMock(
+            side_effect=lambda account_id, **_kwargs: {"users": USERS[account_id]}
+        ),
     )
     app.dependency_overrides[get_request_context] = lambda: RequestContext(
         user=UserIdentifier("a", "boss"), role=Role.ADMIN
@@ -85,7 +86,13 @@ async def test_selected_user_is_replaced_with_their_stored_key(app, forwarded, u
     assert request.headers["X-OpenViking-Account"] == "a"
     assert json.loads(request.content) == {**SETTINGS, "openviking_key": key}
     assert key not in response.text
-    app.state.api_key_manager.refresh_account_users_from_store.assert_awaited_with("a")
+    app.state.api_key_manager.list_users_page.assert_awaited_with(
+        "a",
+        limit=None,
+        role_filter=None,
+        expose_key=True,
+        fresh=True,
+    )
 
 
 @pytest.mark.parametrize("user_id", ["missing", "carol", "root"])
@@ -115,7 +122,7 @@ async def test_root_cannot_choose_a_user(app, forwarded):
     assert response.status_code == 400
     assert "paste the user's OpenViking key" in response.json()["detail"]
     assert forwarded == []
-    app.state.api_key_manager.refresh_account_users_from_store.assert_not_called()
+    app.state.api_key_manager.list_users_page.assert_not_called()
 
 
 async def test_user_and_pasted_key_together_are_rejected_without_echo(app, forwarded):
@@ -145,7 +152,7 @@ async def test_other_requests_pass_through_unchanged(app, forwarded, method, pat
     assert request.method == method
     assert request.url.path == "/admin/" + path
     assert request.content == body
-    app.state.api_key_manager.refresh_account_users_from_store.assert_not_called()
+    app.state.api_key_manager.list_users_page.assert_not_called()
 
 
 @pytest.mark.parametrize("path", ["uploads", "v1/models"])

@@ -30,6 +30,7 @@ const activity = {
       placeholder: 'Type a message...',
       emptyState: 'Select or create a session to start chatting.',
       thinking: 'Thinking...',
+      generating: 'Generating',
       reasoning: 'Reasoning',
       iteration: 'Round {{count}}',
       toolCall: 'Tool call',

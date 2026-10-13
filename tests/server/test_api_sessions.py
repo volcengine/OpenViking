@@ -581,32 +581,63 @@ async def test_direct_session_add_message_records_last_message_at(service):
     assert session.meta.last_message_at
 
 
-async def test_add_message_records_last_message_at_with_single_meta_save(
+async def test_session_initialization_preserves_concurrent_message(
     client: httpx.AsyncClient,
+    service,
     monkeypatch,
 ):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-    save_session_ids = []
-    original_save_meta = Session._save_meta
+    session_id = "concurrent-initialization"
+    ctx = RequestContext(user=DEFAULT_USER, role=Role(Role.ROOT))
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    initial_meta_ready = asyncio.Event()
+    finish_initialization = asyncio.Event()
+    append_started = asyncio.Event()
+    original_write = service.viking_fs.write_file
+    original_append = Session._append_messages_authoritatively
 
-    async def counting_save_meta(self, *args, **kwargs):
-        save_session_ids.append(self.session_id)
-        await original_save_meta(self, *args, **kwargs)
+    async def pause_initial_meta(uri, content, **kwargs):
+        if uri == f"{session_uri}/.meta.json" and not json.loads(content)["message_count"]:
+            initial_meta_ready.set()
+            await finish_initialization.wait()
+        return await original_write(uri, content, **kwargs)
 
-    monkeypatch.setattr(Session, "_save_meta", counting_save_meta)
+    async def append(self, messages):
+        if self.session_id == session_id:
+            append_started.set()
+        return await original_append(self, messages)
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Hello, world!"},
+    monkeypatch.setattr(service.viking_fs, "write_file", pause_initial_meta)
+    monkeypatch.setattr(Session, "_append_messages_authoritatively", append)
+    create_task = asyncio.create_task(
+        client.post("/api/v1/sessions", json={"session_id": session_id})
     )
-    assert resp.status_code == 200
+    message_task = None
+    try:
+        await asyncio.wait_for(initial_meta_ready.wait(), timeout=5)
+        message_task = asyncio.create_task(
+            client.post(
+                f"/api/v1/sessions/{session_id}/messages",
+                json={"role": "user", "content": "message during initialization"},
+            )
+        )
+        await asyncio.wait_for(append_started.wait(), timeout=5)
+        # Without the session lock the append finishes before the initial meta
+        # overwrites it. With the lock it waits for initialization to finish.
+        await asyncio.wait({message_task}, timeout=1)
+    finally:
+        finish_initialization.set()
+        tasks = [task for task in (create_task, message_task) if task is not None]
+        responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
 
-    assert save_session_ids == [session_id]
-
-    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
-    assert session_resp.status_code == 200
-    assert session_resp.json()["result"]["last_message_at"]
+    assert all(response.status_code == 200 for response in responses)
+    meta = json.loads(await service.viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
+    messages = await service.viking_fs.read_file(f"{session_uri}/messages.jsonl", ctx=ctx)
+    assert [json.loads(line)["parts"][0]["text"] for line in messages.splitlines()] == [
+        "message during initialization"
+    ]
+    assert meta["message_count"] == 1
+    assert meta["pending_tokens"] > 0
+    assert meta["last_message_at"]
 
 
 async def test_add_message_ignores_extra_metadata_fields(client: httpx.AsyncClient):

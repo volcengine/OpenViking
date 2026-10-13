@@ -107,8 +107,8 @@ export function Composer({
               onClick={onCancel}
               className={cn(
                 'inline-flex size-8 items-center justify-center rounded-lg',
-                'bg-destructive text-destructive-foreground',
-                'transition-colors hover:bg-destructive/90',
+                'bg-muted text-foreground',
+                'transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               )}
             >
               <SquareIcon className="size-3.5" />

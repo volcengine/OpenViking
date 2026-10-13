@@ -782,6 +782,24 @@ def test_python_syntax_error_includes_offending_source_line():
     assert "^" in error
 
 
+@pytest.mark.parametrize("ending", ["sdk.commit(", "sdk.commit())"])
+@pytest.mark.parametrize(
+    "wrapper", ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."]
+)
+def test_python_rejects_invalid_program_containing_fenced_example(ending, wrapper):
+    context = _context([_profile_schema()])
+    protocol = create_extraction_output_protocol("python")
+    program = (
+        'sdk.set_profile(content="""Example:\n```python\nsdk.commit()\n```\n'
+        f'Keep this example.""")\n{ending}'
+    )
+
+    operations, error = protocol.parse(wrapper.format(program), context)
+
+    assert operations is None
+    assert error is not None
+
+
 def test_memory_schema_identity_fields_follow_scope_and_uri_template():
     entities = MemoryTypeSchema(
         memory_type="entities",
@@ -829,17 +847,31 @@ def test_memory_schema_identity_fields_ignore_jinja_token_collisions():
     assert events.identity_fields() == ("peer_id", "event_name", "ranges")
 
 
-def test_python_set_single_file_memory_compiles_to_same_operations_as_json():
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Engineer",
+        'Config:\n```nginx\nadd_header Cache-Control "no-cache";\n```\nDone.',
+        "Example:\n```python\nsdk.commit()\n```\nKeep this example.",
+        "Use the literal ``` marker.",
+        "```text\nfirst\n```\n```python\nsdk.commit()\n```",
+    ],
+)
+@pytest.mark.parametrize(
+    "wrapper",
+    ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."],
+)
+def test_python_set_single_file_memory_compiles_to_same_operations_as_json(content, wrapper):
     context = _context([_profile_schema()])
     python_protocol = create_extraction_output_protocol("python")
     json_protocol = create_extraction_output_protocol("json")
 
     python_operations, python_error = python_protocol.parse(
-        "sdk.set_profile(content='Engineer')\nsdk.commit()",
+        wrapper.format(f'sdk.set_profile(content="""{content}""")\nsdk.commit()'),
         context,
     )
     json_operations, json_error = json_protocol.parse(
-        '{"profile":[{"page_id":100,"content":"Engineer"}],"delete_ids":[]}',
+        json.dumps({"profile": [{"page_id": 100, "content": content}], "delete_ids": []}),
         context,
     )
 

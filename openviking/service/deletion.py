@@ -80,7 +80,7 @@ class DeletionService:
 
     async def initialize(self) -> None:
         """Bind the queue consumer and reconcile persisted deletion fences."""
-        self._service.viking_fs.set_deletion_guard(self._manager.is_deleting)
+        self._service.viking_fs.set_deletion_guard(self._is_deleting)
         queue_manager = self._service._queue_manager
         queue = queue_manager.get_queue(queue_manager.DATA_CLEANUP)
         queued_task_ids = {
@@ -91,7 +91,7 @@ class DeletionService:
         queue.set_dequeue_handler(_DeletionProcessor(self, self._service_loop))
 
         tracker = get_task_tracker()
-        for account_id, user_id, deletion in self._manager.iter_deletions():
+        for account_id, user_id, deletion in await self._manager.iter_deletions():
             task_id = deletion.get("task_id")
             owner_account_id = deletion.get("owner_account_id")
             owner_user_id = deletion.get("owner_user_id")
@@ -123,6 +123,9 @@ class DeletionService:
                     )
                 )
                 queued_task_ids.add(task_id)
+
+    async def _is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
+        return await self._manager.get_deletion(account_id, user_id) is not None
 
     async def delete(
         self,
@@ -273,7 +276,7 @@ class DeletionService:
         user_id = message["target"]["user_id"]
         scope = "account" if user_id is None else "user"
         tracker = get_task_tracker()
-        deletion = self._manager.get_deletion(account_id, user_id)
+        deletion = await self._manager.get_deletion(account_id, user_id)
         if deletion is None or deletion["task_id"] != task_id:
             task = await tracker.get(task_id, **owner)
             # Account-owned records are removed with their account. A late
@@ -290,9 +293,9 @@ class DeletionService:
             return None
         if deletion is None or deletion["task_id"] != task_id:
             exists = (
-                self._manager.has_user(account_id, user_id)
+                await self._manager.has_user(account_id, user_id)
                 if user_id is not None
-                else any(item["account_id"] == account_id for item in self._manager.get_accounts())
+                else await self._manager.get_account(account_id) is not None
             )
             await tracker.complete(task_id, {"deleted": not exists, "stale": True}, **owner)
             return None

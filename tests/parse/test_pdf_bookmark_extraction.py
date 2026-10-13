@@ -7,8 +7,11 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
+from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -488,17 +491,37 @@ class TestExtractImages:
     def setup_method(self):
         self.parser = PDFParser()
 
-    def test_extract_image_renders_cropped_bbox_as_png(self):
-        page = _FakeImagePage(image_bytes=b"rendered-png")
+    def test_extract_image_renders_cropped_bbox_as_png(self, monkeypatch):
+        pages = [_FakeImagePage(image_bytes=b"rendered-png") for _ in range(2)]
+        parsers = [self.parser, PDFParser()]
+        start = Barrier(2)
+        rendering = Lock()
+        original_render = _FakeCroppedPage.to_image
 
-        image_data = self.parser._extract_image_from_page(
-            page,
-            {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
-        )
+        def render(page, resolution):
+            assert rendering.acquire(blocking=False), "Concurrent PDFium calls"
+            try:
+                # Native rendering releases the GIL; allow the other thread to run.
+                time.sleep(0.05)
+                return original_render(page, resolution)
+            finally:
+                rendering.release()
 
-        assert image_data == b"rendered-png"
-        assert page.crop_calls == [(10, 20, 40, 60)]
-        assert page.cropped_page.resolution_calls == [self.parser.config.image_resolution]
+        monkeypatch.setattr(_FakeCroppedPage, "to_image", render)
+
+        def extract(index):
+            start.wait(timeout=5)
+            return parsers[index]._extract_image_from_page(
+                pages[index],
+                {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            assert list(executor.map(extract, range(2))) == [b"rendered-png"] * 2
+
+        for parser, page in zip(parsers, pages, strict=True):
+            assert page.crop_calls == [(10, 20, 40, 60)]
+            assert page.cropped_page.resolution_calls == [parser.config.image_resolution]
 
     def test_extract_image_clamps_bbox_to_page_bounds(self):
         page = _FakeImagePage()

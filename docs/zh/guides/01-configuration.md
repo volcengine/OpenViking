@@ -1847,6 +1847,10 @@ ov add-resource ./docs --exclude "*.tmp"
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
+    "account_store": {
+      "provider": "file",
+      "params": {}
+    },
     "profile_enabled": false,
     "cors_origins": ["*"],
     "public_base_url": "https://ov.example.com",
@@ -1877,7 +1881,9 @@ ov add-resource ./docs --exclude "*.tmp"
 | `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
 | `auth_mode` | str / null | 内置模式：`"dev"`、`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时，有非空 `root_api_key` 则推导为 `api_key`，否则为 `dev`。 | `null` |
-| `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式仅在 localhost 可省略，非 localhost 部署必填，不负责解析普通用户身份 | `null` |
+| `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式在所有部署中均必填，包括 localhost，不负责解析普通用户身份 | `null` |
+| `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"` Provider，统一持久化 Account、User、Group 和 API Key，兼容现有 AGFS JSON 注册表并维护进程内查询索引。 | `"file"` |
+| `account_store.params` | object | Provider 启动参数。不能通过这里覆盖框架注入的 VikingFS 和 File Provider API Key Hash 配置。 | `{}` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
 | `public_base_url` | str | MCP `add_resource` 和 `add_skill` 工具向客户端返回的上传指令里使用的对外可见 base URL。解析顺序：环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段 → 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto` → 请求头 `Host` → 监听地址兜底。当 server 部署在反向代理后且代理不转发 `X-Forwarded-*` 时，请显式设置本字段（或环境变量）。 | `null` |
@@ -1893,7 +1899,7 @@ ov add-resource ./docs --exclude "*.tmp"
 
 省略 `auth_mode`（或设为 `null`）时，配置了非空 `root_api_key` 则选择 `api_key`，否则选择 `dev`。`dev` 仅允许监听 localhost，不进行身份认证。`root_api_key` 不能配置为空字符串。
 
-显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 仅在 localhost 可省略，监听非 localhost 地址时必填。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
+显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 在启动和每个认证请求中均必填，包括 localhost。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
 
 `user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`server.agent_evolution.enabled` 提供启动默认值，运行时优先级为 Account 覆盖 > Cluster 运行时覆盖 > 启动值。无需重启的修改应使用 Admin settings 接口；直接编辑 `ov.conf` 需要重启后生效。
 
@@ -2009,7 +2015,7 @@ ov add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `enabled` | bool | 是否启用加密 | `false` |
 | `provider` | str | 密钥提供程序：`"local"`、`"vault"` 或 `"volcengine_kms"` | - |
-| `api_key_hashing.enabled` | bool | 是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
+| `api_key_hashing.enabled` | bool | 仅 File Provider：是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
 
 ### Local（本地文件）
 
@@ -2218,6 +2224,10 @@ Task 记录文件位于所属账号的系统目录：
     "host": "string",
     "port": 1933,
     "root_api_key": "string",
+    "account_store": {
+      "provider": "file",
+      "params": {}
+    },
     "cors_origins": ["string"]
   }
 }

@@ -102,6 +102,59 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
     assert adapter.search_by_random.await_args.kwargs["filter"] == _tenant_filter(ctx)
 
 
+@pytest.mark.asyncio
+async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, tmp_path):
+    ctx = _ctx()
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path / "debug_vectors"),
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": "alice-memory",
+                    "uri": "viking://user/alice/memories/own.md",
+                    "account_id": "acct",
+                    "context_type": "memory",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                },
+                {
+                    "id": "bob-memory",
+                    "uri": "viking://user/bob/memories/private.md",
+                    "account_id": "acct",
+                    "context_type": "memory",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                },
+            ],
+            ctx=RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN),
+        )
+
+        records, next_cursor = await backend.scroll(
+            filter=Eq("context_type", "memory"),
+            limit=10,
+            ctx=ctx,
+        )
+        count = await backend.count(filter=Eq("context_type", "memory"), ctx=ctx)
+
+        assert next_cursor is None
+        assert [record["id"] for record in records] == ["alice-memory"]
+        assert count == 1
+    finally:
+        await backend.close()
+
+
 def test_descendant_target_elides_only_visible_root_path_filter():
     ctx = _ctx()
     target = "viking://resources/wiki/physics"

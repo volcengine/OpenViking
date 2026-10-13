@@ -10,9 +10,10 @@ from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
-from openviking.server.auth import _configured_root_api_key, get_request_context
+from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
+from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import UnauthenticatedError
@@ -61,7 +62,7 @@ async def health_check(request: Request):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode
         if effective_auth_mode == AuthMode.TRUSTED.value:
-            result["root_api_key_required"] = bool(_configured_root_api_key(request))
+            result["root_api_key_required"] = True
 
         x_api_key = request.headers.get("X-API-Key")
         authorization = request.headers.get("Authorization")

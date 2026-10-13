@@ -97,18 +97,6 @@ class StorageConfig(BaseModel):
                 "'session_commit' queue."
             )
 
-        if self.agfs.path is not None:
-            logger.warning(
-                f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.agfs.path}'"
-            )
-
-        if self.vectordb.path is not None:
-            logger.warning(
-                f"StorageConfig: 'vectordb.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.vectordb.path}'"
-            )
-
         # Update paths to use workspace (expand ~ first)
         workspace_path = Path(self.workspace).expanduser().resolve()
         workspace_path.mkdir(parents=True, exist_ok=True)

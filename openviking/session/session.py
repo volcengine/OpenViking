@@ -615,15 +615,23 @@ class Session:
 
     async def ensure_exists(self) -> None:
         """Materialize session root and messages file if missing."""
-        if await self.exists():
-            return
-        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(
-            f"{self._session_uri}/messages.jsonl",
-            "",
-            ctx=self.ctx,
+        # Initial state must not overwrite a concurrent append or commit.
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        await self._save_meta()
+        try:
+            if await self.exists():
+                return
+            await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
+            await self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                "",
+                ctx=self.ctx,
+            )
+            await self._save_meta()
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
         """Persist .meta.json to storage using an optional held PathLock lease."""

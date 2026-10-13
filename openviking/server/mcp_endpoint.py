@@ -62,7 +62,6 @@ from openviking.server.auth import (
     _extract_api_key,
     get_api_key_manager_or_raise,
     normalize_actor_peer_header,
-    registry_watcher_running,
     resolve_identity,
     should_expose_user_key,
 )
@@ -200,7 +199,7 @@ class _IdentityASGIMiddleware:
             actor_peer_id = normalize_actor_peer_header(
                 request.headers.get("x-openviking-actor-peer")
             )
-            ctx = _build_request_context(
+            ctx = await _build_request_context(
                 request,
                 identity,
                 actor_peer_id=actor_peer_id,
@@ -373,9 +372,7 @@ async def list_users(
     if include_credentials and not should_expose_user_key(request):
         raise PermissionDeniedError("Credential disclosure is disabled in trusted auth mode")
     manager = get_api_key_manager_or_raise(request)
-    if not registry_watcher_running(request):
-        await manager.refresh_account_users_from_store(ctx.account_id)
-    result = manager.get_users_page(
+    result = await manager.list_users_page(
         ctx.account_id,
         limit=limit,
         page=page,
@@ -397,10 +394,8 @@ async def list_groups(context: Context) -> dict[str, Any]:
     """
     ctx = _get_ctx()
     manager = get_api_key_manager_or_raise(context.request_context.request)
-    await manager.ensure_account_groups_loaded(ctx.account_id)
-    return {
-        "groups": [{"group_id": group["group_id"]} for group in manager.get_groups(ctx.account_id)]
-    }
+    groups = await manager.get_groups(ctx.account_id)
+    return {"groups": [{"group_id": group["group_id"]} for group in groups]}
 
 
 @_mcp_error_results()

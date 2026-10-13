@@ -83,22 +83,17 @@ class _FakeRuntimeConfig:
 
 
 class _FakeApiKeyManager:
-    """Minimal admin-gate stand-in: account existence + user refresh no-ops."""
+    """Minimal admin-gate stand-in."""
 
     def __init__(self, account_ids):
         self._account_ids = list(account_ids)
 
-    async def refresh_accounts_from_store(self):
-        return None
-
-    async def refresh_account_users_from_store(self, account_id):
-        return None
-
-    def ensure_account_active(self, account_id):
+    async def get_account(self, account_id):
         if account_id not in self._account_ids:
-            raise AssertionError(f"unexpected account: {account_id}")
+            return None
+        return {"account_id": account_id, "status": "active"}
 
-    def get_accounts(self):
+    async def list_accounts(self):
         return [{"account_id": aid} for aid in self._account_ids]
 
 

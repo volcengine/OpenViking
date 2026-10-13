@@ -1174,9 +1174,9 @@ const workspace = {
         learnMore: 'Learn how to get an API Key',
         trusted: {
           primary:
-            'This trusted server enforces Root Key validation. The browser needs the same Root API Key for management and tenant data requests.',
+            "Trusted mode requires a Root API Key, including on localhost. Enter the server's root key in the “Root or Admin API Key” field above.",
           secondary:
-            'Request the Root Key from the deployment admin; it is stored at server.root_api_key in the server-side ov.conf. Trusted-mode data identity comes from Account/User assertions and does not need a User API Key.',
+            'Request the key from the deployment admin. If the server has no key yet, set a non-empty server.root_api_key in its ov.conf, restart the server, and enter the same value here. No separate User API Key is needed.',
           title: 'This trusted server requires a Root API Key',
         },
       },
@@ -1188,6 +1188,10 @@ const workspace = {
         primary: 'This server is configured with {{mode}} authentication.',
         title: 'Unsupported authentication mode',
       },
+      trustedRootHint:
+        'Use server.root_api_key from the server-side ov.conf for both management and data access in trusted mode.',
+      trustedUserHint:
+        'Trusted mode needs no separate User API Key; Account and User identify whose data to access.',
       userHint: 'Used by the Filesystem and tenant data APIs.',
     },
     connectionPage: {
@@ -1260,6 +1264,8 @@ const workspace = {
         dataKeyRequired: 'A user or account-admin API key is required',
         rootAvailable: 'Root admin control available',
         tenantDataAvailable: 'Tenant data access available',
+        trustedKeyRequired:
+          'A Root API Key is required. Use server.root_api_key from the server-side ov.conf',
         trustedIdentityRequired:
           'Trusted mode data access requires account and user',
       },

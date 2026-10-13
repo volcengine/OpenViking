@@ -12,6 +12,18 @@ vi.mock('react-i18next', () => ({
 
 afterEach(cleanup)
 
+describe('MessageList streaming indicator', () => {
+  it('shows the generating dot only while streaming', () => {
+    const { rerender } = render(
+      <MessageList messages={[]} streaming={{ iteration: 1, parts: [] }} />,
+    )
+    expect(screen.getByRole('status', { name: 'chat.generating' })).toBeTruthy()
+
+    rerender(<MessageList messages={[]} />)
+    expect(screen.queryByRole('status', { name: 'chat.generating' })).toBeNull()
+  })
+})
+
 const toolParts: MessagePart[] = [
   {
     type: 'tool',

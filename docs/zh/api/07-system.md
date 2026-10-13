@@ -12,9 +12,8 @@ OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和后�
 基础存活检查，无需认证。返回版本号、健康状态和认证模式。提供凭据后会尝试解析身份，成功时补充身份字段；凭据无效时返回认证错误。
 
 Trusted 模式下，完整的 `X-OpenViking-Account` 和 `X-OpenViking-User` 请求头会触发身份解析，
-包括省略 `root_api_key` 的 localhost 部署。配置了 Root 密钥的服务继续校验认证请求中的密钥。
-可选布尔字段 `root_api_key_required` 表示 Trusted 服务配置的密钥要求，解析得到的 `role`
-表示调用者权限。较早版本可能省略该字段。匿名健康探测返回基础存活信息。
+必须携带匹配的 root API key，localhost 也不例外。Trusted 模式的 `root_api_key_required`
+始终为 `true`，解析得到的 `role` 表示调用者权限。匿名健康探测返回基础存活信息，不包含身份字段。
 
 **代码入口**:
 - `openviking/server/routers/system.py:health_check` - HTTP 路由

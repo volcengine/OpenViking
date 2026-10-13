@@ -33,12 +33,6 @@ def _auth_mode(request: Request) -> str:
     return AuthMode.API_KEY.value
 
 
-def _configured_root_api_key(request: Request) -> Optional[str]:
-    config = getattr(request.app.state, "config", None)
-    key = getattr(config, "root_api_key", None)
-    return key if key != "" else None
-
-
 def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
     if not isinstance(x_api_key, str):
         x_api_key = None
@@ -98,16 +92,20 @@ def _get_plugin(request: Request):
     return plugin
 
 
-def resolve_group_ids(request: Request, account_id: str, user_id: str) -> tuple[str, ...]:
+def _uses_local_account_store(plugin) -> bool:
+    """Whether request authorization is backed by server-managed identities."""
+    return plugin.auth_mode in (AuthMode.API_KEY.value, AuthMode.TRUSTED.value)
+
+
+async def resolve_group_ids(request: Request, account_id: str, user_id: str) -> tuple[str, ...]:
     """Resolve server-managed account groups for a request identity."""
     manager = getattr(request.app.state, "api_key_manager", None)
-    if manager is None:
+    if manager is None or not hasattr(manager, "get_user_group_ids"):
         return ()
-    resolver = getattr(manager, "get_user_group_ids", None)
-    return tuple(resolver(account_id, user_id)) if resolver is not None else ()
+    return tuple(await manager.get_user_group_ids(account_id, user_id))
 
 
-def _build_request_context(
+async def _build_request_context(
     request: Request,
     identity: ResolvedIdentity,
     *,
@@ -121,23 +119,25 @@ def _build_request_context(
     ctx = RequestContext(
         user=UserIdentifier(account_id, user_id),
         role=identity.role,
-        group_ids=resolve_group_ids(request, account_id, user_id),
+        group_ids=(
+            await resolve_group_ids(request, account_id, user_id)
+            if identity.role != Role.ROOT and _uses_local_account_store(plugin)
+            else ()
+        ),
         actor_peer_id=actor_peer_id,
         from_oauth=identity.from_oauth,
         api_key=api_key,
     )
     manager = getattr(request.app.state, "api_key_manager", None)
-    is_deleting = getattr(manager, "is_deleting", None)
+    deletion = None
     if (
-        ctx.role != Role.ROOT
-        and callable(is_deleting)
-        and is_deleting(ctx.account_id, ctx.user.user_id)
+        _uses_local_account_store(plugin)
+        and ctx.role != Role.ROOT
+        and manager is not None
+        and hasattr(manager, "get_deletion")
     ):
-        deletion = (
-            manager.get_deletion(ctx.account_id)
-            or manager.get_deletion(ctx.account_id, ctx.user.user_id)
-            or {}
-        )
+        deletion = await manager.get_deletion(ctx.account_id, ctx.user.user_id)
+    if deletion is not None:
         raise FailedPreconditionError(
             "Identity deletion is in progress",
             details={"task_id": deletion.get("task_id")},
@@ -158,6 +158,10 @@ async def resolve_identity(
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
 ) -> ResolvedIdentity:
     """Resolve API key to identity via the active auth plugin."""
+    if x_api_key is None:
+        x_api_key = request.headers.get("X-API-Key")
+    if authorization is None:
+        authorization = request.headers.get("Authorization")
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
     api_key = _extract_api_key(x_api_key, authorization)
@@ -179,7 +183,7 @@ async def get_request_context(
     authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
     """Convert ResolvedIdentity to RequestContext."""
-    return _build_request_context(
+    return await _build_request_context(
         request,
         identity,
         actor_peer_id=normalize_actor_peer_header(x_openviking_actor_peer),
@@ -194,7 +198,7 @@ async def get_session_request_context(
     authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
     """Build a Session context without accepting an actor peer view."""
-    return _build_request_context(
+    return await _build_request_context(
         request,
         identity,
         api_key=_extract_api_key(x_api_key_ctx, authorization_ctx),
@@ -229,14 +233,16 @@ async def get_upload_request_context(
         request.state.signed_upload = consumed
         if _auth_mode(request) == AuthMode.API_KEY:
             manager = get_api_key_manager_or_raise(request)
-            if not manager.has_user(consumed.account_id, consumed.user_id):
+            current_role = await manager.get_registered_user_role(
+                consumed.account_id, consumed.user_id
+            )
+            if current_role is None:
                 raise UnauthenticatedError("Upload token's user no longer exists")
-            current_role = Role(manager.get_user_role(consumed.account_id, consumed.user_id))
             if Role(consumed.role).rank > current_role.rank:
                 raise UnauthenticatedError(
                     "Upload token's role exceeds the user's current role; request a new upload"
                 )
-            return _build_request_context(
+            return await _build_request_context(
                 request,
                 ResolvedIdentity(
                     role=consumed.role,
@@ -250,7 +256,7 @@ async def get_upload_request_context(
             ctx = RequestContext(
                 user=UserIdentifier(consumed.account_id, consumed.user_id),
                 role=Role.USER,
-                group_ids=resolve_group_ids(request, consumed.account_id, consumed.user_id),
+                group_ids=await resolve_group_ids(request, consumed.account_id, consumed.user_id),
                 # Actor peer comes from the token (bound at mint time from the trusted MCP
                 # context), never from this upload request's headers, so server-side
                 # auto-ingest keeps the caller's peer scope for reason-memory routing.
@@ -337,8 +343,7 @@ def require_auth_role(*allowed_roles: Role):
                     "Admin API authentication failed: unable to resolve request context."
                 )
 
-            manager = getattr(request.app.state, "api_key_manager", None)
-            if manager is None:
+            if getattr(request.app.state, "api_key_manager", None) is None:
                 raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
 
             if ctx.role not in allowed_roles:
@@ -375,11 +380,7 @@ def require_auth_root_or_admin(func):
 
 
 def get_api_key_manager_or_raise(request: Request):
-    """Get APIKeyManager from app state or raise appropriate error.
-
-    Raises:
-        PermissionDeniedError: When no APIKeyManager is available.
-    """
+    """Return the compatibility management facade exposed by the auth mode."""
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
         raise PermissionDeniedError(_DEV_MODE_ADMIN_API_MESSAGE)
@@ -394,9 +395,3 @@ def should_expose_user_key(request: Request) -> bool:
     if not isinstance(config, ServerConfig):
         return True
     return config.get_effective_auth_mode() != "trusted"
-
-
-def registry_watcher_running(request: Request) -> bool:
-    plugin = getattr(request.app.state, "auth_plugin", None)
-    watch_task = getattr(plugin, "_watch_task", None)
-    return watch_task is not None and not watch_task.done()

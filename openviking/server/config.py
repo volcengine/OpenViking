@@ -301,6 +301,21 @@ class ToolOutputExternalizationConfig(BaseModel):
     failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
 
 
+class AccountStoreConfig(BaseModel):
+    """Startup-only selection of the complete account store provider."""
+
+    provider: str = "file"
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("account_store.provider must not be empty")
+        return normalized
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -338,6 +353,7 @@ class ServerConfig(BaseModel):
     api_key_watch_enabled: bool = False
     # Poll interval; each check only stats registry files and reads fully on change.
     api_key_watch_interval_seconds: float = 30.0
+    account_store: AccountStoreConfig = Field(default_factory=AccountStoreConfig)
     # Trusted-mode identity registration is batched in memory; 0 disables it.
     trusted_identity_flush_interval_seconds: float = Field(300.0, ge=0)
     trusted_identity_pending_max_size: int = Field(10_000, gt=0)
@@ -547,7 +563,9 @@ def validate_server_config(config: ServerConfig) -> None:
     if config.root_api_key == "":
         logger.error(
             "Invalid server.root_api_key: empty string is not allowed. "
-            "Either set a non-empty root_api_key or remove the setting entirely."
+            "Set a non-empty server.root_api_key in ov.conf and restart. "
+            "Only remove this setting if the selected auth mode does not require a root key; "
+            "trusted and api_key modes require it even on localhost."
         )
         sys.exit(1)
 
