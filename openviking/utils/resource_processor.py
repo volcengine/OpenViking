@@ -701,7 +701,7 @@ class ResourceProcessor:
         4. (Optional) Build vector index
         5. (Optional) Summarize
         """
-        result = {
+        result: Dict[str, Any] = {
             "status": "success",
             "errors": [],
             "source_path": None,
@@ -753,7 +753,21 @@ class ResourceProcessor:
                         **kwargs,
                     )
                 result["source_path"] = parse_result.source_path or path
-                result["meta"] = parse_result.meta
+                parse_meta = parse_result.meta if isinstance(parse_result.meta, dict) else {}
+
+                from openviking.resource.dingtalk_import import (
+                    incomplete_import_details,
+                    record_local_parse_skips,
+                )
+
+                parse_warnings = list(parse_result.warnings or [])
+                parse_warnings.extend(record_local_parse_skips(parse_meta))
+                result["meta"] = parse_meta
+
+                dingtalk_failure = incomplete_import_details(
+                    parse_meta,
+                    parse_warnings,
+                )
 
                 # Only abort when no temp content was produced at all.
                 # For directory imports partial success (some files failed) is
@@ -761,11 +775,13 @@ class ResourceProcessor:
                 if not parse_result.temp_dir_path:
                     result["status"] = "error"
                     result["errors"].extend(
-                        parse_result.warnings or ["Parse failed: no content generated"],
+                        parse_warnings or ["Parse failed: no content generated"],
                     )
+                    if dingtalk_failure is not None:
+                        result["code"] = "FAILED_PRECONDITION"
+                        result["dingtalk"] = dingtalk_failure
                     return result
 
-                parse_meta = parse_result.meta if isinstance(parse_result.meta, dict) else {}
                 is_directory_aggregate = all(
                     key in parse_meta
                     for key in (
@@ -775,7 +791,16 @@ class ResourceProcessor:
                         "failed_files",
                     )
                 )
-                if is_directory_aggregate and parse_meta.get("file_count") == 0:
+                reused_nodes = any(
+                    entry.get("reused")
+                    for entry in parse_meta.get("dingtalk_manifest", [])
+                    if isinstance(entry, dict)
+                )
+                if (
+                    is_directory_aggregate
+                    and parse_meta.get("file_count") == 0
+                    and not reused_nodes
+                ):
                     result["status"] = "error"
                     result["errors"].append(self._empty_directory_error(parse_meta))
                     try:
@@ -791,7 +816,11 @@ class ResourceProcessor:
                     return result
 
                 parse_failures = self._directory_parse_failures(parse_meta)
-                if is_directory_aggregate and parse_failures:
+                if (
+                    is_directory_aggregate
+                    and parse_failures
+                    and not isinstance(parse_meta.get("dingtalk_manifest"), list)
+                ):
                     result["status"] = "error"
                     result["errors"].append(self._incomplete_directory_error(parse_failures))
                     try:
@@ -806,8 +835,30 @@ class ResourceProcessor:
                         )
                     return result
 
-                if parse_result.warnings and kwargs.get("strict", False):
-                    result.setdefault("warnings", []).extend(parse_result.warnings)
+                if dingtalk_failure is not None:
+                    result["status"] = "error"
+                    result["code"] = "FAILED_PRECONDITION"
+                    result["errors"].append(
+                        "DingTalk import was incomplete; the existing target was left unchanged."
+                    )
+                    result["dingtalk"] = dingtalk_failure
+                    try:
+                        await self._cleanup_parse_result_artifact(
+                            parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[ResourceProcessor] Failed to clean incomplete DingTalk temp %s: %s",
+                            parse_result.temp_dir_path,
+                            exc,
+                        )
+                    return result
+
+                if parse_warnings and (
+                    kwargs.get("strict", False)
+                    or isinstance(parse_meta.get("dingtalk_manifest"), list)
+                ):
+                    result.setdefault("warnings", []).extend(parse_warnings)
 
             except OpenVikingError:
                 raise
@@ -972,6 +1023,18 @@ class ResourceProcessor:
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
                     )
                     local_artifact_doc_rel = self._artifact_doc_rel(artifact_ref, temp_uri)
+                    from openviking.resource.dingtalk_import import prepare_dingtalk_artifact
+
+                    dingtalk_state, sync_warnings = await prepare_dingtalk_artifact(
+                        viking_fs,
+                        store=artifact_store,
+                        artifact_ref=artifact_ref,
+                        doc_rel=local_artifact_doc_rel,
+                        target_uri=str(root_uri),
+                        meta=parse_meta,
+                        ctx=ctx,
+                    )
+                    result.setdefault("warnings", []).extend(sync_warnings)
                     context_update_plan = await self._commit_directory_artifact_with_plan(
                         output_store=artifact_store,
                         artifact_ref=artifact_ref,
@@ -992,6 +1055,16 @@ class ResourceProcessor:
                             source_format=parse_result.source_format,
                         ),
                     )
+                    if dingtalk_state is not None:
+                        from openviking.resource.dingtalk_import import persist_sync_sidecar
+
+                        await persist_sync_sidecar(
+                            viking_fs,
+                            target_uri=root_uri,
+                            content=dingtalk_state,
+                            ctx=ctx,
+                            lease_ref=resource_lock,
+                        )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
                     source_committed = True

@@ -52,6 +52,11 @@ from .consts import (
     OPENVIKING_WRITE_CHECK_URI_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from .dingtalk_config import (
+    DingTalkConfig,
+    DingTalkIdentityConfig,
+    DingTalkMCPServerConfig,
+)
 from .embedding_config import EmbeddingConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
 from .glob_config import GlobConfig, GlobEngine
@@ -94,6 +99,9 @@ __all__ = [
     "AGFSConfig",
     "AgentEvolutionConfig",
     "CacheConfig",
+    "DingTalkConfig",
+    "DingTalkIdentityConfig",
+    "DingTalkMCPServerConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",

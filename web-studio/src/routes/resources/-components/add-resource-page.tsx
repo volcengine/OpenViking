@@ -35,6 +35,11 @@ import type { RemoteSourceOptionState } from '../-lib/resource-source-strategy'
 import { DirectoryPickerDialog } from './directory-picker-dialog'
 import { AdditionalResourceOptions } from './additional-resource-options'
 import type { AdditionalResourceOptionsValue } from './additional-resource-options'
+import {
+  DingTalkResourceOptions,
+  isValidDingTalkOptions,
+} from './dingtalk-resource-options'
+import type { DingTalkResourceOptionsValue } from './dingtalk-resource-options'
 import { FeishuResourceOptions } from './feishu-resource-options'
 import type { FeishuResourceOptionsValue } from './feishu-resource-options'
 import { GitResourceOptions } from './git-resource-options'
@@ -64,6 +69,13 @@ const DEFAULT_FEISHU_OPTIONS: FeishuResourceOptionsValue = {
   accessToken: '',
   authMode: 'app',
   refreshToken: '',
+}
+
+const DEFAULT_DINGTALK_OPTIONS: DingTalkResourceOptionsValue = {
+  identity: '',
+  maxBytesMiB: '512',
+  maxDepth: '20',
+  maxNodes: '1000',
 }
 
 const DEFAULT_GIT_OPTIONS: GitResourceOptionsValue = {
@@ -122,7 +134,12 @@ export function AddResourceForm({
   const [include, setInclude] = useState('')
   const [exclude, setExclude] = useState('')
   const [watchEnabled, setWatchEnabled] = useState(initialWatchEnabled)
+  const [watchInitiallyPaused, setWatchInitiallyPaused] = useState(false)
   const [watchInterval, setWatchInterval] = useState('1440')
+  const [dingtalkOptions, setDingTalkOptions] = useState(
+    DEFAULT_DINGTALK_OPTIONS,
+  )
+  const [dingtalkIdentityValid, setDingTalkIdentityValid] = useState(false)
   const [feishuOptions, setFeishuOptions] = useState(DEFAULT_FEISHU_OPTIONS)
   const [gitOptions, setGitOptions] = useState(DEFAULT_GIT_OPTIONS)
   const [webOptions, setWebOptions] =
@@ -142,9 +159,11 @@ export function AddResourceForm({
   const skippedFiles = remoteState.skippedFiles
   const detectedRemoteResourceKind = detectRemoteResourceKind(remoteUrl)
   const remoteResourceKind =
-    remoteResourceType === 'auto'
-      ? detectedRemoteResourceKind
-      : remoteResourceType
+    detectedRemoteResourceKind === 'dingtalk'
+      ? 'dingtalk'
+      : remoteResourceType === 'auto'
+        ? detectedRemoteResourceKind
+        : remoteResourceType
   const sourceCapabilities = getRemoteResourceCapabilities(
     activeMode === 'remote' ? remoteResourceKind : 'unknown',
   )
@@ -156,6 +175,7 @@ export function AddResourceForm({
   const effectiveDestinationMode: ResourceDestinationMode =
     sourceCapabilities.exactDestination ? 'to' : destinationMode
   const sourceOptionState: RemoteSourceOptionState = {
+    dingtalk: dingtalkOptions,
     feishu: feishuOptions,
     git: {
       ...gitOptions,
@@ -188,7 +208,10 @@ export function AddResourceForm({
 
   const resetRemoteSourceFields = useCallback(() => {
     setWatchEnabled(initialWatchEnabled)
+    setWatchInitiallyPaused(false)
     setWatchInterval('1440')
+    setDingTalkOptions(DEFAULT_DINGTALK_OPTIONS)
+    setDingTalkIdentityValid(false)
     setFeishuOptions(DEFAULT_FEISHU_OPTIONS)
     setGitOptions(DEFAULT_GIT_OPTIONS)
     setWebOptions(DEFAULT_WEB_OPTIONS)
@@ -221,6 +244,7 @@ export function AddResourceForm({
       strict,
       targetUri,
       watchEnabled: effectiveWatchEnabled,
+      watchInitiallyPaused,
       watchInterval,
     })
 
@@ -273,6 +297,8 @@ export function AddResourceForm({
   const canSubmit =
     hasValidDestination &&
     watchRequirementMet &&
+    (remoteResourceKind !== 'dingtalk' ||
+      (dingtalkIdentityValid && isValidDingTalkOptions(dingtalkOptions))) &&
     (activeMode === 'upload'
       ? selectedFiles.length > 0
       : !!remoteUrl.trim() && hasWatchInterval)
@@ -321,16 +347,28 @@ export function AddResourceForm({
             onResourceTypeChange={handleRemoteResourceTypeChange}
             onUrlChange={handleRemoteUrlChange}
             onWatchEnabledChange={setWatchEnabled}
+            onWatchInitiallyPausedChange={setWatchInitiallyPaused}
             onWatchIntervalChange={setWatchInterval}
             resourceKind={remoteResourceKind}
             resourceType={remoteResourceType}
             t={t}
             url={displayRemoteUrl}
             watchEnabled={effectiveWatchEnabled}
+            watchInitiallyPaused={watchInitiallyPaused}
             watchInterval={watchInterval}
+            watchPauseSupported={sourceCapabilities.initialPaused}
             watchRequired={watchRequired}
             watchSupported={sourceCapabilities.watch}
           >
+            {remoteResourceKind === 'dingtalk' ? (
+              <DingTalkResourceOptions
+                disabled={remotePhase === 'processing'}
+                onChange={setDingTalkOptions}
+                onIdentityValidityChange={setDingTalkIdentityValid}
+                t={t}
+                value={dingtalkOptions}
+              />
+            ) : null}
             {remoteResourceKind === 'feishu' ? (
               <FeishuResourceOptions
                 disabled={remotePhase === 'processing'}

@@ -1,5 +1,12 @@
 import type { ComponentType } from 'react'
-import { Cloud, FileDown, FileText, GitBranch, Globe2 } from 'lucide-react'
+import {
+  Building2,
+  Cloud,
+  FileDown,
+  FileText,
+  GitBranch,
+  Globe2,
+} from 'lucide-react'
 
 import type {
   RemoteResourceKind,
@@ -16,6 +23,11 @@ type RemoteResourceDescriptor = {
 }
 
 export const REMOTE_RESOURCE_DESCRIPTORS: RemoteResourceDescriptor[] = [
+  {
+    type: 'dingtalk',
+    icon: Building2,
+    exampleKey: 'sourcePicker.dingtalkExample',
+  },
   {
     type: 'feishu',
     icon: FileText,

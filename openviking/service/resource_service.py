@@ -146,6 +146,9 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "resolved_extension",
         "defer_post_processing",
         "prepared_resource",
+        "dingtalk_previous_state",
+        "dingtalk_processing_key",
+        "dingtalk_previous_digest",
         "tags",
         "tag_mode",
         "acl",
@@ -179,6 +182,7 @@ class _ResourceSourceInfo:
     source_name: Optional[str] = None
     source_path: Optional[str] = None
     source_format: Optional[str] = None
+    stable_target: bool = False
 
 
 @dataclass
@@ -308,6 +312,7 @@ class ResourceService:
                 "understanding_response_id",
                 "understanding_file_id",
                 "temp_file_id",
+                "resource_lock",
             }:
                 continue
             try:
@@ -334,8 +339,11 @@ class ResourceService:
     def _infer_watch_source_type(path: str) -> Optional[str]:
         if not path:
             return None
+        from openviking.parse.accessors.dingtalk_accessor import DingTalkAccessor
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
+        if DingTalkAccessor().can_handle(path):
+            return "dingtalk"
         if FeishuAccessor._is_feishu_url(path):
             return "feishu"
         if is_git_repo_url(path):
@@ -501,7 +509,9 @@ class ResourceService:
                     self._runtime_config_manager,
                     ctx.account_id,
                 )
-                app_credentials = self._load_feishu_credentials_for_watch(app_id, app_secret, feishu_config)
+                app_credentials = self._load_feishu_credentials_for_watch(
+                    app_id, app_secret, feishu_config
+                )
                 watch_auth_state = create_feishu_auth_state(
                     token,
                     refresh_token.strip(),
@@ -964,8 +974,11 @@ class ResourceService:
         processor_kwargs: Dict[str, Any],
         watch_auth_state: Optional[Dict[str, Any]],
         shared_source: Optional["SharedSource"] = None,
+        dingtalk_target: str = "",
+        dingtalk_key: str = "",
     ) -> Optional[_SourcePlan]:
         """Freeze one durable standard-pipeline source before it crosses QueueFS."""
+        from openviking.parse.accessors.dingtalk_accessor import DingTalkAccessor
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
         from openviking.resource.staged_source import stage_source
 
@@ -997,13 +1010,14 @@ class ResourceService:
             )
 
         git_source = is_git_repo_url(path)
+        dingtalk_source = DingTalkAccessor().can_handle(path)
         feishu_source = FeishuAccessor._is_feishu_url(path)
         remote_source = is_remote_resource_source(path)
         local_source = False
         if allow_local_path_resolution and len(path) <= 1024 and "\n" not in path:
             with contextlib.suppress(OSError, ValueError):
                 local_source = Path(path).exists()
-        if not (git_source or feishu_source or remote_source or local_source):
+        if not (git_source or dingtalk_source or feishu_source or remote_source or local_source):
             return None
 
         queued_args = {
@@ -1018,7 +1032,48 @@ class ResourceService:
         understanding_file_id = None
         defer_unnamed_target = False
 
-        if git_source:
+        if dingtalk_source:
+            assert self._resource_processor is not None
+            assert self._viking_fs is not None
+            from openviking.resource.dingtalk_incremental import digest, previous_state
+
+            reuse_options: Dict[str, Any] = {"dingtalk_processing_key": dingtalk_key}
+            if dingtalk_target:
+                await self._viking_fs._ensure_access(dingtalk_target, ctx, action=AclAction.WRITE)
+                previous = await previous_state(self._viking_fs, dingtalk_target, dingtalk_key, ctx)
+                if previous:
+                    reuse_options.update(
+                        dingtalk_previous_state=previous,
+                        dingtalk_previous_digest=digest(previous),
+                    )
+            prepared = await self._resource_processor.prepare_durable_source(
+                path,
+                ctx,
+                snapshot_required=True,
+                parse_mode=mode,
+                allow_local_path_resolution=allow_local_path_resolution,
+                **processor_kwargs,
+                **reuse_options,
+            )
+            if prepared is None:  # pragma: no cover - snapshot_required always prepares
+                raise InternalError("Failed to prepare DingTalk source.")
+            try:
+                resolved_extension, source_info = self._prepared_source_info(
+                    prepared,
+                    path,
+                    source_name or prepared.path.name,
+                )
+                source_info.stable_target = True
+                if resolved_extension:
+                    queued_args["resolved_extension"] = resolved_extension
+                staged_source = await stage_source(
+                    prepared,
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                )
+            finally:
+                prepared.cleanup()
+        elif git_source:
             reject_git_http_userinfo(path)
             from openviking.connector.routing import credential_arg_names
 
@@ -1402,6 +1457,9 @@ class ResourceService:
             source_format=source_info.source_format,
             create_parent=create_parent,
         )
+        if candidate_uri and source_info.stable_target:
+            root_uri = candidate_uri
+            candidate_uri = None
         if candidate_uri and defer_candidate_resolution:
             await self._resource_processor.ensure_candidate_parent_write_access(
                 candidate_uri=candidate_uri,
@@ -1939,17 +1997,68 @@ class ResourceService:
             # effect. Connector watches are paused or deleted only via the watches API.
             return result
 
+        from openviking.parse.accessors.dingtalk_accessor import DingTalkAccessor
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
         if is_active is False and not (
-            FeishuAccessor._is_feishu_url(path) or is_git_repo_url(path)
+            DingTalkAccessor().can_handle(path)
+            or FeishuAccessor._is_feishu_url(path)
+            or is_git_repo_url(path)
         ):
             raise InvalidArgumentError(
-                "is_active=false is only supported for Connector, native Feishu, or native Git imports."
+                "is_active=false is only supported for Connector, native DingTalk, "
+                "native Feishu, or native Git imports."
             )
         if enforce_public_remote_targets and is_remote_resource_source(path):
             path = require_remote_resource_source(path)
             kwargs.setdefault("request_validator", ensure_public_remote_target)
+
+        dingtalk_target, dingtalk_key = "", ""
+        if DingTalkAccessor().can_handle(path):
+            assert self._resource_processor is not None
+            from openviking.resource.dingtalk_incremental import processing_key
+
+            if any(
+                key in kwargs
+                for key in (
+                    "dingtalk_previous_state",
+                    "dingtalk_processing_key",
+                    "dingtalk_previous_digest",
+                )
+            ):
+                raise InvalidArgumentError("DingTalk reuse state is managed by the server.")
+            _, source_id, canonical = DingTalkAccessor._parse_source(path)
+            (
+                dingtalk_target,
+                candidate,
+            ) = await self._resource_processor.tree_builder.resolve_target_uri(
+                ctx=ctx,
+                doc_name=kwargs.get("source_name") or f"dingtalk_{source_id}",
+                scope="resources",
+                to_uri=target_to,
+                parent_uri=target_parent,
+                source_path=path,
+                source_format="directory",
+                create_parent=target_create_parent,
+            )
+            dingtalk_target = candidate or dingtalk_target
+            key_options = dict(kwargs)
+            if key_options.get("source_name") == f"dingtalk_{source_id}":
+                key_options.pop("source_name")
+            dingtalk_key = processing_key(
+                canonical,
+                {
+                    **key_options,
+                    "parse_mode": mode.value,
+                    "reason": reason,
+                    "instruction": instruction,
+                    "build_index": build_index,
+                    "summarize": summarize,
+                    "processing_mode": processing_mode,
+                    "tags": tags,
+                    "tag_mode": tag_mode,
+                },
+            )
 
         async with feishu_auth_scope(
             connector, path=path, ctx=ctx, args=kwargs, state=normalized_args.watch_auth_state
@@ -1963,6 +2072,8 @@ class ResourceService:
                 processor_kwargs=kwargs,
                 watch_auth_state=normalized_args.watch_auth_state,
                 shared_source=shared_source,
+                dingtalk_target=dingtalk_target,
+                dingtalk_key=dingtalk_key,
             )
         if source_plan is not None:
             result = await self._enqueue_source_plan(
@@ -2048,9 +2159,9 @@ class ResourceService:
             "errors": [task.error],
         }
         if isinstance(task.result, dict):
-            code = task.result.get("code")
-            if isinstance(code, str) and code:
-                failure["code"] = code
+            for key in ("code", "dingtalk"):
+                if key in task.result:
+                    failure[key] = task.result[key]
         return failure
 
     async def _execute_resource_ingestion(

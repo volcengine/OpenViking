@@ -12,10 +12,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AddResourceForm } from './add-resource-page'
 
+const dingtalkApiMocks = vi.hoisted(() => ({
+  error: null as Error | null,
+  get: vi.fn(),
+  identities: [] as { label: string; name: string }[],
+}))
+
 const uploadMocks = vi.hoisted(() => ({
   enqueueUploads: vi.fn(),
   resetRemote: vi.fn(),
   startRemote: vi.fn(),
+}))
+
+vi.mock('#/lib/ov-client', () => ({
+  getOvResult: vi.fn(async () => {
+    if (dingtalkApiMocks.error) throw dingtalkApiMocks.error
+    return dingtalkApiMocks.identities
+  }),
+  ovClient: { client: { get: dingtalkApiMocks.get } },
 }))
 
 vi.mock('react-i18next', () => ({
@@ -40,6 +54,8 @@ vi.mock('../-hooks/use-resource-upload', () => ({
 
 afterEach(() => {
   cleanup()
+  dingtalkApiMocks.error = null
+  dingtalkApiMocks.identities = []
   vi.clearAllMocks()
 })
 
@@ -59,7 +75,7 @@ describe('AddResourceForm watch options', () => {
     expect(remoteUrlInput.getAttribute('placeholder')).toBe(
       'remoteUrl.placeholder',
     )
-    for (const type of ['feishu', 'git', 'webPage', 'remoteFile']) {
+    for (const type of ['dingtalk', 'feishu', 'git', 'webPage', 'remoteFile']) {
       expect(
         screen.getByRole('button', {
           name: new RegExp(`sourcePicker.${type}`),
@@ -105,6 +121,213 @@ describe('AddResourceForm watch options', () => {
     expect(
       screen.queryByRole('button', { name: /sourcePicker.connector/ }),
     ).toBeNull()
+  })
+
+  it('requires a configured DingTalk identity and keeps credentials server-side', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://alidocs.dingtalk.com/i/nodes/doc-id' },
+    })
+
+    expect(await screen.findByText('dingtalk.identityEmpty')).toBeTruthy()
+    expect(screen.queryByLabelText(/endpoint|secret/i)).toBeNull()
+    expect(
+      screen
+        .getByRole('button', { name: 'startProcessing' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
+    expect(dingtalkApiMocks.get).toHaveBeenCalledWith({
+      url: '/api/v1/resources/dingtalk/identities',
+    })
+  })
+
+  it('submits DingTalk identity, limits, and the shared watch options', async () => {
+    dingtalkApiMocks.identities = [
+      { name: 'team-docs', label: 'Team documentation' },
+    ]
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm
+          initialMode="remote"
+          initialWatchEnabled
+          watchRequired
+        />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://alidocs.dingtalk.com/i/nodes/doc-id' },
+    })
+    fireEvent.change(await screen.findByLabelText('dingtalk.identity'), {
+      target: { value: 'team-docs' },
+    })
+    fireEvent.change(screen.getByLabelText('dingtalk.maxNodes'), {
+      target: { value: '250' },
+    })
+    fireEvent.change(screen.getByLabelText('dingtalk.maxDepth'), {
+      target: { value: '0' },
+    })
+    fireEvent.change(screen.getByLabelText('dingtalk.maxBytesMiB'), {
+      target: { value: '64' },
+    })
+    fireEvent.click(screen.getByRole('switch', { name: 'watch.startPaused' }))
+
+    const submit = screen.getByRole('button', { name: 'startProcessing' })
+    await waitFor(() => expect(submit.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(submit)
+
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith({
+      commonBody: expect.objectContaining({
+        args: {
+          dingtalk_identity: 'team-docs',
+          dingtalk_max_bytes: 64 * 1024 * 1024,
+          dingtalk_max_depth: 0,
+          dingtalk_max_nodes: 250,
+        },
+        is_active: false,
+        parent: 'viking://resources/',
+        watch_interval: 1440,
+      }),
+      onAccepted: undefined,
+      onCompleted: undefined,
+      onFailed: undefined,
+      url: 'https://alidocs.dingtalk.com/i/nodes/doc-id',
+    })
+  })
+
+  it('does not let a DingTalk domain bypass identity options as a web page', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /sourcePicker.webPage/ }),
+    )
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://docs.dingtalk.com/not-supported' },
+    })
+
+    expect(await screen.findByText('dingtalk.identityEmpty')).toBeTruthy()
+    expect(screen.queryByText('web.mode.title')).toBeNull()
+  })
+
+  it('blocks invalid DingTalk limits', async () => {
+    dingtalkApiMocks.identities = [{ name: 'main', label: 'Main' }]
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://alidocs.dingtalk.com/i/nodes/doc-id' },
+    })
+    fireEvent.change(await screen.findByLabelText('dingtalk.identity'), {
+      target: { value: 'main' },
+    })
+    fireEvent.change(screen.getByLabelText('dingtalk.maxNodes'), {
+      target: { value: '0' },
+    })
+
+    expect(screen.getByText('dingtalk.limitError')).toBeTruthy()
+    expect(
+      screen
+        .getByRole('button', { name: 'startProcessing' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('dingtalk.maxNodes'), {
+      target: { value: '1000' },
+    })
+    fireEvent.change(screen.getByLabelText('dingtalk.maxDepth'), {
+      target: { value: '' },
+    })
+    expect(
+      screen
+        .getByRole('button', { name: 'startProcessing' })
+        .hasAttribute('disabled'),
+    ).toBe(true)
+  })
+
+  it('blocks a previously selected identity when the server list becomes empty', async () => {
+    dingtalkApiMocks.identities = [{ name: 'main', label: 'Main' }]
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'remoteUrl' }), {
+      target: { value: 'https://alidocs.dingtalk.com/i/nodes/doc-id' },
+    })
+    fireEvent.change(await screen.findByLabelText('dingtalk.identity'), {
+      target: { value: 'main' },
+    })
+    const submit = screen.getByRole('button', { name: 'startProcessing' })
+    await waitFor(() => expect(submit.hasAttribute('disabled')).toBe(false))
+
+    queryClient.setQueryData(['dingtalk-identities'], [])
+
+    expect(await screen.findByText('dingtalk.identityEmpty')).toBeTruthy()
+    await waitFor(() => expect(submit.hasAttribute('disabled')).toBe(true))
+  })
+
+  it('does not retain initial pause when switching from DingTalk to Web', async () => {
+    dingtalkApiMocks.identities = [{ name: 'main', label: 'Main' }]
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddResourceForm initialMode="remote" initialWatchEnabled />
+      </QueryClientProvider>,
+    )
+
+    const url = screen.getByRole('textbox', { name: 'remoteUrl' })
+    fireEvent.change(url, {
+      target: { value: 'https://alidocs.dingtalk.com/i/nodes/doc-id' },
+    })
+    fireEvent.change(await screen.findByLabelText('dingtalk.identity'), {
+      target: { value: 'main' },
+    })
+    fireEvent.click(screen.getByRole('switch', { name: 'watch.startPaused' }))
+
+    fireEvent.change(url, { target: { value: 'https://example.com/docs' } })
+    expect(
+      screen.queryByRole('switch', { name: 'watch.startPaused' }),
+    ).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'startProcessing' }))
+
+    expect(uploadMocks.startRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commonBody: expect.not.objectContaining({
+          is_active: expect.anything(),
+        }),
+        url: 'https://example.com/docs',
+      }),
+    )
   })
 
   it('lets the server validate an address that differs from the selected type', () => {
@@ -181,7 +404,10 @@ describe('AddResourceForm watch options', () => {
     expect((remoteUrlInput as HTMLInputElement).value).toBe('')
 
     fireEvent.click(screen.getByRole('button', { name: /sourcePicker.git/ }))
-    expect(screen.getByRole('textbox', { name: 'git.branch' }).value).toBe('')
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'git.branch' })
+        .value,
+    ).toBe('')
     expect(
       screen
         .getByRole('button', { name: 'git.branch' })

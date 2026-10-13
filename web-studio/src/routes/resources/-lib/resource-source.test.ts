@@ -4,6 +4,8 @@ import { detectRemoteResourceKind } from './resource-source'
 
 describe('detectRemoteResourceKind', () => {
   it.each([
+    ['https://alidocs.dingtalk.com/i/nodes/example', 'dingtalk'],
+    ['https://docs.dingtalk.com/unsupported/path.pdf', 'dingtalk'],
     ['https://example.feishu.cn/docx/doxcn123', 'feishu'],
     ['https://open.larksuite.com/wiki/wikcn123', 'feishu'],
     ['https://github.com/volcengine/OpenViking', 'git'],
