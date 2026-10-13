@@ -74,6 +74,30 @@ async def test_code_parse_writes_to_local_store(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_code_parse_skips_unsafe_repository_path(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    unsafe_file = repo / "tests" / "media" / "%2F.txt"
+    unsafe_file.parent.mkdir(parents=True)
+    unsafe_file.write_text("fixture", encoding="utf-8")
+    store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
+    parser = CodeRepositoryParser()
+    monkeypatch.setattr(parser, "_get_viking_fs", lambda: _ExplodingVikingFS())
+
+    result = await parser.parse(
+        str(repo),
+        _source_meta={"repo_name": "acme/demo"},
+        parse_output_store=store,
+    )
+
+    assert result.artifact_ref is not None
+    assert result.meta["skipped_file_count"] == 1
+    assert len(result.warnings) == 1
+    assert "tests/media/%2F.txt" in result.warnings[0]
+    assert "Unsafe relative path rejected" in result.warnings[0]
+    assert not (Path(result.artifact_ref.root) / "repository/tests/media/%2F.txt").exists()
+
+
+@pytest.mark.asyncio
 async def test_code_parse_rejects_and_cleans_partial_local_artifact(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     artifact_root = tmp_path / "artifacts"

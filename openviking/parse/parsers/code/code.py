@@ -179,7 +179,7 @@ class CodeRepositoryParser(BaseParser):
             logger.debug(f"Uploading code repository artifacts to: {target_root_uri}")
 
             # 4. Upload to the artifact store (filtering on the fly)
-            file_count, upload_failures = await self._upload_directory(
+            file_count, upload_failures, upload_warnings = await self._upload_directory(
                 local_dir,
                 output_store=output_store,
                 artifact_ref=artifact_ref,
@@ -223,11 +223,13 @@ class CodeRepositoryParser(BaseParser):
                 source_format="repository",
                 parser_name="CodeRepositoryParser",
                 parse_time=time.time() - start_time,
+                warnings=upload_warnings,
             )
             result.temp_dir_path = temp_viking_uri  # Points to parent of repo_name
             result.artifact_ref = artifact_ref
             result.meta["file_count"] = file_count
             result.meta["repo_name"] = repo_name
+            result.meta["skipped_file_count"] = len(upload_warnings)
             if branch:
                 result.meta["repo_ref"] = branch
             if commit:
@@ -614,9 +616,10 @@ class CodeRepositoryParser(BaseParser):
         ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
         include: Optional[str] = None,
         exclude: Optional[str] = None,
-    ) -> Tuple[int, List[str]]:
+    ) -> Tuple[int, List[str], List[str]]:
         """Recursively upload the repository into the artifact store under repository/."""
-        return await upload_directory(
+        skipped_path_warnings: List[str] = []
+        count, failures = await upload_directory(
             local_dir,
             "repository",
             store=output_store,
@@ -624,4 +627,7 @@ class CodeRepositoryParser(BaseParser):
             ignore_dirs=ignore_dirs,
             include=include,
             exclude=exclude,
+            skip_unsafe_paths=True,
+            skipped_path_warnings=skipped_path_warnings,
         )
+        return count, failures, skipped_path_warnings
