@@ -2343,6 +2343,54 @@ async def test_file_root_plan_uses_file_refresh_without_directory_semantic_tree(
 
 
 @pytest.mark.asyncio
+async def test_file_root_plan_refreshes_missing_abstract_when_content_is_indexed():
+    """A prior vectors-only write must not suppress a later semantic summary."""
+    from openviking.storage.context_update_plan import build_context_update_plan_from_snapshot
+    from openviking.storage.resource_rnfv import (
+        FormalEntry,
+        FormalTreeSnapshot,
+        NewArtifactSnapshot,
+        NewEntry,
+        RequestIntent,
+        RNFVSnapshot,
+        VectorIndexSnapshot,
+        VectorRecordSnapshot,
+    )
+
+    root = "viking://resources/report.md"
+    snapshot = RNFVSnapshot(
+        RequestIntent(root, "semantic_and_vectors"),
+        NewArtifactSnapshot({"": NewEntry(md5="same")}),
+        FormalTreeSnapshot({"": FormalEntry()}),
+        VectorIndexSnapshot(
+            {"report-l2": VectorRecordSnapshot("report-l2", root, "", 2, {"md5": "same"})},
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
+    )
+
+    _, plan = await build_context_update_plan_from_snapshot(
+        snapshot=snapshot,
+        store=AsyncMock(),
+        artifact_ref=object(),
+        target=AsyncMock(),
+        vikingdb=AsyncMock(),
+        context_type="resource",
+        is_code_repo=False,
+        account_id="acc",
+        ctx=object(),
+        root_preexisting=True,
+        artifact_paths={"": "report.md"},
+        root_is_file=True,
+    )
+
+    assert plan.content_tree_actions == ()
+    assert plan.direct_index_actions == ()
+    assert plan.semantic_plan is None
+    assert plan.file_refresh is not None
+    assert plan.file_refresh.md5 == "same"
+
+
+@pytest.mark.asyncio
 async def test_hydration_promotes_a_dependency_when_its_record_disappears():
     from openviking.storage.context_update_plan import (
         ContentState,

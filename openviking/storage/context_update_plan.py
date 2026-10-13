@@ -1318,15 +1318,30 @@ async def build_context_update_plan_from_snapshot(
         return diff, plan
 
     root_entry = diff.entries[""]
-    needs_refresh = ContentState(root_entry.content_state) in {
-        ContentState.ADDED,
-        ContentState.RESTORE,
-        ContentState.MODIFIED,
-        ContentState.REPLACE_KIND,
-    } or (
-        snapshot.request.vectorize
-        and IndexState(root_entry.index_state)
-        in {IndexState.MISSING, IndexState.PARTIAL, IndexState.STALE, IndexState.LEVEL_CONFLICT}
+    has_file_abstract = any(
+        record.relative_path == ""
+        and record.level == 2
+        and str(record.fields.get("abstract") or "").strip()
+        for record in records.values()
+    )
+    needs_refresh = (
+        ContentState(root_entry.content_state)
+        in {
+            ContentState.ADDED,
+            ContentState.RESTORE,
+            ContentState.MODIFIED,
+            ContentState.REPLACE_KIND,
+        }
+        or (
+            snapshot.request.vectorize
+            and IndexState(root_entry.index_state)
+            in {IndexState.MISSING, IndexState.PARTIAL, IndexState.STALE, IndexState.LEVEL_CONFLICT}
+        )
+        or (
+            snapshot.request.processing_mode != "vectors_only"
+            and snapshot.request.vectorize
+            and not has_file_abstract
+        )
     )
     return diff, ContextUpdatePlan(
         root_uri=plan.root_uri,

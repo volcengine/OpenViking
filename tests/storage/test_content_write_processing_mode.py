@@ -449,3 +449,33 @@ def test_plan_statuses_report_deferred_parent_and_queued_vector_work():
         "deferred",
         "queued",
     )
+
+
+@pytest.mark.parametrize(
+    ("semantic_action", "wait", "queue_status", "expected"),
+    [
+        (
+            FreshnessAction.MARK_PENDING.value,
+            False,
+            None,
+            ("deferred", "queued"),
+        ),
+        (
+            FreshnessAction.NOOP.value,
+            True,
+            {},
+            ("skipped", "complete"),
+        ),
+    ],
+)
+def test_plan_statuses_prioritize_parent_freshness_over_file_semantic_work(
+    semantic_action, wait, queue_status, expected
+):
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+    work = SimpleNamespace(
+        semantic_requested=True,
+        vector_requested=True,
+        semantic_action=semantic_action,
+    )
+
+    assert coordinator._plan_statuses(work, wait=wait, queue_status=queue_status) == expected

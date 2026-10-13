@@ -308,21 +308,17 @@ class OpenVikingStore(BaseStore):
         value: dict[str, Any],
         now: datetime,
     ) -> dict[str, Any]:
-        record = _store_record(namespace, key, value, created_at=now, updated_at=now)
-        content = json.dumps(record, ensure_ascii=False, indent=2)
         try:
-            self._write_create(uri, content)
+            existing = self._read_record(uri)
+        except Exception:
+            record = _store_record(namespace, key, value, created_at=now, updated_at=now)
+            self._write_create(uri, json.dumps(record, ensure_ascii=False, indent=2))
             return record
-        except Exception as create_exc:
-            try:
-                existing = self._read_record(uri)
-            except Exception:
-                raise create_exc
 
-            created_at = _parse_dt(existing["created_at"])
-            record = _store_record(namespace, key, value, created_at=created_at, updated_at=now)
-            self._write_replace(uri, json.dumps(record, ensure_ascii=False, indent=2))
-            return record
+        created_at = _parse_dt(existing["created_at"])
+        record = _store_record(namespace, key, value, created_at=created_at, updated_at=now)
+        self._write_replace(uri, json.dumps(record, ensure_ascii=False, indent=2))
+        return record
 
     def _write(self, uri: str, content: str) -> None:
         try:

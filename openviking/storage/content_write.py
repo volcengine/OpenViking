@@ -1523,13 +1523,12 @@ class ContentWriteCoordinator:
     ) -> tuple[str, str]:
         """Map executed plan work + queue status to semantic/vector statuses."""
         semantic_action = getattr(work, "semantic_action", None)
-        if not getattr(work, "semantic_requested", False):
-            if semantic_action == FreshnessAction.MARK_PENDING.value:
-                semantic_status = "deferred"
-            elif semantic_action == FreshnessAction.NOOP.value:
-                semantic_status = "skipped"
-            else:
-                semantic_status = "skipped"
+        if semantic_action == FreshnessAction.MARK_PENDING.value:
+            semantic_status = "deferred"
+        elif semantic_action == FreshnessAction.NOOP.value:
+            semantic_status = "skipped"
+        elif not getattr(work, "semantic_requested", False):
+            semantic_status = "skipped"
         elif not wait:
             semantic_status = "queued"
         elif _queue_has_errors(queue_status, "Semantic"):
