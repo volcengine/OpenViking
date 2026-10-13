@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.5.18",
+  "version": "0.5.19",
   "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking.",
   "author": {
     "name": "OpenViking",
