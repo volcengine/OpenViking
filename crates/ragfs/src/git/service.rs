@@ -6650,7 +6650,7 @@ mod fast_path1_tests {
                 mount_path: "/local".to_string(),
                 params,
                 backups: Some(BackendsConfig {
-                    namespace: "default".to_string(),
+                    service_name: "mw-test".to_string(),
                     initial_partitions: 16,
                     checkpoint_interval_secs: 86_400,
                     provider: "filesystem".to_string(),

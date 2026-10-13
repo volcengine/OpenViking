@@ -1,4 +1,5 @@
 {
+    "service_name": "openviking-server",
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
@@ -90,13 +91,11 @@
             },
             "cachefs": {
                 "backend": "local",
-                "namespace": "openviking",
                 "max_file_size_bytes": 1048576,
                 "bypass_prefixes": ["/queue", "/tmp"],
             },
             "queuefs": {
                 "backend": "sqlite",
-                "cache_key_prefix": "default",
             },
             "pathlock": {
                 "provider": "filesystem",

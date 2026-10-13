@@ -13,6 +13,10 @@ from threading import Thread
 from typing import Any, Callable, Dict
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.config_utils import (
+    DEFAULT_SERVICE_NAME,
+    normalize_service_name,
+)
 from openviking_cli.utils.config.consts import DEFAULT_OV_CONF, OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.logger import get_logger
 
@@ -28,6 +32,11 @@ class RagfsBindingConfig:
     root_key: bytes | None = None
     provider_type: int | None = None
     log: Dict[str, Any] | None = None
+    service_name: str = DEFAULT_SERVICE_NAME
+
+    def __post_init__(self) -> None:
+        """Validate the service name used by cache-backed modules."""
+        object.__setattr__(self, "service_name", normalize_service_name(self.service_name))
 
     def encryption_enabled(self) -> bool:
         """Return whether the binding stack should include the encryption layer."""
@@ -60,17 +69,19 @@ class RagfsBindingConfig:
                 cachefs,
                 cachefs_backend == "cache",
                 uses_runtime,
+                self.service_name,
             )
         elif self.cache is not None:
-            cache_config = _disabled_cache_config(cachefs)
+            cache_config = _disabled_cache_config(cachefs, self.service_name)
         else:
             if uses_runtime:
                 raise ValueError(
                     "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
                     "or cache-backed multi-write uses the shared Runtime"
                 )
-            cache_config = _disabled_cache_config(cachefs)
+            cache_config = _disabled_cache_config(cachefs, self.service_name)
         binding_config: Dict[str, Any] = {
+            "service_name": self.service_name,
             "cache": cache_config,
             "pathlock": pathlock,
         }
@@ -91,13 +102,16 @@ class RagfsBindingConfig:
         return binding_config
 
 
-def _disabled_cache_config(cachefs_model: Any) -> Dict[str, Any]:
+def _disabled_cache_config(
+    cachefs_model: Any, service_name: str = DEFAULT_SERVICE_NAME
+) -> Dict[str, Any]:
+    """Build the disabled cache config shape; service_name is carried at binding top level."""
+    normalize_service_name(service_name)
     traversal_mode = getattr(cachefs_model, "traversal_mode", "backend")
     return {
         "enabled": False,
         "runtime_enabled": False,
         "provider": "redis",
-        "namespace": getattr(cachefs_model, "namespace", "openviking"),
         "max_file_size_bytes": getattr(cachefs_model, "max_file_size_bytes", 1024 * 1024),
         "traversal_mode": getattr(traversal_mode, "value", traversal_mode),
         "bypass_prefixes": list(getattr(cachefs_model, "bypass_prefixes", [])),
@@ -109,10 +123,12 @@ def _build_provider_cache_config(
     cachefs_model: Any,
     cachefs_enabled: bool,
     runtime_enabled: bool,
+    service_name: str,
 ) -> Dict[str, Any]:
+    """Build a provider-backed cache config that shares the top-level service name."""
     provider = provider_config.provider.strip()
     params = dict(provider_config.params)
-    cache_config = _disabled_cache_config(cachefs_model)
+    cache_config = _disabled_cache_config(cachefs_model, service_name)
     cache_config.update(
         {
             "enabled": cachefs_enabled,
@@ -200,6 +216,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             agfs=agfs_config,
             cache=cache_config,
             log=binding_log,
+            service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -213,6 +230,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             root_key=bytes(root_key),
             provider_type=encryptor.provider_type,
             log=binding_log,
+            service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
         ),
         encryptor,
     )
@@ -251,7 +269,9 @@ def resolve_queuefs_mount_point(config: Any = None) -> str:
     return "/queue"
 
 
-def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str, Any]:
+def _build_queuefs_plugin_config(
+    agfs_config: Any, data_path: Path, service_name: str = DEFAULT_SERVICE_NAME
+) -> Dict[str, Any]:
     """Build QueueFS plugin configuration from AGFS config."""
     default_queue_db_path = data_path / "_system" / "queue" / "queue.db"
     queuefs_config = getattr(agfs_config, "queuefs", None)
@@ -276,15 +296,20 @@ def _build_queuefs_plugin_config(agfs_config: Any, data_path: Path) -> Dict[str,
         plugin_config["db_path"] = queue_db_path
 
     if backend == "cache":
-        plugin_config["cache_key_prefix"] = queuefs_config.cache_key_prefix
+        plugin_config["service_name"] = service_name
 
     return plugin_config
 
 
 def _generate_plugin_config(
-    agfs_config: Any, data_path: Path, server_encryption_enabled: bool = False
+    agfs_config: Any,
+    data_path: Path,
+    server_encryption_enabled: bool = False,
+    *,
+    service_name: str = DEFAULT_SERVICE_NAME,
 ) -> Dict[str, Any]:
     """Dynamically generate RAGFS plugin configuration based on backend type."""
+    service_name = normalize_service_name(service_name)
     config = {
         "serverinfofs": {
             "enabled": True,
@@ -296,7 +321,7 @@ def _generate_plugin_config(
         "queuefs": {
             "enabled": True,
             "path": "/queue",
-            "config": _build_queuefs_plugin_config(agfs_config, data_path),
+            "config": _build_queuefs_plugin_config(agfs_config, data_path, service_name),
         },
     }
 
@@ -326,7 +351,7 @@ def _generate_plugin_config(
     # Add multi-write fields if backups are configured
     if backups_config is not None:
         # Serialize backups config to dict for FFI JSON passthrough
-        mount_config["backups"] = _serialize_backups_config(backups_config, data_path)
+        mount_config["backups"] = _serialize_backups_config(backups_config, data_path, service_name)
         mount_config["server_encryption_enabled"] = server_encryption_enabled
         mount_config["primary_encryption_enabled"] = server_encryption_enabled
 
@@ -405,7 +430,7 @@ def _serialize_s3_plugin_params(s3_config: Any) -> Dict[str, Any]:
 
 
 def _dump_config_object(config: Any) -> Dict[str, Any]:
-    """Dump a pydantic or namespace-like config object without None values."""
+    """Dump a pydantic or attribute-style config object without None values."""
     if hasattr(config, "model_dump"):
         return config.model_dump(exclude_none=True)
     if isinstance(config, dict):
@@ -482,7 +507,9 @@ def _normalize_backup_item(item: Any, data_path: Path) -> Dict[str, Any]:
     return item_dict
 
 
-def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str, Any]:
+def _serialize_backups_config(
+    backups_config: Any, data_path: Path, service_name: str = DEFAULT_SERVICE_NAME
+) -> Dict[str, Any]:
     """Serialize V2 backups while warning about and stripping legacy fields."""
     result = _dump_config_object(backups_config)
     deprecated_fields = []
@@ -516,6 +543,7 @@ def _serialize_backups_config(backups_config: Any, data_path: Path) -> Dict[str,
             "Deprecated backups configuration fields are ignored: %s",
             ", ".join(dict.fromkeys(deprecated_fields)),
         )
+    result["service_name"] = service_name
     return result
 
 
@@ -653,7 +681,12 @@ def mount_agfs_backend(agfs: Any, config: RagfsBindingConfig | Any) -> None:
         config.encryption_enabled() if isinstance(config, RagfsBindingConfig) else False
     )
     config = _generate_plugin_config(
-        agfs_config, data_path, server_encryption_enabled=server_encryption_enabled
+        agfs_config,
+        data_path,
+        server_encryption_enabled=server_encryption_enabled,
+        service_name=config.service_name
+        if isinstance(config, RagfsBindingConfig)
+        else DEFAULT_SERVICE_NAME,
     )
 
     for plugin_name, plugin_config in config.items():

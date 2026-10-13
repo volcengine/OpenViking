@@ -135,13 +135,9 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
-    cache_key_prefix: str = Field(
-        default="default",
-        description="Queue key namespace when backend is 'cache'.",
-    )
-
     @model_validator(mode="after")
     def validate_config(self):
+        """Validate QueueFS mode and backend choices."""
         valid_modes = {"shared", "worker"}
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
@@ -156,12 +152,6 @@ class QueueFSConfig(BaseModel):
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
             raise ValueError("queuefs busy_timeout_ms must be >= 0")
-        if not self.cache_key_prefix.strip() or any(
-            marker in self.cache_key_prefix for marker in ("{", "}")
-        ):
-            raise ValueError(
-                "queuefs cache_key_prefix must be non-empty and must not contain '{' or '}'"
-            )
         return self
 
 
@@ -179,7 +169,6 @@ class AGFSCacheFSConfig(BaseModel):
         default="local",
         description="CacheFS backend: 'local' | 'cache'",
     )
-    namespace: str = Field(default="openviking", description="RAGFS cache namespace")
     max_file_size_bytes: int = Field(
         default=1024 * 1024,
         description="Maximum full-file object size admitted to cache",
@@ -195,8 +184,7 @@ class AGFSCacheFSConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self):
-        if not self.namespace.strip():
-            raise ValueError("cachefs namespace must not be empty")
+        """Validate CacheFS limits."""
         if self.max_file_size_bytes <= 0:
             raise ValueError("cachefs max_file_size_bytes must be > 0")
         return self
@@ -312,10 +300,6 @@ class AGFSPathLockConfig(BaseModel):
         default="filesystem",
         description="PathLock provider: 'filesystem' | 'memory' | 'cache'",
     )
-    namespace: Optional[str] = Field(
-        default=None,
-        description="OpenViking instance name used by cache-backed PathLock.",
-    )
     lock_timeout_secs: float = Field(
         default=0.0,
         description="Deprecated internal field. Runtime auto-pathlock wait timeout is fixed at 0.0 seconds.",
@@ -330,18 +314,6 @@ class AGFSPathLockConfig(BaseModel):
         """Validate provider and timeout/expiry ranges."""
         if self.provider not in {"filesystem", "memory", "cache"}:
             raise ValueError("pathlock provider must be one of: 'filesystem', 'memory', 'cache'")
-        if self.provider == "cache" and not (self.namespace or "").strip():
-            raise ValueError("pathlock namespace is required for provider 'cache'")
-        if self.namespace is not None and (
-            not self.namespace
-            or any(
-                not (char.isascii() and (char.isalnum() or char in "._-"))
-                for char in self.namespace
-            )
-        ):
-            raise ValueError(
-                "pathlock namespace must contain only ASCII letters, digits, '.', '_' or '-'"
-            )
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self

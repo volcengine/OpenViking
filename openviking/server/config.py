@@ -19,7 +19,9 @@ from openviking_cli.utils.config.config_loader import (
     resolve_config_path,
 )
 from openviking_cli.utils.config.config_utils import (
+    DEFAULT_SERVICE_NAME,
     format_validation_error,
+    normalize_service_name,
     warn_unknown_config_fields,
 )
 from openviking_cli.utils.config.consts import (
@@ -430,6 +432,36 @@ def get_server_url_from_server_data(server_data: object) -> str:
     return f"http://{host}:{port}"
 
 
+def _inherit_otel_service_names(server_data: Dict[str, Any], service_name: str) -> None:
+    """Fill omitted OTel service_name fields from the top-level service name."""
+    if "observability" not in server_data:
+        server_data["observability"] = {}
+    observability = server_data["observability"]
+    if not isinstance(observability, dict):
+        return
+
+    for key in ("traces", "logs"):
+        if key not in observability:
+            observability[key] = {"service_name": service_name}
+        elif isinstance(observability[key], dict) and "service_name" not in observability[key]:
+            observability[key]["service_name"] = service_name
+
+    if "metrics" not in observability:
+        observability["metrics"] = {}
+    metrics = observability["metrics"]
+    if not isinstance(metrics, dict):
+        return
+    if "exporters" not in metrics:
+        metrics["exporters"] = {}
+    exporters = metrics["exporters"]
+    if not isinstance(exporters, dict):
+        return
+    if "otel" not in exporters:
+        exporters["otel"] = {"service_name": service_name}
+    elif isinstance(exporters["otel"], dict) and "service_name" not in exporters["otel"]:
+        exporters["otel"]["service_name"] = service_name
+
+
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     """Load server configuration from ov.conf.
 
@@ -467,6 +499,9 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         server_data = {}
     if not isinstance(server_data, dict):
         raise ValueError(f"Invalid server config in {path}: 'server' section must be an object")
+    server_data = dict(server_data)
+    service_name = normalize_service_name(data.get("service_name", DEFAULT_SERVICE_NAME))
+    _inherit_otel_service_names(server_data, service_name)
 
     # Convert auth_mode string — built-in enums are converted to their string
     # value; custom modes are kept as-is for plugin extensibility.

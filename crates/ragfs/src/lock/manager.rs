@@ -31,7 +31,7 @@ pub struct PathLockConfig {
     /// Built-in provider name: `filesystem`, `memory`, or `cache`.
     pub provider: String,
     /// OpenViking instance name used by the cache-backed provider.
-    pub namespace: Option<String>,
+    pub service_name: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -42,7 +42,7 @@ impl Default for PathLockConfig {
     fn default() -> Self {
         Self {
             provider: "filesystem".to_string(),
-            namespace: None,
+            service_name: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }

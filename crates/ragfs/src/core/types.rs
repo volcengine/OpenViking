@@ -558,10 +558,10 @@ impl ConfigValue {
 
 /// Multi-write backends container configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackendsConfig {
-    /// Cache key namespace used by cache-backed metadata.
-    #[serde(default = "default_backups_namespace")]
-    pub namespace: String,
+    /// OpenViking instance name used by cache-backed metadata.
+    pub service_name: String,
     /// Initial number of metadata partitions.
     #[serde(default = "default_initial_partitions")]
     pub initial_partitions: u32,
@@ -574,11 +574,6 @@ pub struct BackendsConfig {
     /// Backup items
     #[serde(default)]
     pub items: Vec<BackendItemConfig>,
-}
-
-/// Return the default cache-backed metadata namespace.
-fn default_backups_namespace() -> String {
-    "default".to_string()
 }
 
 /// Return the default metadata partition count.
@@ -695,6 +690,7 @@ mod tests {
         valid_params.insert(
             "backups".to_string(),
             ConfigValue::Json(serde_json::json!({
+                "service_name": "mw-prod",
                 "items": [{"name": "backup1", "backend": "memory"}]
             })),
         );
@@ -707,7 +703,8 @@ mod tests {
             ConfigValue::Bool(true),
         );
         let config = PluginConfig::from_raw_parts("localfs", "/local", valid_params).unwrap();
-        assert!(config.backups.is_some());
+        let backups = config.backups.as_ref().unwrap();
+        assert_eq!(backups.service_name, "mw-prod");
         assert!(config.server_encryption_enabled);
         assert!(config.primary_encryption_enabled);
         assert_eq!(
@@ -722,9 +719,19 @@ mod tests {
             (
                 HashMap::from([(
                     "backups".to_string(),
-                    ConfigValue::Json(serde_json::json!({"items": "invalid"})),
+                    ConfigValue::Json(serde_json::json!({
+                        "service_name": "mw-prod",
+                        "items": "invalid"
+                    })),
                 )]),
                 "invalid 'backups'",
+            ),
+            (
+                HashMap::from([(
+                    "backups".to_string(),
+                    ConfigValue::Json(serde_json::json!({"items": []})),
+                )]),
+                "service_name",
             ),
             (
                 HashMap::from([(

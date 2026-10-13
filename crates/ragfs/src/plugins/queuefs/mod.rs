@@ -106,7 +106,7 @@ struct ParsedBackendConfig {
     sqlite_db_path: Option<String>,
     sqlite_options: SQLiteQueueOptions,
     #[cfg(feature = "cache")]
-    cache_key_prefix: Option<String>,
+    service_name: Option<String>,
 }
 
 /// Parsed path information
@@ -689,11 +689,9 @@ impl QueueFSPlugin {
                     "SQLite busy timeout in milliseconds",
                 ),
                 #[cfg(feature = "cache")]
-                ConfigParameter::optional(
-                    "cache_key_prefix",
-                    "string",
-                    "default",
-                    "Queue key namespace when backend=cache",
+                ConfigParameter::required_string(
+                    "service_name",
+                    "OpenViking service name when backend=cache",
                 ),
             ],
             #[cfg(feature = "cache")]
@@ -776,18 +774,22 @@ impl QueueFSPlugin {
             }
         };
         #[cfg(feature = "cache")]
-        let cache_key_prefix = match kind {
+        let service_name = match kind {
             BackendKind::Cache => {
-                let prefix = Self::get_string_param(config, "cache_key_prefix")
-                    .unwrap_or("default")
+                let service_name = Self::get_string_param(config, "service_name")
+                    .ok_or_else(|| {
+                        Error::config(
+                            "queuefs service_name is required when backend=cache".to_string(),
+                        )
+                    })?
                     .to_string();
-                if prefix.trim().is_empty() || prefix.contains(['{', '}']) {
+                if service_name.trim().is_empty() || service_name.contains(['{', '}']) {
                     return Err(Error::config(
-                        "queuefs cache_key_prefix must be non-empty and must not contain '{' or '}'"
+                        "queuefs service_name must be non-empty and must not contain '{' or '}'"
                             .to_string(),
                     ));
                 }
-                Some(prefix)
+                Some(service_name)
             }
             _ => None,
         };
@@ -800,7 +802,7 @@ impl QueueFSPlugin {
                 busy_timeout_ms,
             },
             #[cfg(feature = "cache")]
-            cache_key_prefix,
+            service_name,
         })
     }
 }
@@ -890,8 +892,8 @@ impl ServicePlugin for QueueFSPlugin {
                             .expect("cache runtime is validated")
                             .clone(),
                         parsed
-                            .cache_key_prefix
-                            .expect("cache key prefix is validated"),
+                            .service_name
+                            .expect("queuefs service_name is validated"),
                     )
                     .await?,
                 ));
@@ -1166,7 +1168,7 @@ mod tests {
         #[cfg(feature = "cache")]
         assert!(config_params
             .iter()
-            .any(|parameter| parameter.name == "cache_key_prefix"));
+            .any(|parameter| parameter.name == "service_name"));
 
         let config =
             PluginConfig::single_backend("queuefs", "/queue", std::collections::HashMap::new());

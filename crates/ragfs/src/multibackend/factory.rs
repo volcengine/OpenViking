@@ -111,7 +111,7 @@ pub(crate) async fn build_inactive_multi_write_fs(
                 Arc::new(CacheProvider::new(
                     metadata_store.clone(),
                     runtime,
-                    bc.namespace.clone(),
+                    bc.service_name.clone(),
                 )?)
             }
             #[cfg(not(feature = "cache"))]

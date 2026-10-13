@@ -1256,7 +1256,7 @@ mod tests {
             mount_path: mount_path.to_string(),
             params: HashMap::new(),
             backups: Some(BackendsConfig {
-                namespace: "default".to_string(),
+                service_name: "mw-test".to_string(),
                 initial_partitions: 16,
                 checkpoint_interval_secs: 86_400,
                 provider: "filesystem".to_string(),
@@ -1768,7 +1768,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("backend".into(), ConfigValue::String("cache".into()));
         params.insert(
-            "cache_key_prefix".into(),
+            "service_name".into(),
             ConfigValue::String("mountable-shutdown-test".into()),
         );
         mfs.mount(PluginConfig::single_backend("queuefs", "/queue", params))

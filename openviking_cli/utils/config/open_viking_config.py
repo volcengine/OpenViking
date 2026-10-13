@@ -17,7 +17,9 @@ from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
 from .config_utils import (
+    DEFAULT_SERVICE_NAME,
     format_validation_error,
+    normalize_service_name,
     warn_unknown_config_fields,
     warn_unknown_fields,
 )
@@ -195,6 +197,10 @@ class OpenVikingConfig(BaseModel):
     default_agent: Optional[str] = Field(
         default=None,
         description="Deprecated and ignored. User is the only data-plane identity.",
+    )
+    service_name: str = Field(
+        default=DEFAULT_SERVICE_NAME,
+        description="OpenViking deployment name shared by cache namespaces and OTel defaults",
     )
 
     cache: Optional[CacheConfig] = Field(
@@ -374,9 +380,22 @@ class OpenVikingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_service_name(self) -> "OpenVikingConfig":
+        """Validate and normalize the top-level service name."""
+        self.service_name = normalize_service_name(self.service_name)
+        return self
+
+    @model_validator(mode="after")
     def _validate_cache_runtime_config(self) -> "OpenVikingConfig":
+        """Require the shared cache Provider whenever AGFS selects a cache-backed runtime."""
         agfs = self.storage.agfs
-        uses_canonical_cache = agfs.cachefs.backend == "cache" or agfs.queuefs.backend == "cache"
+        backups = agfs.backups or {}
+        uses_canonical_cache = (
+            agfs.cachefs.backend == "cache"
+            or agfs.queuefs.backend == "cache"
+            or agfs.pathlock.provider == "cache"
+            or backups.get("provider", "filesystem") == "cache"
+        )
         if uses_canonical_cache and self.cache is None:
             raise ValueError("top-level cache config is required when an AGFS backend uses cache")
         return self

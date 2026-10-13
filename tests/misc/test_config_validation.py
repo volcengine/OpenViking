@@ -191,8 +191,11 @@ def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
 
 
 def test_top_level_cache_provider_params_build_redis_binding_config():
+    assert OpenVikingConfig.from_dict({}).service_name == "openviking-server"
+
     config = OpenVikingConfig.from_dict(
         {
+            "service_name": "tenant-a",
             "cache": {
                 "provider": "redis",
                 "params": {
@@ -207,7 +210,7 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
             },
             "storage": {
                 "workspace": "/tmp/ov-test",
-                "agfs": {"cachefs": {"backend": "cache", "namespace": "tenant-a"}},
+                "agfs": {"cachefs": {"backend": "cache"}},
             },
         }
     )
@@ -215,14 +218,15 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert config.cache.provider == "redis"
     assert config.cache.params["mode"] == "sentinel"
+    assert binding["service_name"] == "tenant-a"
     assert binding["cache"]["enabled"] is True
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["cache"]["provider"] == "redis"
-    assert binding["cache"]["namespace"] == "tenant-a"
     assert binding["cache"]["redis"]["mode"] == "sentinel"
     assert binding["cache"]["redis"]["master_name"] == "mymaster"
 
@@ -230,6 +234,7 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
 def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
     config = OpenVikingConfig.model_validate(
         {
+            "service_name": "queue-runtime",
             "cache": {
                 "provider": "redis",
                 "params": {"endpoints": ["redis://redis:6379"]},
@@ -238,10 +243,7 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
                 "workspace": "/tmp/ov-test",
                 "agfs": {
                     "cachefs": {"backend": "local"},
-                    "queuefs": {
-                        "backend": "cache",
-                        "cache_key_prefix": "queue-runtime",
-                    },
+                    "queuefs": {"backend": "cache"},
                 },
             },
         }
@@ -250,11 +252,19 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["cache"]["redis"]["endpoints"] == ["redis://redis:6379"]
+
+    plugins = _generate_plugin_config(
+        config.storage.agfs,
+        Path("/tmp/ov-test"),
+        service_name=config.service_name,
+    )
+    assert plugins["queuefs"]["config"]["service_name"] == "queue-runtime"
 
 
 def test_top_level_cache_params_ignore_removed_replica_read_config():
@@ -736,7 +746,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
-        cachefs={"backend": "cache", "namespace": "runtime-cache"},
+        cachefs={"backend": "cache"},
     )
 
     config = RagfsBindingConfig(
@@ -744,6 +754,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
         cache=CacheConfig(provider="redis", params={}),
         root_key=b"\x01" * 32,
         provider_type=7,
+        service_name="runtime-cache",
     )
 
     binding = config.to_binding_dict()
@@ -754,7 +765,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
     }
     assert binding["cache"]["enabled"] is True
     assert binding["cache"]["runtime_enabled"] is True
-    assert binding["cache"]["namespace"] == "runtime-cache"
+    assert binding["service_name"] == "runtime-cache"
     assert binding["pathlock"] == {
         "provider": "filesystem",
         "lock_expire_secs": 30.0,
@@ -766,12 +777,13 @@ def test_ragfs_binding_enables_runtime_for_queuefs_cache_backend(tmp_path):
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
-        queuefs={"backend": "cache", "cache_key_prefix": "queue-runtime"},
+        queuefs={"backend": "cache"},
     )
 
     binding = RagfsBindingConfig(
         agfs=agfs_config,
         cache=CacheConfig(provider="redis", params={}),
+        service_name="queue-runtime",
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
@@ -789,35 +801,35 @@ def test_ragfs_binding_enables_runtime_for_multiwrite_cache_provider(tmp_path):
     binding = RagfsBindingConfig(
         agfs=agfs_config,
         cache=CacheConfig(provider="redis", params={}),
+        service_name="mw-runtime",
     ).to_binding_dict()
 
+    assert binding["service_name"] == "mw-runtime"
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
 
+    backups = _generate_plugin_config(
+        agfs_config,
+        tmp_path,
+        service_name="mw-runtime",
+    )["localfs"]["config"]["backups"]
+    assert backups["service_name"] == "mw-runtime"
+
 
 def test_agfs_pathlock_config_validates_provider_and_expiry(tmp_path):
-    """PathLock config validates Redis namespace and expiry boundaries."""
+    """PathLock config validates provider and expiry boundaries."""
     config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
         pathlock={
             "provider": "cache",
-            "namespace": "prod-a",
             "lock_expire_secs": 60.0,
         },
     )
 
     assert config.pathlock.provider == "cache"
-    assert config.pathlock.namespace == "prod-a"
     assert config.pathlock.lock_expire_secs == 60.0
 
-    with pytest.raises(ValueError, match="namespace"):
-        AGFSConfig(path=str(tmp_path), pathlock={"provider": "cache"})
-    with pytest.raises(ValueError, match="namespace"):
-        AGFSConfig(
-            path=str(tmp_path),
-            pathlock={"provider": "cache", "namespace": "bad{name}"},
-        )
     with pytest.raises(ValueError, match="lock_expire_secs"):
         AGFSConfig(path=str(tmp_path), pathlock={"lock_expire_secs": 0.0})
 
@@ -832,36 +844,33 @@ def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
             },
             "storage": {
                 "workspace": str(tmp_path),
-                "agfs": {
-                    "pathlock": {
-                        "provider": "cache",
-                        "namespace": "prod-a",
-                    }
-                },
+                "agfs": {"pathlock": {"provider": "cache"}},
             },
+            "service_name": "prod-a",
         }
     )
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["pathlock"] == {
         "provider": "cache",
-        "namespace": "prod-a",
         "lock_expire_secs": 30.0,
         "lock_timeout_secs": 0.0,
     }
+    assert binding["service_name"] == "prod-a"
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="memory",
-        cachefs={"backend": "cache", "namespace": "runtime-cache"},
+        cachefs={"backend": "cache"},
     )
 
     def _fake_get_binding_client():
@@ -872,12 +881,13 @@ def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_p
     config = RagfsBindingConfig(
         agfs=agfs_config,
         cache=CacheConfig(provider="redis", params={}),
+        service_name="runtime-cache",
     )
     client = create_agfs_client(config)
 
     assert isinstance(client, _FakeBindingClient)
+    assert client.config["service_name"] == "runtime-cache"
     assert client.config["cache"]["enabled"] is True
-    assert client.config["cache"]["namespace"] == "runtime-cache"
     assert any(call[0] == "memfs" for call in client.mount_calls)
 
 
