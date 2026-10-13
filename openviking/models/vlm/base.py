@@ -5,6 +5,8 @@
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
@@ -35,6 +37,35 @@ class ToolCall:
     id: str
     name: str
     arguments: Dict[str, Any]
+    provider_fields: Dict[str, Any] = field(default_factory=dict)
+
+
+def extract_tool_call_provider_fields(tool_call: Any) -> Dict[str, Any]:
+    """Copy provider fields that must be replayed with an assistant tool call."""
+
+    def read(name: str) -> Any:
+        if isinstance(tool_call, Mapping):
+            return tool_call.get(name)
+        return getattr(tool_call, name, None)
+
+    provider_fields: Dict[str, Any] = {}
+    function = read("function")
+    function_fields = (
+        function.get("provider_specific_fields")
+        if isinstance(function, Mapping)
+        else getattr(function, "provider_specific_fields", None)
+    )
+    if isinstance(function_fields, Mapping) and function_fields:
+        provider_fields["provider_specific_fields"] = deepcopy(dict(function_fields))
+    for name in ("extra_content", "provider_specific_fields"):
+        value = read(name)
+        if isinstance(value, Mapping) and value:
+            provider_fields[name] = deepcopy(dict(value))
+    for name in ("thought_signature", "thoughtSignature"):
+        signature = read(name)
+        if isinstance(signature, str) and signature:
+            provider_fields[name] = signature
+    return provider_fields
 
 
 @dataclass

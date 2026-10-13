@@ -15,7 +15,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import SessionKey
-from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.base import LLMProvider, tool_call_to_message_dict
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
@@ -270,16 +270,7 @@ class SubagentManager:
                 if response.has_tool_calls:
                     # Add assistant message with tool calls
                     tool_call_dicts = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                # Keep Unicode readable in model-facing tool history.
-                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
-                            },
-                        }
-                        for tc in response.tool_calls
+                        tool_call_to_message_dict(tool_call) for tool_call in response.tool_calls
                     ]
                     messages.append(
                         {

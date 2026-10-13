@@ -11,6 +11,7 @@ import re
 import time
 import traceback
 from collections.abc import AsyncIterator, Mapping
+from copy import deepcopy
 from typing import Any
 
 from loguru import logger
@@ -720,6 +721,7 @@ class VLMProviderAdapter(LLMProvider):
                     name=tc.name,
                     arguments=tc.arguments,
                     tokens=0,
+                    provider_fields=deepcopy(tc.provider_fields),
                 )
             )
 

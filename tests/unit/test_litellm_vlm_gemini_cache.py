@@ -16,6 +16,8 @@ hits this 400. The LiteLLM VLM backend works around it by stripping
 `gemini`.
 """
 
+from litellm.types.utils import ModelResponse
+
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 
 
@@ -88,3 +90,50 @@ class TestGeminiCacheControlStripping:
         assert all(not (m["role"] == "assistant" and not m["content"]) for m in kwargs["messages"])
         assert [m["role"] for m in kwargs["messages"]] == ["user", "user"]
         assert all("cache_control" not in m for m in kwargs["messages"])
+
+
+def test_gemini_tool_call_preserves_provider_fields_for_replay():
+    vlm = _vlm("gemini-3.1-flash-lite-preview")
+    extra_content = {"google": {"thought_signature": "signed-state"}}
+    response = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-weather",
+                            "type": "function",
+                            "function": {
+                                "name": "weather",
+                                "arguments": '{"city":"Singapore"}',
+                            },
+                            "extra_content": extra_content,
+                            "provider_specific_fields": {
+                                "thought_signature": "native-litellm-state"
+                            },
+                            "thought_signature": "top-level-state",
+                            "thoughtSignature": "camel-state",
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    tool_call = vlm._build_vlm_response(response, has_tools=True).tool_calls[0]
+
+    assert tool_call.arguments == {"city": "Singapore"}
+    assert tool_call.provider_fields == {
+        "extra_content": {"google": {"thought_signature": "signed-state"}},
+        "provider_specific_fields": {"thought_signature": "native-litellm-state"},
+        "thought_signature": "top-level-state",
+        "thoughtSignature": "camel-state",
+    }
+    extra_content["google"]["thought_signature"] = "mutated"
+    assert tool_call.provider_fields["extra_content"]["google"]["thought_signature"] == (
+        "signed-state"
+    )
