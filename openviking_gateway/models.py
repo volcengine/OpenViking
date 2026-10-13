@@ -100,6 +100,8 @@ class Upstream(BaseModel):
     # Send back the reasoning a client dropped from replies the gateway relayed.
     # None follows the vendor: on for DeepSeek, Ark and BytePlus, off otherwise.
     replay_reasoning: bool | None = None
+    # Some Chat-compatible models put reasoning in content before a literal </think> tag.
+    extract_reasoning: Literal["think-tags"] | None = None
     coding_plan: bool = False
     allow_coding_plan: bool = False
     cache_min_tokens: int = Field(default=1024, ge=0)
@@ -111,6 +113,12 @@ class Upstream(BaseModel):
         if any(size < 1024 for size in value.values()):
             raise ValueError("model context windows must be at least 1024 tokens")
         return value
+
+    @model_validator(mode="after")
+    def validate_reasoning_extraction(self):
+        if self.extract_reasoning and self.protocol != "chat":
+            raise ValueError("reasoning extraction requires the chat protocol")
+        return self
 
     @field_validator("base_url")
     @classmethod

@@ -564,7 +564,27 @@ describe('UpstreamEditor', () => {
     expect(lastSavedBody()).toMatchObject({
       vendor: 'deepseek',
       replay_reasoning: false,
+      extract_reasoning: null,
     })
+  })
+
+  it('offers inline reasoning extraction only for Chat Completions', async () => {
+    renderAt('/gateway/upstreams/new')
+    await screen.findByText('upstreams.editor.newTitle')
+    const toggle = screen.getByRole('switch', {
+      name: 'upstreams.form.extractReasoning.label',
+    })
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(screen.getByText('enums.protocol.anthropic'))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('switch', {
+          name: 'upstreams.form.extractReasoning.label',
+        }),
+      ).toBeNull(),
+    )
   })
 
   it("fills in the provider's default base URL for each protocol", async () => {

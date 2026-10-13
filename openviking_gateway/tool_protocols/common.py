@@ -190,8 +190,9 @@ class ToolProtocol(ABC):
     # cannot resend exactly must go upstream without its thinking.
     signed_thinking = False
 
-    def __init__(self, body: dict):
+    def __init__(self, body: dict, extract_reasoning: str | None = None):
         self.body = body
+        self.extract_reasoning = extract_reasoning
         self.identifier = self.id_prefix + "ovgw-" + uuid.uuid4().hex
         self.visible: list[dict] = []
         self.started = False

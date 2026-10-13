@@ -159,7 +159,13 @@ class ProxyRequest:
         except (aiohttp.ClientError, asyncio.TimeoutError):
             raise HTTPException(502, "Model upstream is unavailable")
         self.metrics.update(status=self.response.status, upstream_id=self.upstream["id"])
-        self.capture = ResponseCapture(self.protocol or self.upstream["protocol"])
+        protocol = self.protocol or self.upstream["protocol"]
+        self.capture = ResponseCapture(
+            protocol,
+            extract_reasoning=(
+                self.upstream.get("extract_reasoning") if protocol == "chat" else None
+            ),
+        )
         # Only the tool loop rewrites a reply, so the recall notice goes through it too.
         if (
             self.prepared
@@ -404,6 +410,9 @@ class ProxyRequest:
         response, capture = self.response, self.capture
         headers = filtered_headers(response.headers)
         if "text/event-stream" in response.headers.get("content-type", ""):
+            rewrite = not response.headers.get("content-encoding") and bool(
+                capture.extract_reasoning
+            )
 
             async def stream():
                 decoder = SSEDecoder()
@@ -411,6 +420,16 @@ class ProxyRequest:
                 finished = False
                 try:
                     async for chunk in response.content.iter_any():
+                        if rewrite:
+                            for frame in decoder.feed(chunk):
+                                data = decoder.data(frame)
+                                if data is None:
+                                    yield frame
+                                    continue
+                                normalized = capture.event(data)
+                                await self.relay()
+                                yield b"data: " + orjson.dumps(normalized) + b"\n\n"
+                            continue
                         if observe:
                             try:
                                 for frame in decoder.feed(chunk):
@@ -423,12 +442,21 @@ class ProxyRequest:
                                 self.metrics["degradation"] = "capture_parse_failure"
                             await self.relay()
                         yield chunk
+                    if rewrite and decoder.buffer:
+                        capture.complete = False
+                        yield decoder.buffer
                     finished = True
                 finally:
                     response.close()
                     if not finished:
                         capture.complete = False
 
+            if rewrite:
+                headers = {
+                    key: value
+                    for key, value in headers.items()
+                    if key.lower() not in {"content-length", "etag", "content-encoding"}
+                }
             return StreamingResponse(
                 stream(),
                 status_code=response.status,
@@ -439,7 +467,14 @@ class ProxyRequest:
             content = await response.read()
             if response.status < 300 and not response.headers.get("content-encoding"):
                 try:
-                    capture.nonstream(orjson.loads(content))
+                    normalized = capture.nonstream(orjson.loads(content))
+                    if capture.extract_reasoning:
+                        content = orjson.dumps(normalized)
+                        headers = {
+                            key: value
+                            for key, value in headers.items()
+                            if key.lower() not in {"content-length", "etag", "content-encoding"}
+                        }
                 except (ValueError, TypeError, KeyError):
                     pass
         finally:

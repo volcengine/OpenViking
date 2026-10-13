@@ -84,6 +84,7 @@ function upstream(overrides: Partial<Upstream>): Upstream {
     vendor: 'generic',
     allow_gateway_tools: true,
     replay_reasoning: null,
+    extract_reasoning: null,
     coding_plan: false,
     allow_coding_plan: false,
     cache_min_tokens: 1024,

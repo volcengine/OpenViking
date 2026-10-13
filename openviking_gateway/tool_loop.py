@@ -31,6 +31,7 @@ class HiddenToolLoop:
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
+        self.adapter.extract_reasoning = capture.extract_reasoning
         self.body = {
             **prepared.body,
             self.adapter.field: list(self.adapter.messages(prepared.body)),

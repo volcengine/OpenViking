@@ -3,6 +3,7 @@
 """Chat Completions messages and delta projection."""
 
 import copy
+from dataclasses import dataclass
 
 from ..protocols import prefix_chain, text_content
 from .common import (
@@ -15,6 +16,40 @@ from .common import (
     merge_delta,
     sse,
 )
+
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+@dataclass
+class InlineReasoning:
+    """Split one opted-in choice after a complete closing marker arrives."""
+
+    pending: str = ""
+    matched: bool = False
+    done: bool = False
+
+    def feed(self, text, finish=False):
+        if self.done:
+            return "", text
+        buffer = self.pending + text
+        self.pending = ""
+        close = buffer.find(THINK_CLOSE)
+        if close < 0:
+            if finish:
+                self.done = True
+                return "", buffer
+            self.pending = buffer
+            return "", ""
+        self.done = True
+        if close == 0:
+            return "", buffer
+        before, after = buffer[:close], buffer[close + len(THINK_CLOSE) :]
+        opening = before.find(THINK_OPEN)
+        self.matched = True
+        if opening < 0:
+            return before, after
+        return before[opening + len(THINK_OPEN) :], before[:opening] + after
 
 
 class ChatProtocol(ToolProtocol):
@@ -92,27 +127,70 @@ class ChatProtocol(ToolProtocol):
             raise SummaryError("summary_incomplete")
         return text_content(message)
 
-    def __init__(self, body):
-        super().__init__(body)
+    def __init__(self, body, extract_reasoning=None):
+        super().__init__(body, extract_reasoning)
         self.visible = [{"role": "assistant", "content": ""}]
 
     def begin(self):
         super().begin()
         self.message, self.fragments = {"role": "assistant"}, {}
+        self.inline_reasoning = {}
         # Whether the first completion arrived, and how many a nonstreaming response held.
         self.chosen, self.choices = False, 1
 
     def encode(self, value):
         return super().encode(value) if value is None else sse(value)
 
+    def transform_event(self, value):
+        if self.extract_reasoning != "think-tags":
+            return value
+        transformed = copy.deepcopy(value)
+        for choice in transformed.get("choices") or []:
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            index = choice.get("index", 0)
+            extractor = self.inline_reasoning.setdefault(index, InlineReasoning())
+            content = delta.get("content")
+            reasoning, visible = extractor.feed(
+                content if isinstance(content, str) else "",
+                finish=bool(choice.get("finish_reason")),
+            )
+            if not (isinstance(content, str) or reasoning or visible):
+                continue
+            delta.pop("content", None)
+            if reasoning:
+                delta["reasoning_content"] = (delta.get("reasoning_content") or "") + reasoning
+            if visible:
+                delta["content"] = visible
+        return transformed
+
+    def transform_response(self, value):
+        if self.extract_reasoning != "think-tags":
+            return value
+        transformed = copy.deepcopy(value)
+        for choice in transformed.get("choices") or []:
+            message = choice.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+                continue
+            extractor = InlineReasoning()
+            reasoning, visible = extractor.feed(message["content"], finish=True)
+            if not extractor.matched:
+                continue
+            message["content"] = visible
+            if reasoning:
+                message["reasoning_content"] = (message.get("reasoning_content") or "") + reasoning
+        return transformed
+
     def accumulate(self, value):
+        value = self.transform_event(value)
         self.envelope.update({k: v for k, v in value.items() if k not in {"choices", "usage"}})
         if value.get("usage"):
             self.usage.update(value["usage"])
         # Only the first completion is the reply; the tool loop refuses any other.
         choice = next((c for c in value.get("choices") or [] if c.get("index", 0) == 0), None)
         if choice is None:
-            return
+            return value
         self.chosen = True
         delta = copy.deepcopy(choice.get("delta") or {})
         for item in delta.pop("tool_calls", None) or []:
@@ -120,12 +198,13 @@ class ChatProtocol(ToolProtocol):
             merge_delta(self.fragments.setdefault(index, {}), item)
         merge_delta(self.message, delta)
         self.finish = choice.get("finish_reason") or self.finish
+        return value
 
     def event(self, value):
+        value = self.accumulate(value)
         choices = value.get("choices") or []
         if len(choices) > 1 or (choices and choices[0].get("index", 0) != 0):
             raise ToolLoopError("Tool mode requires one completion")
-        self.accumulate(value)
         if not choices:
             return [] if value.get("usage") else [{**value, "id": self.identifier}]
         # The lead comes before the first completion's content, in its envelope.
@@ -147,6 +226,7 @@ class ChatProtocol(ToolProtocol):
         return events
 
     def load(self, value):
+        value = self.transform_response(value)
         choices = value.get("choices") or []
         self.envelope, self.choices = value, len(choices)
         self.usage = value.get("usage") or {}
@@ -158,6 +238,7 @@ class ChatProtocol(ToolProtocol):
                 self.visible[0], {k: v for k, v in self.message.items() if k != "tool_calls"}
             )
             self.lead_notice()
+        return value
 
     def assembled(self):
         if not self.chosen:

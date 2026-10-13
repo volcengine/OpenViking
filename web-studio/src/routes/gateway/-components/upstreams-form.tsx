@@ -209,6 +209,9 @@ export function UpstreamForm({
   function switchEndpoint(vendor: Vendor, protocol: Protocol) {
     if (vendor !== draft.vendor) onChange('vendor', vendor)
     if (protocol !== draft.protocol) onChange('protocol', protocol)
+    if (protocol !== 'chat' && draft.extract_reasoning) {
+      onChange('extract_reasoning', null)
+    }
     const baseUrl = baseUrlAfterSwitch(draft, vendor, protocol)
     if (baseUrl !== draft.base_url) onFill('base_url', baseUrl)
   }
@@ -558,6 +561,17 @@ export function UpstreamForm({
             )
           }
         />
+        {draft.protocol === 'chat' ? (
+          <ToggleRow
+            id="upstream-extract-reasoning"
+            label={t('upstreams.form.extractReasoning.label')}
+            description={t('upstreams.form.extractReasoning.description')}
+            checked={draft.extract_reasoning === 'think-tags'}
+            onCheckedChange={(checked) =>
+              onChange('extract_reasoning', checked ? 'think-tags' : null)
+            }
+          />
+        ) : null}
         {ARK_VENDORS.includes(draft.vendor) ? (
           <SettingField
             label={t('upstreams.form.cacheMinTokens.label')}

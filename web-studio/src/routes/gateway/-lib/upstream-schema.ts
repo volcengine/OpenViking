@@ -17,6 +17,7 @@ export const UPSTREAM_DEFAULTS: UpstreamInput = {
   vendor: 'generic',
   allow_gateway_tools: true,
   replay_reasoning: null,
+  extract_reasoning: null,
   coding_plan: false,
   allow_coding_plan: false,
   cache_min_tokens: 1024,

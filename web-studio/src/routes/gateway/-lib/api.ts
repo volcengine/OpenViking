@@ -66,6 +66,7 @@ type UpstreamSettings = {
    * the vendor (see `replaysReasoning`).
    */
   replay_reasoning: boolean | null
+  extract_reasoning: 'think-tags' | null
   coding_plan: boolean
   allow_coding_plan: boolean
   cache_min_tokens: number

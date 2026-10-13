@@ -34,6 +34,44 @@ def test_vendor_defaults(vendor, value, expected):
     assert replays_reasoning(upstream) is expected
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("plain answer", {"role": "assistant", "content": "plain answer"}),
+        (
+            "<think>private</think>answer",
+            {"role": "assistant", "content": "answer", "reasoning_content": "private"},
+        ),
+        ("<think></think>answer", {"role": "assistant", "content": "answer"}),
+        ("<think>unfinished", {"role": "assistant", "content": "<think>unfinished"}),
+        ("</think>answer", {"role": "assistant", "content": "</think>answer"}),
+    ],
+)
+def test_chat_inline_reasoning_extraction_is_opt_in_and_lossless(content, expected):
+    capture = ResponseCapture("chat", extract_reasoning="think-tags")
+    body = completion({"role": "assistant", "content": content})
+    normalized = capture.nonstream(body)
+    assert normalized["choices"][0]["message"] == expected
+    assert capture.message == expected
+
+
+def test_chat_inline_reasoning_keeps_usage_only_events():
+    capture = ResponseCapture("chat", extract_reasoning="think-tags")
+    event = {"choices": [], "usage": {"completion_tokens": 3}}
+    assert capture.event(event) == event
+    assert capture.usage["output_tokens"] == 3
+
+
+def test_inline_reasoning_extraction_requires_chat_protocol():
+    with pytest.raises(ValueError):
+        Upstream(
+            name="x",
+            base_url="http://model",
+            protocol="responses",
+            extract_reasoning="think-tags",
+        )
+
+
 async def configure_chat(client, admin, **fields):
     response = await client.put(
         "/admin/upstreams/chat",
@@ -83,6 +121,90 @@ def reasoning_backend(app, requests):
         return response
 
     app.state.test_backend["handler"] = backend
+
+
+def inline_reasoning_backend(app, requests):
+    """An OpenAI-compatible upstream that puts private reasoning in content."""
+
+    async def backend(request):
+        if request.path != "/v1/chat/completions":
+            return None
+        payload = await request.json()
+        requests.append(payload)
+        message = {
+            "role": "assistant",
+            "content": "private chain</think>final answer",
+        }
+        if not payload.get("stream"):
+            return web.json_response(completion(message))
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        events = [
+            {"choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+            {"choices": [{"index": 0, "delta": {"content": "private chain</thi"}}]},
+            {"choices": [{"index": 0, "delta": {"content": "nk>final answer"}}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        for event in events:
+            await response.write(b"data: " + orjson.dumps(event) + b"\n\n")
+        await response.write(b"data: [DONE]\n\n")
+        await response.write_eof()
+        return response
+
+    app.state.test_backend["handler"] = backend
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("gateway_tools", [False, True])
+async def test_chat_extracts_inline_reasoning_before_delivery_and_replay(
+    running_gateway, streaming, gateway_tools
+):
+    app, client, admin, key, _, _ = running_gateway
+    await configure_chat(
+        client,
+        admin,
+        base_url=str(app.state.config.openviking_url),
+        vendor="generic",
+        replay_reasoning=True,
+        extract_reasoning="think-tags",
+        allow_gateway_tools=gateway_tools,
+    )
+    requests = []
+    inline_reasoning_backend(app, requests)
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "inline"}
+    first = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "stream": streaming, "messages": [QUESTION]},
+    )
+    assert first.status_code == 200, first.text
+    if streaming:
+        assert b'"reasoning_content":"private chain"' in first.content
+        assert b'"content":"final answer"' in first.content
+    else:
+        assert first.json()["choices"][0]["message"] == {
+            "role": "assistant",
+            "content": "final answer",
+            "reasoning_content": "private chain",
+        }
+    assert b"private chain</think>final answer" not in first.content
+    assert b"</think>" not in first.content
+
+    visible = {"role": "assistant", "content": "final answer"}
+    second = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={
+            "model": "model",
+            "stream": streaming,
+            "messages": [QUESTION, visible, FOLLOW_UP],
+        },
+    )
+    assert second.status_code == 200, second.text
+    assert requests[1]["messages"][1] == {
+        **visible,
+        "reasoning_content": "private chain",
+    }
 
 
 async def chat_turns(client, key, session, turns, streaming, keep_reasoning=False):

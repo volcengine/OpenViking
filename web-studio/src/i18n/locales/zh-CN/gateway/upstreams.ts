@@ -220,6 +220,11 @@ const upstreams = {
       description:
         '客户端回传历史时丢掉了模型的推理内容，网关会在后续请求中补回。DeepSeek 在带工具的请求里缺少推理内容会报错，所以 DeepSeek、火山方舟和 BytePlus 方舟默认开启。',
     },
+    extractReasoning: {
+      label: '提取正文中的推理标签',
+      description:
+        '用于把模型放在答案正文中、以 </think> 结尾的私有推理拆出来。仅在确认模型有这种行为时开启。',
+    },
     cacheMinTokens: {
       label: '最小可缓存长度',
       description:

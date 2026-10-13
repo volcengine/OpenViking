@@ -230,6 +230,11 @@ const upstreams = {
       description:
         "Sends each reply's reasoning back with later requests when the client leaves it out. DeepSeek rejects tool requests without it, so this is on by default for DeepSeek, Ark and BytePlus.",
     },
+    extractReasoning: {
+      label: 'Extract inline reasoning tags',
+      description:
+        'For models that return private reasoning before a closing </think> tag in answer content. Leave this off unless the model has that documented behavior.',
+    },
     cacheMinTokens: {
       label: 'Minimum cacheable prompt',
       description:

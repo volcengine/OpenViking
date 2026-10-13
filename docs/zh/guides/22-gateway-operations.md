@@ -359,6 +359,7 @@ server {
 - **启用。** 停用的上游不接收请求，也不出现在模型列表里。原本使用它的对话会转到下一个候选上游，这会造成一次服务商缓存未命中，并丢掉之前的 Claude 思考块；这些请求会被标记为**上游已切换**（`upstream_changed`）。想保留恢复的余地，就用停用代替删除。
 - **允许 OpenViking 工具**决定能否通过这个上游提供 OpenViking 工具。关闭后立即生效，已经带工具的对话也会受影响。
 - **补全推理内容回传。** 客户端回传历史时，常常丢掉模型之前回复里的推理内容。开启后，网关记下经它转发的每条回复的推理内容，在后续请求里放回原来的回复上：Chat Completions 补回 `reasoning_content`，Anthropic Messages 把 thinking 块放回原位，Responses 把带明文内容的 reasoning 项放回对应条目之前。每轮补回的内容逐字节相同，所以服务商的提示词缓存照常命中；补回的内容计入输入 token。客户端自己回传了推理内容的回复保持不变。DeepSeek、火山方舟和 BytePlus 方舟默认开启，其他服务商默认关闭。DeepSeek 在带工具的请求里缺少推理内容会报错，所以关闭后，DeepSeek 上游只在请求关闭思考模式时提供 OpenViking 工具。即使开启，有些请求也补不回推理内容，这些请求同样得不到工具：对话换了上游（`upstream_changed`）、Claude 对话丢了记忆记录（`missing_injection_record`），或者客户端把思考内容当作正文发回。
+- **提取正文中的推理标签**是 Chat Completions 的可选兼容规则。某些模型把私有推理放进 `content`，并在末尾返回字面量 `</think>` 标签。网关会在实时返回和保存前把这段前缀移到 `reasoning_content`。没有完整标签的正文保持不变。其他模型不要开启，因为正常答案也可能包含同样的文本。
 - **最小可缓存长度**（仅火山方舟和 BytePlus 方舟）是模型能缓存的最短提示词长度，只影响请求日志如何报告缓存资格。
 
 其他上游设置都立即生效，对进行中的对话也一样。网关没有故障转移：选中的上游出错时，客户端会收到这个错误；服务商无法访问时返回 502 "Model upstream is unavailable"。
@@ -784,6 +785,7 @@ URL 类设置必须是普通的 `http` 或 `https` 地址，不能包含账号�
 | 启用 | `enabled` | `true` | 停用的上游不接收请求。 |
 | 允许 OpenViking 工具 | `allow_gateway_tools` | `true` | 能否通过这个上游提供 OpenViking 工具。 |
 | 补全推理内容回传 | `replay_reasoning` | `null`（跟随服务商） | 把客户端丢掉的推理内容补回之前的回复。`null` 时 `deepseek`、`ark` 和 `byteplus` 开启，其他服务商关闭；`true` 或 `false` 覆盖服务商默认值。Studio 中开关与服务商默认值一致时保存为 `null`。 |
+| 提取正文中的推理标签 | `extract_reasoning` | `null` | 仅限 Chat Completions。模型路由会把私有推理放在答案正文中并用字面量 `</think>` 结尾时，设为 `think-tags`。 |
 | 这是 Coding Plan 或订阅密钥 | `coding_plan` | `false` | 除非另外允许，否则拒绝发往这个上游的请求。 |
 | 仍然允许 | `allow_coding_plan` | `false` | 允许使用被标记为 Coding Plan 的密钥。 |
 | 最小可缓存长度 | `cache_min_tokens` | `1024` | 仅火山方舟和 BytePlus 方舟；影响缓存资格的报告。 |

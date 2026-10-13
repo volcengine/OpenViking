@@ -35,6 +35,7 @@ class ResponseCapture:
     handoff: bool = False
     output_items: list | None = None
     context_usage: dict | None = None
+    extract_reasoning: str | None = None
     assembler: ToolProtocol | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -54,16 +55,20 @@ class ResponseCapture:
 
     def nonstream(self, body):
         adapter = tool_protocol(self.protocol)({})
+        adapter.extract_reasoning = self.extract_reasoning
         adapter.begin()
-        adapter.load(body)
+        body = adapter.load(body) or body
         vars(self).update(adapter.reply())
+        return body
 
     def event(self, body):
         if self.assembler is None:
             self.assembler = tool_protocol(self.protocol)({})
+            self.assembler.extract_reasoning = self.extract_reasoning
             self.assembler.begin()
-        self.assembler.accumulate(body)
+        body = self.assembler.accumulate(body) or body
         vars(self).update(self.assembler.reply())
+        return body
 
 
 def hidden_chain(messages: list[dict], protocol: str) -> list[str]:
