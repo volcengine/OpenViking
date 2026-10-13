@@ -93,6 +93,7 @@ const HARNESSES = {
   cursor: { label: "Cursor", liveId: hookLiveId("cu-") },
   trae: { label: "TRAE", liveId: hookLiveId("tr-") },
   trae_cn: { label: "TRAE CN", liveId: hookLiveId("trcn-") },
+  vscode: { label: "VS Code", liveId: hookLiveId("vscode-") },
   // The installer sets TRAE CLI up as the Codex plugin run by traecli, so its
   // live sessions are Codex's (cx-). No ingest source reads its history.
   trae_cli: { label: "TRAE CLI", liveId: codexLiveId },
@@ -110,18 +111,18 @@ const HARNESSES = {
 };
 const HARNESS_ALIASES = {
   claude: "claude_code", "claude-code": "claude_code", claude_code: "claude_code", codex: "codex",
-  cursor: "cursor", trae: "trae", "trae-cn": "trae_cn", trae_cn: "trae_cn", "trae-cli": "trae_cli", trae_cli: "trae_cli",
-  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh", openclaw: "openclaw",
+  cursor: "cursor", trae: "trae", "trae-cn": "trae_cn", trae_cn: "trae_cn", "trae-cli": "trae_cli", trae_cli: "trae_cli", vscode: "vscode",
+  zcode: "zcode", vscode: "vscode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh", openclaw: "openclaw",
   hermes: "hermes",
 };
-const INPUT_NAMES = "claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, opencode, pi, dsh, openclaw, hermes";
+const INPUT_NAMES = "claude, codex, cursor, trae, trae-cn, trae-cli, vscode, zcode, kimicode, codebuddy, opencode, pi, dsh, openclaw, hermes";
 // The harness name the plugin passes to its config loader, for ov.conf's
 // legacy section and the `{harness}` peer template variable. OpenClaw and
 // Hermes do not use that loader and name their peers after the agent, not
 // the directory, so no peer is derived for them.
 const PLUGIN_HARNESS = {
   claude_code: "claude-code", codex: "codex", cursor: "cursor", trae: "trae", trae_cn: "trae-cn", trae_cli: "codex",
-  zcode: "zcode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh",
+  zcode: "zcode", vscode: "vscode", kimicode: "kimicode", codebuddy: "codebuddy", opencode: "opencode", pi: "pi", dsh: "dsh",
 };
 
 const DEFAULTS = { since: "14d", maxSessions: 20, skipActive: "2h", maxMessageChars: 20000 };

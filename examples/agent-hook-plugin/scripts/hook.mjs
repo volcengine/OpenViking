@@ -102,13 +102,19 @@ async function promptSubmit(ctx) {
       if (profile) parts.push(contextBlock("session-start", profile));
       profileInjected = Boolean(profile);
     }
-    const recallBlock = state.promptHash === promptHash && state.recallBlock
-      ? state.recallBlock
-      : await recallForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, log, { sessionId: ctx.sessionId })
-        .catch((error) => {
-          logError("recall", error);
-          return null;
-        });
+    // A host whose prompt event has no injection channel (VS Code's
+    // UserPromptSubmit accepts the common output only) declares
+    // skipsPromptRecall: the fetch would stall every submission just to
+    // discard the answer it cannot hand to the model.
+    const recallBlock = host.skipsPromptRecall
+      ? null
+      : state.promptHash === promptHash && state.recallBlock
+        ? state.recallBlock
+        : await recallForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, log, { sessionId: ctx.sessionId })
+          .catch((error) => {
+            logError("recall", error);
+            return null;
+          });
     if (recallBlock) parts.push(recallBlock);
     await writeHookState(clientId, ctx.nativeSessionId, {
       ...state,

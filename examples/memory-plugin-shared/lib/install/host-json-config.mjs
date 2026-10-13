@@ -10,6 +10,9 @@
  * drifted — the uninstall side learned to reclaim the URI-guard entries and the
  * install side never did, so a rename left a stale guard hook behind.
  *
+ * A host may pass no mcpPath: vscode's first cut is hooks-only, and the same
+ * tolerance the uninstall side already had applies on the way in.
+ *
  * Installer-only: nothing under lib/ imports it, so it stays out of the runtime
  * closure sync.mjs vendors into the plugins.
  */
@@ -149,7 +152,12 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
     throw new Error(`Invalid ${clientId} hooks template`);
   }
   const hooksConfig = readJson(hooksPath);
-  hooksConfig.version = Number.isFinite(Number(hooksConfig.version)) ? Number(hooksConfig.version) : 1;
+  // Seed the version field only where the host's own schema declares one —
+  // VS Code's Local hook files have none, and an unknown key is this
+  // installer's to regret.
+  if (hooksConfig.version === undefined && hookTemplate.version !== undefined) {
+    hooksConfig.version = hookTemplate.version;
+  }
   hooksConfig.hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
     ? hooksConfig.hooks : {};
 
@@ -169,26 +177,28 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
   }
   atomicWrite(hooksPath, hooksConfig);
 
-  const mcpTemplate = readJson(path.join(hostDir, ".mcp.json"));
-  const templateServer = mcpTemplate.mcpServers?.openviking;
-  if (!templateServer || typeof templateServer !== "object" || Array.isArray(templateServer)) {
-    throw new Error(`Invalid ${clientId} MCP template`);
+  if (mcpPath) {
+    const mcpTemplate = readJson(path.join(hostDir, ".mcp.json"));
+    const templateServer = mcpTemplate.mcpServers?.openviking;
+    if (!templateServer || typeof templateServer !== "object" || Array.isArray(templateServer)) {
+      throw new Error(`Invalid ${clientId} MCP template`);
+    }
+    const mcp = readJson(mcpPath);
+    mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.isArray(mcp.mcpServers)
+      ? mcp.mcpServers : {};
+    // Migrate only the exact OpenViking endpoints published by the earlier manual
+    // guides. A coincidentally named third-party server must remain untouched.
+    if (isKnownLegacyOpenVikingServer(mcp.mcpServers["ov-mcp-server"])) {
+      delete mcp.mcpServers["ov-mcp-server"];
+    }
+    mcp.mcpServers.openviking = {
+      ...templateServer,
+      command: nodeBin,
+      args: [path.join(root, "servers", "mcp-proxy.mjs")],
+      env: { ...(templateServer.env || {}), ...integrationEnv },
+    };
+    atomicWrite(mcpPath, mcp);
   }
-  const mcp = readJson(mcpPath);
-  mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.isArray(mcp.mcpServers)
-    ? mcp.mcpServers : {};
-  // Migrate only the exact OpenViking endpoints published by the earlier manual
-  // guides. A coincidentally named third-party server must remain untouched.
-  if (isKnownLegacyOpenVikingServer(mcp.mcpServers["ov-mcp-server"])) {
-    delete mcp.mcpServers["ov-mcp-server"];
-  }
-  mcp.mcpServers.openviking = {
-    ...templateServer,
-    command: nodeBin,
-    args: [path.join(root, "servers", "mcp-proxy.mjs")],
-    env: { ...(templateServer.env || {}), ...integrationEnv },
-  };
-  atomicWrite(mcpPath, mcp);
 
   const installedManifestPath = path.join(root, "integration.json");
   const previousManifest = readJson(installedManifestPath);
@@ -196,7 +206,7 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
   const unchangedInstall = previousManifest.version === packageManifest.version
     && previousManifest.source === sourceMode
     && previousManifest.hooksConfig === hooksPath
-    && previousManifest.mcpConfig === mcpPath;
+    && (mcpPath ? previousManifest.mcpConfig === mcpPath : true);
   atomicWrite(installedManifestPath, {
     schemaVersion: 1,
     id: packageManifest.id,
@@ -206,7 +216,7 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
     source: sourceMode,
     capabilities: packageManifest.capabilities,
     hooksConfig: hooksPath,
-    mcpConfig: mcpPath,
+    ...(mcpPath ? { mcpConfig: mcpPath } : {}),
     installedAt: previousManifest.installedAt || now,
     updatedAt: unchangedInstall ? previousManifest.updatedAt || previousManifest.installedAt || now : now,
   });

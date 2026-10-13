@@ -95,6 +95,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_VSCODE=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -117,6 +118,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_VSCODE=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -147,6 +149,7 @@ add_detected_traecode_cli_alias
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_VSCODE=0
 tui_reset_bin_selection
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
