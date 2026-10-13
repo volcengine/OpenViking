@@ -820,13 +820,14 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| account_id | str | 是 | - | 工作区 ID |
+| account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
+- 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。此限制仅用于创建，不改变既有账户的校验和鉴权，也不改变用户/peer ID 规则。
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
 - `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
