@@ -1,6 +1,7 @@
 import base64
 import io
 import types
+from datetime import datetime, timezone
 
 import pytest
 from PIL import Image
@@ -96,6 +97,48 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+@pytest.mark.asyncio
+async def test_context_timestamps_keep_creation_time_across_reindex(monkeypatch):
+    initial_time = datetime(2026, 10, 9, 10, 0, tzinfo=timezone.utc)
+    refresh_time = datetime(2026, 10, 10, 11, 30, tzinfo=timezone.utc)
+
+    class TimestampFS:
+        async def stat(self, _uri, *, ctx, skip_count):
+            del ctx, skip_count
+            return {"modTime": refresh_time.isoformat()}
+
+    class TimestampStore:
+        record = None
+
+        async def fetch_by_uri(self, _uri, *, ctx):
+            del ctx
+            return self.record
+
+    store = TimestampStore()
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", TimestampFS)
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: types.SimpleNamespace(vikingdb_manager=store),
+    )
+
+    created_at, updated_at = await embedding_utils._resolve_context_timestamps(
+        "viking://resources/note.md",
+        DummyReq(),
+        preserve_existing_created_at=True,
+    )
+    assert created_at == refresh_time
+    assert updated_at == refresh_time
+
+    store.record = {"created_at": initial_time.isoformat()}
+    created_at, updated_at = await embedding_utils._resolve_context_timestamps(
+        "viking://resources/note.md",
+        DummyReq(),
+        preserve_existing_created_at=True,
+    )
+    assert created_at == initial_time
+    assert updated_at == refresh_time
 
 
 def _jpeg_bytes(width: int, height: int) -> bytes:

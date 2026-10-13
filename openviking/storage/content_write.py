@@ -1067,6 +1067,7 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
+            preserve_existing_created_at=True,
             ingest_options=ingest_options,
             file_md5=file_md5,
         )
