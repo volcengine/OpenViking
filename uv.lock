@@ -3696,7 +3696,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.14" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.14" },
-    { name = "openviking-sdk", specifier = ">=0.1.14" },
+    { name = "openviking-sdk", specifier = ">=0.1.15" },
     { name = "orjson", marker = "extra == 'gateway'", specifier = ">=3.11.7" },
     { name = "packaging", marker = "extra == 'gateway'", specifier = ">=24.0" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
@@ -3778,14 +3778,14 @@ dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "openviking-sdk"
-version = "0.1.14"
+version = "0.1.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/16/b6bef6ad2ad5dd92fa5a1bda3d0777d03d18ad2b75fa6d08f0ae3c1189d0/openviking_sdk-0.1.14.tar.gz", hash = "sha256:1b13fc5019f89954a02991749871c9dc91af3ec386c94544041340e754794179", size = 57277, upload-time = "2026-10-09T15:48:07.921Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/0d/4363876996c031976749c448ce449e3d5d1503c30745dba3127404664940/openviking_sdk-0.1.15.tar.gz", hash = "sha256:51586349329180d665ff9f33613aa2a33eff47d6f3e390f00077204ac139612d", size = 57632, upload-time = "2026-10-13T08:19:31.295Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/15/a25c3bb2a4a69d6e6b07fd49ee265bf9d14fe9b0d0906e699d632cf7711e/openviking_sdk-0.1.14-py3-none-any.whl", hash = "sha256:482984351c1bb978d33ec5e6e0e55eaed8944c8df12e08e55b8de707ed067213", size = 34688, upload-time = "2026-10-09T15:48:05.995Z" },
+    { url = "https://files.pythonhosted.org/packages/26/c2/c95482ecfd3a77294f9396b57011c5b3d01aeda5f0493515413a13127f2e/openviking_sdk-0.1.15-py3-none-any.whl", hash = "sha256:0eeb296feb0c963b43a21fc4a59cab1a487960a7c647c684ca1562246be7bd57", size = 34783, upload-time = "2026-10-13T08:19:30.101Z" },
 ]
 
 [[package]]
