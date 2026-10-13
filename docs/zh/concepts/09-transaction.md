@@ -272,12 +272,12 @@ value = owner_id:time_ns:lock_type
 HASH key 按路径 scope 隔离：
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-所有 key 都使用 `{namespace}` 作为 Redis Cluster hash tag。Exact 获取使用
+所有 key 都使用 `{service_name}` 作为 Redis Cluster hash tag。Exact 获取使用
 `HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
 `HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
 HASH。跨 scope batch 会被拒绝。

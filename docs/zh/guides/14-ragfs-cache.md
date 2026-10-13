@@ -91,12 +91,12 @@ CacheRuntime 协调多个 OpenViking 进程的路径锁。OpenViking 会从顶�
 Redis HASH key 按逻辑路径 scope 拆分：
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-`{namespace}` 来自 `service_name`，也是 Redis Cluster hash tag，因此同一部署的 PathLock key
+`{service_name}` 是 Redis Cluster hash tag，因此同一部署的 PathLock key
 仍位于同一 slot。Tree 冲突检查只扫描请求所属 scope 的 HASH。`/` 和
 `/local` 使用 global HASH，但不会扫描 account 或 `_system` HASH。
 跨 scope batch 会被拒绝。
@@ -226,7 +226,7 @@ RAGFS 主要缓存三类对象。
 文件 key 使用稳定命名空间和路径 hash：
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 文件 value 是 `CacheEnvelope`，包含文件内容、对象类型、路径和 generation 快照。全量读取命中后，RAGFS 会先校验 envelope 和 generation，再返回内容。
@@ -238,7 +238,7 @@ ragfs:v1:{namespace}:file:{hash(path)}
 目录 key：
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 目录缓存保存 backend 原始 `read_dir` entries，而不是权限过滤后的最终结果。权限、角色和 agent context 仍在 OpenViking 上层实时处理。
@@ -250,7 +250,7 @@ ragfs:v1:{namespace}:dir:{hash(path)}
 子树 generation key：
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` 和目录 `rename` 可能让 Provider 中残留子孙 key。RAGFS 通过 bump subtree generation，让旧 envelope 的 generation 快照失效，后续真实读取会回源并重建缓存。

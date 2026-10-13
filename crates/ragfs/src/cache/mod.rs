@@ -11,4 +11,4 @@ mod wrapper;
 
 pub use metrics::{CacheMetrics, CacheMetricsSnapshot};
 pub use policy::{CacheDecision, CachePolicy, CacheTraversalMode, CacheTreeMode};
-pub use wrapper::{CacheNamespace, CachedFileSystem};
+pub use wrapper::CachedFileSystem;

@@ -509,7 +509,7 @@ impl RedisPathLockProvider {
             }
         };
         Ok(format!(
-            "ov:pathlock:{{{}}}:{suffix}:tokens",
+            "{{{}}}:ov:pathlock:{suffix}:tokens",
             self.service_name
         ))
     }
@@ -1337,7 +1337,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             let raw = runtime
                 .execute_script(ScriptRequest {
                     script_id: TEST_HASH_ID.to_string(),
-                    keys: vec![format!("ov:pathlock:{{{service_name}}}:{scope}:tokens")],
+                    keys: vec![format!("{{{service_name}}}:ov:pathlock:{scope}:tokens")],
                     args: vec![
                         RedisPathLockProvider::bytes("get"),
                         RedisPathLockProvider::bytes(path),

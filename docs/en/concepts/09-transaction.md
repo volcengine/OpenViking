@@ -275,12 +275,12 @@ value = owner_id:time_ns:lock_type
 HASH keys are isolated by path scope:
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-All keys use `{namespace}` as the Redis Cluster hash tag. Exact acquisition
+All keys use `{service_name}` as the Redis Cluster hash tag. Exact acquisition
 reads the target and ancestors with `HMGET`; Tree acquisition scans only its
 scope HASH with `HGETALL`. Global `/` and `/local` locks do not scan account
 or `_system` HASHes. Cross-scope batches are rejected.

@@ -94,12 +94,12 @@ Cache-backed PathLock only supports the built-in Redis Provider.
 Redis HASH keys are partitioned by logical path scope:
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-`{namespace}` is derived from `service_name` and used as the Redis Cluster
+`{service_name}` is used as the Redis Cluster
 hash tag, so all PathLock keys for one deployment remain in one slot. Tree
 conflict checks scan only the HASH for
 the request scope. `/` and `/local` use the global HASH but do not scan
@@ -235,7 +235,7 @@ RAGFS mainly caches three object types.
 File keys use a stable namespace and path hash:
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
@@ -247,7 +247,7 @@ The default policy prefers summary files such as `.abstract.md` and `.overview.m
 Directory key:
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 The directory cache stores raw backend `read_dir` entries, not permission-filtered final results. Permission, role, and agent-context filtering still happens in the OpenViking upper layer at request time.
@@ -259,7 +259,7 @@ This lets one directory cache object serve `ls`, `tree`, `glob`, the file-collec
 Subtree generation key:
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` and directory `rename` can leave descendant keys behind in the Provider. RAGFS bumps the subtree generation so old envelopes fail their generation snapshot check. Later real reads fall back to the backend and rebuild the cache.

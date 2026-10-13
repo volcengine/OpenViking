@@ -16,18 +16,18 @@ use super::stats_wrapper::StatsWrappedFS;
 
 use super::errors::{Error, Result};
 #[cfg(feature = "cache")]
-use crate::cache::{CacheNamespace, CachePolicy};
+use crate::cache::CachePolicy;
 #[cfg(feature = "cache")]
 use crate::cache_runtime::{
     CacheOperation, CacheRuntime, DynamicProviderConfig, RedisProviderConfig,
 };
 
+#[cfg(feature = "cache")]
+use crate::lock::RedisPathLockProvider;
 use crate::lock::{
     FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
     PathLockProvider, PathLockWrappedFS,
 };
-#[cfg(feature = "cache")]
-use crate::lock::RedisPathLockProvider;
 
 #[cfg(feature = "s3")]
 use crate::plugins::S3FSPlugin;
@@ -198,7 +198,7 @@ pub async fn build_configured_stack(
                 .as_ref()
                 .expect("cache provider is validated")
                 .clone(),
-            CacheNamespace::new(&cache.cachefs.service_name),
+            cache.cachefs.service_name,
             cache.cachefs.policy,
         ))
     } else if let Some(runtime) = runtime.as_ref() {
