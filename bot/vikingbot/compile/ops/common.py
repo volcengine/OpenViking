@@ -7,7 +7,6 @@ to pipeline_io. Record transforms are shared by Map and intermediate Reduce stag
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -15,7 +14,7 @@ from openviking.core.namespace import relative_uri_path
 from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash, digest
-from vikingbot.compile.pipeline_io import retry_allowed
+from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import (
     CombineResponse,
@@ -337,18 +336,18 @@ async def transform(
 
 
 async def job(runtime: Pipeline, name, inputs, work):
-    """Persist one job's outcome; failures never advance source/record completion."""
+    """Persist one job's outcome with bounded retries; failures never advance input completion."""
     entry = {"status": "running", "inputs": [r.record_id for r in inputs]}
     await runtime.files.put(f"jobs/{name}", entry)
-    retries = Counter()
     try:
-        while True:
+        for attempt in range(MAX_JOB_ATTEMPTS):
             try:
                 output = await work()
                 break
             except OSError as exc:
-                if classify_api_error(exc) == ERROR_CLASS_INPUT_TOO_LARGE or not retry_allowed(
-                    retries, str(exc)
+                if (
+                    attempt == MAX_JOB_ATTEMPTS - 1
+                    or classify_api_error(exc) == ERROR_CLASS_INPUT_TOO_LARGE
                 ):
                     raise
                 runtime.metrics["job_retries"] += 1
