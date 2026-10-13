@@ -19,7 +19,7 @@ from openviking.utils.model_retry import retry_async
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMResponse
+from ..base import ToolCall, VLMResponse, trace_vlm_call
 from .openai_vlm import OpenAIVLM
 
 logger = get_logger(__name__)
@@ -172,6 +172,7 @@ class VolcEngineVLM(OpenAIVLM):
             size_bytes=size_bytes,
         )
 
+    @trace_vlm_call
     async def get_media_completion_async(
         self,
         *,
@@ -190,6 +191,7 @@ class VolcEngineVLM(OpenAIVLM):
             media_type=media_type,
         )
 
+    @trace_vlm_call
     def get_completion(
         self,
         prompt: str = "",
@@ -232,6 +234,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @trace_vlm_call
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -414,6 +417,7 @@ class VolcEngineVLM(OpenAIVLM):
         else:
             return {"type": "image_url", "image_url": {"url": image}}
 
+    @trace_vlm_call
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -464,6 +468,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @trace_vlm_call
     async def get_vision_completion_async(
         self,
         prompt: str = "",

@@ -181,6 +181,19 @@ From an observability standpoint, Studio reads dashboard summaries, token series
 
 Studio is best for interactive click-through debugging. If you need to feed observability data into your own logs or automation, prefer the HTTP API or SDK and request telemetry explicitly.
 
+## LLM and vision provider calls
+
+With tracing enabled, text, vision, and supported audio/video completion calls emit
+`chat <model>` CLIENT spans under the active operation. They include provider, model,
+duration, input/output token usage when available, and normalized error type. Retries
+share one logical call span; failover records each provider actually called.
+These new spans add no prompts, completions, media, API keys, or raw error bodies.
+Existing diagnostic events stay on their current operation span. Path-shaped model
+names are shown as `local-model` without changing requests. No new configuration is required.
+Trace labels use the backend's request model, including known defaults; an unknown
+default is labeled `unknown`. With no configured model, Codex text and vision requests
+now use its adapter's `gpt-5.3-codex` default instead of the inherited OpenAI default.
+
 ## Request-level telemetry
 
 The public request-tracing feature in OpenViking is called `operation telemetry`. It attaches a structured summary to a response so you can inspect things like:

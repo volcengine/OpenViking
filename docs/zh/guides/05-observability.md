@@ -181,6 +181,18 @@ Studio 从 `/api/v1/console/*` 读取 dashboard summary、token series、context
 
 Studio 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
 
+## LLM 和视觉服务调用
+
+启用 tracing 后，文本、视觉及支持的音视频生成调用会在当前 operation 下产生
+`chat <model>` CLIENT span，包含提供商、模型、耗时、可用的输入/输出 token 用量和
+归一化错误类型。一次逻辑调用的重试共用一个 span；故障切换记录实际调用的各个服务。
+这些新 span 不添加提示词、生成内容、媒体、API key 或原始错误响应，已有诊断事件
+仍保留在当前 operation span 上。路径形式的模型名称显示为 `local-model`，实际请求
+保持不变，无需新增配置。
+Trace 的模型名称使用后端请求的模型及其已知默认值；未知默认值显示为 `unknown`。
+未配置模型时，Codex 的文本和视觉请求现在使用适配器默认的 `gpt-5.3-codex`，
+而不再使用继承的 OpenAI 默认值。
+
 ## 请求级 Telemetry
 
 OpenViking 的请求级追踪能力对外名称是 `operation telemetry`。它会在响应里附带一份结构化摘要，用来说明这次调用里发生了什么，例如：

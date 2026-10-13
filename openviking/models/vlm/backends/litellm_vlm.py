@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, trace_vlm_call
 
 logger = get_logger(__name__)
 
@@ -418,6 +418,9 @@ class LiteLLMVLMProvider(VLMBase):
             )
         return message.content or ""
 
+    def _get_request_model(self) -> str:
+        return self.model or "gpt-4o-mini"
+
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -427,7 +430,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
-        model = self._resolve_model(self.model or "gpt-4o-mini")
+        model = self._resolve_model(self._get_request_model())
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
             model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
@@ -442,7 +445,7 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        model = self._resolve_model(self.model or "gpt-4o-mini")
+        model = self._resolve_model(self._get_request_model())
         if messages:
             kwargs_messages = messages
         else:
@@ -454,6 +457,7 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs_messages = [{"role": "user", "content": content}]
         return self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
+    @trace_vlm_call
     def get_completion(
         self,
         prompt: str = "",
@@ -482,6 +486,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM completion",
         )
 
+    @trace_vlm_call
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -518,6 +523,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM async completion",
         )
 
+    @trace_vlm_call
     def get_vision_completion(
         self,
         prompt: str = "",
@@ -546,6 +552,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM vision completion",
         )
 
+    @trace_vlm_call
     async def get_vision_completion_async(
         self,
         prompt: str = "",

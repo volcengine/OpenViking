@@ -46,6 +46,9 @@ class CodexVLM(OpenAIVLM):
         super().__init__(normalized)
         self._async_client = None
 
+    def _get_request_model(self) -> str:
+        return self.model or "gpt-5.3-codex"
+
     def _build_responses_client(self, api_key: str, api_base: str):
         kwargs = _build_openai_client_kwargs(
             "openai",
@@ -65,7 +68,7 @@ class CodexVLM(OpenAIVLM):
         )
         return CodexCompletionsAdapter(
             lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
-            self.model or "gpt-5.3-codex",
+            self._get_request_model(),
             auth_retry_client_factory=auth_retry_client_factory,
         )
 

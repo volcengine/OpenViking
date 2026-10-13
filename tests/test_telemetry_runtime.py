@@ -10,6 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
@@ -26,6 +30,7 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.telemetry import execution as telemetry_execution
 from openviking.telemetry import (
     get_current_telemetry,
     register_telemetry,
@@ -94,6 +99,372 @@ def test_telemetry_summary_breaks_down_llm_and_embedding_token_usage():
     assert "semantic_nodes" not in summary
     assert "memory" not in summary
     assert "errors" not in summary
+
+
+@pytest.fixture
+def vlm_span_exporter(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    test_tracer = provider.get_tracer("openviking-vlm-test")
+    monkeypatch.setattr(tracer_module, "_otel_tracer", test_tracer)
+    monkeypatch.setattr(telemetry_execution.otel_trace, "get_tracer", lambda _name: test_tracer)
+    yield exporter
+    provider.shutdown()
+
+
+def _chat_spans(exporter):
+    return [s for s in exporter.get_finished_spans() if s.kind is otel_trace.SpanKind.CLIENT]
+
+
+def _chat_response(text="private response", tokens=11):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=text, tool_calls=None, reasoning_content=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=tokens, completion_tokens=7, total_tokens=tokens + 7),
+    )
+
+
+def _traced_vlm(monkeypatch, backend="openai", **config):
+    from openviking.models.vlm.backends import litellm_vlm
+    from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
+    from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+
+    classes = {
+        "openai": OpenAIVLM,
+        "litellm": litellm_vlm.LiteLLMVLMProvider,
+        "volcengine": VolcEngineVLM,
+    }
+    vlm = classes[backend](
+        {
+            "provider": backend,
+            "model": "test-model",
+            "api_key": "private-key",
+            "max_retries": 0,
+            **config,
+        }
+    )
+    create = Mock(return_value=_chat_response())
+    acreate = AsyncMock(return_value=_chat_response())
+    if backend == "litellm":
+        monkeypatch.setattr(litellm_vlm, "completion", create)
+        monkeypatch.setattr(litellm_vlm, "acompletion", acreate)
+    else:
+        monkeypatch.setattr(
+            vlm,
+            "get_client",
+            lambda: SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            ),
+        )
+        monkeypatch.setattr(
+            vlm,
+            "get_async_client",
+            lambda: SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=acreate))
+            ),
+        )
+    return vlm, create, acreate
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm", "volcengine"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "get_completion",
+        "get_completion_async",
+        "get_vision_completion",
+        "get_vision_completion_async",
+    ],
+)
+async def test_vlm_provider_spans_preserve_results_usage_and_operation_parent(
+    monkeypatch,
+    vlm_span_exporter,
+    backend,
+    method,
+):
+    vlm, _, _ = _traced_vlm(monkeypatch, backend)
+
+    async def call():
+        result = getattr(vlm, method)(prompt="private prompt")
+        return await result if method.endswith("_async") else result
+
+    execution = await telemetry_execution.run_with_telemetry(
+        operation="session.commit",
+        telemetry=True,
+        fn=call,
+    )
+    assert execution.result == "private response"
+    spans = _chat_spans(vlm_span_exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    parent = next(s for s in vlm_span_exporter.get_finished_spans() if s.name == "session.commit")
+    assert span.parent.span_id == parent.context.span_id
+    assert span.end_time >= span.start_time
+    assert span.attributes == {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": backend,
+        "gen_ai.request.model": "test-model",
+        "gen_ai.usage.input_tokens": 11,
+        "gen_ai.usage.output_tokens": 7,
+    }
+    assert not span.events
+    assert execution.telemetry["summary"]["tokens"]["llm"]["total"] == 18
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_model", [None, "", "custom-codex-model"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "get_completion",
+        "get_completion_async",
+        "get_vision_completion",
+        "get_vision_completion_async",
+    ],
+)
+async def test_codex_span_model_matches_actual_responses_request(
+    monkeypatch, vlm_span_exporter, configured_model, method
+):
+    from openviking.models.vlm.backends.codex_vlm import CodexVLM
+
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="private response")],
+            )
+        ],
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7, total_tokens=18),
+    )
+    create = Mock(
+        side_effect=lambda **_kwargs: iter(
+            [SimpleNamespace(type="response.completed", response=response)]
+        )
+    )
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    vlm = CodexVLM({"model": configured_model, "api_key": "private-key", "max_retries": 0})
+    monkeypatch.setattr(vlm, "_build_responses_client", lambda *_args: client)
+    result = getattr(vlm, method)(prompt="private prompt")
+    if method.endswith("_async"):
+        result = await result
+    assert result == "private response"
+    request_model = create.call_args.kwargs["model"]
+    assert request_model == (configured_model or "gpt-5.3-codex")
+    spans = _chat_spans(vlm_span_exporter)
+    assert len(spans) == 1
+    assert spans[0].name == f"chat {request_model}"
+    assert spans[0].attributes["gen_ai.request.model"] == request_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["openai", "litellm"])
+async def test_vlm_known_default_model_matches_request(monkeypatch, vlm_span_exporter, backend):
+    vlm, _, call = _traced_vlm(monkeypatch, backend, model=None)
+    await vlm.get_completion_async("private prompt")
+    assert call.call_args.kwargs["model"] == "gpt-4o-mini"
+    assert _chat_spans(vlm_span_exporter)[0].attributes["gen_ai.request.model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_vlm_without_known_default_traces_unknown_model(vlm_span_exporter):
+    from openviking.models.vlm.base import trace_vlm_call
+
+    class UnknownBackend(VLMBase):
+        def get_completion(self, **_kwargs):
+            return "response"
+
+        get_vision_completion = get_completion
+
+        @trace_vlm_call
+        async def get_completion_async(self, **_kwargs):
+            return "response"
+
+        get_vision_completion_async = get_completion_async
+
+    assert await UnknownBackend({"provider": "custom"}).get_completion_async() == "response"
+    span = _chat_spans(vlm_span_exporter)[0]
+    assert span.name == "chat unknown"
+    assert span.attributes["gen_ai.request.model"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_vlm_retry_and_failover_span_cardinality(monkeypatch, vlm_span_exporter):
+    from openviking.models.vlm.base import FailoverVLM
+
+    class ProviderError(RuntimeError):
+        status_code = 503
+
+    async def no_delay(_delay):
+        pass
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_delay)
+    vlm, _, call = _traced_vlm(monkeypatch, max_retries=1)
+    call.side_effect = [ProviderError("HTTP 503 private provider body"), _chat_response()]
+    assert await vlm.get_completion_async("private prompt") == "private response"
+    assert call.await_count == 2
+    assert len(_chat_spans(vlm_span_exporter)) == 1
+
+    primary, _, call = _traced_vlm(monkeypatch, model="primary")
+    error = ProviderError("HTTP 401 private provider body with private-key")
+    error.status_code = 401
+    call.side_effect = error
+    with pytest.raises(ProviderError) as raised:
+        await primary.get_completion_async("private prompt")
+    assert raised.value is error
+    backup, _, _ = _traced_vlm(monkeypatch, model="backup")
+    assert (
+        await FailoverVLM(primary, backup).get_completion_async("private prompt")
+        == "private response"
+    )
+    spans = _chat_spans(vlm_span_exporter)
+    assert [s.name for s in spans] == [
+        "chat test-model",
+        "chat primary",
+        "chat primary",
+        "chat backup",
+    ]
+    for span in spans[1:3]:
+        assert span.status.status_code is otel_trace.StatusCode.ERROR
+        assert span.attributes["error.type"] == "401"
+        assert "private" not in span.to_json()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_vlm_spans_keep_usage_isolated(monkeypatch, vlm_span_exporter):
+    vlm, _, call = _traced_vlm(monkeypatch)
+    ready, started = asyncio.Event(), 0
+
+    async def reply(**kwargs):
+        nonlocal started
+        started += 1
+        if started == 2:
+            ready.set()
+        await ready.wait()
+        return _chat_response(tokens=len(kwargs["messages"][0]["content"]))
+
+    call.side_effect = reply
+    await asyncio.gather(vlm.get_completion_async("a"), vlm.get_completion_async("abcdef"))
+    assert sorted(
+        s.attributes["gen_ai.usage.input_tokens"] for s in _chat_spans(vlm_span_exporter)
+    ) == [1, 6]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_vlm_call_closes_span_and_preserves_cancellation(
+    monkeypatch, vlm_span_exporter
+):
+    vlm, _, call = _traced_vlm(monkeypatch)
+    started = asyncio.Event()
+
+    async def wait(**_kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    call.side_effect = wait
+    task = asyncio.create_task(vlm.get_completion_async("private prompt"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(_chat_spans(vlm_span_exporter)) == 1
+    call.side_effect = None
+    await vlm.get_completion_async("next request")
+    assert len(_chat_spans(vlm_span_exporter)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [False, True])
+async def test_vlm_tracing_disabled_or_broken_preserves_provider_behavior(monkeypatch, broken):
+    class BrokenSpan:
+        def set_attribute(self, *_args):
+            raise RuntimeError("trace write failed")
+
+        record_exception = set_attribute
+        set_status = set_attribute
+        end = set_attribute
+
+    monkeypatch.setattr(
+        tracer_module,
+        "_otel_tracer",
+        SimpleNamespace(
+            start_span=lambda *_args, **_kwargs: BrokenSpan(),
+        )
+        if broken
+        else None,
+    )
+    vlm, _, call = _traced_vlm(monkeypatch)
+    assert await vlm.get_completion_async("private prompt") == "private response"
+    error = RuntimeError("original provider error")
+    call.side_effect = error
+    with pytest.raises(RuntimeError) as raised:
+        await vlm.get_completion_async("private prompt")
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        "/Users/private/models/model.gguf",
+        "provider//home/private/model.gguf",
+        r"C:\private\model.gguf",
+    ],
+)
+async def test_vlm_span_omits_local_model_paths_without_changing_requests(
+    monkeypatch, vlm_span_exporter, model
+):
+    vlm, _, call = _traced_vlm(monkeypatch, model=model)
+    await vlm.get_completion_async("private prompt")
+    assert call.await_args.kwargs["model"] == model
+    span = _chat_spans(vlm_span_exporter)[0]
+    assert span.name == "chat local-model"
+    assert "private" not in span.to_json()
+
+
+@pytest.mark.asyncio
+async def test_volcengine_media_span_includes_usage_and_preserves_cleanup(
+    monkeypatch, tmp_path, vlm_span_exporter
+):
+    vlm, _, _ = _traced_vlm(monkeypatch, "volcengine", media={"enabled": True})
+    path = tmp_path / "private-meeting.mp3"
+    path.write_bytes(b"ID3-audio")
+    client = SimpleNamespace(
+        files=SimpleNamespace(
+            create=AsyncMock(return_value=SimpleNamespace(id="private-file")),
+            wait_for_processing=AsyncMock(return_value=SimpleNamespace(status="active")),
+            delete=AsyncMock(),
+        ),
+        responses=SimpleNamespace(
+            create=AsyncMock(
+                return_value=SimpleNamespace(
+                    id="response-1",
+                    status="completed",
+                    usage=SimpleNamespace(input_tokens=11, output_tokens=7),
+                    output=[
+                        SimpleNamespace(
+                            type="message",
+                            content=[SimpleNamespace(type="output_text", text="private response")],
+                        )
+                    ],
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    result = await vlm.get_media_completion_async(
+        prompt="private prompt", media_path=path, filename=path.name, media_type="audio"
+    )
+    assert result == "private response"
+    assert client.files.delete.await_count == 1
+    span = _chat_spans(vlm_span_exporter)[0]
+    assert span.attributes["gen_ai.usage.input_tokens"] == 11
+    assert "private" not in span.to_json()
 
 
 def test_telemetry_summary_breaks_down_stage_token_usage():
@@ -866,7 +1237,8 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
     handler = TextEmbeddingHandler(
-        _DummyVikingDB(), embedding_provider=provider,
+        _DummyVikingDB(),
+        embedding_provider=provider,
     )
     payload = {
         "data": json.dumps(

@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import contextvars
+import functools
+import inspect
 import logging
 import re
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
@@ -22,6 +26,28 @@ from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 logger = get_logger(__name__)
+_active_vlm_span: contextvars.ContextVar[Optional[tuple[Any, Any]]] = contextvars.ContextVar(
+    "ov_active_vlm_span", default=None
+)
+
+
+def trace_vlm_call(method):
+    """Trace a concrete provider call, including its internal retries."""
+    if inspect.iscoroutinefunction(method):
+
+        @functools.wraps(method)
+        async def async_call(self, *args, **kwargs):
+            with self._vlm_span():
+                return await method(self, *args, **kwargs)
+
+        return async_call
+
+    @functools.wraps(method)
+    def sync_call(self, *args, **kwargs):
+        with self._vlm_span():
+            return method(self, *args, **kwargs)
+
+    return sync_call
 
 
 class UnsupportedMediaInputError(RuntimeError):
@@ -80,6 +106,56 @@ class VLMBase(ABC):
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
+
+    def _get_request_model(self) -> str:
+        return self.model or "unknown"
+
+    @contextmanager
+    def _vlm_span(self) -> Iterator[Any]:
+        active = _active_vlm_span.get()
+        if active is not None and active[0] is self:
+            yield active[1]
+            return
+
+        span = None
+        try:
+            from opentelemetry.trace import SpanKind, Status, StatusCode
+
+            from openviking.telemetry import tracer_module
+            from openviking.telemetry.model_identity import model_name_for_trace
+
+            if tracer_module.is_enabled():
+                model = model_name_for_trace(self._get_request_model())
+                # Do not make this span current: prompt/response events stay on the operation.
+                span = tracer_module.get_tracer().start_span(f"chat {model}", kind=SpanKind.CLIENT)
+                span.set_attribute("gen_ai.operation.name", "chat")
+                span.set_attribute("gen_ai.provider.name", str(self.provider))
+                span.set_attribute("gen_ai.request.model", model)
+        except Exception:
+            logger.debug("failed to initialize VLM span", exc_info=True)
+
+        token = _active_vlm_span.set((self, span))
+        try:
+            yield span
+        except Exception as exc:
+            if span is not None:
+                try:
+                    error_type = extract_metric_error_code(exc)
+                    span.set_attribute("error.type", error_type)
+                    span.record_exception(
+                        RuntimeError(f"{type(exc).__name__} (error.type={error_type})")
+                    )
+                    span.set_status(Status(StatusCode.ERROR))
+                except Exception:
+                    logger.debug("failed to record VLM span error", exc_info=True)
+            raise
+        finally:
+            _active_vlm_span.reset(token)
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    logger.debug("failed to close VLM span", exc_info=True)
 
     @abstractmethod
     def get_completion(
@@ -240,6 +316,13 @@ class VLMBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        try:
+            active = _active_vlm_span.get()
+            if active is not None and active[0] is self and active[1] is not None:
+                active[1].set_attribute("gen_ai.usage.input_tokens", int(prompt_tokens))
+                active[1].set_attribute("gen_ai.usage.output_tokens", int(completion_tokens))
+        except Exception:
+            logger.debug("failed to set VLM span token usage", exc_info=True)
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
             from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
@@ -759,9 +842,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -820,9 +901,7 @@ class MultiCredentialVLM(VLMBase):
             "temperature": first.temperature,
             "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
         }
         super().__init__(config)
