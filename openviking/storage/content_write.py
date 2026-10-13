@@ -12,6 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     classify_uri,
     context_type_for_uri,
@@ -46,21 +47,32 @@ from openviking.storage.context_update_plan import (
     ContentTreeAction,
     ContentTreeOperation,
     ContextUpdatePlan,
+    DirectIndexAction,
+    FileRefreshIntent,
     build_context_update_plan_from_snapshot,
     execute_content_tree_actions,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.resource_diff import (
+    ContentState,
+    IndexState,
     InlineBytesStore,
     build_rnfv_snapshot,
     make_inline_file_inventory,
+    resolve_resource_diff,
 )
-from openviking.storage.resource_rnfv import FormalEntry, RequestIntent
+from openviking.storage.resource_rnfv import (
+    FormalEntry,
+    RequestIntent,
+    canonical_vector_records_by_level,
+)
 from openviking.storage.resource_target import AgfsResourceTarget
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
@@ -1098,6 +1110,7 @@ class ContentWriteCoordinator:
                 lease=lease,
                 ingest_options=operation["ingest_options"],
                 include_previous_abstract=True,
+                defer_vector_hydration=True,
             )
         return prepared
 
@@ -1115,6 +1128,7 @@ class ContentWriteCoordinator:
         lease: Dict[str, Any],
         ingest_options: IngestOptions | None,
         include_previous_abstract: bool = False,
+        defer_vector_hydration: bool = False,
     ) -> _PreparedInlineResource:
         """Build one file-scoped RNFV plan from already-locked, final bytes.
 
@@ -1148,22 +1162,34 @@ class ContentWriteCoordinator:
             # orphan canonical V record is overwritten by the later UPSERT.
             vector_inventory=vector_inventory,
         )
-        _, plan = await build_context_update_plan_from_snapshot(
-            snapshot=rnfv,
-            store=store,
-            artifact_ref=artifact_ref,
-            target=target,
-            vikingdb=vector_store,
-            context_type=context_type_for_uri(uri),
-            is_code_repo=False,
-            account_id=ctx.account_id,
-            ctx=ctx,
-            root_preexisting=target_preexisting,
-            artifact_paths=inventory.artifact_paths,
-            ingest_options=ingest_options,
-            root_is_file=True,
-        )
-        plan = self._ensure_explicit_write_content_action(plan, md5=inventory.entries[""].md5)
+        if defer_vector_hydration:
+            plan = await self._build_deferred_batch_file_plan(
+                rnfv=rnfv,
+                store=store,
+                artifact_ref=artifact_ref,
+                target=target,
+                inventory=inventory,
+                request_intent=request_intent,
+                ctx=ctx,
+                target_preexisting=target_preexisting,
+            )
+        else:
+            _, plan = await build_context_update_plan_from_snapshot(
+                snapshot=rnfv,
+                store=store,
+                artifact_ref=artifact_ref,
+                target=target,
+                vikingdb=vector_store,
+                context_type=context_type_for_uri(uri),
+                is_code_repo=False,
+                account_id=ctx.account_id,
+                ctx=ctx,
+                root_preexisting=target_preexisting,
+                artifact_paths=inventory.artifact_paths,
+                ingest_options=ingest_options,
+                root_is_file=True,
+            )
+            plan = self._ensure_explicit_write_content_action(plan, md5=inventory.entries[""].md5)
         previous_abstract = (
             next(
                 (
@@ -1186,6 +1212,140 @@ class ContentWriteCoordinator:
             target=target,
             previous_abstract=previous_abstract,
             ingest_options=IngestOptions.from_value(ingest_options),
+        )
+
+    @staticmethod
+    def _file_scalar_patch(request: RequestIntent) -> FieldPatch | None:
+        values: dict[str, Any] = {}
+        modes: dict[str, str] = {}
+        for intent in request.scalar_intents:
+            if int(ContextLevel.DETAIL) not in intent.target_levels:
+                continue
+            values[intent.field] = (
+                list(intent.value) if isinstance(intent.value, tuple) else intent.value
+            )
+            modes[intent.field] = intent.mode
+        return FieldPatch(values, modes) if values else None
+
+    async def _build_deferred_batch_file_plan(
+        self,
+        *,
+        rnfv: Any,
+        store: InlineBytesStore,
+        artifact_ref: _InlineArtifactRef,
+        target: AgfsResourceTarget,
+        inventory: Any,
+        request_intent: RequestIntent,
+        ctx: RequestContext,
+        target_preexisting: bool,
+    ) -> ContextUpdatePlan:
+        """Build a batch file plan without synchronously hydrating V scalars.
+
+        Batch keeps exact file locks only for F state and content mutation.  An
+        existing L2 uses the durable embedding queue's MERGE action, whose
+        worker exact-gets the current record before resolving FieldPatch.  This
+        avoids N per-file remote hydrations while preserving latest-state scalar
+        merge semantics.
+        """
+        diff = await resolve_resource_diff(
+            rnfv,
+            store=store,
+            artifact_ref=artifact_ref,
+            target=target,
+            artifact_paths=inventory.artifact_paths,
+        )
+        entry = diff.entries[""]
+        records = tuple(rnfv.vectors.records_by_id.values())
+        canonical, duplicates = canonical_vector_records_by_level(records)
+        detail = canonical.get(int(ContextLevel.DETAIL))
+        scalar_patch = self._file_scalar_patch(request_intent)
+        direct_actions: list[DirectIndexAction] = [
+            DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
+            for record in duplicates
+        ]
+        for level, record in canonical.items():
+            if level != int(ContextLevel.DETAIL):
+                direct_actions.append(
+                    DirectIndexAction(IndexAction.DELETE, record.uri, level, record.record_id)
+                )
+
+        content_changed = ContentState(entry.content_state) in {
+            ContentState.ADDED,
+            ContentState.RESTORE,
+            ContentState.MODIFIED,
+            ContentState.REPLACE_KIND,
+        }
+        index_needs_vector = IndexState(entry.index_state) in {
+            IndexState.MISSING,
+            IndexState.PARTIAL,
+            IndexState.STALE,
+            IndexState.LEVEL_CONFLICT,
+        }
+        needs_vector = request_intent.vectorize and (
+            content_changed or detail is None or index_needs_vector
+        )
+        if request_intent.processing_mode == "vectors_only" and needs_vector:
+            action = IndexAction.MERGE if detail is not None else IndexAction.UPSERT
+            direct_actions.append(
+                DirectIndexAction(
+                    action=action,
+                    uri=request_intent.target_uri,
+                    level=int(ContextLevel.DETAIL),
+                    record_id=(
+                        detail.record_id
+                        if detail is not None
+                        else vector_record_id(
+                            ctx.account_id,
+                            request_intent.target_uri,
+                            int(ContextLevel.DETAIL),
+                        )
+                    ),
+                    upsert_fields=(
+                        scalar_patch.resolve({})
+                        if action is IndexAction.UPSERT and scalar_patch
+                        else {}
+                    ),
+                    field_patch=scalar_patch if action is IndexAction.MERGE else None,
+                    md5=entry.md5,
+                    summary=str(detail.fields.get("abstract") or "") if detail else "",
+                )
+            )
+        elif scalar_patch is not None and detail is not None and not needs_vector:
+            direct_actions.append(
+                DirectIndexAction(
+                    IndexAction.UPDATE_FIELDS,
+                    detail.uri,
+                    int(ContextLevel.DETAIL),
+                    detail.record_id,
+                    field_patch=scalar_patch.with_seed(
+                        {
+                            "uri": detail.uri,
+                            "account_id": ctx.account_id,
+                            "level": int(ContextLevel.DETAIL),
+                        }
+                    ),
+                )
+            )
+
+        return ContextUpdatePlan(
+            root_uri=request_intent.target_uri,
+            context_type=context_type_for_uri(request_intent.target_uri),
+            content_tree_actions=(
+                ContentTreeAction(
+                    ContentTreeOperation.UPSERT,
+                    "",
+                    old_kind="file" if target_preexisting else None,
+                    new_kind="file",
+                    artifact_path="",
+                    md5=inventory.entries[""].md5,
+                ),
+            ),
+            direct_index_actions=tuple(direct_actions),
+            file_refresh=(
+                FileRefreshIntent(request_intent.target_uri, entry.md5)
+                if request_intent.processing_mode != "vectors_only" and needs_vector
+                else None
+            ),
         )
 
     async def _write_direct_with_refresh(

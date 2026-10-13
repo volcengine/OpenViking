@@ -235,8 +235,8 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
         )
 
     async def build_plan(**kwargs):
-        uri = kwargs["snapshot"].request.target_uri
-        return None, ContextUpdatePlan(
+        uri = kwargs["request_intent"].target_uri
+        return ContextUpdatePlan(
             root_uri=uri,
             context_type="resource",
             content_tree_actions=(
@@ -270,7 +270,7 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
         }
 
     monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", build_snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", build_plan)
+    monkeypatch.setattr(coordinator, "_build_deferred_batch_file_plan", build_plan)
     monkeypatch.setattr(content_write_module, "execute_content_tree_actions", commit)
     monkeypatch.setattr(content_write_module, "enqueue_direct_index_actions", enqueue)
     monkeypatch.setattr(content_write_module.Summarizer, "refresh_file_parents", grouped_refresh)
@@ -306,6 +306,125 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_batch_existing_files_defer_full_vector_reads_to_embedding_worker(monkeypatch):
+    root = "viking://resources/wiki"
+    operations = [
+        {"uri": f"{root}/docs/{index}.md", "content": f"new {index}", "mode": "replace"}
+        for index in range(64)
+    ]
+    vfs = _VFS(
+        root, {operation["uri"]: f"old {index}" for index, operation in enumerate(operations)}
+    )
+
+    class _VikingDB:
+        def __init__(self):
+            self.inventory_calls = []
+            self.hydrate_incremental_records = AsyncMock(
+                side_effect=AssertionError("batch preparation must not hydrate full vector records")
+            )
+
+        async def get_incremental_inventory_by_uris(self, uris, **kwargs):
+            self.inventory_calls.append((list(uris), kwargs))
+            return {
+                uri: {
+                    f"{index}-l2": {
+                        "id": f"{index}-l2",
+                        "uri": uri,
+                        "level": 2,
+                        "md5": content_md5(f"old {index}".encode()),
+                        "abstract": f"old abstract {index}",
+                    }
+                }
+                for index, uri in enumerate(uris)
+            }
+
+    vikingdb = _VikingDB()
+    coordinator = ContentWriteCoordinator(vfs, vikingdb=vikingdb)
+    monkeypatch.setattr(
+        content_write_module.Summarizer,
+        "refresh_file_parents",
+        AsyncMock(
+            return_value={"enqueued_count": 1, "parent_actions": {f"{root}/docs": "refresh_now"}}
+        ),
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=operations,
+        ctx=ctx,
+        wait=False,
+        processing_mode="semantic_and_vectors",
+    )
+
+    assert result["updated"] == sorted(operation["uri"] for operation in operations)
+    assert len(vikingdb.inventory_calls) == 1
+    assert vikingdb.inventory_calls[0][0] == sorted(operation["uri"] for operation in operations)
+    vikingdb.hydrate_incremental_records.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_vectors_only_existing_file_enqueues_merge_patch_without_hydration(monkeypatch):
+    root = "viking://resources/wiki"
+    uri = f"{root}/a.md"
+    vfs = _VFS(root, {uri: "old"})
+
+    class _VikingDB:
+        hydrate_incremental_records = AsyncMock(
+            side_effect=AssertionError("batch preparation must not hydrate full vector records")
+        )
+
+        async def get_incremental_inventory_by_uris(self, uris, **kwargs):
+            del kwargs
+            return {
+                uri: {
+                    "existing-l2": {
+                        "id": "existing-l2",
+                        "uri": uri,
+                        "level": 2,
+                        "md5": content_md5(b"old"),
+                        "abstract": "old abstract",
+                    }
+                }
+                for uri in uris
+            }
+
+    actions = []
+
+    async def enqueue(direct_actions, **kwargs):
+        del kwargs
+        actions.extend(direct_actions)
+        return True
+
+    monkeypatch.setattr(content_write_module, "enqueue_direct_index_actions", enqueue)
+    coordinator = ContentWriteCoordinator(vfs, vikingdb=_VikingDB())
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {
+                "uri": uri,
+                "content": "new",
+                "tags": ["team=search"],
+                "tag_mode": "append",
+            }
+        ],
+        ctx=ctx,
+        wait=False,
+        processing_mode="vectors_only",
+    )
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.action.value == "merge"
+    assert action.record_id == "existing-l2"
+    assert action.field_patch is not None
+    assert action.field_patch.values == {"search_tags": ["team=search"]}
+    assert action.field_patch.modes == {"search_tags": "append"}
+
+
+@pytest.mark.asyncio
 async def test_batch_resource_plan_uses_operation_processing_mode_and_tags(monkeypatch):
     root = "viking://resources/wiki"
     uri = f"{root}/a.md"
@@ -327,10 +446,10 @@ async def test_batch_resource_plan_uses_operation_processing_mode_and_tags(monke
 
     async def build_plan(**kwargs):
         del kwargs
-        return None, ContextUpdatePlan(uri, "resource")
+        return ContextUpdatePlan(uri, "resource")
 
     monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", build_snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", build_plan)
+    monkeypatch.setattr(coordinator, "_build_deferred_batch_file_plan", build_plan)
     monkeypatch.setattr(coordinator, "_refresh_batch", AsyncMock(return_value=None))
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -378,10 +497,10 @@ async def test_batch_resource_plan_allows_clear_tags_without_tags(monkeypatch):
 
     async def build_plan(**kwargs):
         del kwargs
-        return None, ContextUpdatePlan(uri, "resource")
+        return ContextUpdatePlan(uri, "resource")
 
     monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", build_snapshot)
-    monkeypatch.setattr(content_write_module, "build_context_update_plan_from_snapshot", build_plan)
+    monkeypatch.setattr(coordinator, "_build_deferred_batch_file_plan", build_plan)
     monkeypatch.setattr(coordinator, "_refresh_batch", AsyncMock(return_value=None))
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
