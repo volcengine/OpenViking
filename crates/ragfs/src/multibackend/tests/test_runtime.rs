@@ -95,4 +95,3 @@ async fn delete_account_event_removes_backup_scope() {
         Error::NotFound(_)
     ));
 }
-}
