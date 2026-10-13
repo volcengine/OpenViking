@@ -111,6 +111,7 @@ class RequestContext:
     # Trusted background workers may maintain derived content without replaying
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
+    cache_id: Optional[str] = None
 
     @property
     def account_id(self) -> str:

@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Typ
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
 from openviking.storage.queuefs.queue_middleware import (
     AckContext,
@@ -260,6 +261,7 @@ class NamedQueue:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
 
+    @without_request_cache
     async def process_dequeued(self, data: Dict[str, Any]) -> ProcessResult:
         """Process one fetched delivery and settle local status exactly once."""
         handler = self._dequeue_handler

@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.service.task_events import (
     PROCESS_EVENT_KINDS,
     TaskEventHistory,
@@ -268,6 +269,7 @@ class TaskTracker:
             self._cleanup_task.cancel()
             logger.debug("[TaskTracker] Cleanup loop stopped")
 
+    @without_request_cache
     async def _cleanup_loop(self) -> None:
         while True:
             try:

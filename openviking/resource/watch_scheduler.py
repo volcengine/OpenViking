@@ -16,6 +16,7 @@ from openviking.connector.auth import (
     restore_feishu_request,
 )
 from openviking.connector.delegate import ConnectorDelegate
+from openviking.pyagfs.request_cache import without_request_cache
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -151,6 +152,7 @@ class WatchScheduler:
 
         logger.info("[WatchScheduler] Stopped")
 
+    @without_request_cache
     async def schedule_task(self, task_id: str) -> bool:
         """Schedule a single task for immediate execution.
 
@@ -203,6 +205,7 @@ class WatchScheduler:
         if executions:
             await asyncio.gather(*executions, return_exceptions=True)
 
+    @without_request_cache
     async def _run_scheduler(self) -> None:
         """Background task loop that periodically checks and executes due tasks.
 

@@ -7,8 +7,10 @@
 mod envelope;
 mod metrics;
 mod policy;
+mod request;
 mod wrapper;
 
 pub use metrics::{CacheMetrics, CacheMetricsSnapshot};
 pub use policy::{CacheDecision, CachePolicy, CacheTraversalMode, CacheTreeMode};
+pub use request::{RequestCacheRegistry, RequestStatCache, RequestStatLookup, RequestStatMiss};
 pub use wrapper::{CacheNamespace, CachedFileSystem};
