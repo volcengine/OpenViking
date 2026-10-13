@@ -269,7 +269,7 @@ if not state then
     return { "invalid", "unknown backend id: " .. ARGV[4] }
 end
 local synced_seq = tonumber(ARGV[5])
-if synced_seq < state.synced_seq then
+if synced_seq ~= 0 and synced_seq < state.synced_seq then
     return { "invalid", "backend progress cannot regress" }
 end
 local next_seq = tonumber(redis.call("HGET", KEYS[1], "next_seq"))

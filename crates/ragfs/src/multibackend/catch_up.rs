@@ -467,7 +467,23 @@ impl CatchUpWorker {
                 .remove_scope_with_retry(backup, lease, &account_id, &path)
                 .await
             {
-                Ok(()) => {}
+                Ok(()) => {
+                    if let Err(error) = self
+                        .reset_account_progress_after_scope_delete(lease, &account_id)
+                        .await
+                    {
+                        if !lease.is_valid() {
+                            return Err(error.into());
+                        }
+                        warn!(
+                            backend = %self.backend_id,
+                            account = %account_id,
+                            error = %error,
+                            "multi-write catch-up scope-delete progress reset failed"
+                        );
+                        failed_from = Some(failed_from.map_or(seq, |failed: u64| failed.min(seq)));
+                    }
+                }
                 Err(CatchUpFailure::Cancelled) => return Err(CatchUpFailure::Cancelled),
                 Err(CatchUpFailure::Failed(_)) if !lease.is_valid() => {
                     return Err(Error::internal("catch-up lease was not refreshed").into());
@@ -534,6 +550,35 @@ impl CatchUpWorker {
             }
         }
         Err(CatchUpFailure::Failed(last_error.unwrap()))
+    }
+
+    /// Reset this backup's progress for a recreated account after scope delete.
+    async fn reset_account_progress_after_scope_delete(
+        &self,
+        lease: &CatchUpLease,
+        account_id: &str,
+    ) -> Result<()> {
+        let path = self.store.paths().account_manifest(account_id)?.0;
+        let manifest: PartitionsManifest = match self.store.read_json(&path).await {
+            Ok(manifest) => manifest,
+            Err(Error::NotFound(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        manifest.validate()?;
+        if !lease.refresh().await? {
+            return Err(Error::internal("catch-up lease was not refreshed"));
+        }
+        for (&partition_id, _) in &manifest.partitions {
+            let scope = ScopeKey {
+                account_id: account_id.to_string(),
+                partition_id,
+                epoch: manifest.epoch,
+            };
+            self.provider
+                .advance_backend_state(&scope, &self.backend_id, 0)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Refresh the lease immediately before a monotonic progress update.

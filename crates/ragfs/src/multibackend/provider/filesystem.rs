@@ -654,7 +654,7 @@ impl MultiWriteProvider for FilesystemProvider {
         }
     }
 
-    /// Advances one backup's monotonic progress while its catch-up lease is held.
+    /// Advances one backup's progress while its catch-up lease is held.
     async fn advance_backend_state(
         &self,
         scope: &ScopeKey,
@@ -668,7 +668,7 @@ impl MultiWriteProvider for FilesystemProvider {
             let state = manifest.backend_states.get_mut(backend_id).ok_or_else(|| {
                 Error::invalid_operation(format!("unknown backend id: {backend_id}"))
             })?;
-            if synced_seq < state.synced_seq {
+            if synced_seq != 0 && synced_seq < state.synced_seq {
                 return Err(Error::invalid_operation("backend progress cannot regress"));
             }
             if synced_seq >= manifest.next_seq {
