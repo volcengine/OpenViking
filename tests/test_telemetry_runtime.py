@@ -10,8 +10,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
+from openviking.models.embedder.base import (
+    CompositeHybridEmbedder,
+    DenseEmbedderBase,
+    EmbedResult,
+    FailoverEmbedder,
+    SparseEmbedderBase,
+    embed_compat,
+    query_embed_cache_scope,
+)
 from openviking.models.vlm.base import VLMBase
 from openviking.observability.context import (
     bind_operation_observability_context,
@@ -26,6 +38,7 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.telemetry import execution as telemetry_execution
 from openviking.telemetry import (
     get_current_telemetry,
     register_telemetry,
@@ -37,6 +50,387 @@ from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 from openviking_cli.utils import logger as logger_module
+
+
+class _TracingProviderError(RuntimeError):
+    status_code = 503
+
+
+class _TracingEmbedder(DenseEmbedderBase):
+    def __init__(self, model_name: str, *, failures: int = 0, max_retries: int = 0):
+        super().__init__(
+            model_name,
+            config={"provider": "openai", "max_retries": max_retries},
+        )
+        self.attempts = 0
+        self.failures = failures
+
+    def embed(self, content, is_query: bool = False) -> EmbedResult:
+        raise AssertionError("embed_async should be used")
+
+    async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            self.attempts += 1
+            if self.attempts <= self.failures:
+                raise _TracingProviderError(f"HTTP status 503 for {content}")
+            return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+        result = await self._run_with_async_retry(_call, operation_name="test embedding")
+        self.update_token_usage(self.model_name, self.provider, 7, 0)
+        return result
+
+    def get_dimension(self) -> int:
+        return 3
+
+
+class _TracingSparseEmbedder(SparseEmbedderBase):
+    def __init__(self, model_name: str):
+        super().__init__(model_name, config={"provider": "volcengine"})
+
+    def embed(self, content, is_query: bool = False) -> EmbedResult:
+        raise AssertionError("embed_async should be used")
+
+    async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
+        async def _call() -> EmbedResult:
+            return EmbedResult(sparse_vector={"term": 1.0})
+
+        return await self._run_with_async_retry(_call, operation_name="test sparse embedding")
+
+
+class _ConcurrentTracingEmbedder(DenseEmbedderBase):
+    def __init__(self):
+        super().__init__("concurrent-model", config={"provider": "openai"})
+        self.started = 0
+        self.all_started = asyncio.Event()
+
+    def embed(self, content, is_query: bool = False) -> EmbedResult:
+        raise AssertionError("embed_async should be used")
+
+    async def embed_async(self, content, is_query: bool = False) -> EmbedResult:
+        self.started += 1
+        if self.started == 2:
+            self.all_started.set()
+        await self.all_started.wait()
+        self.update_token_usage(self.model_name, self.provider, len(content), 0)
+        return EmbedResult(dense_vector=[float(len(content))])
+
+    def get_dimension(self) -> int:
+        return 1
+
+
+@pytest.fixture
+def embedding_span_exporter(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    test_tracer = provider.get_tracer("openviking-embedding-test")
+    monkeypatch.setattr(tracer_module, "_otel_tracer", test_tracer)
+    monkeypatch.setattr(telemetry_execution.otel_trace, "get_tracer", lambda _name: test_tracer)
+    yield exporter
+    provider.shutdown()
+
+
+def _embedding_spans(exporter):
+    return [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes.get("gen_ai.operation.name") == "embeddings"
+    ]
+
+
+class _FailingSpan:
+    def set_attribute(self, *_args, **_kwargs):
+        raise RuntimeError("span write failed")
+
+    def record_exception(self, *_args, **_kwargs):
+        raise RuntimeError("span write failed")
+
+    def set_status(self, *_args, **_kwargs):
+        raise RuntimeError("span write failed")
+
+
+class _FailingSpanContext:
+    def __enter__(self):
+        return _FailingSpan()
+
+    def __exit__(self, *_args):
+        raise RuntimeError("span close failed")
+
+
+class _FailingTracer:
+    def start_as_current_span(self, *_args, **_kwargs):
+        return _FailingSpanContext()
+
+
+@pytest.mark.asyncio
+async def test_embedding_spans_capture_safe_success_and_failure_attributes(
+    embedding_span_exporter,
+):
+    sensitive_input = "OV_EMBEDDING_TRACE_SECRET_7f3a9c"
+
+    async def _run(embedder):
+        return await embed_compat(embedder, sensitive_input, is_query=True)
+
+    await telemetry_execution.run_with_telemetry(
+        operation="search.find",
+        telemetry=True,
+        fn=lambda: _run(_TracingEmbedder("success-model")),
+    )
+    with pytest.raises(RuntimeError, match="503"):
+        await telemetry_execution.run_with_telemetry(
+            operation="search.find",
+            telemetry=True,
+            fn=lambda: _run(_TracingEmbedder("failure-model", failures=1)),
+        )
+
+    spans = _embedding_spans(embedding_span_exporter)
+    assert [span.name for span in spans] == [
+        "embeddings success-model",
+        "embeddings failure-model",
+    ]
+    assert all(span.kind is otel_trace.SpanKind.CLIENT for span in spans)
+    assert all(span.parent is not None for span in spans)
+    attributes = dict(spans[0].attributes)
+    assert attributes.pop("openviking.embedding.queue_wait_ms") >= 0
+    assert attributes.pop("openviking.embedding.provider_duration_ms") >= 0
+    assert attributes == {
+        "gen_ai.operation.name": "embeddings",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "success-model",
+        "gen_ai.embeddings.dimension.count": 3,
+        "gen_ai.usage.input_tokens": 7,
+    }
+    assert spans[0].status.status_code is otel_trace.StatusCode.UNSET
+    assert spans[1].attributes["error.type"] == "503"
+    assert spans[1].status.status_code is otel_trace.StatusCode.ERROR
+    serialized = json.dumps(
+        [
+            {
+                "name": span.name,
+                "attributes": dict(span.attributes),
+                "events": [dict(event.attributes) for event in span.events],
+            }
+            for span in spans
+        ],
+        default=str,
+    )
+    assert sensitive_input not in serialized
+
+
+@pytest.mark.asyncio
+async def test_embedding_span_failures_do_not_break_provider_calls(monkeypatch):
+    monkeypatch.setattr(tracer_module, "_otel_tracer", _FailingTracer())
+
+    embedder = _TracingEmbedder("fail-open-model")
+    result = await embed_compat(embedder, "private input", is_query=True)
+
+    assert result.dense_vector == [0.1, 0.2, 0.3]
+    assert embedder.attempts == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        "/Users/private/models/model.gguf",
+        "provider//home/private/model.gguf",
+        r"C:\private\model.gguf",
+    ],
+)
+async def test_embedding_spans_omit_local_model_paths(embedding_span_exporter, model):
+    embedder = _TracingEmbedder(model)
+    await embed_compat(embedder, "private input")
+    assert embedder.model_name == model
+    span = _embedding_spans(embedding_span_exporter)[0]
+    assert span.name == "embeddings local-model"
+    assert "private" not in span.to_json()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_embedding_spans_keep_token_usage_isolated(embedding_span_exporter):
+    embedder = _ConcurrentTracingEmbedder()
+
+    await asyncio.gather(
+        embed_compat(embedder, "a", is_query=True),
+        embed_compat(embedder, "abcdef", is_query=True),
+    )
+
+    assert sorted(
+        span.attributes["gen_ai.usage.input_tokens"]
+        for span in _embedding_spans(embedding_span_exporter)
+    ) == [1, 6]
+
+
+@pytest.mark.asyncio
+async def test_embedding_spans_separate_concurrency_wait_from_provider_duration(
+    embedding_span_exporter,
+):
+    started = asyncio.Event()
+
+    class QueuedEmbedder(_TracingEmbedder):
+        async def embed_async(self, content, is_query=False):
+            async def call():
+                started.set()
+                await asyncio.sleep(0.2)
+                return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+            return await self._run_with_async_retry(call, operation_name="queued embedding")
+
+    embedder = QueuedEmbedder("queued-model")
+    embedder.max_concurrent = 1
+    first = asyncio.create_task(embed_compat(embedder, "first"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.gather(first, embed_compat(embedder, "second"))
+
+    spans = _embedding_spans(embedding_span_exporter)
+    assert len(spans) == 2
+    first_wait, second_wait = [s.attributes["openviking.embedding.queue_wait_ms"] for s in spans]
+    durations = [s.attributes["openviking.embedding.provider_duration_ms"] for s in spans]
+    assert first_wait < 50
+    assert second_wait == pytest.approx(200, abs=100)
+    assert second_wait == pytest.approx(durations[0], abs=75)
+    assert all(duration == pytest.approx(200, abs=100) for duration in durations)
+    assert (spans[1].end_time - spans[1].start_time) / 1_000_000 >= second_wait + durations[1] - 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_retry_stays_inside_one_span(embedding_span_exporter, monkeypatch):
+    from openviking.models.embedder import base as embedder_base
+
+    async def _no_delay(_delay):
+        return None
+
+    clock = 0.0
+    waits = iter([0.125, 0.25])
+
+    async def acquire():
+        nonlocal clock
+        clock += next(waits)
+
+    monkeypatch.setattr(embedder_base, "time", SimpleNamespace(monotonic=lambda: clock))
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _no_delay)
+    embedder = _TracingEmbedder("retry-model", failures=1, max_retries=1)
+    embedder._account_semaphore = SimpleNamespace(acquire=acquire, release=lambda: None)
+
+    await embed_compat(embedder, "retry me", is_query=True)
+
+    assert embedder.attempts == 2
+    assert [span.name for span in _embedding_spans(embedding_span_exporter)] == [
+        "embeddings retry-model"
+    ]
+    assert (
+        _embedding_spans(embedding_span_exporter)[0].attributes[
+            "openviking.embedding.queue_wait_ms"
+        ]
+        == 375.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_embedding_queue_wait_closes_span(embedding_span_exporter):
+    queued = asyncio.Event()
+    semaphore = asyncio.Semaphore(0)
+
+    async def acquire():
+        queued.set()
+        await semaphore.acquire()
+
+    embedder = _TracingEmbedder("cancelled-model")
+    embedder._account_semaphore = SimpleNamespace(acquire=acquire, release=semaphore.release)
+    task = asyncio.create_task(embed_compat(embedder, "cancel me"))
+    await asyncio.wait_for(queued.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    span = _embedding_spans(embedding_span_exporter)[0]
+    assert span.attributes["openviking.embedding.queue_wait_ms"] >= 0
+    assert span.attributes["openviking.embedding.provider_duration_ms"] == 0
+    assert embedder.attempts == 0
+    semaphore.release()
+    await embed_compat(embedder, "next request")
+    assert len(_embedding_spans(embedding_span_exporter)) == 2
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_cache_hit_does_not_create_provider_span(
+    embedding_span_exporter,
+):
+    embedder = _TracingEmbedder("cache-model")
+
+    async with query_embed_cache_scope():
+        await embed_compat(embedder, "cached", is_query=True)
+        await embed_compat(embedder, "cached", is_query=True)
+
+    assert embedder.attempts == 1
+    assert [span.name for span in _embedding_spans(embedding_span_exporter)] == [
+        "embeddings cache-model"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_account_bound_embedding_spans_include_usage_and_skip_cache_hits(
+    embedding_span_exporter,
+    monkeypatch,
+):
+    from openviking.config.embedding import AccountEmbeddingProvider
+    from openviking.config.vector import VectorRuntimeSettings
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+    from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+
+    embedder = _TracingEmbedder("account-model")
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda _config: embedder)
+    settings = VectorRuntimeSettings(
+        embedding=EmbeddingConfig(
+            dense={
+                "provider": "openai",
+                "model": "account-model",
+                "dimension": 3,
+                "api_key": "test-key",
+            },
+        ),
+        vectordb=VectorDBBackendConfig(dimension=3),
+        embedding_profile="test",
+        dedicated_vectordb=False,
+    )
+    provider = AccountEmbeddingProvider(
+        SimpleNamespace(resolve=AsyncMock(return_value=settings)),
+        SimpleNamespace(add_update_consumer=lambda **_kwargs: None),
+    )
+    try:
+        bound = provider.bind("account-a")
+        async with query_embed_cache_scope():
+            first = await embed_compat(bound, "query", is_query=True)
+            second = await embed_compat(bound, "query", is_query=True)
+        assert first == second
+        assert embedder.attempts == 1
+        spans = _embedding_spans(embedding_span_exporter)
+        assert len(spans) == 1
+        assert spans[0].attributes["gen_ai.usage.input_tokens"] == 7
+        assert (await provider.get_status("account-a")).borrowers == 0
+    finally:
+        await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_embedding_wrappers_emit_only_actual_provider_subcall_spans(
+    embedding_span_exporter,
+):
+    dense = _TracingEmbedder("dense-model")
+    sparse = _TracingSparseEmbedder("sparse-model")
+    composite = CompositeHybridEmbedder(dense, sparse)
+    await embed_compat(composite, "hybrid", is_query=False)
+
+    primary = _TracingEmbedder("primary-model", failures=1)
+    backup = _TracingEmbedder("backup-model")
+    failover = FailoverEmbedder([primary, backup], ["primary", "backup"])
+    await embed_compat(failover, "fail over", is_query=True)
+
+    assert [span.name for span in _embedding_spans(embedding_span_exporter)] == [
+        "embeddings dense-model",
+        "embeddings sparse-model",
+        "embeddings primary-model",
+        "embeddings backup-model",
+    ]
 
 
 def test_root_observability_context_bind_and_reset():
@@ -866,7 +1260,8 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
     handler = TextEmbeddingHandler(
-        _DummyVikingDB(), embedding_provider=provider,
+        _DummyVikingDB(),
+        embedding_provider=provider,
     )
     payload = {
         "data": json.dumps(

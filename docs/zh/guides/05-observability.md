@@ -214,6 +214,18 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 - [操作级 Telemetry 参考](07-operation-telemetry.md)
 
+### Embedding 服务调用
+
+启用 `server.observability.traces.enabled` 后，实际 embedding 调用会产生
+`embeddings <model>` CLIENT span，包含提供商、模型、维度、可用的输入 token 用量、
+耗时和归一化错误类型。一次逻辑调用的重试共用一个 span；缓存命中不产生 span。
+组合和故障切换 embedder 只记录实际服务调用。这些 span 不添加输入文本、向量、
+API key 或原始错误响应。路径形式的模型名称显示为 `local-model`，实际请求保持不变。
+异步 span 的耗时包含并发队列等待和重试退避。
+`openviking.embedding.queue_wait_ms` 累加所有尝试的信号量等待时间；
+`openviking.embedding.provider_duration_ms` 累加服务调用的执行时间，不包含
+队列等待和重试退避。
+
 ## 产生本地 Trace 并提交排查
 
 如果一次问题无法只靠响应里的 `telemetry.summary` 判断，可以让 OpenViking 把 OpenTelemetry trace 写到本地 JSONL 文件。用户把 JSONL 文件和有问题的 `trace_id` 提交给管理员/支持人员，由管理员上传到排查环境并继续分析。这个方式适合离线客户环境、无法直连 OTLP 后端的环境，或者需要把复现过程打包给支持人员分析的场景。
