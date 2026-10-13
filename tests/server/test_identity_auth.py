@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -22,6 +23,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InvalidArgumentError,
     UnauthenticatedError,
 )
 from tests.server.account_store_fakes import InMemoryAGFS
@@ -120,6 +122,63 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
         x_openviking_user="alice",
     )
     assert identity.role == Role.USER
+
+
+async def test_oversized_trusted_account_does_not_block_valid_registration(runtime):
+    request = await make_request(runtime, "trusted", trusted_flush_interval=300)
+    plugin = request.app.state.auth_plugin
+    account_id = "a" * 255
+    await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account=account_id, x_openviking_user="alice"
+    )
+
+    with pytest.raises(InvalidArgumentError, match="account_id.*255.*UTF-8 bytes"):
+        await plugin.resolve_identity(
+            request,
+            api_key="root",
+            x_openviking_account="a" * 256,
+            x_openviking_user="bob",
+        )
+
+    long_user_id = "u" * 1024
+    await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user=long_user_id
+    )
+    await plugin.flush_trusted_identities()
+
+    assert await runtime.get_registered_user_role(account_id, "alice") == Role.USER
+    assert await runtime.get_registered_user_role("acme", long_user_id) == Role.USER
+
+
+async def test_trusted_registration_preserves_existing_oversized_account():
+    account_id = "a" * 1024
+    agfs = InMemoryAGFS()
+    agfs.write(
+        "/local/_system/accounts.json",
+        json.dumps({"accounts": {account_id: {"created_at": "legacy"}}}).encode(),
+    )
+    agfs.write(
+        f"/local/{account_id}/_system/users.json",
+        json.dumps({"users": {"alice": {"role": "admin"}}}).encode(),
+    )
+    manager = build_api_key_manager("root", SimpleNamespace(agfs=agfs), issue_user_keys=False)
+    await manager.load()
+    try:
+        request = await make_request(manager, "trusted", trusted_flush_interval=300)
+        plugin = request.app.state.auth_plugin
+        identity = await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account=account_id, x_openviking_user="alice"
+        )
+        assert identity.role == Role.ADMIN
+
+        await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account=account_id, x_openviking_user="bob"
+        )
+        await plugin.flush_trusted_identities()
+
+        assert await manager.get_registered_user_role(account_id, "bob") == Role.USER
+    finally:
+        await manager.close()
 
 
 async def test_trusted_unknown_user_cannot_bypass_account_deletion(runtime):

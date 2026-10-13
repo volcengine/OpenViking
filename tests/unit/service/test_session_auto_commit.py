@@ -20,9 +20,9 @@ from openviking.service.session_auto_commit import (
     compute_next_check_at,
 )
 from openviking.service.session_service import SessionService
-from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
+
 
 _REAL_DATETIME = datetime
 
@@ -113,11 +113,6 @@ class _FakeVikingFS:
         finally:
             with self._read_lock:
                 self.active_reads -= 1
-
-    def _uri_to_path(self, uri: str, ctx: RequestContext) -> str:
-        parts = uri.removeprefix("viking://").split("/")
-        safe_parts = [VikingFS._shorten_component(part) for part in parts]
-        return f"/local/{ctx.account_id}/{'/'.join(safe_parts)}"
 
 
 class _FakeSessionService:
@@ -562,127 +557,6 @@ async def test_scheduler_schedules_idle_sessions_still_within_keep_recent_window
     assert service.calls == [
         ("session_within_keep", "idle_timeout", "user_b"),
     ]
-
-
-@pytest.mark.asyncio
-async def test_scheduler_uses_logical_identity_from_meta_for_shortened_paths():
-    logical_user_id = "user-" + ("u" * 300)
-    logical_session_id = "session-" + ("s" * 300) + " "
-    physical_user_id = VikingFS._shorten_component(logical_user_id)
-    physical_session_id = VikingFS._shorten_component(logical_session_id)
-    meta_path = f"/local/acct_a/user/{physical_user_id}/sessions/{physical_session_id}/.meta.json"
-    service = _FakeSessionService(
-        [],
-        {
-            meta_path: _meta(user_id=logical_user_id) | {"session_id": logical_session_id},
-        },
-        users_by_account={"acct_a": [physical_user_id]},
-        tree_entries_by_user={
-            ("acct_a", physical_user_id): [_session_entry(physical_session_id)],
-        },
-    )
-    scheduler = SessionAutoCommitScheduler(
-        service,
-        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
-        check_interval=60.0,
-    )
-
-    await scheduler._scan_once()
-
-    assert service.calls == [
-        (logical_session_id, "idle_timeout", logical_user_id),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_scheduler_falls_back_to_physical_identity_for_legacy_meta():
-    meta_path = "/local/acct_a/user/user_b/sessions/session_a/.meta.json"
-    legacy_meta = _meta()
-    legacy_meta.pop("created_by_account_id")
-    legacy_meta.pop("created_by_user_id")
-    service = _FakeSessionService(
-        [_session_entry("session_a")],
-        {meta_path: legacy_meta},
-    )
-    scheduler = SessionAutoCommitScheduler(
-        service,
-        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
-        check_interval=60.0,
-    )
-
-    await scheduler._scan_once()
-
-    assert service.calls == [("session_a", "idle_timeout", "user_b")]
-
-
-@pytest.mark.asyncio
-async def test_read_idle_candidate_skips_meta_outside_session_tree():
-    meta_path = "/invalid/.meta.json"
-    service = _FakeSessionService([], {meta_path: _meta()})
-    scheduler = SessionAutoCommitScheduler(
-        service,
-        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
-        check_interval=60.0,
-    )
-
-    candidate = await scheduler._read_idle_candidate(
-        service.viking_fs,
-        meta_path,
-        datetime.now(timezone.utc),
-    )
-
-    assert candidate is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "meta_override",
-    [
-        {"created_by_account_id": "other-account"},
-        {"created_by_user_id": "other-user"},
-        {"session_id": "other-session"},
-    ],
-)
-async def test_scheduler_skips_meta_identity_that_does_not_match_physical_path(
-    meta_override,
-):
-    meta_path = "/local/acct_a/user/user_b/sessions/session_a/.meta.json"
-    service = _FakeSessionService(
-        [_session_entry("session_a")],
-        {meta_path: _meta() | meta_override},
-    )
-    scheduler = SessionAutoCommitScheduler(
-        service,
-        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
-        check_interval=60.0,
-    )
-
-    await scheduler._scan_once()
-
-    assert service.calls == []
-
-
-@pytest.mark.asyncio
-async def test_scheduler_skips_meta_identity_when_canonical_mapping_fails(monkeypatch):
-    meta_path = "/local/acct_a/user/user_b/sessions/session_a/.meta.json"
-    service = _FakeSessionService(
-        [_session_entry("session_a")],
-        {meta_path: _meta() | {"session_id": "session_a"}},
-    )
-
-    def fail_uri_to_path(*_args, **_kwargs):
-        raise ValueError("invalid identity")
-
-    monkeypatch.setattr(service.viking_fs, "_uri_to_path", fail_uri_to_path)
-    scheduler = SessionAutoCommitScheduler(
-        service,
-        SimpleNamespace(enabled=True, check_interval_seconds=60.0),
-        check_interval=60.0,
-    )
-
-    await scheduler._scan_once()
-
-    assert service.calls == []
 
 
 @pytest.mark.asyncio

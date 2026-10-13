@@ -14,6 +14,7 @@ from fastapi import Request
 
 from openviking.core.identifiers import validate_account_id, validate_user_id
 from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys.legacy import validate_file_account_id
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
@@ -235,6 +236,12 @@ class TrustedAuthPlugin(AuthPlugin):
             return
         if user_id in self._pending.get(account_id, set()):
             return
+        try:
+            validate_file_account_id(account_id)
+        except InvalidArgumentError:
+            # Existing remote-backed accounts may exceed the new-account limit.
+            if manager is None or await manager.get_account(account_id) is None:
+                raise
         if self._pending_count + self._in_flight_count >= self._pending_max_size:
             logger.warning(
                 "Trusted identity registration queue is full; dropping %s/%s",

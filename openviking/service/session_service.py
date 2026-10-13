@@ -7,8 +7,6 @@ Provides session management operations: session, sessions, add_message, commit, 
 """
 
 import asyncio
-import json
-import re
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -47,10 +45,6 @@ from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionCon
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
-
-_SHORTENED_COMPONENT_RE = re.compile(r".+_[0-9a-f]{8}\Z")
-_MIN_SHORTENED_COMPONENT_BYTES = VikingFS._MAX_FILENAME_BYTES - 3
-_SESSION_META_READ_CONCURRENCY = 8
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
@@ -335,43 +329,13 @@ class SessionService:
                 sort_order="desc",
                 ctx=ctx,
             )
-            visible_entries = [
-                entry for entry in entries if entry.get("name", "") not in [".", ".."]
-            ]
-            session_ids = [entry.get("name", "") for entry in visible_entries]
-            candidate_indices = [
-                index
-                for index, entry in enumerate(visible_entries)
-                if self._is_potentially_shortened_session_entry(
-                    entry,
-                    session_ids[index],
-                )
-            ]
-            if candidate_indices:
-                read_semaphore = asyncio.Semaphore(_SESSION_META_READ_CONCURRENCY)
-                logical_ids = await asyncio.gather(
-                    *(
-                        self._logical_session_id_from_entry(
-                            session_base_uri,
-                            session_ids[index],
-                            visible_entries[index],
-                            ctx,
-                            read_semaphore=read_semaphore,
-                        )
-                        for index in candidate_indices
-                    )
-                )
-                for index, logical_id in zip(
-                    candidate_indices,
-                    logical_ids,
-                    strict=True,
-                ):
-                    session_ids[index] = logical_id
-
-            for entry, session_id in zip(visible_entries, session_ids, strict=True):
-                sessions_by_id[session_id] = {
-                    "session_id": session_id,
-                    "uri": f"{session_base_uri}/{session_id}",
+            for entry in entries:
+                name = entry.get("name", "")
+                if name in [".", ".."]:
+                    continue
+                sessions_by_id[name] = {
+                    "session_id": name,
+                    "uri": f"{session_base_uri}/{name}",
                     "is_dir": entry.get("isDir", False),
                     "mod_time": entry.get("modTime", ""),
                 }
@@ -379,58 +343,6 @@ class SessionService:
             logger.debug("Failed to list sessions", exc_info=True)
 
         return list(sessions_by_id.values())
-
-    async def _logical_session_id_from_entry(
-        self,
-        session_base_uri: str,
-        physical_name: str,
-        entry: Dict[str, Any],
-        ctx: RequestContext,
-        *,
-        read_semaphore: asyncio.Semaphore | None = None,
-    ) -> str:
-        """Recover a shortened session component from its authoritative metadata."""
-        if not self._is_potentially_shortened_session_entry(entry, physical_name):
-            return physical_name
-
-        meta_uri = f"{session_base_uri}/{physical_name}/.meta.json"
-        try:
-            if read_semaphore is None:
-                raw_meta = await self._viking_fs.read_file(meta_uri, ctx=ctx)
-            else:
-                async with read_semaphore:
-                    raw_meta = await self._viking_fs.read_file(meta_uri, ctx=ctx)
-            meta = json.loads(raw_meta)
-            logical_name = meta.get("session_id") if isinstance(meta, dict) else None
-            if not isinstance(logical_name, str) or not logical_name.strip():
-                return physical_name
-
-            session_base_path = self._viking_fs._uri_to_path(session_base_uri, ctx=ctx)
-            logical_path = self._viking_fs._uri_to_path(
-                canonical_session_uri(ctx, logical_name),
-                ctx=ctx,
-            )
-            if logical_path != f"{session_base_path}/{physical_name}":
-                return physical_name
-            return logical_name
-        except Exception:
-            logger.debug(
-                "Failed to recover logical session id from %s",
-                meta_uri,
-                exc_info=True,
-            )
-            return physical_name
-
-    @staticmethod
-    def _is_potentially_shortened_session_entry(
-        entry: Dict[str, Any],
-        physical_name: str,
-    ) -> bool:
-        return (
-            entry.get("isDir", False)
-            and len(physical_name.encode("utf-8")) >= _MIN_SHORTENED_COMPONENT_BYTES
-            and _SHORTENED_COMPONENT_RE.fullmatch(physical_name) is not None
-        )
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.
