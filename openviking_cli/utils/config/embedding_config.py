@@ -52,6 +52,7 @@ class EmbeddingModelConfig(BaseModel):
             "Parameter value for query-side embeddings when calling embed(is_query=True). "
             "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'query', 'search_query'). "
             "For Jina models, this maps to 'task' (e.g., 'retrieval.query'). "
+            "For Volcengine dense models, it is an instruction prefixed to text queries. "
             "Setting this or document_param activates non-symmetric mode. "
             "Leave both unset for symmetric models."
         ),
@@ -158,10 +159,13 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in ("query_param", "document_param"):
-                value = data.get(key)
-                if isinstance(value, str):
-                    data[key] = value.lower()
+            # Volcengine takes query_param as instruction text, where case matters;
+            # the other providers take parameter values such as "query".
+            if str(data.get("provider") or "volcengine").lower() != "volcengine":
+                for key in ("query_param", "document_param"):
+                    value = data.get(key)
+                    if isinstance(value, str):
+                        data[key] = value.lower()
         return data
 
     _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
@@ -824,6 +828,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
