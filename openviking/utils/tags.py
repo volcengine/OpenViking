@@ -102,7 +102,7 @@ def preserve_memory_type_tag(
     existing: Iterable[str] | None,
     incoming: Iterable[str] | None,
 ) -> list[str]:
-    """Preserve the extracted memory type while updating ordinary search tags."""
+    """Preserve the system memory type while updating ordinary search tags."""
     existing_memory_type = next(
         (
             tag
@@ -111,8 +111,8 @@ def preserve_memory_type_tag(
         ),
         None,
     )
-    # Only memory extraction creates or changes this tag. Ordinary writes
-    # preserve it, including its absence on legacy memories.
+    # Only trusted memory indexing creates or changes this tag. User tag updates
+    # preserve it, including its absence on untouched legacy memories.
     user_tags = [
         tag
         for tag in normalize_search_tags(incoming, discard_invalid=True)
