@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart
+from openviking.session.auto_commit_policy import DEFAULT_PENDING_TOKEN_THRESHOLD
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
+    estimate_extraction_message_tokens,
+    long_term_extraction_batch_limits,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
 )
@@ -62,6 +65,21 @@ def test_phase2_batches_split_an_oversized_batch_by_token_count():
         ["m2"],
     ]
     assert all(batch.estimated_tokens <= one_message_tokens for batch in batches)
+
+
+def test_long_term_extraction_without_policy_batches_only_a_large_commit():
+    small = [_message("u1"), _message("a1", role="assistant")]
+    large = [_message(f"m{i}", text="word " * 20_000) for i in range(30)]
+    assert estimate_extraction_message_tokens(large) > DEFAULT_PENDING_TOKEN_THRESHOLD
+    policy = ExtractionBatchLimits(max_messages=5)
+
+    assert long_term_extraction_batch_limits(ExtractionBatchLimits(), small).enabled is False
+    assert long_term_extraction_batch_limits(policy, large) == policy
+    fallback = long_term_extraction_batch_limits(ExtractionBatchLimits(), large)
+    assert fallback == ExtractionBatchLimits(max_message_tokens=DEFAULT_PENDING_TOKEN_THRESHOLD)
+    batches = plan_extraction_batches(large, fallback)
+    assert len(batches) > 1
+    assert all(batch.estimated_tokens <= DEFAULT_PENDING_TOKEN_THRESHOLD for batch in batches)
 
 
 def test_phase2_batches_keep_a_turn_together_when_it_fits():
