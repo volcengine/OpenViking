@@ -1697,6 +1697,7 @@ async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
     )
 
     assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     assert captured["to"] is None
 
 
@@ -1784,15 +1785,20 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
 
     async def fake_add_resource(*, path, ctx, **kwargs):
         captured["path"] = path
-        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
+        captured.update(kwargs)
         return {"root_uri": "viking://resources/from_tfid"}
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
 
-    result = await add_resource(temp_file_id=tfid)
+    result = await add_resource(
+        temp_file_id=tfid,
+        parent="viking://resources/imports",
+    )
     assert "Resource added" in result
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
+    assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     upload_token_store.clear()
 
 

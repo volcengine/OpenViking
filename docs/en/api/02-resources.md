@@ -1,6 +1,6 @@
 # Resource Management
 
-Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. For package export and import, see [OVPack](14-ovpack.md).
+Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. See the [data organization guide](../guides/23-data-organize.md) for directory conventions and [OVPack](14-ovpack.md) for package export and import.
 
 ## Core Concepts
 
