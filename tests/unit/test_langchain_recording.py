@@ -318,22 +318,28 @@ def test_recorder_ignores_filtered_only_batch_without_initializing_client():
     assert client._initialized is False
 
 
-def test_recorder_applies_commit_policy_once_after_all_batches():
+@pytest.mark.parametrize("override", [False, True])
+def test_recorder_applies_commit_policy_once_after_all_batches(override):
     client = TrackingOpenVikingClient()
     recorder = OpenVikingSessionRecorder(
         client=client,
-        commit_policy=OpenVikingCommitPolicy(mode="always"),
+        commit_policy=OpenVikingCommitPolicy(mode="never" if override else "always"),
     )
+    kwargs = {"commit_policy": OpenVikingCommitPolicy(mode="always")} if override else {}
 
     recorder.record(
         "recorder-commit",
         [HumanMessage(content=f"Message {index}") for index in range(101)],
+        **kwargs,
     )
 
     assert client.batch_sizes == [100, 1]
     assert client.commit_calls == ["recorder-commit"]
     assert client.sessions["recorder-commit"] == []
     assert len(client.archives["recorder-commit"][0]["messages"]) == 101
+
+    recorder.record("recorder-default", [HumanMessage(content="Use the default again.")])
+    assert bool(client.archives["recorder-default"]) is not override
 
 
 def test_recorder_reports_partial_progress_and_retries_only_unwritten_suffix():
