@@ -113,6 +113,11 @@ the OV server validates the source.
 Returns session metadata for a given session ID — message counts, archive
 state, pending tokens. Takes `{session_id}`.
 
+The ID must be a non-empty single path segment. Standalone `.` / `..`,
+`/`, `\`, `?`, `#`, `%`, and ASCII control characters are rejected with
+HTTP 422 before contacting OpenViking. Dots within an ID and Unicode IDs
+remain supported.
+
 ## Tests
 
 ```bash
