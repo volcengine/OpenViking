@@ -12,6 +12,11 @@ name = "ragfs_python"
 # this crate's symbols. cdylib is what maturin packages as the Python .so.
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+doc = false
+
 [features]
 default = ["extension-module", "s3"]
 extension-module = ["pyo3/extension-module"]
@@ -30,3 +35,4 @@ toml = "0.8"
 gix-hash = "0.14"
 bytes = "1.5"
 similar = "3.1"
+pyo3-stub-gen = { version = "0.20.0", default-features = false, features = ["infer_signature"] }

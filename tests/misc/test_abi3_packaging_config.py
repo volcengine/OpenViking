@@ -91,6 +91,17 @@ def test_setup_extracts_windows_ragfs_python_pyd_from_maturin_wheel():
     assert "stable-ABI native extension" in setup_py
 
 
+def test_ragfs_python_stub_is_packaged_with_the_native_extension():
+    setup_py = _read_text("setup.py")
+    pyproject = _read_text("pyproject.toml")
+    binding_pyproject = _read_text("crates/ragfs-python/pyproject.toml")
+
+    assert '"lib/ragfs_python.pyi"' in setup_py
+    assert '"lib/ragfs_python.pyi"' in pyproject
+    assert 'path = "ragfs_python.pyi"' in binding_pyproject
+    assert 'stub_source = ragfs_python_dir / "ragfs_python.pyi"' in setup_py
+
+
 def test_windows_abi3_backend_uses_stable_python_linkage():
     setup_py = _read_text("setup.py")
     src_cmake = _read_text("src/CMakeLists.txt")
