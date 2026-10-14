@@ -1330,7 +1330,14 @@ mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_runtime_failure_is_propagated_by_stat_and_read_dir() {
-        let provider = std::sync::Arc::new(crate::cache_runtime::MemoryMockProvider::new());
+        let provider = std::sync::Arc::new(
+            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|request| {
+                panic!(
+                    "script execution is outside this failure propagation test's scope: {}",
+                    request.script_id
+                )
+            }),
+        );
         let runtime = crate::cache_runtime::CacheRuntime::memory_with_provider(provider.clone());
         let fs = QueueFileSystem::with_cache_runtime(runtime, "queuefs-runtime-errors".to_string())
             .await

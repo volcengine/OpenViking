@@ -1755,7 +1755,12 @@ mod tests {
         use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
         use crate::plugins::QueueFSPlugin;
 
-        let provider = Arc::new(MemoryMockProvider::new());
+        let provider = Arc::new(MemoryMockProvider::new().with_script_handler(|request| {
+            panic!(
+                "script execution is outside this shutdown test's scope: {}",
+                request.script_id
+            )
+        }));
         let runtime = CacheRuntime::memory_with_provider(provider.clone());
         let mfs = MountableFS::new();
         mfs.register_plugin(QueueFSPlugin::with_cache_runtime(runtime))
