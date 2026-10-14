@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from openviking.parse.parsers.code.ast.process_engine import _is_tree_sitter_language_preloaded
+
 logger = logging.getLogger(__name__)
 
 _QUERY_DIR = Path(__file__).with_name("queries") / "tree-sitter-language-pack"
@@ -66,12 +68,23 @@ def _extract_with_grep_ast(
     verbose: bool,
 ) -> Optional[str]:
     try:
+        from grep_ast import filename_to_lang
         from grep_ast import TreeContext
     except Exception as exc:
         logger.warning("grep-ast RepoMap extractor unavailable: %s", exc)
         return None
 
     try:
+        lang = filename_to_lang(rel_name)
+        query_lang = _query_language_name(lang) if lang else None
+        if not query_lang or not _is_tree_sitter_language_preloaded(query_lang):
+            logger.info(
+                "tree-sitter grammar is not preloaded for '%s' (language: %s); falling back",
+                file_name,
+                query_lang or lang,
+            )
+            return None
+
         _, captures = _query_captures(rel_name, content)
         def_lines = _definition_lines(captures)
         if not def_lines:
@@ -127,6 +140,9 @@ def _query_captures(rel_name: str, content: str):
         raise ValueError(f"missing tags query for language: {lang}")
 
     query_lang = _query_language_name(lang)
+    if not _is_tree_sitter_language_preloaded(query_lang):
+        raise ValueError(f"tree-sitter grammar is not preloaded: {query_lang}")
+
     parser = get_parser(query_lang)
     language = get_language(query_lang)
     tree = parser.parse(content.encode("utf-8"))
