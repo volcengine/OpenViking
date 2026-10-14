@@ -24,6 +24,10 @@ T = TypeVar("T")
 
 _SESSION_LOCKS: dict[Path, asyncio.Lock] = {}
 
+# Serializes whole agent turns per SessionKey (turn-level), separate from
+# _SESSION_LOCKS which only guards the disk-write instant inside save().
+_TURN_LOCKS: dict[SessionKey, asyncio.Lock] = {}
+
 
 @dataclass
 class Session:
@@ -154,6 +158,21 @@ class SessionManager:
         if lock is None:
             lock = asyncio.Lock()
             _SESSION_LOCKS[path] = lock
+        return lock
+
+    def get_turn_lock(self, session_key: SessionKey) -> asyncio.Lock:
+        """Return the per-session lock serializing whole agent turns.
+
+        Distinct from ``_get_lock`` (which only guards the disk-write
+        instant inside ``save``): a turn holds this lock from entry to
+        completion, so ``process_direct`` turns (cron ``on_job`` /
+        heartbeat) cannot interleave with an in-flight bus turn on the
+        same cached Session (issue #4756).
+        """
+        lock = _TURN_LOCKS.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _TURN_LOCKS[session_key] = lock
         return lock
 
     def _get_session_path(self, session_key: SessionKey) -> Path:
