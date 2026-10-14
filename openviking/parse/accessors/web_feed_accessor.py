@@ -33,7 +33,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 from openviking.parse.base import lazy_import
@@ -223,6 +223,21 @@ def _match_filters(url: str, include: Optional[str], exclude: Optional[str]) -> 
     if includes:
         return any(fnmatch.fnmatch(url, pat) or pat in url for pat in includes)
     return True
+
+
+def _normalize_feed_url(url: str) -> str:
+    """Return a comparison key for feed entries without changing the original URL."""
+    parts = urlsplit(url or "")
+    scheme = parts.scheme.lower()
+    hostname = (parts.hostname or "").lower().rstrip(".")
+    try:
+        port = parts.port
+    except ValueError:
+        return urlunsplit((scheme, parts.netloc, parts.path or "/", parts.query, ""))
+    if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        port = None
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    return urlunsplit((scheme, netloc, parts.path or "/", parts.query, ""))
 
 
 def _build_httpx_client_kwargs(request_validator, timeout: float) -> Dict[str, Any]:
@@ -566,20 +581,21 @@ class WebFeedAccessor(DataAccessor):
         include: Optional[str],
         exclude: Optional[str],
     ) -> List[FeedEntry]:
-        base_host = urlparse(feed_url).netloc
+        base_host = urlsplit(_normalize_feed_url(feed_url)).netloc
         seen: set = set()
         out: List[FeedEntry] = []
         for entry in entries:
             url = entry.url
             if not url.startswith(("http://", "https://")):
                 continue
-            if url in seen:
+            normalized_url = _normalize_feed_url(url)
+            if normalized_url in seen:
                 continue
-            if cfg["same_host_only"] and urlparse(url).netloc != base_host:
+            if cfg["same_host_only"] and urlsplit(normalized_url).netloc != base_host:
                 continue
             if not _match_filters(url, include, exclude):
                 continue
-            seen.add(url)
+            seen.add(normalized_url)
             out.append(entry)
         return out
 
