@@ -164,12 +164,15 @@ class OpenVikingStore(BaseStore):
         *,
         ttl: Any = None,
     ) -> None:
+        from langgraph.store.base import _validate_namespace
+
         if ttl is not None:
             raise NotImplementedError(
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
         namespace = tuple(namespace)
+        _validate_namespace(namespace)
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
         record = self._write_record(data_uri, namespace, key, dict(value), now)
