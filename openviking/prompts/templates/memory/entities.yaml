@@ -28,8 +28,12 @@ fields:
   - name: category
     type: string
     description: |
-      Category written in {{ language }}.
-      {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+      Stable category label, always written in lowercase English snake_case
+      (underscores, max 3 words), regardless of the session language.
+      Before creating a new category, list the existing category directories
+      for this memory type: if a suitable category already exists, reuse its
+      exact value; never create a synonym or a translated variant for the same
+      topic.
     merge_op: replace
 
   - name: name
