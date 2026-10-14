@@ -1241,6 +1241,42 @@ def test_langgraph_store_round_trip_and_semantic_search():
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
 
+def test_langgraph_store_put_none_deletes_existing_item_and_is_idempotent_on_missing_key():
+    """Regression coverage for issue #5821: ``OpenVikingStore.put(..., value=None)``
+    must follow LangGraph's ``BaseStore.put`` contract and delete the item,
+    not persist a null-valued record. Deleting a missing key must be
+    idempotent (no item created) so callers can use ``put(..., None)`` as a
+    unconditional delete.
+    """
+
+    client = InMemoryOpenVikingClient()
+    store = OpenVikingStore(client=client)
+
+    namespace = ("users", "ada")
+    key = "preferences"
+
+    # Step 1: seed an existing item so get() / search() / list_namespaces()
+    # are non-empty before the deletion.
+    store.put(namespace, key, {"color": "azure"})
+
+    seeded = store.get(namespace, key)
+    assert seeded is not None and seeded.value == {"color": "azure"}
+    assert store.list_namespaces(prefix=namespace) == [namespace]
+
+    # Step 2: put(..., None) on the existing key must delete it.
+    store.put(namespace, key, None)
+    assert store.get(namespace, key) is None
+    assert store.search(namespace_prefix=namespace) == []
+    assert store.list_namespaces(prefix=namespace) == []
+
+    # Step 3: put(..., None) on a never-written key must be a no-op
+    # (no null-valued record, namespace still absent from list_namespaces()).
+    missing_key = "never_written"
+    store.put(namespace, missing_key, None)
+    assert store.get(namespace, missing_key) is None
+    assert store.list_namespaces(prefix=namespace) == []
+
+
 @pytest.mark.parametrize("use_batch", [False, True])
 def test_langgraph_store_accepts_mapping_values(use_batch):
     store = OpenVikingStore(client=InMemoryOpenVikingClient())
