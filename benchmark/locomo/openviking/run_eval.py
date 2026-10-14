@@ -648,6 +648,60 @@ def result_row_key(row: dict[str, Any]) -> str:
     return f"question:{str(row.get('question', '') or '').strip()}"
 
 
+class ResultIntegrityError(RuntimeError):
+    pass
+
+
+def validate_result_integrity(
+    planned_rows: list[dict[str, Any]], recorded_rows: list[dict[str, Any]]
+) -> None:
+    planned_keys = [result_row_key(row) for row in planned_rows]
+    recorded_keys = [result_row_key(row) for row in recorded_rows]
+    planned_key_set = set(planned_keys)
+    recorded_key_set = set(recorded_keys)
+    duplicate_planned = sorted(key for key in planned_key_set if planned_keys.count(key) > 1)
+    duplicate_recorded = sorted(key for key in recorded_key_set if recorded_keys.count(key) > 1)
+    missing = sorted(planned_key_set - recorded_key_set)
+    unexpected = sorted(recorded_key_set - planned_key_set)
+    completed = sum(1 for row in recorded_rows if str(row.get("status", "")).strip() == "completed")
+    failed = sum(1 for row in recorded_rows if str(row.get("status", "")).strip() == "failed")
+    invalid_status = sorted(
+        result_row_key(row)
+        for row in recorded_rows
+        if str(row.get("status", "")).strip() not in {"completed", "failed"}
+    )
+
+    if (
+        len(planned_rows) == len(recorded_rows)
+        and completed == len(planned_rows)
+        and not failed
+        and not duplicate_planned
+        and not duplicate_recorded
+        and not missing
+        and not unexpected
+        and not invalid_status
+    ):
+        return
+
+    details = [
+        f"planned={len(planned_rows)}",
+        f"recorded={len(recorded_rows)}",
+        f"completed={completed}",
+        f"failed={failed}",
+    ]
+    if missing:
+        details.append(f"missing={missing}")
+    if unexpected:
+        details.append(f"unexpected={unexpected}")
+    if duplicate_planned:
+        details.append(f"duplicate_planned={duplicate_planned}")
+    if duplicate_recorded:
+        details.append(f"duplicate_recorded={duplicate_recorded}")
+    if invalid_status:
+        details.append(f"invalid_status={invalid_status}")
+    raise ResultIntegrityError("LoCoMo result integrity check failed: " + ", ".join(details))
+
+
 def parse_sample_indices(
     raw_samples: str | None, dataset_size: int | None = None
 ) -> list[int] | None:
@@ -806,10 +860,9 @@ def main():
         invalid_questions=invalid_questions,
         sample_indices=parse_sample_indices(args.samples),
     )
-    total = len(qa_list)
-
     # 过滤掉 category=5 的问题
     qa_list = [qa for qa in qa_list if str(qa.get("category")) != "5"]
+    total = len(qa_list)
     print(f"Filtered to {len(qa_list)} questions after removing category=5")
 
     # 加载已处理的问题
@@ -823,6 +876,8 @@ def main():
         "sample_id",
         "question_id",
         "question_index",
+        "status",
+        "error",
         "result",
         "is_invalid",
         "question",
@@ -878,41 +933,17 @@ def main():
         f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
     )
 
-    def process_qa(qa_item, idx, total_count):
-        """单个QA处理函数，供多线程调用"""
+    def build_base_row(qa_item):
         question = qa_item["question"]
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
-        # 使用 question_id 作为 session_id，实现完全独立并行
-        sample_id = qa_item.get("sample_id")
         question_id = qa_item.get("question_id")
-        print(f"Processing {idx}/{total_count}: {question[:60]}...")
-        if question_time:
-            print(f"  [time context: {question_time}]")
-
-        (
-            response,
-            token_usage,
-            time_cost,
-            iteration,
-            tools_used_names,
-            retrieved_uris_by_iteration,
-            model_input_prompt,
-        ) = run_vikingbot_chat(
-            question=question,
-            question_time=question_time,
-            sample_id=sample_id,
-            question_id=question_id,
-            openviking_url=args.openviking_url,
-            single_search_context_limit=args.single_search_context_limit,
-            single_search_rerank_limit=args.single_search_rerank_limit,
-            single_search_max_context_chars=args.single_search_max_context_chars,
-        )
-
-        row = {
+        return {
             "sample_id": qa_item["sample_id"],
             "question_id": question_id,
             "question_index": qa_item.get("question_index", ""),
+            "status": "",
+            "error": "",
             "result": "",
             "question": question,
             "answer": answer,
@@ -920,55 +951,132 @@ def main():
             "question_time": question_time or "",
             "evidence": json.dumps(qa_item.get("evidence", [])),
             "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
-            "response": response,
-            "model_input_prompt": model_input_prompt if args.debug_print_model_input else "",
-            "token_usage": json.dumps(token_usage, ensure_ascii=False),
-            "memory_prompt_tokens": token_usage.get("memory_prompt_tokens", 0),
-            "memory_chars": token_usage.get("memory_chars", 0),
-            "memory_tokenizer": token_usage.get("memory_tokenizer", ""),
-            "time_cost": round(time_cost, 2),
-            "iteration": iteration,
-            "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-            "retrieved_uris_by_iteration": json.dumps(
-                retrieved_uris_by_iteration, ensure_ascii=False
-            )
-            if args.debug_print_model_input
-            else "",
+            "response": "",
+            "model_input_prompt": "",
+            "token_usage": "{}",
+            "memory_prompt_tokens": 0,
+            "memory_chars": 0,
+            "memory_tokenizer": "",
+            "time_cost": 0,
+            "iteration": 0,
+            "tools_used_names": "[]",
+            "retrieved_uris_by_iteration": "",
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
-        # 线程安全的结果收集
+    def record_row(row, total_count):
+        nonlocal processed_count
+        row_key = result_row_key(row)
         with write_lock:
-            nonlocal processed_count
-            new_rows.append(row)
-            row_key = result_row_key(row)
-            found = False
+            for new_row in new_rows:
+                if result_row_key(new_row) == row_key:
+                    new_row.update(row)
+                    break
+            else:
+                new_rows.append(row)
+
             for existing_row in existing_rows:
                 if result_row_key(existing_row) == row_key:
                     existing_row.update(row)
-                    found = True
                     break
-            if not found:
+            else:
                 existing_rows.append(row)
+
             processed_questions.add(row_key)
-            processed_count += 1
+            processed_count = len(new_rows)
             save_results_locked()
-            print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
-        return True
+            print(
+                f"Recorded {processed_count}/{total_count}: "
+                f"{row['status']}, time cost: {row['time_cost']}s"
+            )
+
+    def process_qa(qa_item, idx, total_count):
+        """单个QA处理函数，供多线程调用"""
+        row = build_base_row(qa_item)
+        question = qa_item["question"]
+        question_time = qa_item.get("question_time")
+        sample_id = qa_item.get("sample_id")
+        question_id = qa_item.get("question_id")
+        print(f"Processing {idx}/{total_count}: {question[:60]}...")
+        if question_time:
+            print(f"  [time context: {question_time}]")
+
+        started = time.perf_counter()
+        try:
+            (
+                response,
+                token_usage,
+                time_cost,
+                iteration,
+                tools_used_names,
+                retrieved_uris_by_iteration,
+                model_input_prompt,
+            ) = run_vikingbot_chat(
+                question=question,
+                question_time=question_time,
+                sample_id=sample_id,
+                question_id=question_id,
+                openviking_url=args.openviking_url,
+                single_search_context_limit=args.single_search_context_limit,
+                single_search_rerank_limit=args.single_search_rerank_limit,
+                single_search_max_context_chars=args.single_search_max_context_chars,
+            )
+            row.update(
+                {
+                    "status": "completed",
+                    "response": response,
+                    "model_input_prompt": (
+                        model_input_prompt if args.debug_print_model_input else ""
+                    ),
+                    "token_usage": json.dumps(token_usage, ensure_ascii=False),
+                    "memory_prompt_tokens": token_usage.get("memory_prompt_tokens", 0),
+                    "memory_chars": token_usage.get("memory_chars", 0),
+                    "memory_tokenizer": token_usage.get("memory_tokenizer", ""),
+                    "time_cost": round(time_cost, 2),
+                    "iteration": iteration,
+                    "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+                    "retrieved_uris_by_iteration": (
+                        json.dumps(retrieved_uris_by_iteration, ensure_ascii=False)
+                        if args.debug_print_model_input
+                        else ""
+                    ),
+                }
+            )
+        except Exception as exc:
+            row.update(
+                {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "time_cost": round(time.perf_counter() - started, 2),
+                }
+            )
+        record_row(row, total_count)
+        return row
 
     # 使用线程池处理：全局并行，每个 question 独立 session
     with ThreadPoolExecutor(max_workers=args.threads) as executor:
         # 提交所有任务
-        futures = []
+        futures = {}
         for idx, qa_item in enumerate(remaining_qa, 1):
-            futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+            future = executor.submit(process_qa, qa_item, idx, remaining_count)
+            futures[future] = qa_item
 
         # 等待所有任务完成
         for future in as_completed(futures):
             try:
                 future.result()
             except Exception as e:
-                print(f"Error processing QA item: {str(e)}")
+                qa_item = futures[future]
+                row = build_base_row(qa_item)
+                row.update(
+                    {
+                        "status": "failed",
+                        "error": f"{type(e).__name__}: {e}",
+                    }
+                )
+                record_row(row, remaining_count)
+
+    validate_result_integrity(remaining_qa, new_rows)
 
     if args.update_mode:
         print(f"Updated {len(new_rows)} rows in {args.output}")
