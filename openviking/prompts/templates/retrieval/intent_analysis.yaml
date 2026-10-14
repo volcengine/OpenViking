@@ -1,8 +1,8 @@
 metadata:
   id: "retrieval.intent_analysis"
   name: "Intent Analysis"
-  description: "Analyze session context to generate query plans for different context types"
-  version: "2.1.0"
+  description: "Generate compact query plans for different context types"
+  version: "2.2.0"
   language: "en"
   category: "retrieval"
 
@@ -155,21 +155,16 @@ template: |
 
   ## Output Format
 
-  ```json
-  {
-      "reasoning": "1. Task type (operational/informational/conversational); 2. What context is needed (skill/resource/memory); 3. What is already in context; 4. What is missing and needs to be queried",
-      "queries": [
-          {
-              "query": "Specific query text (following the style of the corresponding type)",
-              "context_type": "skill|resource|memory",
-              "intent": "Purpose of the query",
-              "priority": 1-5
-          }
-      ]
-  }
-  ```
+  Output a single JSON object with exactly one top-level key:
 
-  Please output JSON:
+  - `queries`: array of objects with:
+    - `query`: specific query text following the style of its context type
+    - `context_type`: one of `skill`, `resource`, `memory`
+    - `priority`: integer from 1 to 5
+
+  If no query is needed, set `queries` to an empty array `[]`.
+
+  Output the JSON object directly. Do not include reasoning and do not wrap it in markdown code fences.
 
 llm_config:
   temperature: 0.0

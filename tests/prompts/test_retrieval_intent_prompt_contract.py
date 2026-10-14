@@ -9,11 +9,12 @@ from openviking.prompts.manager import PromptManager
 @pytest.mark.parametrize(
     "prompt_id",
     [
+        "retrieval.intent_analysis",
         "retrieval.ov_intent_analysis_sft_v4",
         "retrieval.ov_intent_analysis_sft_v7",
     ],
 )
-def test_sft_intent_prompts_use_compact_queries_contract(prompt_id: str):
+def test_intent_prompts_use_compact_queries_contract(prompt_id: str):
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
     rendered = manager.render(
         prompt_id,
