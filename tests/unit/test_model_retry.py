@@ -21,6 +21,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
+    is_retryable_api_error,
     retry_async,
     retry_sync,
 )
@@ -131,6 +132,42 @@ async def test_retry_async_does_not_retry_unknown_error():
         await retry_async(_call, max_retries=3)
 
     assert attempts["count"] == 1
+
+
+# --- provider overload classification ---
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_classify_provider_overload_error_is_transient(wrapped):
+    """A status-less provider overload error is transient and retryable (#6000)."""
+    message = "Our servers are currently overloaded. Please try again later."
+    error = Exception(message)
+    if wrapped:
+        error = RuntimeError(f"openai.APIError: {message}")
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
+    assert is_retryable_api_error(error) is True
+
+
+def test_classify_unrecognized_message_stays_unknown():
+    """Messages matching no pattern keep failing fast (guard against over-matching)."""
+    error = Exception("some unexpected validation failure")
+    assert classify_api_error(error) == ERROR_CLASS_UNKNOWN
+    assert is_retryable_api_error(error) is False
+
+
+@pytest.mark.asyncio
+async def test_retry_async_retries_provider_overload_error():
+    """retry_async retries an overload error instead of giving up on attempt 1."""
+    attempts = {"count": 0}
+
+    async def _call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise Exception("Our servers are currently overloaded. Please try again later.")
+        return "ok"
+
+    assert await retry_async(_call, max_retries=3, base_delay=0.0, jitter=False) == "ok"
+    assert attempts["count"] == 2
 
 
 # --- quota_exceeded classification ---
