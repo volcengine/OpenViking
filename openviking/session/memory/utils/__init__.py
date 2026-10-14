@@ -26,10 +26,12 @@ from openviking.session.memory.utils.line_numbers import (
     add_line_numbers,
     every_line_has_line_numbers,
     extract_start_line_number,
+    has_sequential_line_numbers,
     line_count,
     slice_content_lines,
     split_content_lines,
     strip_line_numbers,
+    strip_line_numbers_if_present,
 )
 from openviking.session.memory.utils.messages import (
     parse_memory_file_with_fields,
@@ -53,10 +55,12 @@ __all__ = [
     "add_line_numbers",
     "every_line_has_line_numbers",
     "extract_start_line_number",
+    "has_sequential_line_numbers",
     "line_count",
     "slice_content_lines",
     "split_content_lines",
     "strip_line_numbers",
+    "strip_line_numbers_if_present",
     # Messages
     "pretty_print_messages",
     "parse_memory_file_with_fields",
