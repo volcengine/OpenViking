@@ -179,6 +179,33 @@ async def test_retry_vlm_does_not_retry_cancelled_request():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["get_completion_async", "get_vision_completion_async"])
+async def test_retry_vlm_bounds_each_async_attempt_by_timeout(method):
+    # SDK/httpx timeouts bound each socket read; a response that keeps trickling
+    # bytes never trips them. ``timeout`` must bound the whole attempt.
+    class StallOnceVLM(FakeVLM):
+        async def _stall_once(self, name, kwargs):
+            if not self.calls:
+                self.calls.append((name, kwargs))
+                await asyncio.Event().wait()
+            return self._next(name, kwargs)
+
+        async def get_completion_async(self, **kwargs):
+            return await self._stall_once("async_text", kwargs)
+
+        async def get_vision_completion_async(self, **kwargs):
+            return await self._stall_once("async_vision", kwargs)
+
+    inner = StallOnceVLM(["ok"])
+    inner.timeout = 0.05
+
+    result = await asyncio.wait_for(getattr(RetryVLM(inner), method)(prompt="hello"), 5)
+
+    assert result == "ok"
+    assert len(inner.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_retry_vlm_forwards_extension_kwargs_and_does_not_retry_media(tmp_path):
     media_error = ProviderError(503)
     inner = FakeVLM(["ok"], media_outcomes=[media_error, "unexpected"])
