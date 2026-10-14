@@ -1012,6 +1012,11 @@ ov session delete a1b2c3d4
 - `ContextPart`: 上下文引用，指向资源或记忆
 - `ToolPart`: 工具调用和结果
 
+`ImagePart.url` 应为 VLM 提供方可访问的 HTTP(S) URL，或 `data:image/png;base64,...`
+等图片 data URI。本地文件应由写入客户端先编码；会话提取不会读取客户端提供的文件路径
+（包括 `file://` URL）。如果消息中任一图片来源不受支持，提取会记录告警，跳过该消息的
+图片描述且不调用 VLM；原有文本仍保留，纯图片消息则不参与提取。已存储的会话消息不变。
+
 **代码入口**：
 - `openviking/session/session.py:Session.add_message()` - 核心实现
 - `openviking/server/routers/sessions.py:add_message()` - HTTP 路由
