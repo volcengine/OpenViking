@@ -32,7 +32,6 @@ OpenViking `user` 是经过认证的上下文所有者，可以代表人、Agent
 
 | 目录 | 内容 | 边界 |
 | --- | --- | --- |
-| `projects/<project>/` | 项目协作上下文 | 在其下继续使用本表中的分类目录 |
 | `repos/` | 完整代码仓库 | 保留仓库内部结构；不要按编程语言拆分 |
 | `docs/` | 手册、规范、产品文档、Office 文档、论文、预印本及其他文档快照 | 复现代码和独立数据集分别放入 `repos/` 与 `datasets/` |
 | `sites/` | 以 URL、域名或 Feed 为来源，并按网页树导入或更新的内容 | 单个离线文档放入 `docs/` |
@@ -43,8 +42,11 @@ OpenViking `user` 是经过认证的上下文所有者，可以代表人、Agent
 | `items/` | 以商品、产品、SKU 或其他业务对象为粒度的实体集合 | 批量表格和训练数据放入 `datasets/` |
 | `people/` | 以人物、客户、联系人或其他身份为粒度的实体集合 | 可见范围和敏感信息仍由 user 空间、account 与 ACL 控制 |
 | `inbox/` | 当前身份尚未归类的 Resource | 仅建议位于 `viking://~/resources/`，不作为 account 共享空间的长期分类 |
+| `projects/<project>/` | 项目协作上下文 | 可选容器；确有项目需要时，在其下继续使用本表中的分类目录 |
 
 `items/` 和 `people/` 是实体集合目录的示例，不是保留名称。Agent 可以根据领域使用 `companies/`、`positions/` 或其他明确的复数名词。此类目录当前仍是普通 Resource 目录，用于与后续 Item 检索能力对齐；当前版本不提供专门的 Item 检索语义。
+
+时间序列资料（日报、邮件归档、定期报告等）在分类目录下按日期分层即可，不要再为日期新建分类。URI 中可以直接使用服务端路径变量，例如 `viking://resources/docs/{calendar:ym}/` 会渲染为 `docs/2026/05/`；常用变量包括 `{calendar:today}`、`{calendar:ym}`、`{calendar:yq}`、`{calendar:yw}`，CLI、SDK 和 MCP 原样传递模板，由服务端解析。详见 [Viking URI 路径变量](../concepts/04-viking-uri.md#路径变量)。
 
 目录名称不代表格式支持情况。导入前应检查[资源管理支持的格式](../api/02-resources.md#资源类型)。`artifacts/` 中尚未支持的文件应通过已启用的对象存储 Connector 保存，或等待相应的原始文件存储与解析能力。
 

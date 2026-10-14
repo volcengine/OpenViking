@@ -32,7 +32,6 @@ The other category directories may sit directly below a Resource root or inside 
 
 | Directory | Content | Boundary |
 | --- | --- | --- |
-| `projects/<project>/` | Project collaboration context | Continue using the categories in this table below it |
 | `repos/` | Complete code repositories | Preserve the repository structure; do not split by programming language |
 | `docs/` | Manuals, specifications, product documentation, Office files, papers, preprints, and other document snapshots | Put reproduction code and independent datasets in `repos/` and `datasets/` |
 | `sites/` | Content sourced from a URL, domain, or feed and imported or refreshed as a web tree | Put a discrete offline document in `docs/` |
@@ -43,8 +42,11 @@ The other category directories may sit directly below a Resource root or inside 
 | `items/` | Entity collection organized by commodity, product, SKU, or another business object | Put bulk tables and training data in `datasets/` |
 | `people/` | Entity collection organized by person, customer, contact, or another identity | User space, account boundaries, and ACLs still control visibility and sensitive information |
 | `inbox/` | Resources not yet classified by the current identity | Recommended only under `viking://~/resources/`; not a durable account-shared category |
+| `projects/<project>/` | Project collaboration context | Optional container; when a project genuinely needs one, continue using the categories in this table below it |
 
 `items/` and `people/` are examples of entity collection directories, not reserved names. An agent may use `companies/`, `positions/`, or another clear plural noun for the domain. These directories are ordinary Resource directories today and align with a future Item retrieval capability; the current release provides no dedicated Item retrieval semantics.
+
+For time-series material (daily reports, email archives, periodic reports), layer it by date inside the category rather than creating a category per date. Path variables can be used directly in the URI: `viking://resources/docs/{calendar:ym}/` renders to `docs/2026/05/`. Common variables include `{calendar:today}`, `{calendar:ym}`, `{calendar:yq}`, and `{calendar:yw}`; the CLI, SDK, and MCP pass the template as-is and the server resolves it. See [Viking URI path variables](../concepts/04-viking-uri.md#path-variables).
 
 A directory name does not imply format support. Check [supported resource formats](../api/02-resources.md#resource-types) before import. Store unsupported artifact files through an enabled object-storage Connector, or wait for raw-file storage and parser support.
 
