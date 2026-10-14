@@ -1544,6 +1544,53 @@ viking://user/{user_id}/sessions/{session_id}/
     └── archive_002/
 ```
 
+### retry_archive()
+
+为单个归档重新排队 Phase 2：归档已失败，或 Phase 1 已就绪但没有排队或运行中的任务持有它。仅 HTTP。
+请求必须携带归档原始 `messages.jsonl` 字节的 SHA-256，归档变化后，此前的审计结果不能被重放。
+
+以下情况服务端拒绝（`FAILED_PRECONDITION`）：已完成的归档；哈希不一致；未设置 `allow_cancelled_failure`
+的取消类失败；存在 `memory_diff.json` 但没有持久化长期记忆进度。QueueFS 或活跃 worker 仍持有该归档或会话时返回
+`skipped`。`completed_memory_steps` 中已记录的长期记忆步骤不会重复执行。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `session_id` | string | 是 | - | 会话 ID |
+| `archive_id` | string | 是 | - | `archive_NNN` |
+| `expected_messages_sha256` | string | 是 | - | `messages.jsonl` 的小写十六进制 SHA-256 |
+| `allow_ownerless_ready` | boolean | 否 | `false` | 允许重试无持有者的 Phase 1 就绪归档 |
+| `allow_cancelled_failure` | boolean | 否 | `false` | 允许重试因取消而失败的归档 |
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/archives/{archive_id}/retry
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_003/retry \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d '{"expected_messages_sha256": "<messages.jsonl 的 sha256>"}'
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "accepted",
+    "task_id": "0b6c...",
+    "archive_uri": "viking://user/default/sessions/session-id/history/archive_003",
+    "previous_task_id": "9f1e...",
+    "recovery_kind": "failed",
+    "completed_memory_steps": {}
+  }
+}
+```
+
+用任务 API 跟踪 `task_id`。`status: "skipped"` 时 `reason` 为 `already_covered`、`archive_owned` 或 `session_busy`。
+
 ### memory_diff.json 数据结构
 
 长记忆抽取成功运行时，会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
