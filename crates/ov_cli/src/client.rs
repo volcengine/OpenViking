@@ -2163,18 +2163,84 @@ mod tests {
         assert_eq!(body["processing_mode"], "vectors_only");
     }
 
-    #[test]
-    fn compact_request_body_drops_default_search_type_for_legacy_servers() {
-        let mut body = json!({"query": "OAuth token", "search_type": "semantic"});
-        super::compact_request_body(&mut body);
-        assert!(!body.as_object().unwrap().contains_key("search_type"));
+    #[tokio::test]
+    async fn search_list_request_preserves_legacy_server_compatibility() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .search(
+                "OAuth token".to_string(),
+                String::new(),
+                None,
+                "semantic".to_string(),
+                "list".to_string(),
+                None,
+                10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+            )
+            .await
+            .expect("list search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/search "));
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({"query": "OAuth token", "target_uri": "", "limit": 10})
+        );
     }
 
-    #[test]
-    fn compact_request_body_keeps_keywords_search_type() {
-        let mut body = json!({"query": "OAuth token", "search_type": "keywords"});
-        super::compact_request_body(&mut body);
-        assert_eq!(body["search_type"], "keywords");
+    #[tokio::test]
+    async fn search_context_request_preserves_keywords_and_session_options() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .search(
+                "OAuth token".to_string(),
+                String::new(),
+                None,
+                "keywords".to_string(),
+                "context".to_string(),
+                Some("session-1".to_string()),
+                3,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["memory".to_string()]),
+                Some(vec!["project=openviking".to_string()]),
+                false,
+                Some("7d".to_string()),
+            )
+            .await
+            .expect("context search should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/search/search "));
+        let (_, body) = request.split_once("\r\n\r\n").expect("request body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            json!({
+                "query": "OAuth token",
+                "target_uri": "",
+                "search_type": "keywords",
+                "mode": "context",
+                "session_id": "session-1",
+                "limit": 3,
+                "context_type": ["memory"],
+                "tags": ["project=openviking"],
+                "events_time_decay_protection": "7d"
+            })
+        );
     }
 
     #[test]
@@ -2404,54 +2470,6 @@ mod tests {
         assert!(!default_request.contains("&limit="));
         assert!(!default_request.contains("sort_by="));
         assert!(!default_request.contains("sort_order="));
-    }
-
-    #[tokio::test]
-    async fn search_modes_preserve_list_requests_and_forward_context_options() {
-        for mode in ["list", "context"] {
-            let (base_url, request_rx) = spawn_request_capture_server().await;
-            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-            client
-                .search(
-                    "auth decision".to_string(),
-                    String::new(),
-                    None,
-                    "semantic".to_string(),
-                    mode.to_string(),
-                    Some("session-1".to_string()),
-                    3,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(vec!["memory".to_string()]),
-                    Some(vec!["project=openviking".to_string()]),
-                    false,
-                    Some("7d".to_string()),
-                )
-                .await
-                .expect("search request should succeed");
-
-            let request = request_rx.await.expect("request should be captured");
-            assert!(request.starts_with("POST /api/v1/search/search "));
-            let (_, body) = request.split_once("\r\n\r\n").expect("request body");
-            let actual: serde_json::Value = serde_json::from_str(body).expect("JSON body");
-            let mut expected = json!({
-                "query": "auth decision",
-                "target_uri": "",
-                "session_id": "session-1",
-                "limit": 3,
-                "context_type": ["memory"],
-                "tags": ["project=openviking"],
-                "events_time_decay_protection": "7d"
-            });
-            if mode == "context" {
-                expected["mode"] = json!("context");
-            }
-            assert_eq!(actual, expected, "unexpected {mode} request");
-        }
     }
 
     #[tokio::test]

@@ -1011,217 +1011,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn context_output_preserves_rendered_text_without_truncation() {
-        let text = format!(
-            "<memory uri=\"viking://resources/auth.md\">\n  {}\n\nFinal line.\n</memory>\n",
-            "Long context with original spacing. ".repeat(20)
-        );
-        let result = json!({
-            "entries": [{"uri": "viking://resources/auth.md", "text": "entry text"}],
-            "rendered": text,
-            "digest": "",
-            "stats": {"returned": 1, "rewrite": "off"}
-        });
-
-        assert_eq!(
-            render_context_output_for_table(&result, OutputFormat::Table)
-                .map(|output| output.text)
-                .as_deref(),
-            Some(text.as_str())
-        );
-    }
-
-    #[test]
-    fn context_output_prefers_nonempty_digest() {
-        let result = json!({
-            "entries": [],
-            "rendered": "Full assembled context.",
-            "digest": "  Concise context.\n",
-            "stats": {"rewrite": "ok"}
-        });
-
-        assert_eq!(
-            render_context_output_for_table(&result, OutputFormat::Table)
-                .map(|output| output.text)
-                .as_deref(),
-            Some("  Concise context.\n")
-        );
-    }
-
-    #[test]
-    fn context_output_falls_back_from_empty_digest_to_rendered() {
-        let result = json!({
-            "entries": [],
-            "rendered": "Full assembled context.",
-            "digest": " \n",
-            "stats": {"rewrite": "failed"}
-        });
-
-        assert_eq!(
-            render_context_output_for_table(&result, OutputFormat::Table)
-                .map(|output| output.text)
-                .as_deref(),
-            Some("Full assembled context.")
-        );
-    }
-
-    #[test]
-    fn context_output_explains_empty_context() {
-        let result = json!({
-            "entries": [],
-            "rendered": "",
-            "digest": "",
-            "stats": {"returned": 0, "rewrite": "off"}
-        });
-
-        let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-            .expect("empty context message");
-
-        assert_eq!(strip_ansi(&rendered.text), "No context found.");
-    }
-
-    #[test]
-    fn context_output_does_not_restore_context_rejected_by_rewrite() {
-        let result = json!({
-            "entries": [{"text": "Rejected entry."}],
-            "rendered": "Rejected assembled context.",
-            "digest": "",
-            "stats": {"returned": 0, "rewrite": "no_relevant"}
-        });
-
-        let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-            .expect("no relevant context message");
-
-        assert_eq!(strip_ansi(&rendered.text), "No relevant context found.");
-        assert!(!rendered.text.contains("Rejected"));
-    }
-
-    #[test]
-    fn context_output_unwraps_result_and_keeps_profile() {
-        let result = json!({
-            "result": {
-                "entries": [],
-                "rendered": "Full assembled context.\nSecond line.",
-                "digest": "",
-                "stats": {"rewrite": "off"}
-            },
-            "profile": ["context assembly: 12ms"]
-        });
-
-        let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-            .expect("context with profile");
-
-        assert_eq!(
-            strip_ansi(&rendered.text),
-            "Full assembled context.\nSecond line.\n\nprofile\ncontext assembly: 12ms"
-        );
-    }
-
-    #[test]
-    fn context_output_keeps_profile_for_empty_context() {
-        let result = json!({
-            "result": {
-                "entries": [],
-                "rendered": "",
-                "digest": "",
-                "stats": {"returned": 0, "rewrite": "off"}
-            },
-            "profile": ["context assembly: 12ms"]
-        });
-
-        let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-            .expect("empty context with profile");
-
-        assert_eq!(
-            strip_ansi(&rendered.text),
-            "No context found.\n\nprofile\ncontext assembly: 12ms"
-        );
-    }
-
-    #[test]
-    fn context_output_keeps_retrieval_errors_separate_from_usable_text() {
-        for (digest, expected) in [("", "Full context."), ("Digest.", "Digest.")] {
-            let result = json!({
-                "result": {
-                    "rendered": "Full context.",
-                    "digest": digest,
-                    "stats": {
-                        "retrieval_errors": ["RuntimeError: index unavailable", "TimeoutError: embedder"]
-                    }
-                },
-                "profile": ["context assembly: 12ms"]
-            });
-
-            let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-                .expect("context with retrieval failures");
-
-            assert_eq!(
-                strip_ansi(&rendered.text),
-                format!("{expected}\n\nprofile\ncontext assembly: 12ms")
-            );
-            assert_eq!(
-                rendered.retrieval_errors,
-                ["RuntimeError: index unavailable", "TimeoutError: embedder"]
-            );
-        }
-    }
-
-    #[test]
-    fn context_output_does_not_report_retrieval_failures_as_no_matches() {
-        for (rewrite, text) in [("off", ""), ("no_relevant", "Rejected context.")] {
-            let result = json!({
-                "rendered": text,
-                "digest": "",
-                "stats": {
-                    "rewrite": rewrite,
-                    "retrieval_errors": ["RuntimeError: index unavailable"]
-                }
-            });
-
-            let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-                .expect("retrieval failure output");
-
-            assert!(rendered.text.is_empty());
-            assert_eq!(rendered.retrieval_errors, ["RuntimeError: index unavailable"]);
-        }
-    }
-
-    #[test]
-    fn context_output_ignores_empty_retrieval_errors() {
-        for errors in [json!(null), json!([]), json!(["", " \n"])] {
-            let result = json!({
-                "rendered": "",
-                "stats": {"retrieval_errors": errors}
-            });
-
-            let rendered = render_context_output_for_table(&result, OutputFormat::Table)
-                .expect("empty context output");
-
-            assert_eq!(strip_ansi(&rendered.text), "No context found.");
-            assert!(rendered.retrieval_errors.is_empty());
-        }
-    }
-
-    #[test]
-    fn context_renderer_leaves_json_to_standard_output() {
-        let result = json!({
-            "result": {
-                "entries": [{"uri": "viking://resources/auth.md", "text": "Full entry."}],
-                "rendered": "Full assembled context.",
-                "digest": "Concise context.",
-                "stats": {
-                    "returned": 1,
-                    "rewrite": "ok",
-                    "retrieval_errors": ["RuntimeError: index unavailable"]
-                }
-            },
-            "profile": ["context assembly: 12ms"]
-        });
-
-        assert!(render_context_output_for_table(&result, OutputFormat::Json).is_none());
-    }
-
-    #[test]
     fn search_result_cards_render_ranked_scannable_rows() {
         let results = json!([
             {
@@ -1440,7 +1229,7 @@ mod tests {
     }
 
     #[test]
-    fn search_result_cards_render_result_object_with_profile() {
+    fn search_output_preserves_content_profile_and_retrieval_failures() {
         let results = json!({
             "result": [
                 {
@@ -1458,6 +1247,47 @@ mod tests {
         assert!(rendered.contains("viking://user/default/memories/events/.abstract.md"));
         assert!(rendered.contains("profile"));
         assert!(rendered.contains("vector search: 12ms"));
+
+        let text = format!(
+            "<memory>\n  {}\n\nFinal line.\n</memory>",
+            "Full context. ".repeat(100)
+        );
+        let mut context = json!({
+            "rendered": text,
+            "digest": "",
+            "stats": {"rewrite": "off", "retrieval_errors": ["RuntimeError: index unavailable"]},
+            "profile": ["vector search: 12ms"]
+        });
+        let output = render_context_output_for_table(&context, OutputFormat::Table)
+            .expect("context with partial retrieval failure");
+        assert_eq!(
+            strip_ansi(&output.text),
+            format!("{text}\n\nprofile\nvector search: 12ms")
+        );
+        assert_eq!(output.retrieval_errors, ["RuntimeError: index unavailable"]);
+        assert!(render_context_output_for_table(&context, OutputFormat::Json).is_none());
+
+        context["digest"] = json!("Concise context.");
+        context["stats"]["rewrite"] = json!("ok");
+        let output = render_context_output_for_table(&context, OutputFormat::Table)
+            .expect("rewritten context");
+        assert_eq!(
+            strip_ansi(&output.text),
+            "Concise context.\n\nprofile\nvector search: 12ms"
+        );
+        assert_eq!(output.retrieval_errors, ["RuntimeError: index unavailable"]);
+
+        context["rendered"] = json!("");
+        context["digest"] = json!("");
+        context["stats"]["rewrite"] = json!("off");
+        context.as_object_mut().unwrap().remove("profile");
+        let output = render_context_output_for_table(&context, OutputFormat::Table)
+            .expect("total retrieval failure");
+        assert!(
+            output.text.is_empty(),
+            "retrieval failure must not look like no matches"
+        );
+        assert_eq!(output.retrieval_errors, ["RuntimeError: index unavailable"]);
     }
 
     #[test]

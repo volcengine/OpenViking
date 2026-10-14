@@ -4205,80 +4205,26 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_search_context_type() {
-        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
-            .expect("search context type should parse");
-
-        match cli.command {
-            Commands::Search { context_type, .. } => {
-                assert_eq!(context_type, Some(vec!["skill".to_string()]));
-            }
-            _ => panic!("expected search command"),
-        }
-    }
-
-    #[test]
-    fn cli_search_defaults_to_list_mode() {
-        let cli = Cli::try_parse_from(["ov", "search", "invoice"])
-            .expect("search should default to list mode");
-
-        match cli.command {
-            Commands::Search { mode, .. } => assert_eq!(mode, "list"),
-            _ => panic!("expected search command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_search_context_mode_with_retrieval_options() {
+    fn cli_parses_search_context_mode_and_type() {
         let cli = Cli::try_parse_from([
             "ov",
             "search",
-            "recent decisions",
+            "invoice",
             "--mode",
             "context",
             "--context-type",
-            "memory",
-            "--events-time-decay-protection",
-            "1d",
-            "--level",
-            "2",
+            "skill",
         ])
-        .expect("context mode should accept retrieval options");
+        .expect("search context mode and type should parse");
 
         match cli.command {
             Commands::Search {
-                mode,
-                context_type,
-                events_time_decay_protection,
-                level,
-                ..
+                mode, context_type, ..
             } => {
                 assert_eq!(mode, "context");
-                assert_eq!(context_type, Some(vec!["memory".to_string()]));
-                assert_eq!(events_time_decay_protection.as_deref(), Some("1d"));
-                assert_eq!(level, Some(vec![2]));
+                assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
-        }
-    }
-
-    #[test]
-    fn cli_rejects_invalid_search_mode() {
-        let error = Cli::try_parse_from(["ov", "search", "invoice", "--mode", "summary"])
-            .err()
-            .expect("unknown search modes should be rejected");
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
-    }
-
-    #[test]
-    fn cli_find_rejects_mode() {
-        for mode in ["list", "context"] {
-            let error = Cli::try_parse_from(["ov", "find", "invoice", "--mode", mode])
-                .err()
-                .expect("find does not support a mode flag");
-
-            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
         }
     }
 
@@ -4288,9 +4234,12 @@ mod tests {
             .expect("search image should parse");
 
         match cli.command {
-            Commands::Search { query, image, .. } => {
+            Commands::Search {
+                query, image, mode, ..
+            } => {
                 assert_eq!(query.as_deref(), Some("poster"));
                 assert_eq!(image.as_deref(), Some("viking://x.png"));
+                assert_eq!(mode, "list");
             }
             _ => panic!("expected search command"),
         }

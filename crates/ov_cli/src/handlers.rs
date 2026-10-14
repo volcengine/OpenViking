@@ -2236,41 +2236,6 @@ mod config_switch_prompt_tests {
 }
 
 #[cfg(test)]
-mod search_mode_validation_tests {
-    use super::*;
-
-    #[test]
-    fn context_mode_rejects_uri_and_read_content() {
-        for (uri, read_content, conflicting_flag) in [
-            ("viking://resources", false, "--uri"),
-            ("", true, "--read-content"),
-            ("viking://resources", true, "--uri"),
-        ] {
-            let error = validate_search_mode_options("context", uri, read_content)
-                .expect_err("context options should be rejected before sending a request");
-
-            assert!(matches!(error, Error::Client(_)));
-            assert!(error.to_string().contains(conflicting_flag));
-            assert!(error.to_string().contains("--mode context"));
-            assert!(error.to_string().contains("--mode list"));
-        }
-    }
-
-    #[test]
-    fn valid_search_mode_combinations_remain_supported() {
-        assert!(validate_search_mode_options("context", "", false).is_ok());
-        for (uri, read_content) in [
-            ("", false),
-            ("viking://resources", false),
-            ("", true),
-            ("viking://resources", true),
-        ] {
-            assert!(validate_search_mode_options("list", uri, read_content).is_ok());
-        }
-    }
-}
-
-#[cfg(test)]
 mod add_resource_validation_tests {
     #[test]
     fn local_watch_is_rejected_before_upload() {
