@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -290,6 +291,6 @@ async def ov_session_status(
 ) -> Dict[str, Any]:
     """GET /api/v1/sessions/{session_id}."""
     try:
-        return await client.get(f"/api/v1/sessions/{body.session_id}")
+        return await client.get(f"/api/v1/sessions/{quote(body.session_id, safe='')}")
     except OVError as exc:
         raise _forward(exc) from exc
