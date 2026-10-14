@@ -37,6 +37,7 @@ jobs:
 
       - run: npm ci --prefix examples/dsh-memory-plugin
       - run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
+      - run: npm install --prefix examples/opencode-plugin --ignore-scripts --package-lock=false
 
       # The plugins published as packages keep no shared copies in git; they are
       # built on the way out, and the tests import them like the package would.
