@@ -247,6 +247,92 @@ void test_basic_workflow() {
   SPDLOG_INFO("[Passed] test_basic_workflow");
 }
 
+void test_l2_score_normalization() {
+  SPDLOG_INFO("[Running] test_l2_score_normalization...");
+
+  const std::string config = R"({
+        "CollectionName": "l2_score_normalization",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 3,
+            "Dimension": 2,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": []
+    })";
+
+  IndexEngine engine(config);
+  std::vector<AddDataRequest> records(3);
+  records[0].label = 4001;
+  records[0].vector = {0.0, 0.0};
+  records[0].fields_str = "{}";
+  records[1].label = 4002;
+  records[1].vector = {2.0, 0.0};
+  records[1].fields_str = "{}";
+  records[2].label = 4003;
+  records[2].vector = {0.0, 3.0};
+  records[2].fields_str = "{}";
+  if (engine.add_data(records) != 0) {
+    SPDLOG_ERROR("Failed to add L2 score normalization records");
+    exit(1);
+  }
+
+  SearchRequest request;
+  request.query = {0.0, 0.0};
+  request.topk = 3;
+  const SearchResult result = engine.search(request);
+  if (result.labels != std::vector<uint64_t>{4001, 4002, 4003} ||
+      result.scores.size() != 3 || !is_close(result.scores[0], 1.0f) ||
+      !is_close(result.scores[1], 0.2f) || !is_close(result.scores[2], 0.1f)) {
+    SPDLOG_ERROR("Pure-dense L2 scores were not normalized to (0, 1]");
+    exit(1);
+  }
+
+  const std::string hybrid_config = R"({
+        "CollectionName": "l2_hybrid_score_scale",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 1,
+            "Dimension": 2,
+            "Distance": "l2",
+            "Quant": "float",
+            "EnableSparse": true,
+            "SearchWithSparseLogitAlpha": 0.5
+        },
+        "ScalarIndex": []
+    })";
+  IndexEngine hybrid_engine(hybrid_config);
+  AddDataRequest hybrid_record;
+  hybrid_record.label = 4010;
+  hybrid_record.vector = {2.0, 0.0};
+  hybrid_record.sparse_raw_terms = {"term"};
+  hybrid_record.sparse_values = {3.0};
+  hybrid_record.fields_str = "{}";
+  if (hybrid_engine.add_data({hybrid_record}) != 0) {
+    SPDLOG_ERROR("Failed to add hybrid L2 score record");
+    exit(1);
+  }
+  SearchRequest hybrid_request;
+  hybrid_request.query = {0.0, 0.0};
+  hybrid_request.sparse_raw_terms = {"term"};
+  hybrid_request.sparse_values = {1.0};
+  hybrid_request.topk = 1;
+  const SearchResult hybrid_result = hybrid_engine.search(hybrid_request);
+  if (hybrid_result.labels != std::vector<uint64_t>{4010} ||
+      hybrid_result.scores.size() != 1 ||
+      !is_close(hybrid_result.scores[0], -3.0f)) {
+    SPDLOG_ERROR("L2 normalization changed the hybrid score scale");
+    exit(1);
+  }
+
+  SPDLOG_INFO("[Passed] test_l2_score_normalization");
+}
+
 void test_routed_filter_projection_edge_cases() {
   SPDLOG_INFO("[Running] test_routed_filter_projection_edge_cases...");
 
@@ -618,6 +704,7 @@ void test_paged_store_scan() {
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
+  test_l2_score_normalization();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
   test_paged_store_scan();

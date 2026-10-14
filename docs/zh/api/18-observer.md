@@ -162,9 +162,9 @@ ov observer vikingdb
 }
 ```
 
-对于 local 后端，cosine、IP 和 L2 对应的 `pure_dense_score_scale` 分别为 `cosine_affine_0_1`、`inner_product` 和 `one_minus_squared_l2`。其他后端返回 `backend_defined`；如果已加载的元数据没有暴露 metric，`distance_metric` 为 `null`。
+对于 local 后端，cosine、IP 和 L2 对应的 `pure_dense_score_scale` 分别为 `cosine_affine_0_1`、`inner_product` 和 `reciprocal_squared_l2_0_1`。其他后端返回 `backend_defined`；如果已加载的元数据没有暴露 metric，`distance_metric` 为 `null`。
 
-该字段只描述纯 dense 向量分数。稀疏融合、时间衰减、rerank 等检索阶段可能产生不同尺度的最终 `score`。从 v0.4.22 起，local 纯 dense cosine 使用 `clamp((cosine_similarity + 1) / 2, 0, 1)`，已有索引也适用。
+该字段只描述纯 dense 向量分数。稀疏融合、时间衰减、rerank 等检索阶段可能产生不同尺度的最终 `score`。从 v0.4.22 起，local 纯 dense cosine 使用 `clamp((cosine_similarity + 1) / 2, 0, 1)`，已有索引也适用。local 纯 dense L2 使用 `1 / (1 + squared_l2)`，分数保持在 `(0, 1]`，不会改变排序，也不需要重建已有索引。
 
 ---
 

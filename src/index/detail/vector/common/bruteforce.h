@@ -262,15 +262,22 @@ class BruteforceSearch {
     labels.resize(result_size);
     scores.resize(result_size);
 
-    const bool cosine_score =
-        meta_->distance_type == "ip" && meta_->normalize_vector &&
-        (!query_sparse_view || meta_->search_with_sparse_logit_alpha <= 0.0f);
+    const bool pure_dense_score =
+        !query_sparse_view || meta_->search_with_sparse_logit_alpha <= 0.0f;
+    const bool cosine_score = meta_->distance_type == "ip" &&
+                              meta_->normalize_vector && pure_dense_score;
+    const bool l2_score = meta_->distance_type == "l2" && pure_dense_score;
     for (int i = static_cast<int>(result_size) - 1; i >= 0; --i) {
       const auto& top = pq.top();
-      // Map after ranking so clamping quantization error cannot change top-k.
-      scores[i] = cosine_score
-                      ? std::clamp((top.first + 1.0f) * 0.5f, 0.0f, 1.0f)
-                      : top.first;
+      // Map after ranking so normalization cannot change top-k.
+      if (cosine_score) {
+        scores[i] = std::clamp((top.first + 1.0f) * 0.5f, 0.0f, 1.0f);
+      } else if (l2_score) {
+        const float squared_l2 = std::max(0.0f, 1.0f - top.first);
+        scores[i] = 1.0f / (1.0f + squared_l2);
+      } else {
+        scores[i] = top.first;
+      }
       labels[i] = top.second;
       pq.pop();
     }

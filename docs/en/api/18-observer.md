@@ -162,9 +162,9 @@ ov observer vikingdb
 }
 ```
 
-For the local backend, `pure_dense_score_scale` is `cosine_affine_0_1`, `inner_product`, or `one_minus_squared_l2` for cosine, IP, or L2 respectively. Other backends report `backend_defined`; `distance_metric` is `null` when their loaded metadata does not expose it.
+For the local backend, `pure_dense_score_scale` is `cosine_affine_0_1`, `inner_product`, or `reciprocal_squared_l2_0_1` for cosine, IP, or L2 respectively. Other backends report `backend_defined`; `distance_metric` is `null` when their loaded metadata does not expose it.
 
-The field describes only a pure-dense vector score. Sparse fusion, time decay, reranking, and other retrieval stages can produce a different final `score` scale. Since v0.4.22, local pure-dense cosine uses `clamp((cosine_similarity + 1) / 2, 0, 1)`, including for existing indexes.
+The field describes only a pure-dense vector score. Sparse fusion, time decay, reranking, and other retrieval stages can produce a different final `score` scale. Since v0.4.22, local pure-dense cosine uses `clamp((cosine_similarity + 1) / 2, 0, 1)`, including for existing indexes. Local pure-dense L2 uses `1 / (1 + squared_l2)`, which keeps scores in `(0, 1]` without changing ranking or rebuilding existing indexes.
 
 ---
 

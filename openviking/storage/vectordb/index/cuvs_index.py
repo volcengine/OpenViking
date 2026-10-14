@@ -2037,7 +2037,7 @@ class CuVSDenseIndex:
 
     def _score_from_distance(self, distance: float) -> float:
         if self.distance == "l2":
-            return 1.0 - distance
+            return 1.0 / (1.0 + max(distance, 0.0))
         if self.normalize_vectors:
             return min(1.0, max(0.0, (distance + 1.0) / 2.0))
         return distance

@@ -161,7 +161,7 @@ This is why auto mode initializes the runtime first, reads the remaining free
 memory, and then applies a conservative safety factor and independent reserve
 rather than admitting from the vector payload alone.
 
-Cosine search L2-normalizes vectors before computing inner products. L2 scores use `1 - squared_l2`, so larger scores remain better matches.
+Cosine search L2-normalizes vectors before computing inner products. Pure-dense L2 scores use `1 / (1 + squared_l2)`, so scores stay in `(0, 1]` and larger scores remain better matches. Sparse and hybrid score fusion keeps its separate scale.
 
 ## Data type and native-index behavior
 
