@@ -33,6 +33,7 @@ from openviking.storage.acl import (
     is_acl_uri,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.record_types import context_records
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -50,6 +51,7 @@ from openviking.utils.tags import (
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -844,7 +846,7 @@ class _SingleAccountBackend:
     async def fetch_by_uri(self, uri: str) -> Optional[Dict[str, Any]]:
         try:
             records = await self.query(
-                filter={"op": "must", "field": "uri", "conds": [uri]},
+                filter=And([Eq("uri", uri), context_records()]),
                 limit=2,
                 output_fields=FETCH_BY_URI_OUTPUT_FIELDS,
             )
@@ -967,7 +969,7 @@ class _SingleAccountBackend:
     async def remove_by_uri(self, uri: str) -> int:
         try:
             target_records = await self.filter(
-                {"op": "must", "field": "uri", "conds": [uri]},
+                And([Eq("uri", uri), context_records()]),
                 limit=10,
                 output_fields=LOOKUP_OUTPUT_FIELDS,
             )
@@ -989,7 +991,7 @@ class _SingleAccountBackend:
     async def _remove_descendants(self, parent_uri: str) -> int:
         total_deleted = 0
         children = await self.filter(
-            PathScope("uri", parent_uri, depth=1),
+            And([PathScope("uri", parent_uri, depth=1), context_records()]),
             limit=100000,
             output_fields=LOOKUP_OUTPUT_FIELDS,
         )
@@ -1177,6 +1179,7 @@ class VikingVectorIndexBackend:
         self._shared_adapter = create_collection_adapter(config)
         self._shared_async_adapter = _AsyncVectorAdapter(self._shared_adapter)
         self._closing = False
+        self._memory_association_index = None
 
         logger.info(
             "VikingVectorIndexBackend facade initialized",
@@ -1201,6 +1204,22 @@ class VikingVectorIndexBackend:
     def _get_default_backend(self) -> _SingleAccountBackend:
         """获取默认 backend（用于 collection 管理等操作）"""
         return self._get_backend_for_account("default")
+
+    @property
+    def memory_association_index(self):
+        """Lazy derived index; creating this object does not load NLP or open a DB."""
+        if self._memory_association_index is None:
+            from openviking.retrieve.memory_association.index import MemoryAssociationIndex
+
+            self._memory_association_index = MemoryAssociationIndex(self)
+        return self._memory_association_index
+
+    async def _maintain_memory_associations(self, operation, ctx, *args, **kwargs):
+        """Derived-index failure must not turn a settled primary write into a retry."""
+        try:
+            await getattr(self.memory_association_index, operation)(ctx, *args, **kwargs)
+        except Exception as exc:
+            logger.warning("Memory association %s failed after primary write: %s", operation, exc)
 
     def _get_backend_for_account(self, account_id: str) -> _SingleAccountBackend:
         """获取指定 account 的 backend，懒创建"""
@@ -1495,11 +1514,15 @@ class VikingVectorIndexBackend:
 
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.delete(ids)
+        deleted = await backend.delete(ids)
+        await self._maintain_memory_associations("remove_ids", ctx, ids)
+        return deleted
 
     async def strict_delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         """Delete exact record IDs without converting backend failures to success."""
-        return await (await self._get_backend_for_context(ctx)).strict_delete(ids)
+        deleted = await (await self._get_backend_for_context(ctx)).strict_delete(ids)
+        await self._maintain_memory_associations("remove_ids", ctx, ids)
+        return deleted
 
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
         backend = await self._get_backend_for_context(ctx)
@@ -1646,7 +1669,7 @@ class VikingVectorIndexBackend:
         return await backend.query(
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
-            filter=filter,
+            filter=self._merge_filters(filter, context_records()),
             limit=limit,
             offset=offset,
             output_fields=output_fields,
@@ -1672,7 +1695,7 @@ class VikingVectorIndexBackend:
             self._tenant_filter(ctx, acl_enabled=acl_enabled),
         )
         return await backend.search_by_random(
-            filter=filter,
+            filter=self._merge_filters(filter, context_records()),
             limit=limit,
             offset=offset,
             output_fields=output_fields,
@@ -1725,7 +1748,9 @@ class VikingVectorIndexBackend:
 
     async def remove_by_uri(self, uri: str, *, ctx: RequestContext) -> int:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.remove_by_uri(uri)
+        deleted = await backend.remove_by_uri(uri)
+        await self._maintain_memory_associations("remove_uri_tree", ctx, uri)
+        return deleted
 
     async def scroll(
         self,
@@ -1743,7 +1768,7 @@ class VikingVectorIndexBackend:
             self._tenant_filter(ctx, acl_enabled=acl_enabled),
         )
         return await backend.scroll(
-            filter=filter,
+            filter=self._merge_filters(filter, context_records()),
             limit=limit,
             cursor=cursor,
             output_fields=output_fields,
@@ -1760,7 +1785,7 @@ class VikingVectorIndexBackend:
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         backend = await self._get_backend_for_context(ctx)
         return await backend.scroll(
-            filter=filter,
+            filter=self._merge_filters(filter, context_records()),
             limit=limit,
             cursor=cursor,
             output_fields=output_fields,
@@ -1768,7 +1793,7 @@ class VikingVectorIndexBackend:
 
     async def _strict_transfer_count(self, ctx: RequestContext, filter: FilterExpr) -> int:
         backend = await self._get_backend_for_context(ctx)
-        return await backend.strict_count(filter=filter)
+        return await backend.strict_count(filter=self._merge_filters(filter, context_records()))
 
     async def _strict_scan(
         self,
@@ -1832,6 +1857,8 @@ class VikingVectorIndexBackend:
 
     async def _strict_transfer_delete(self, ctx: RequestContext, ids: List[str]) -> int:
         backend = await self._get_backend_for_context(ctx)
+        # Keep source memory associations until the move settles; compensation may
+        # restore the primary source records if a later batch fails.
         return await backend.strict_delete(ids)
 
     async def count(
@@ -1849,7 +1876,7 @@ class VikingVectorIndexBackend:
             )
         else:
             backend = self._get_default_backend()
-        return await backend.count(filter=filter)
+        return await backend.count(filter=self._merge_filters(filter, context_records()))
 
     async def search_by_keywords(
         self,
@@ -1880,7 +1907,7 @@ class VikingVectorIndexBackend:
             fields=fields,
             limit=limit,
             offset=offset,
-            filter=filter,
+            filter=self._merge_filters(filter, context_records()),
             output_fields=output_fields,
         )
 
@@ -1889,7 +1916,12 @@ class VikingVectorIndexBackend:
             backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
-        return await backend.clear()
+        cleared = await backend.clear()
+        auxiliary_ctx = ctx or RequestContext(
+            user=UserIdentifier.the_default_user(), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_memory_associations("remove_account", auxiliary_ctx)
+        return cleared
 
     async def optimize(self) -> bool:
         return await self._get_default_backend().optimize()
@@ -1899,6 +1931,8 @@ class VikingVectorIndexBackend:
         await run_to_completion(self._close_backends)
 
     async def _close_backends(self) -> None:
+        if self._memory_association_index is not None:
+            await self._memory_association_index.close()
         adapters: dict[int, _AsyncVectorAdapter] = {
             id(self._shared_adapter): self._shared_async_adapter
         }
@@ -2535,7 +2569,14 @@ class VikingVectorIndexBackend:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(Eq("account_id", account_id))
+        deleted = await root_backend.delete_by_filter(
+            And([Eq("account_id", account_id), context_records()])
+        )
+        auxiliary_ctx = RequestContext(
+            user=UserIdentifier(account_id, "default"), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_memory_associations("remove_account", auxiliary_ctx)
+        return deleted
 
     async def delete_user_data(
         self,
@@ -2547,9 +2588,14 @@ class VikingVectorIndexBackend:
         """Delete every vector record owned by one user as ROOT."""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(
-            And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
+        deleted = await root_backend.delete_by_filter(
+            And([Eq("account_id", account_id), Eq("owner_user_id", user_id), context_records()])
         )
+        auxiliary_ctx = RequestContext(
+            user=UserIdentifier(account_id, user_id), role=Role.ROOT, bypass_acl=True
+        )
+        await self._maintain_memory_associations("remove_owner", auxiliary_ctx, user_id)
+        return deleted
 
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:
@@ -2560,6 +2606,7 @@ class VikingVectorIndexBackend:
 
             backend = await self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
+        await self._maintain_memory_associations("remove_uris", ctx, uris)
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
         scopes: List[FilterExpr] = [Eq("uri", uri)]
@@ -2567,7 +2614,7 @@ class VikingVectorIndexBackend:
             scopes.append(PathScope("uri", uri, depth=-1))
         # Never include the parent: unrelated siblings are outside transfer locks
         # and may change between the count and paginated reads.
-        return And([Eq("account_id", ctx.account_id), Or(scopes)])
+        return And([Eq("account_id", ctx.account_id), context_records(), Or(scopes)])
 
     async def _read_uri_transfer_entries(
         self,
@@ -2854,6 +2901,7 @@ class VikingVectorIndexBackend:
             }
         if affected_target_ids:
             await self._delete_vector_transfer_ids(ctx, affected_target_ids)
+            await self._maintain_memory_associations("remove_ids", ctx, affected_target_ids)
         return source_records, batches, target_acl_fields
 
     async def copy_uri_mapping(
@@ -2935,6 +2983,7 @@ class VikingVectorIndexBackend:
                     residual_count=residual_count,
                 ) from transfer_error
             raise
+        await self._maintain_memory_associations("transfer", ctx, source_records, target_payloads)
         return result
 
     async def update_uri_mapping(
@@ -3056,6 +3105,9 @@ class VikingVectorIndexBackend:
                     residual_count=len(source_records),
                 ) from transfer_error
             raise
+        await self._maintain_memory_associations(
+            "transfer", ctx, source_records, target_payloads, move=True
+        )
         return result
 
     def _build_scope_filter(

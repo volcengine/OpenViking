@@ -153,6 +153,18 @@ class FindRequest(BaseModel):
         return self
 
 
+class AssociationSearchRequest(BaseModel):
+    """Independent memory association retrieval; ordinary search options stay unchanged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1)
+    target_uri: Union[str, List[str]] = ""
+    limit: int = Field(default=20, ge=1, le=1000)
+    score_threshold: Optional[float] = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    telemetry: TelemetryRequest = False
+
+
 def _reject_unknown_categories(value: Any, label: str, allowed: Sequence[str]) -> None:
     if not isinstance(value, dict):
         return
@@ -412,6 +424,31 @@ async def find(
         result=result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
+
+
+@router.post("/associations")
+async def search_associations(
+    request: AssociationSearchRequest,
+    http_request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Search shared cues and their visible current memory URIs."""
+    execution = await run_operation(
+        operation="search.associations",
+        telemetry=request.telemetry,
+        fn=lambda: get_service().search.search_associations(
+            query=request.query,
+            ctx=_ctx,
+            target_uri=_resolve_uri_or_uris(request.target_uri, _ctx),
+            limit=request.limit,
+            score_threshold=request.score_threshold,
+        ),
+    )
+    result = _sanitize_floats(execution.result)
+    http_request.state.retrieval_result_count = result["total"]
+    return Response(status="ok", result=result, telemetry=execution.telemetry).model_dump(
+        exclude_none=True
+    )
 
 
 def _context_ignored_fields(request: SearchRequest) -> List[str]:

@@ -461,7 +461,8 @@ def _build_where_clause(
             comparisons = [f"NOT (%s = ANY({quoted_field}))" for _ in conds]
             return " AND ".join(comparisons), list(conds)
         placeholders = ", ".join(["%s"] * len(conds))
-        return f"{quoted_field} NOT IN ({placeholders})", list(conds)
+        # Missing scalar values are not members either, matching local filters.
+        return f"({quoted_field} IS NULL OR {quoted_field} NOT IN ({placeholders}))", list(conds)
 
     if op == "prefix":
         prefix = str(filters.get("prefix", ""))
