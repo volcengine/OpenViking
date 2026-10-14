@@ -64,7 +64,12 @@ from openviking.session.working_memory import (
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.model_retry import (
+    is_retryable_api_error,
+    is_stall_api_error,
+    retry_async,
+    stall_retry_delay,
+)
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
@@ -2133,12 +2138,23 @@ class Session:
                         # transient-error classifier so permanent failures (auth,
                         # quota, content-safety, 400, oversized input) fail fast
                         # instead of being retried pointlessly.
+                        #
+                        # Timeout/connection stalls consume the client read timeout
+                        # on every attempt, so a fast-fail backoff would land the
+                        # retry in the same stall; give them tens of seconds of
+                        # separation instead (#5513). The retry count is unchanged.
+                        def _stall_aware_delay(exc: Exception, attempt: int) -> Optional[float]:
+                            if is_stall_api_error(exc):
+                                return stall_retry_delay(attempt)
+                            return None
+
                         return await retry_async(
                             fn,
                             max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
                             is_retryable=is_retryable_api_error,
+                            delay_for=_stall_aware_delay,
                             logger=logger,
                             operation_name=operation_name,
                         )

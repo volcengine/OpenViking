@@ -152,6 +152,11 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "ratelimit",
     "requestbursttoofast",
     "timeout",
+    # Ark surfaces client read timeouts as "Request timed out." and httpcore
+    # as "timed out"; neither contains the contiguous "timeout" substring, so
+    # without this pattern the error classifies as unknown and is never
+    # retried (#5513).
+    "timed out",
     "connectionerror",
     "connection refused",
     "connection reset",
@@ -283,6 +288,16 @@ def classify_api_error(error: Exception) -> str:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_TRANSIENT
 
+    # Bare timeout exceptions carry little or no recognizable text; keep retry
+    # classification consistent with the "timeout" metric label that
+    # extract_metric_error_code already assigns them. asyncio.TimeoutError is
+    # an alias of TimeoutError on 3.11+ but a distinct class on 3.10.
+    if any(
+        isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+        for exc in (error, getattr(error, "__cause__", None))
+    ):
+        return ERROR_CLASS_TRANSIENT
+
     return ERROR_CLASS_UNKNOWN
 
 
@@ -380,6 +395,52 @@ def rate_limit_retry_delay(attempt: int) -> float:
     return delay * random.uniform(0.8, 1.2)
 
 
+# Stall-class transient errors: the request hung until the client read
+# timeout instead of failing fast. Every retry re-pays that full timeout, so
+# callers that own a step-level retry budget should separate stall attempts
+# by tens of seconds rather than the fast-fail sub-10s window (#5513).
+STALL_API_ERROR_PATTERNS = (
+    "timeout",
+    "timed out",
+    "connectionerror",
+    "connection refused",
+    "connection reset",
+)
+STALL_RETRY_BASE_DELAY_SECONDS = 30.0
+STALL_RETRY_MAX_DELAY_SECONDS = 120.0
+
+
+def is_stall_api_error(error: Exception) -> bool:
+    """Return True for retryable timeout/connection-class (stall) failures.
+
+    This only shapes the backoff; whether to retry at all is still decided by
+    :func:`is_retryable_api_error`.
+    """
+    for exc in (error, getattr(error, "__cause__", None)):
+        if exc is None:
+            continue
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            return True
+        text = str(exc)
+        if not text:
+            continue
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in STALL_API_ERROR_PATTERNS:
+            if _pattern_matches(text_lower, text_compact, pattern):
+                return True
+    return False
+
+
+def stall_retry_delay(attempt: int) -> float:
+    """Exponential backoff delay with jitter for stall-class transient retries."""
+    delay = min(
+        STALL_RETRY_MAX_DELAY_SECONDS,
+        STALL_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt)),
+    )
+    return delay * random.uniform(0.8, 1.2)
+
+
 def _compute_delay(
     attempt: int,
     *,
@@ -441,10 +502,16 @@ async def retry_async(
     max_delay: float = 8.0,
     jitter: bool = True,
     is_retryable: Callable[[Exception], bool] = is_retryable_api_error,
+    delay_for: Callable[[Exception, int], float | None] | None = None,
     logger=None,
     operation_name: str = "operation",
 ) -> T:
-    """Retry an async function on known transient errors."""
+    """Retry an async function on known transient errors.
+
+    ``delay_for`` optionally overrides the default exponential backoff for a
+    specific error: it is called as ``delay_for(exc, attempt)`` right before a
+    retry, and a ``None`` return falls back to the standard delay.
+    """
     attempt = 0
 
     while True:
@@ -454,12 +521,16 @@ async def retry_async(
             if max_retries <= 0 or attempt >= max_retries or not is_retryable(e):
                 raise
 
-            delay = _compute_delay(
-                attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter=jitter,
-            )
+            delay_override = delay_for(e, attempt) if delay_for is not None else None
+            if delay_override is not None:
+                delay = delay_override
+            else:
+                delay = _compute_delay(
+                    attempt,
+                    base_delay=base_delay,
+                    max_delay=max_delay,
+                    jitter=jitter,
+                )
             if logger:
                 logger.warning(
                     "%s failed with retryable error (retry %d/%d): %s; retrying in %.2fs",
