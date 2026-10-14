@@ -262,7 +262,7 @@ def _handle_validation_error(e: PydanticValidationError):
         err = e.errors()[0]
         field = ".".join(str(x) for x in err["loc"])
         msg = f"{err['msg']} (field: {field})"
-    except:
+    except (KeyError, IndexError, TypeError, AttributeError):
         pass
     raise ValidationError(msg)
 
