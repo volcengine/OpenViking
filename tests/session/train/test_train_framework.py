@@ -7,6 +7,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -86,10 +87,30 @@ class DummyVikingFS:
         account_id = getattr(ctx, "account_id", "default")
         return f"/local/{account_id}/{uri.removeprefix('viking://').strip('/')}"
 
+    @property
+    def _async_agfs(self) -> "_NoopPathlockClient":
+        return _NoopPathlockClient()
 
-def _policy_set(*, version: int = 1, viking_fs: DummyVikingFS | None = None) -> ExperienceSet:
+
+class _NoopPathlockClient:
+    """Pathlock stub: scoping tests never contend for a real lock."""
+
+    async def pathlock_acquire_tree(self, path, timeout_secs=0.0, **kwargs):
+        del path, timeout_secs, kwargs
+        return {"lease_ref": "noop-lease"}
+
+    async def pathlock_release(self, lease):
+        del lease
+
+
+def _policy_set(
+    *,
+    version: int = 1,
+    root_uri: str = "viking://user/u/memories/experiences",
+    viking_fs: DummyVikingFS | None = None,
+) -> ExperienceSet:
     return ExperienceSet(
-        root_uri="viking://user/u/memories/experiences",
+        root_uri=root_uri,
         policies=[
             Experience(
                 name="booking_duplicate_handling",
@@ -868,6 +889,89 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     assert [item.target_name for item in second.plan.items] == ["case_b"]
     assert first.apply_result.written_uris == ["viking://user/u/memories/experiences/case_a.md"]
     assert second.apply_result.written_uris == ["viking://user/u/memories/experiences/case_b.md"]
+
+    assert await trainer.close() is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_policy_trainer_scopes_skill_only_submission_by_its_own_gradients():
+    """A skill-only submitter keeps its own write and never sees others' (#5337).
+
+    Session-skill extraction submits gradients with ``analysis=None``.  The skill
+    plan items carry no ``derived_from`` trajectory link, so trajectory-based
+    scoping cannot attribute them; the submitter's own gradients are the only
+    reliable ownership signal.
+    """
+
+    skill_root = "viking://user/u/skills"
+
+    from openviking.session.train import (
+        PolicyPlanItem,
+        StreamingPolicyTrainer,
+        StreamingPolicyTrainerConfig,
+    )
+
+    class SkillGradient:
+        def __init__(self, name: str) -> None:
+            self.target_name = name
+            self.target_uri = f"{skill_root}/{name}/SKILL.md"
+            self.after_file = SimpleNamespace(memory_type="skills")
+
+    class SkillOptimizer:
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            return PolicyUpdatePlan(
+                items=[
+                    PolicyPlanItem(
+                        kind="upsert",
+                        memory_type="skills",
+                        target_name=gradient.target_name,
+                        target_uri=gradient.target_uri,
+                        before_content=None,
+                        after_content=f"skill {gradient.target_name}",
+                        links=[],
+                    )
+                    for gradient in gradients
+                ],
+                metadata={"gradient_count": len(gradients)},
+            )
+
+    class SkillUpdater:
+        async def apply(self, plan, policy_set, context, *, transaction_handle=None):
+            del context, transaction_handle
+            return PolicyApplyResult(
+                updated_policy_set=policy_set,
+                written_uris=[item.target_uri for item in plan.items if item.target_uri],
+                errors=[],
+            )
+
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(root_uri=skill_root),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=SkillOptimizer(),
+        policy_updater=SkillUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=2,
+            max_wait_seconds=60.0,
+            timer_check_interval_seconds=60.0,
+        ),
+    )
+
+    first, second = await asyncio.gather(
+        trainer.submit_gradients([SkillGradient("skill_a")]),
+        trainer.submit_gradients([SkillGradient("skill_b")]),
+    )
+
+    assert first.batch_result is second.batch_result
+    assert {item.target_name for item in first.batch_result.plan.items} == {"skill_a", "skill_b"}
+    # Each submitter keeps the write its own gradient produced...
+    assert first.apply_result.written_uris == [f"{skill_root}/skill_a/SKILL.md"]
+    assert second.apply_result.written_uris == [f"{skill_root}/skill_b/SKILL.md"]
+    # ...and neither plan leaks the other submitter's item.
+    assert [item.target_name for item in first.plan.items] == ["skill_a"]
+    assert [item.target_name for item in second.plan.items] == ["skill_b"]
 
     assert await trainer.close() is None
 
