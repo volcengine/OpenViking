@@ -55,3 +55,47 @@ def test_dense_embedder_passes_local_provider_duration_to_metrics(mock_perf_coun
     embedder.embed("hello")
 
     assert embedder.update_token_usage.call_args.kwargs["duration_seconds"] == 0.25
+
+
+_INSTRUCTION = "Target_modality: text.\nInstruction: Retrieve the memory notes relevant to the question\nQuery:"
+
+
+def test_dense_embedder_prefixes_text_queries_only():
+    embedder = VolcengineDenseEmbedder(
+        model_name="test", api_key="test-key", dimension=2, query_param=_INSTRUCTION
+    )
+    sent = []
+
+    def create(input, model, extra_headers):
+        sent.append(input)
+        return SimpleNamespace(data=SimpleNamespace(embedding=[1.0, 0.0]), usage=None)
+
+    embedder.client = SimpleNamespace(multimodal_embeddings=SimpleNamespace(create=create))
+    image = [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]
+
+    embedder.embed("Which plan did we pick?", is_query=True)
+    embedder.embed("document text")
+    embedder.embed(image, is_query=True)
+
+    assert sent == [
+        [{"type": "text", "text": _INSTRUCTION + "Which plan did we pick?"}],
+        [{"type": "text", "text": "document text"}],
+        image,
+    ]
+
+
+@patch("openviking.models.embedder.volcengine_embedders.volcenginesdkarkruntime.Ark")
+def test_embedding_config_passes_volcengine_query_param_unchanged(_mock_ark):
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    config = EmbeddingConfig(
+        dense={
+            "provider": "volcengine",
+            "model": "test",
+            "api_key": "test-key",
+            "dimension": 2,
+            "query_param": _INSTRUCTION,
+        }
+    )
+
+    assert config.get_embedder().query_param == _INSTRUCTION
