@@ -20,6 +20,35 @@ def test_message_estimated_tokens_is_cjk_aware():
     assert estimate_text_tokens("\U0001f600") == 2
 
 
+def test_embedder_estimate_tokens_is_cjk_aware():
+    """EmbedderBase._estimate_tokens must use the shared CJK-aware estimator.
+
+    The embedder previously used a hand-rolled estimate that counted CJK
+    unified ideographs at 1 token/char and treated CJK Extension A, CJK
+    punctuation, fullwidth forms, kana and Hangul as "other" (1/4 token),
+    undercounting Chinese content by up to ~3x in embedding token usage
+    accounting. It must stay consistent with estimate_text_tokens.
+    """
+    from openviking.models.embedder.base import EmbedderBase
+
+    class _MinimalEmbedder(EmbedderBase):
+        def embed(self, content, is_query=False):
+            raise NotImplementedError
+
+    # _estimate_tokens is a pure method; bypass __init__ to avoid provider setup.
+    embedder = _MinimalEmbedder.__new__(_MinimalEmbedder)
+
+    assert embedder._estimate_tokens("\u4f60\u597d\u4e16\u754c") == 6  # 你好世界
+    assert embedder._estimate_tokens("\u3400\u3401") == 3  # CJK Extension A
+    assert embedder._estimate_tokens("\u3001\u3002") == 3  # CJK punctuation
+    assert embedder._estimate_tokens("\uff01\uff02") == 3  # fullwidth forms
+    assert embedder._estimate_tokens("\u3042\u3044") == 3  # kana
+    assert embedder._estimate_tokens("\ud55c\uae00") == 3  # Hangul
+    assert embedder._estimate_tokens("abcd") == 1
+    assert embedder._estimate_tokens("\U0001f600") == 2
+    assert embedder._estimate_tokens("") == 0
+
+
 def test_truncate_text_to_token_budget_preserves_head_and_tail():
     text = "summary-start " + ("填充内容" * 100) + " relevant-tail"
 

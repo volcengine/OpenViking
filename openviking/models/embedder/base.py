@@ -22,6 +22,7 @@ from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     classify_api_error,
 )
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
@@ -517,7 +518,7 @@ class EmbedderBase(ABC):
         self._token_tracker.reset()
 
     def _estimate_tokens(self, text: str) -> int:
-        """Estimate token count from text (1 token ≈ 4 characters for English)
+        """Estimate token count using the shared CJK-aware estimator.
 
         Args:
             text: Input text to estimate tokens for
@@ -525,13 +526,7 @@ class EmbedderBase(ABC):
         Returns:
             Estimated token count
         """
-        if not text:
-            return 0
-        # Approximate: 1 token ≈ 4 characters
-        # For Chinese characters, 1 token ≈ 1-2 characters
-        chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
-        other_chars = len(text) - chinese_chars
-        return max(1, (chinese_chars // 1) + (other_chars // 4))
+        return estimate_text_tokens(text)
 
 
 class DenseEmbedderBase(EmbedderBase):
