@@ -1221,6 +1221,23 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 
 查询扩展需要传入有内容的 `session_id` 并启用意图分析，重写需要传入 `rewrite`。这些模型调用受各自超时限制；失败后回退到未扩展的查询或未重写的结果。
 
+`relation_expansion` 在带 Rerank 的 `search()` 中沿文件 frontmatter 里显式声明的 `related` 关联扩展候选，详见[关联扩展](../concepts/07-retrieval.md#关联扩展默认关闭)。默认关闭；未配置可用的 `rerank` 时不生效。
+
+```json
+{
+  "retrieval": {
+    "relation_expansion": {"enabled": true, "max_seeds": 3, "max_edges": 16, "max_added": 3}
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `relation_expansion.enabled` | bool | 将高排名命中所关联的资源作为额外候选参与评估 | `false` |
+| `relation_expansion.max_seeds` | int (1-20) | 读取其关联的、通过分数阈值的最高排名文件命中数 | `3` |
+| `relation_expansion.max_edges` | int (1-200) | 每次查询在所有种子中最多检查的关联条数 | `16` |
+| `relation_expansion.max_added` | int (1-50) | 每次查询最多加入的关联资源数 | `3` |
+
 ### grep
 
 Grep 引擎配置，用于内容模式搜索。这些设置为服务端配置，不支持请求级别覆盖。
