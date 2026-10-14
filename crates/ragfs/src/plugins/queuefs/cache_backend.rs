@@ -670,6 +670,32 @@ fn cache_error(operation: &str, error: CacheError) -> Error {
 mod tests {
     use super::*;
 
+    fn lifecycle_test_runtime() -> Arc<CacheRuntime> {
+        let provider = Arc::new(
+            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|request| {
+                panic!(
+                    "script execution is outside this lifecycle test's scope: {}",
+                    request.script_id
+                )
+            }),
+        );
+        CacheRuntime::memory_with_provider(provider)
+    }
+
+    #[tokio::test]
+    async fn open_rejects_provider_without_script_support() {
+        let error = CacheQueueStorage::open(CacheRuntime::memory(), "unsupported".to_string())
+            .await
+            .err()
+            .expect("memory provider must be rejected");
+
+        assert!(matches!(
+            error,
+            Error::Internal(message)
+                if message.contains("unsupported cache operation: execute_script")
+        ));
+    }
+
     #[test]
     fn startup_recovery_uses_original_zero_thirty_sixty_second_offsets() {
         assert_eq!(
@@ -688,7 +714,7 @@ mod tests {
 
     #[test]
     fn drop_outside_tokio_runtime_removes_heartbeat() {
-        let runtime = CacheRuntime::memory();
+        let runtime = lifecycle_test_runtime();
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
         let storage = tokio_runtime
             .block_on(CacheQueueStorage::open(
@@ -706,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_removes_heartbeat_before_returning() {
-        let runtime = CacheRuntime::memory();
+        let runtime = lifecycle_test_runtime();
         let storage =
             CacheQueueStorage::open(Arc::clone(&runtime), "async-shutdown-test".to_string())
                 .await
