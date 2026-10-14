@@ -255,11 +255,11 @@ ov -o json config list
 
 ```bash
 # 添加 URL 并等待处理完成
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # 添加本地目录并过滤文件
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"

@@ -322,7 +322,7 @@ ov system consistency viking://resources/my-project
 
 #### 1. API 实现介绍
 
-等待处理队列排空，或在超时后结束。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
+等待处理队列排空。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
 
 **代码入口**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP 路由
@@ -333,9 +333,7 @@ ov system consistency viking://resources/my-project
 
 **参数**
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| timeout | float | 否 | None | 超时时间（秒），None 表示无限等待 |
+无参数。HTTP 请求超时使用客户端配置。
 
 #### 3. 使用示例
 
@@ -348,32 +346,27 @@ POST /api/v1/system/wait
 ```bash
 curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "timeout": 60.0
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **Python SDK**
 
 ```python
 # 等待当前处理队列排空
-status = client.wait_processed(timeout=60.0)
+status = client.wait_processed()
 print(status)  # 检查各队列的 error_count 和 errors
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.waitProcessed(60));
+console.log(await client.waitProcessed());
 ```
 
 **Go SDK**
 
 ```go
-status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(60),
-})
+status, err := client.WaitProcessed(ctx)
 if err != nil {
     return err
 }
@@ -383,7 +376,7 @@ fmt.Println(status)
 **CLI**
 
 ```bash
-ov system wait --timeout 60
+ov system wait
 ```
 
 **响应示例**

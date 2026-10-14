@@ -118,10 +118,6 @@ func queryInt(values url.Values, key string, value int) {
 	values.Set(key, strconv.Itoa(value))
 }
 
-func queryFloat(values url.Values, key string, value float64) {
-	values.Set(key, strconv.FormatFloat(value, 'f', -1, 64))
-}
-
 func normalizeTarget(target any) any {
 	switch v := target.(type) {
 	case nil:

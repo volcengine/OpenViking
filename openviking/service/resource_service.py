@@ -87,7 +87,6 @@ from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
     ConflictError,
-    DeadlineExceededError,
     FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
@@ -842,7 +841,6 @@ class ResourceService:
                         reason=msg.reason,
                         instruction=msg.instruction,
                         defer_post_processing=False,
-                        timeout=msg.timeout,
                         build_index=msg.build_index,
                         summarize=msg.summarize,
                         processing_mode=msg.processing_mode,
@@ -1218,7 +1216,6 @@ class ResourceService:
         create_parent: bool,
         reason: str,
         instruction: str,
-        timeout: Optional[float],
         build_index: bool,
         summarize: bool,
         processing_mode: ProcessingMode,
@@ -1295,7 +1292,6 @@ class ResourceService:
                 lock_handoff=lock_handoff,
                 reason=reason,
                 instruction=instruction,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -1514,7 +1510,6 @@ class ResourceService:
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1549,7 +1544,6 @@ class ResourceService:
             reason=reason,
             instruction=instruction,
             wait=wait,
-            timeout=timeout,
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
@@ -1576,7 +1570,6 @@ class ResourceService:
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1598,7 +1591,6 @@ class ResourceService:
             reason=reason,
             instruction=instruction,
             wait=False,
-            timeout=timeout,
             build_index=build_index,
             summarize=summarize,
             processing_mode=processing_mode,
@@ -1623,7 +1615,6 @@ class ResourceService:
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1674,7 +1665,6 @@ class ResourceService:
             reason: Reason for adding the resource
             instruction: Processing instruction for semantic extraction
             wait: Whether to wait for semantic extraction and vectorization to complete
-            timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
             processing_mode: Post-ingest processing mode for semantic/vector work
@@ -1973,7 +1963,6 @@ class ResourceService:
                 create_parent=target_create_parent,
                 reason=reason,
                 instruction=instruction,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -2000,7 +1989,6 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 defer_post_processing=True,
-                timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
                 processing_mode=processing_mode,
@@ -2025,17 +2013,11 @@ class ResourceService:
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
         task_id = result["task_id"]
-        try:
-            task = await get_task_tracker().wait(
-                task_id,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                timeout=timeout,
-            )
-        except TimeoutError as exc:
-            raise DeadlineExceededError(
-                "waiting for resource import", timeout, task_id=task_id
-            ) from exc
+        task = await get_task_tracker().wait(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
 
         if task.status == TaskStatus.COMPLETED:
             completed = dict(task.result)
@@ -2063,7 +2045,6 @@ class ResourceService:
         parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
-        timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -2194,7 +2175,6 @@ class ResourceService:
                     lock_handoff=lock_handoff,
                     reason=reason,
                     instruction=instruction,
-                    timeout=timeout,
                     build_index=build_index,
                     summarize=summarize,
                     processing_mode=processing_mode,
@@ -2259,7 +2239,6 @@ class ResourceService:
         ctx: RequestContext,
         reason: str,
         source_name: Optional[str],
-        timeout: Optional[float] = None,
     ) -> None:
         if not self._resource_memory_link_service:
             return
@@ -2274,7 +2253,6 @@ class ResourceService:
                 resource_uri=root_uri,
                 reason=reason,
                 source_name=source_name,
-                timeout=timeout,
             )
             result["memory_linking"] = link_result
         except Exception as exc:
@@ -2437,7 +2415,6 @@ class ResourceService:
         data: Any,
         ctx: RequestContext,
         wait: bool = False,
-        timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
@@ -2452,7 +2429,6 @@ class ResourceService:
         Args:
             data: Skill data (directory path, file path, string, or dict)
             wait: Whether to wait for vectorization to complete
-            timeout: Wait timeout in seconds
             target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
 
         Returns:
@@ -2540,20 +2516,12 @@ class ResourceService:
 
             if wait:
                 wait_start = time.perf_counter()
-                try:
-                    if telemetry_id:
-                        await request_wait_tracker.wait_for_request(telemetry_id, timeout=timeout)
-                        status = request_wait_tracker.build_queue_status(telemetry_id)
-                    else:
-                        qm = get_queue_manager()
-                        status = build_queue_status_payload(await qm.wait_complete(timeout=timeout))
-                except TimeoutError as exc:
-                    get_current_telemetry().set_error(
-                        "resource_service.wait_complete",
-                        "DEADLINE_EXCEEDED",
-                        str(exc),
-                    )
-                    raise DeadlineExceededError("queue processing", timeout) from exc
+                if telemetry_id:
+                    await request_wait_tracker.wait_for_request(telemetry_id)
+                    status = request_wait_tracker.build_queue_status(telemetry_id)
+                else:
+                    qm = get_queue_manager()
+                    status = build_queue_status_payload(await qm.wait_complete())
                 get_current_telemetry().set(
                     "queue.wait.duration_ms",
                     round((time.perf_counter() - wait_start) * 1000, 3),
@@ -2582,7 +2550,7 @@ class ResourceService:
         except BaseException as exc:
             if task is not None and not monitor_started:
                 if processing_started and not request_wait_tracker.is_complete(telemetry_id):
-                    # A standalone add retains its original timeout behavior.
+                    # A cancelled standalone request leaves processing in the background.
                     # An update's caller separately cancels before restoring.
                     monitor_started = True
                     asyncio.create_task(
@@ -2651,20 +2619,14 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def wait_processed(self) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
-
-        Args:
-            timeout: Wait timeout in seconds
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
-        try:
-            status = await qm.wait_complete(timeout=timeout)
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+        status = await qm.wait_complete()
         return {
             name: {
                 "processed": s.processed,

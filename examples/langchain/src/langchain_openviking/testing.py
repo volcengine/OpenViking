@@ -154,7 +154,6 @@ class InMemoryOpenVikingClient:
         content: str,
         mode: str = "replace",
         wait: bool = False,
-        timeout: float | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         if mode == "create" and uri in self.records:

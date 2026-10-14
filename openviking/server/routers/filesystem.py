@@ -300,7 +300,6 @@ async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
-    timeout: Optional[float] = Query(None, description="Wait timeout in seconds"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
@@ -308,7 +307,7 @@ async def rm(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait, timeout=timeout)
+        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:

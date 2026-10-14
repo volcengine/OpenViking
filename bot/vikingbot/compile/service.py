@@ -910,7 +910,6 @@ class BotCompileService:
                         root_uri=request.to,
                         operations=rendered.operations,
                         wait=False,
-                        timeout=300.0,
                     )
                 except OpenVikingError as exc:
                     if exc.code == "CONFLICT":
@@ -1090,14 +1089,13 @@ class BotCompileService:
             result = {"created": [], "updated": [], "unchanged": []}
             if skill_target:
                 result = await self._write_skill_bundle(
-                    client=client, target_uri=request.to, rendered=rendered, timeout=300.0
+                    client=client, target_uri=request.to, rendered=rendered
                 )
             elif rendered.operations:
                 result = await client.batch_write(
                     root_uri=request.to,
                     operations=rendered.operations,
                     wait=False,
-                    timeout=300.0,
                     skip_conflicts=True,
                 )
             conflicts = result.get("conflicts", [])
@@ -1280,7 +1278,6 @@ class BotCompileService:
         client: VikingClient,
         target_uri: str,
         rendered: RenderedBundle,
-        timeout: float,
     ) -> dict[str, list[str]]:
         """Publish one validated package, retaining untouched existing attachments.
 
@@ -1362,11 +1359,11 @@ class BotCompileService:
                 )
             if exists:
                 published = await client.update_skill(
-                    skill_name, str(skill_dir), target_uri=target_uri, wait=True, timeout=timeout
+                    skill_name, str(skill_dir), target_uri=target_uri, wait=True
                 )
             else:
                 published = await client.add_skill(
-                    str(skill_dir), target_uri=target_uri, wait=True, timeout=timeout
+                    str(skill_dir), target_uri=target_uri, wait=True
                 )
             result["updated" if exists else "created"].append(
                 str(published.get("root_uri") or published.get("uri") or root_uri)

@@ -45,7 +45,6 @@ class WriteContentRequest(BaseModel):
     content: str
     mode: str = "replace"
     wait: bool = False
-    timeout: float | None = None
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: list[str] | None = None
@@ -79,7 +78,6 @@ class BatchWriteRequest(BaseModel):
     root_uri: str
     operations: list[BatchWriteOperation]
     wait: bool = True
-    timeout: float | None = None
     telemetry: TelemetryRequest = False
     # Preserve conflicting target files and return their URI/reason while writing other files.
     skip_conflicts: bool = False
@@ -253,7 +251,6 @@ async def write(
             ctx=_ctx,
             mode=request.mode,
             wait=request.wait,
-            timeout=request.timeout,
             processing_mode=request.processing_mode,
             tags=request.tags,
             tag_mode=request.tag_mode,
@@ -288,7 +285,6 @@ async def batch_write(
             operations=operations,
             ctx=_ctx,
             wait=request.wait,
-            timeout=request.timeout,
             skip_conflicts=request.skip_conflicts,
             processing_mode=request.processing_mode,
         ),

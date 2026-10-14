@@ -74,7 +74,6 @@ export interface RequestOptions {
 /** Options shared by asynchronous processing APIs. */
 export interface WaitOptions {
   wait?: boolean;
-  timeout?: number;
   telemetry?: unknown;
 }
 /** Writable direct grants and inheritance mode. */

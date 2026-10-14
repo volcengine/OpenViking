@@ -25,7 +25,7 @@ class _FakeRequestWaitTracker:
     def register_request(self, telemetry_id: str) -> None:
         self.registered_requests.append(telemetry_id)
 
-    async def wait_for_request(self, telemetry_id: str, timeout, poll_interval=None):
+    async def wait_for_request(self, telemetry_id: str, timeout=None, poll_interval=None):
         del poll_interval
         self.wait_calls.append((telemetry_id, timeout))
 
@@ -112,12 +112,11 @@ async def test_add_skill_wait_uses_request_tracker(service, monkeypatch):
             data={"name": "demo", "content": "# Demo"},
             ctx=ctx,
             wait=True,
-            timeout=9.0,
         )
 
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 9.0)]
+    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
 
@@ -153,13 +152,12 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
             data={"name": "demo", "content": "# Demo"},
             ctx=ctx,
             wait=True,
-            timeout=9.0,
         )
 
     assert result["root_uri"] == "viking://user/default/skills/demo"
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 9.0)]
+    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
 
@@ -190,8 +188,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
         del kwargs
         return None
 
-    async def _explode_wait_for_queues(*, timeout):
-        del timeout
+    async def _explode_wait_for_queues():
         raise AssertionError("global queue wait should not be used")
 
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
@@ -203,12 +200,11 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
             content="updated",
             ctx=ctx,
             wait=True,
-            timeout=5.0,
         )
 
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
+    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
     assert result["semantic_status"] == "complete"
@@ -241,8 +237,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
         del kwargs
         return None
 
-    async def _explode_wait_for_queues(*, timeout):
-        del timeout
+    async def _explode_wait_for_queues():
         raise AssertionError("global queue wait should not be used")
 
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
@@ -254,12 +249,11 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
             content="updated",
             ctx=ctx,
             wait=True,
-            timeout=5.0,
         )
 
     assert result["queue_status"] == tracker.queue_status
     assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
+    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
     assert result["semantic_status"] == "complete"

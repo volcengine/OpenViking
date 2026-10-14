@@ -85,7 +85,6 @@ from openviking.utils.summarizer import FileRefreshRequest, Summarizer
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     ConflictError,
-    DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
@@ -206,7 +205,6 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         mode: str = "replace",
         wait: bool = False,
-        timeout: Optional[float] = None,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
@@ -252,7 +250,6 @@ class ContentWriteCoordinator:
                 mode=mode,
                 response_mode=response_mode,
                 wait=wait,
-                timeout=timeout,
                 ctx=ctx,
                 telemetry_id=telemetry_id,
                 ingest_options=ingest_options,
@@ -266,7 +263,6 @@ class ContentWriteCoordinator:
             response_mode=response_mode,
             context_type=context_type,
             wait=wait,
-            timeout=timeout,
             ctx=ctx,
             telemetry_id=telemetry_id,
             processing_mode=processing_mode,
@@ -280,7 +276,6 @@ class ContentWriteCoordinator:
         operations: list[dict[str, Any]],
         ctx: RequestContext,
         wait: bool = True,
-        timeout: Optional[float] = None,
         skip_conflicts: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Dict[str, Any]:
@@ -517,7 +512,6 @@ class ContentWriteCoordinator:
                             # wait after both legacy special paths and RNFV
                             # plans have enqueued their work.
                             wait=False,
-                            timeout=timeout,
                             telemetry_id=telemetry_id,
                             file_md5s=file_md5s,
                             file_abstracts=file_abstracts,
@@ -557,8 +551,6 @@ class ContentWriteCoordinator:
                         )
                         queue_status = None
                     else:
-                        if isinstance(exc, DeadlineExceededError):
-                            raise
                         cause = str(exc).strip() or type(exc).__name__
                         raise OpenVikingError(
                             "Content is already at the requested state, but semantic/index "
@@ -594,7 +586,7 @@ class ContentWriteCoordinator:
                     await self._viking_fs._async_agfs.pathlock_release(lease)
                 lock_settled = True
                 queue_status = (
-                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                    await self._wait_for_request(telemetry_id=telemetry_id)
                     if wait and request_registered
                     else refresh_outcome.queue_status
                     if refresh_outcome is not None
@@ -781,7 +773,6 @@ class ContentWriteCoordinator:
         refresh_kinds: dict[str, str],
         ctx: RequestContext,
         wait: bool,
-        timeout: Optional[float],
         telemetry_id: str,
         file_md5s: dict[str, str] | None = None,
         file_abstracts: dict[str, str] | None = None,
@@ -858,7 +849,6 @@ class ContentWriteCoordinator:
             )
         queue_status = await self._wait_for_request(
             telemetry_id=telemetry_id,
-            timeout=timeout,
         )
         self._raise_refresh_errors(queue_status)
         return _BatchRefreshOutcome(
@@ -1460,7 +1450,6 @@ class ContentWriteCoordinator:
         response_mode: str,
         context_type: str,
         wait: bool,
-        timeout: Optional[float],
         ctx: RequestContext,
         telemetry_id: str,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -1478,7 +1467,6 @@ class ContentWriteCoordinator:
                 response_mode=response_mode,
                 context_type=context_type,
                 wait=wait,
-                timeout=timeout,
                 ctx=ctx,
                 telemetry_id=telemetry_id,
                 ingest_options=ingest_options,
@@ -1586,7 +1574,7 @@ class ContentWriteCoordinator:
             lock_settled = True
 
             queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                await self._wait_for_request(telemetry_id=telemetry_id)
                 if wait
                 else None
             )
@@ -1702,7 +1690,6 @@ class ContentWriteCoordinator:
         response_mode: str,
         context_type: str,
         wait: bool,
-        timeout: Optional[float],
         ctx: RequestContext,
         telemetry_id: str,
         ingest_options: IngestOptions | None = None,
@@ -1736,7 +1723,7 @@ class ContentWriteCoordinator:
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
             queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                await self._wait_for_request(telemetry_id=telemetry_id)
                 if wait
                 else None
             )
@@ -2012,27 +1999,20 @@ class ContentWriteCoordinator:
         except AbstractOverviewFormatError as exc:
             raise InvalidArgumentError(str(exc)) from exc
 
-    async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
+    async def _wait_for_queues(self) -> Dict[str, Any]:
         queue_manager = get_queue_manager()
-        try:
-            status = await queue_manager.wait_complete(timeout=timeout)
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+        status = await queue_manager.wait_complete()
         return build_queue_status_payload(status)
 
     async def _wait_for_request(
         self,
         *,
         telemetry_id: str,
-        timeout: Optional[float],
     ) -> Dict[str, Any]:
         if not telemetry_id:
-            return await self._wait_for_queues(timeout=timeout)
+            return await self._wait_for_queues()
         tracker = get_request_wait_tracker()
-        try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+        await tracker.wait_for_request(telemetry_id)
         return tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
@@ -2044,7 +2024,6 @@ class ContentWriteCoordinator:
         mode: str,
         response_mode: str,
         wait: bool,
-        timeout: Optional[float],
         ctx: RequestContext,
         telemetry_id: str,
         ingest_options: IngestOptions | None = None,
@@ -2097,9 +2076,9 @@ class ContentWriteCoordinator:
             queue_status = None
             if embedding_requested and wait:
                 queue_status = (
-                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                    await self._wait_for_request(telemetry_id=telemetry_id)
                     if telemetry_id
-                    else await self._wait_for_queues(timeout=timeout)
+                    else await self._wait_for_queues()
                 )
             vector_status = self._queue_work_status(
                 requested=embedding_requested,

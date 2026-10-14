@@ -161,36 +161,21 @@ async def test_add_resource_success(
     assert body["result"]["task_id"]
 
 
-@pytest.mark.parametrize("timeout", [None, 0.0])
 async def test_add_resource_with_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
-    timeout,
 ):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": sample_markdown_file.name,
-            "reason": "test resource",
-            "wait": True,
-            "timeout": timeout,
-        },
-    )
-    if timeout == 0.0:
-        assert resp.status_code == 504
-        error = resp.json()["error"]
-        assert error["code"] == "DEADLINE_EXCEEDED"
-        task_id = error["details"]["task_id"]
-        assert error["details"]["timeout"] == timeout
-        assert "Waiting for resource import timed out" in error["message"]
-        assert "does not cancel or fail the background task" in error["message"]
-        assert f"ov task status {task_id}" in error["message"]
-        task = await _wait_task_terminal(client, task_id)
-        assert task["status"] == "completed"
-        assert "root_uri" in task["result"]
-        return
+    payload = {
+        "temp_file_id": sample_markdown_file.name,
+        "reason": "test resource",
+        "wait": True,
+    }
+    rejected = await client.post("/api/v1/resources", json={**payload, "timeout": 1.0})
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
 
+    resp = await client.post("/api/v1/resources", json=payload)
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -829,7 +814,7 @@ async def test_add_resource_non_wait_auto_name_resolves_unique_root_uri(
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 30.0},
+        json={},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -847,7 +832,7 @@ async def test_wait_processed_after_add(
     )
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 60.0},
+        json={},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"

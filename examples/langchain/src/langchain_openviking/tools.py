@@ -406,10 +406,6 @@ def create_openviking_tools(
             bool,
             Field(description="Whether to wait for resource ingestion to finish before returning."),
         ] = False,
-        timeout: Annotated[
-            float | None,
-            Field(description="Optional wait timeout in seconds for resource ingestion."),
-        ] = None,
     ) -> str:
         """Import an explicit resource into OpenViking.
 
@@ -432,7 +428,6 @@ def create_openviking_tools(
                 reason=reason,
                 instruction=instruction,
                 wait=wait,
-                timeout=timeout,
             )
         except Exception as exc:
             if _is_probably_local_path(path) and "direct host filesystem paths" in str(exc):
@@ -458,10 +453,6 @@ def create_openviking_tools(
             bool,
             Field(description="Whether to wait for skill registration to finish before returning."),
         ] = False,
-        timeout: Annotated[
-            float | None,
-            Field(description="Optional wait timeout in seconds for skill registration."),
-        ] = None,
     ) -> str:
         """Register a reusable OpenViking skill for trusted admin workflows."""
 
@@ -470,7 +461,6 @@ def create_openviking_tools(
             "add_skill",
             data=data,
             wait=wait,
-            timeout=timeout,
         )
         return stringify(result, max_chars=8_000)
 

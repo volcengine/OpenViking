@@ -341,7 +341,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                     ctx=ctx,
                     reason=msg.reason,
                     source_name=msg.source_name,
-                    timeout=msg.timeout,
                 )
                 await self._record_watch_execution(msg, "completed")
                 await tracker.complete(

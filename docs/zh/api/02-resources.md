@@ -83,7 +83,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 OpenViking 先检查来源和请求参数是否满足 Connector 接入条件。Connector 在标准流水线之外完成导入。其余请求中，[`parser_api`](../guides/01-configuration.md#parser-api) 选中的格式交给外部 Understanding 解析，剩余格式使用内置 Parser。外部解析只替换 Parse 阶段，结果仍进入 TreeBuilder 和后续存储、语义处理。已经由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析。
 
-Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；等待超时不代表导入已取消。
+Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；HTTP 请求超时不代表导入已取消。
 
 #### 阶段 1：源解析 (Parse)
 - 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
@@ -186,8 +186,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | source_name | string | 否 | None | 来源显示名；上传文件省略时使用原始文件名 |
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
-| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
+| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回；不支持单独的 `timeout` 参数，HTTP 超时使用客户端配置 |
 | strict | bool | 否 | False | 是否使用严格模式 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |

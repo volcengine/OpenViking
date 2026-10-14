@@ -63,14 +63,10 @@ export const getSystemStatus = <ThrowOnError extends boolean = false>(options?: 
  *
  * Wait for all processing to complete.
  */
-export const postSystemWait = <ThrowOnError extends boolean = false>(options: Options<PostSystemWaitData, ThrowOnError>) => (options.client ?? client).post<PostSystemWaitResponses, PostSystemWaitErrors, ThrowOnError>({
+export const postSystemWait = <ThrowOnError extends boolean = false>(options?: Options<PostSystemWaitData, ThrowOnError>) => (options?.client ?? client).post<PostSystemWaitResponses, PostSystemWaitErrors, ThrowOnError>({
     responseType: 'json',
     url: '/api/v1/system/wait',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
+    ...options
 });
 
 /**

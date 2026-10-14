@@ -633,13 +633,11 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.add_skill(
             path,
             options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def update_skill(
@@ -649,14 +647,12 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.update_skill(
             skill_name,
             path,
             options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def batch_write(
@@ -665,7 +661,6 @@ class VikingClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
         skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
@@ -673,7 +668,6 @@ class VikingClient:
             root_uri=root_uri,
             operations=operations,
             wait=wait,
-            timeout=timeout,
             options={"skip_conflicts": skip_conflicts},
         )
 

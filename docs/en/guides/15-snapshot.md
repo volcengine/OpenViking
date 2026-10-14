@@ -177,7 +177,7 @@ client.write(
     content="# Guide\n\nv1 content\n",
     mode="create",
 )
-print(client.wait_processed(timeout=120))
+print(client.wait_processed())
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 if not v1.get("commit_oid"):
     raise RuntimeError(f"No snapshot created: {v1}")
@@ -189,7 +189,7 @@ client.write(
     content="# Guide\n\nv2 content\n",
     mode="replace",
 )
-print(client.wait_processed(timeout=120))
+print(client.wait_processed())
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. Walk history

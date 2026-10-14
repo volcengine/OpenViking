@@ -875,7 +875,7 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("source");
     expect(props).toHaveProperty("data");
     expect(props).toHaveProperty("wait");
-    expect(props).toHaveProperty("timeout");
+    expect(props).not.toHaveProperty("timeout");
     expect(props).not.toHaveProperty("to");
     expect(props).not.toHaveProperty("parent");
   });
@@ -1386,10 +1386,9 @@ describe("OpenViking import command parsing", () => {
   });
 
   it("parses add-skill flags", () => {
-    expect(parseAddSkillCommandArgs("./skills/demo --wait --timeout=30")).toMatchObject({
+    expect(parseAddSkillCommandArgs("./skills/demo --wait")).toMatchObject({
       source: "./skills/demo",
       wait: true,
-      timeout: 30,
     });
   });
 
@@ -2290,7 +2289,6 @@ describe("Plugin registration", () => {
     const result = await tool.execute("tc-add-skill", {
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("Imported OpenViking skill");
@@ -2300,7 +2298,6 @@ describe("Plugin registration", () => {
     expect(body).toMatchObject({
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     });
   });
 

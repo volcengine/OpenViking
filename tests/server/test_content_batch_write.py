@@ -1008,7 +1008,6 @@ async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
         },
         ctx=ctx,
         wait=False,
-        timeout=None,
         telemetry_id="",
     )
     assert len(semantic_calls) == 1
@@ -1060,7 +1059,7 @@ async def test_batch_write_api_upserts_files(client_with_resource):
 
     waited = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 30.0},
+        json={},
     )
     assert waited.status_code == 200
 

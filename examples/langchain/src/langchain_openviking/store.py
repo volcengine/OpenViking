@@ -81,7 +81,6 @@ class OpenVikingStore(BaseStore):
         root_uri: str = "viking://~/memories/langgraph_store",
         index: bool | list[str] | None = None,
         wait: bool = True,
-        timeout: float | None = None,
         search_fetch_limit: int = 50,
         auto_initialize: bool = True,
     ):
@@ -101,7 +100,6 @@ class OpenVikingStore(BaseStore):
         self.root_uri: str = root_uri.rstrip("/")
         self.index: bool | list[str] | None = index
         self.wait: bool = wait
-        self.timeout: float | None = timeout
         self.search_fetch_limit: int = search_fetch_limit
         self._client_cache: Any = None
 
@@ -340,7 +338,6 @@ class OpenVikingStore(BaseStore):
             content=content,
             mode="create",
             wait=self.wait,
-            timeout=self.timeout,
         )
 
     def _write_replace(self, uri: str, content: str) -> None:
@@ -351,7 +348,6 @@ class OpenVikingStore(BaseStore):
             content=content,
             mode="replace",
             wait=self.wait,
-            timeout=self.timeout,
         )
 
     def _remove(self, uri: str) -> None:

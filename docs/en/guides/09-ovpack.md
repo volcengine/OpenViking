@@ -213,7 +213,7 @@ def migrate_project():
             vector_mode="auto",
         )
         print(imported_uri)
-        print(client.wait_processed(timeout=120))
+        print(client.wait_processed())
         print(client.check_consistency(uri=imported_uri))
     finally:
         client.close()

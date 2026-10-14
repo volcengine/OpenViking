@@ -331,7 +331,7 @@ ov system consistency viking://resources/my-project
 
 #### 1. API Implementation Overview
 
-Wait until the processing queues are drained, or until the timeout. This check is not scoped to the caller’s last request and does not cover every asynchronous API. Check the returned `error_count` and `errors`; empty queues do not prove that every operation succeeded. To confirm one import or commit, poll its [task ID](17-tasks.md) instead.
+Wait until the processing queues are drained. This check is not scoped to the caller’s last request and does not cover every asynchronous API. Check the returned `error_count` and `errors`; empty queues do not prove that every operation succeeded. To confirm one import or commit, poll its [task ID](17-tasks.md) instead.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP route
@@ -342,9 +342,7 @@ Wait until the processing queues are drained, or until the timeout. This check i
 
 **Parameters**
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| timeout | float | No | None | Timeout in seconds. None means wait indefinitely |
+None. HTTP requests use the client timeout configuration.
 
 #### 3. Usage Examples
 
@@ -357,32 +355,27 @@ POST /api/v1/system/wait
 ```bash
 curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "timeout": 60.0
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **Python SDK**
 
 ```python
 # Wait for the current processing queues to drain
-status = client.wait_processed(timeout=60.0)
+status = client.wait_processed()
 print(status)  # Inspect each queue’s error_count and errors
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.waitProcessed(60));
+console.log(await client.waitProcessed());
 ```
 
 **Go SDK**
 
 ```go
-status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(60),
-})
+status, err := client.WaitProcessed(ctx)
 if err != nil {
     return err
 }
@@ -392,7 +385,7 @@ fmt.Println(status)
 **CLI**
 
 ```bash
-ov system wait --timeout 60
+ov system wait
 ```
 
 **Response Example**

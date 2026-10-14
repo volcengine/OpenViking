@@ -557,7 +557,6 @@ ADD_RESOURCE_SCHEMA = _tool_schema(
         "parent": _str("Optional parent viking:// URI. Cannot be used with to."),
         "instruction": _str("Optional processing instruction for semantic extraction."),
         "wait": {"type": "boolean", "description": "Whether to wait for processing to complete."},
-        "timeout": {"type": "number", "description": "Timeout in seconds when wait is true."},
     },
     ["url"],
 )
@@ -3364,7 +3363,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if args.get("to") and args.get("parent"):
             return tool_error("Cannot specify both 'to' and 'parent'")
         payload: Dict[str, Any] = {
-            key: args[key] for key in ("reason", "to", "parent", "instruction", "wait", "timeout") if key in args and args[key] not in {None, ""}
+            key: args[key] for key in ("reason", "to", "parent", "instruction", "wait") if key in args and args[key] not in {None, ""}
         }
 
         parsed_url = urlparse(url)

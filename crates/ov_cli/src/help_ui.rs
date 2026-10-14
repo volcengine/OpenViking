@@ -908,8 +908,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         path: &["wait"],
         purpose: "Wait for queued async processing to complete.",
         examples: &[HelpItem {
-            label: "ov wait --timeout 120",
-            description: "Wait up to two minutes.",
+            label: "ov wait",
+            description: "Wait for queued processing to complete.",
         }],
         next_steps: &[
             HelpItem {
@@ -2967,22 +2967,19 @@ mod tests {
     }
 
     #[test]
-    fn curated_help_lists_timeout_for_waiting_commands() {
+    fn curated_help_omits_timeout_for_waiting_commands() {
         for args in [
             ["ov", "add-resource", "--help"],
             ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
+            ["ov", "wait", "--help"],
         ] {
             let rendered = strip_ansi(
                 &render_command_help_request(&os_args(&args)).expect("help should render"),
             );
             assert!(
-                rendered.contains("--timeout <seconds>"),
-                "missing timeout option in:\n{rendered}"
-            );
-            assert!(
-                rendered.contains("seconds"),
-                "missing timeout description in:\n{rendered}"
+                !rendered.contains("--timeout"),
+                "unexpected timeout option in:\n{rendered}"
             );
         }
     }

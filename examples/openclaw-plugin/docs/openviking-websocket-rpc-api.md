@@ -258,8 +258,7 @@ Recall semantic memories and resources. Current semantic recall target types are
     "sessionKey": "main",
     "args": {
       "source": "/absolute/path/to/my-skill",
-      "wait": true,
-      "timeout": 120
+      "wait": true
     }
   }
 }
@@ -290,7 +289,6 @@ Recall semantic memories and resources. Current semantic recall target types are
 | `source` | string | 二选一 | 本地 `SKILL.md` 文件或 skill 目录 |
 | `data` | any | 二选一 | 原始 `SKILL.md` 内容或 MCP tool dict |
 | `wait` | boolean | 否 | 是否等待服务端处理完成 |
-| `timeout` | number | 否 | `wait=true` 时的超时时间，单位秒 |
 
 ### `add_resource`
 
@@ -311,8 +309,7 @@ Recall semantic memories and resources. Current semantic recall target types are
       "parent": "viking://resources/project-docs",
       "reason": "导入项目文档",
       "instruction": "保留 API 示例和配置说明",
-      "wait": true,
-      "timeout": 300
+      "wait": true
     }
   }
 }
@@ -328,7 +325,6 @@ Recall semantic memories and resources. Current semantic recall target types are
 | `reason` | string | 否 | 导入原因或说明 |
 | `instruction` | string | 否 | 服务端处理指令 |
 | `wait` | boolean | 否 | 是否等待服务端处理完成 |
-| `timeout` | number | 否 | `wait=true` 时的超时时间，单位秒 |
 
 ### `ov_archive_search`
 

@@ -7,8 +7,6 @@ import asyncio
 import threading
 import zipfile
 
-import pytest
-
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import get_task_context
 from openviking.storage.queuefs import get_queue_manager
@@ -60,13 +58,12 @@ async def _indexed_record(client, uri, level):
     ]
 
 
-@pytest.mark.parametrize("cancel_mode", ["timeout", "task"])
 async def test_update_cancellation_restores_package_and_index(
-    client, tmp_path, monkeypatch, cancel_mode
+    client, tmp_path, monkeypatch
 ):
     from openviking.storage.queuefs import semantic_executor
 
-    name = "timeout-package-rollback"
+    name = "cancelled-package-rollback"
     old_upload = await _upload_package(
         client,
         tmp_path,
@@ -138,7 +135,6 @@ async def test_update_cancellation_restores_package_and_index(
             json={
                 "temp_file_id": new_upload,
                 "wait": True,
-                "timeout": 2 if cancel_mode == "timeout" else 10,
             },
         )
     )
@@ -147,16 +143,14 @@ async def test_update_cancellation_restores_package_and_index(
         async with asyncio.timeout(1):
             while not await _indexed_record(client, f"{root}/references/000-fast.md", 2):
                 await asyncio.sleep(0.01)
-        if cancel_mode == "task":
-            assert len(task_owners) == 1
-            owner = next(iter(task_owners.values()))
-            await get_task_tracker().cancel(
-                owner.task_id, account_id=owner.account_id, user_id=owner.user_id
-            )
+        assert len(task_owners) == 1
+        owner = next(iter(task_owners.values()))
+        await get_task_tracker().cancel(
+            owner.task_id, account_id=owner.account_id, user_id=owner.user_id
+        )
         response = await asyncio.wait_for(asyncio.shield(updating), timeout=5)
-        expected_error = "DEADLINE_EXCEEDED" if cancel_mode == "timeout" else "PROCESSING_ERROR"
         assert response.status_code >= 400, response.text
-        assert response.json()["error"]["code"] == expected_error
+        assert response.json()["error"]["code"] == "PROCESSING_ERROR"
         assert cancelled == started
         assert not finished, "Rollback must not wait for blocked summaries to finish normally"
         assert len(started) < len(files), "Pending summaries should be skipped on cancellation"

@@ -8,12 +8,11 @@ use serde_json::json;
 
 pub async fn wait(
     client: &HttpClient,
-    timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let response: serde_json::Value = client
-        .post("/api/v1/system/wait", &json!({ "timeout": timeout }))
+        .post("/api/v1/system/wait", &json!({}))
         .await?;
     output_success(&response, output_format, compact);
     Ok(())

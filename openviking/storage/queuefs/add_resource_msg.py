@@ -34,7 +34,6 @@ class AddResourceMsg:
     bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
-    timeout: Optional[float] = None
     build_index: bool = True
     summarize: bool = False
     strict: bool = False
@@ -181,7 +180,6 @@ class AddResourceMsg:
             else None,
             reason=str(data.get("reason", "")),
             instruction=str(data.get("instruction", "")),
-            timeout=float(data["timeout"]) if data.get("timeout") is not None else None,
             build_index=bool(data.get("build_index", True)),
             summarize=bool(data.get("summarize", False)),
             strict=bool(data.get("strict", False)),

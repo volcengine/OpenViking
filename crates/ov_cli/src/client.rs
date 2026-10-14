@@ -386,13 +386,12 @@ impl HttpClient {
         content: &str,
         mode: &str,
         wait: bool,
-        timeout: Option<f64>,
         processing_mode: &str,
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
     ) -> Result<serde_json::Value> {
-        let mut body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
+        let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
@@ -463,7 +462,6 @@ impl HttpClient {
         content: &str,
         mode: &str,
         wait: bool,
-        timeout: Option<f64>,
         processing_mode: &str,
     ) -> Value {
         let mut body = serde_json::json!({
@@ -471,7 +469,6 @@ impl HttpClient {
             "content": content,
             "mode": mode,
             "wait": wait,
-            "timeout": timeout,
             "processing_mode": processing_mode,
         });
         compact_request_body(&mut body);
@@ -683,16 +680,12 @@ impl HttpClient {
         uri: &str,
         recursive: bool,
         wait: bool,
-        timeout: Option<f64>,
     ) -> Result<serde_json::Value> {
-        let mut params = vec![
+        let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
             ("wait".to_string(), wait.to_string()),
         ];
-        if let Some(timeout) = timeout {
-            params.push(("timeout".to_string(), timeout.to_string()));
-        }
         self.delete("/api/v1/fs", &params).await
     }
 
@@ -870,7 +863,6 @@ impl HttpClient {
         reason: &str,
         instruction: &str,
         wait: bool,
-        timeout: Option<f64>,
         strict: bool,
         ignore_dirs: Option<String>,
         include: Option<String>,
@@ -942,7 +934,6 @@ impl HttpClient {
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
-                    "timeout": timeout,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -978,7 +969,6 @@ impl HttpClient {
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
-                    "timeout": timeout,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -1002,7 +992,6 @@ impl HttpClient {
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
-                    "timeout": timeout,
                     "strict": strict,
                     "ignore_dirs": ignore_dirs,
                     "include": include,
@@ -1024,7 +1013,6 @@ impl HttpClient {
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,
-                "timeout": timeout,
                 "strict": strict,
                 "ignore_dirs": ignore_dirs,
                 "include": include,
@@ -1208,7 +1196,6 @@ impl HttpClient {
         name: &str,
         data: &str,
         wait: bool,
-        timeout: Option<f64>,
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
@@ -1238,7 +1225,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -1255,7 +1241,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "temp_file_id": temp_file_id,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -1266,7 +1251,6 @@ impl HttpClient {
                 let mut body = serde_json::json!({
                     "data": data,
                     "wait": wait,
-                    "timeout": timeout,
                 });
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
@@ -1278,7 +1262,6 @@ impl HttpClient {
             let mut body = serde_json::json!({
                 "data": data,
                 "wait": wait,
-                "timeout": timeout,
             });
             if let Some(source_metadata) = source_metadata {
                 body["source_metadata"] = source_metadata;
@@ -2066,7 +2049,6 @@ mod tests {
                 "",
                 "",
                 false,
-                None,
                 false,
                 None,
                 None,
@@ -2103,7 +2085,6 @@ mod tests {
                 "",
                 "",
                 false,
-                None,
                 false,
                 None,
                 None,
@@ -2266,7 +2247,6 @@ mod tests {
             "updated",
             "replace",
             true,
-            Some(3.0),
             "semantic_and_vectors",
         );
 
@@ -2277,7 +2257,6 @@ mod tests {
                 "content": "updated",
                 "mode": "replace",
                 "wait": true,
-                "timeout": 3.0,
             })
         );
         assert!(body.get("regenerate_semantics").is_none());
@@ -2291,7 +2270,6 @@ mod tests {
             "updated",
             "replace",
             true,
-            None,
             "semantic_and_vectors",
         );
 
@@ -2305,7 +2283,6 @@ mod tests {
             "updated",
             "replace",
             true,
-            None,
             "vectors_only",
         );
 

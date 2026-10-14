@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -202,12 +200,6 @@ async def system_status(
     )
 
 
-class WaitRequest(BaseModel):
-    """Request model for wait."""
-
-    timeout: Optional[float] = None
-
-
 class ConsistencyRequest(BaseModel):
     """Request model for filesystem/vector-index consistency checks."""
 
@@ -216,12 +208,11 @@ class ConsistencyRequest(BaseModel):
 
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
-    request: WaitRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Wait for all processing to complete."""
     service = get_service()
-    result = await service.resources.wait_processed(timeout=request.timeout)
+    result = await service.resources.wait_processed()
     return Response(status="ok", result=result)
 
 

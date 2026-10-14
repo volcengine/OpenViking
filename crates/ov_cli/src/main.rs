@@ -433,14 +433,6 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Request timeout in seconds. Used with --wait and by Manifest private Git imports
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
         /// Enable strict mode for directory scanning (fail if any unsupported files found)
         #[arg(
             long = "strict",
@@ -733,14 +725,6 @@ enum Commands {
         /// Wait until semantic refresh is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Wait timeout in seconds (only used with --wait)
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
     },
     /// [Data] Copy a file or directory
     Cp {
@@ -847,14 +831,6 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Optional wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
@@ -1311,16 +1287,7 @@ enum Commands {
 
     // --- Status & Observability ---
     /// [Status] Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// [Status] Track async resource processing tasks
     Task {
         #[command(subcommand)]
@@ -1569,11 +1536,7 @@ pub(crate) enum SnapshotCmd {
 #[derive(Subcommand)]
 enum SystemCommands {
     /// Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(long, value_parser = config::parse_positive_timeout, value_name = "seconds")]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// Show component status
     Status,
     /// Quick health check
@@ -3340,7 +3303,6 @@ async fn main() {
             reason,
             instruction,
             wait,
-            timeout,
             tags,
             tag_mode,
             acl,
@@ -3373,7 +3335,6 @@ async fn main() {
                                 processing_mode,
                                 external_connector: run.external_connector,
                             },
-                            timeout,
                             ctx,
                         )
                         .await
@@ -3389,7 +3350,6 @@ async fn main() {
                     reason,
                     instruction,
                     wait,
-                    timeout,
                     strict_mode,
                     ignore_dirs,
                     include,
@@ -3537,9 +3497,9 @@ async fn main() {
             on_conflict,
             vector_mode,
         } => handlers::handle_restore(file_path, on_conflict, vector_mode, ctx).await,
-        Commands::Wait { timeout } => {
+        Commands::Wait => {
             let client = ctx.get_client();
-            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+            commands::system::wait(&client, ctx.output_format, ctx.compact).await
         }
         Commands::Task { action } => match action {
             TaskCommands::Status { task_id } => {
@@ -3708,8 +3668,7 @@ async fn main() {
             uri,
             recursive,
             wait,
-            timeout,
-        } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        } => handlers::handle_rm(uri, recursive, wait, ctx).await,
         Commands::Cp {
             from_uri,
             to_uri,
@@ -3821,7 +3780,6 @@ async fn main() {
             mode,
             wait,
             processing_mode,
-            timeout,
             tags,
             tag_mode,
             acl,
@@ -3839,7 +3797,6 @@ async fn main() {
                 from_file,
                 effective_mode,
                 wait,
-                timeout,
                 processing_mode,
                 tags,
                 tag_mode,
@@ -5254,37 +5211,28 @@ mod tests {
     }
 
     #[test]
-    fn all_timeout_options_require_positive_finite_seconds() {
-        let command_prefixes = [
-            vec!["ov", "add-resource", "https://example.com", "--timeout"],
-            vec!["ov", "rm", "viking://resources/item", "--timeout"],
+    fn waiting_commands_reject_timeout_option() {
+        for mut args in [
+            vec!["ov", "add-resource", "https://example.com"],
+            vec!["ov", "rm", "viking://resources/item"],
             vec![
                 "ov",
                 "write",
                 "viking://resources/item",
                 "--content",
                 "value",
-                "--timeout",
             ],
-            vec!["ov", "wait", "--timeout"],
-            vec!["ov", "system", "wait", "--timeout"],
-        ];
-
-        for prefix in command_prefixes {
-            for invalid in ["0", "-1", "inf", "NaN", "1e300"] {
-                let mut args = prefix.clone();
-                args.push(invalid);
-                assert!(
-                    Cli::try_parse_from(&args).is_err(),
-                    "{args:?} should reject an invalid timeout"
-                );
-            }
-
-            let mut args = prefix;
-            args.push("0.1");
+            vec!["ov", "wait"],
+            vec!["ov", "system", "wait"],
+        ] {
             assert!(
                 Cli::try_parse_from(&args).is_ok(),
-                "{args:?} should accept a positive finite timeout"
+                "{args:?} should be accepted"
+            );
+            args.extend(["--timeout", "60"]);
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "{args:?} should reject --timeout"
             );
         }
     }

@@ -52,7 +52,6 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
-    DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
@@ -456,7 +455,6 @@ class FSService:
         ctx: RequestContext,
         recursive: bool = False,
         wait: bool = False,
-        timeout: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         viking_fs = self._ensure_initialized()
@@ -508,7 +506,7 @@ class FSService:
                     ctx=ctx,
                 )
             if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
-                queue_status = await self._wait_for_refresh(timeout=timeout)
+                queue_status = await self._wait_for_refresh()
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
@@ -718,20 +716,12 @@ class FSService:
             raise
         return "queued"
 
-    async def _wait_for_refresh(self, *, timeout: Optional[float]) -> Dict[str, Any]:
+    async def _wait_for_refresh(self) -> Dict[str, Any]:
         telemetry_id = get_current_telemetry().telemetry_id
         if telemetry_id:
-            try:
-                await get_request_wait_tracker().wait_for_request(telemetry_id, timeout=timeout)
-            except TimeoutError as exc:
-                raise DeadlineExceededError("queue processing", timeout) from exc
+            await get_request_wait_tracker().wait_for_request(telemetry_id)
             return get_request_wait_tracker().build_queue_status(telemetry_id)
-        try:
-            return build_queue_status_payload(
-                await get_queue_manager().wait_complete(timeout=timeout)
-            )
-        except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+        return build_queue_status_payload(await get_queue_manager().wait_complete())
 
     async def cp(
         self,
@@ -1219,7 +1209,6 @@ class FSService:
         ctx: RequestContext,
         mode: str = "replace",
         wait: bool = False,
-        timeout: Optional[float] = None,
         processing_mode: str = "semantic_and_vectors",
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
@@ -1234,7 +1223,6 @@ class FSService:
             ctx=ctx,
             mode=mode,
             wait=wait,
-            timeout=timeout,
             processing_mode=processing_mode,
             tags=tags,
             tag_mode=tag_mode,
@@ -1248,7 +1236,6 @@ class FSService:
         operations: list[dict[str, Any]],
         ctx: RequestContext,
         wait: bool = True,
-        timeout: Optional[float] = None,
         skip_conflicts: bool = False,
         processing_mode: str = "semantic_and_vectors",
     ) -> Dict[str, Any]:
@@ -1260,7 +1247,6 @@ class FSService:
             operations=operations,
             ctx=ctx,
             wait=wait,
-            timeout=timeout,
             skip_conflicts=skip_conflicts,
             processing_mode=processing_mode,
         )

@@ -256,11 +256,11 @@ Some command help may also show the long `--output json` form. `-o json` is the 
 
 ```bash
 # Add URL and wait for processing
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # Add a local directory with filters
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"

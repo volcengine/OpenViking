@@ -926,7 +926,6 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
         ctx=request_context,
         recursive=True,
         wait=True,
-        timeout=12.0,
     )
 
     assert viking_fs.rm_calls == [{"uri": uri, "recursive": True, "ctx": request_context}]
@@ -937,7 +936,7 @@ async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_cont
         ctx=request_context,
         force_refresh=True,
     )
-    service._wait_for_refresh.assert_awaited_once_with(timeout=12.0)
+    service._wait_for_refresh.assert_awaited_once_with()
     assert result["semantic_root_uri"] == "viking://resources/images/2026/06/10"
     assert result["semantic_status"] == "complete"
     assert result["queue_status"] == {"Semantic": {"pending_count": 0}}
@@ -1499,14 +1498,13 @@ async def test_resource_rm_wait_registers_request_before_semantic_root(
         ctx=request_context,
         recursive=True,
         wait=True,
-        timeout=3,
     )
 
     assert tracker.registered_requests == ["tm-fs-rm"]
     assert tracker.registered_roots
     assert tracker.registered_roots[0]["request_was_registered"] is True
     assert queue_manager.messages[0].recursive is False
-    assert tracker.wait_calls == [("tm-fs-rm", 3)]
+    assert tracker.wait_calls == [("tm-fs-rm", None)]
     assert tracker.cleaned == ["tm-fs-rm"]
     assert result["semantic_status"] == "complete"
 

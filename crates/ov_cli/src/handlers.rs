@@ -22,7 +22,6 @@ pub async fn handle_add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: Option<f64>,
     strict_mode: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
@@ -86,11 +85,6 @@ pub async fn handle_add_resource(
         reject_manifest_run_keys(args)?;
     }
 
-    let effective_timeout = if wait {
-        timeout.unwrap_or(60.0).max(ctx.config.timeout)
-    } else {
-        ctx.config.timeout
-    };
     let auth = ctx.config.effective_auth(ctx.sudo);
     let client = client::HttpClient::new(
         &ctx.config.url,
@@ -98,7 +92,7 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        effective_timeout,
+        ctx.config.timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.effective_extra_headers(),
     )
@@ -113,7 +107,6 @@ pub async fn handle_add_resource(
         reason,
         instruction,
         wait,
-        timeout,
         strict,
         effective_ignore_dirs,
         effective_include,
@@ -420,8 +413,8 @@ use crate::SystemCommands;
 pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
-        SystemCommands::Wait { timeout } => {
-            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+        SystemCommands::Wait => {
+            commands::system::wait(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Status => {
             commands::system::status(&client, ctx.output_format, ctx.compact).await
@@ -1387,7 +1380,6 @@ pub async fn handle_write(
     from_file: Option<String>,
     mode: String,
     wait: bool,
-    timeout: Option<f64>,
     processing_mode: String,
     tags: Vec<String>,
     tag_mode: String,
@@ -1411,7 +1403,6 @@ pub async fn handle_write(
         &payload,
         &mode,
         wait,
-        timeout,
         &processing_mode,
         tags,
         &tag_mode,
@@ -1877,7 +1868,6 @@ pub async fn handle_rm(
     uri: String,
     recursive: bool,
     wait: bool,
-    timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1886,7 +1876,6 @@ pub async fn handle_rm(
         &uri,
         recursive,
         wait,
-        timeout,
         ctx.output_format,
         ctx.compact,
     )

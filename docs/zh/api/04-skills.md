@@ -189,7 +189,6 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 | data | Any | 否 | - | 内联 SKILL.md、结构化/MCP 数据或 Git URL；与 `temp_file_id` 选择一个 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID（通过 `temp_upload` 获取）；与 `data` 选择一个 |
 | wait | bool | 否 | False | 是否等待技能处理完成 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=True` 时生效 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 | target_uri | string | 否 | 按目标优先级解析 | 目标 skills 根，例如 `viking://~/skills` 或 `viking://agent/skills` |
 | skills | List[str] | 否 | `[]` | 从目录/Git 集合按目录名选择 Skill；空列表或 `["*"]` 选择全部 |
@@ -229,7 +228,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 单个 Skill 导入默认返回 `task_id`。通过 [任务 API](17-tasks.md) 查询状态，任务为 `completed` 后再检索；`wait=true` 则等待队列处理并返回 `queue_status`。多 Skill 导入返回 `installed` 数组，每个结果独立携带任务信息，不保证批次原子性。`list_only=true` 只返回来源中的 `skills` 与 `total`，不创建导入任务。
 
-HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, timeout=None, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
+HTTP 字段和 SDK 参数并非同名同层级：Python `add_skill(data, wait=False, options=None)` / `update_skill(skill_name, data, ...)` 将 `target_uri`、`telemetry` 放在 `options` 中；`skills`、`list_only`、`source_metadata`（新增）及 `from_source`（更新）等字段放在 `options["extra"]` 中。TypeScript 使用 `targetUri` 和 `extra`，Go 使用 `TargetURI` 和 `Extra`。TypeScript 的本地路径自动上传仅适用于 Node.js。
 
 ```python
 # 预览本地集合；不写入 OpenViking
@@ -488,7 +487,7 @@ task_id         uuid-xxx
 
 Python HTTP SDK 会把该响应映射为对应异常（`ProcessingError`）。
 
-具体错误码取决于失败阶段，例如名称或目标参数无效为 `INVALID_ARGUMENT` / `INVALID_URI`，找不到 Skill 为 `NOT_FOUND`，完整性清单超限为 `RESOURCE_EXHAUSTED`，等待超时为 `DEADLINE_EXCEEDED`。`wait=false` 返回成功只表示同步导入阶段完成，后台失败需通过任务状态确认。标准响应可能带可选 `telemetry` / `profile`，没有通用 `time` 字段；SDK 通常直接返回 `result` 对象。
+具体错误码取决于失败阶段，例如名称或目标参数无效为 `INVALID_ARGUMENT` / `INVALID_URI`，找不到 Skill 为 `NOT_FOUND`，完整性清单超限为 `RESOURCE_EXHAUSTED`。`wait=false` 返回成功只表示同步导入阶段完成，后台失败需通过任务状态确认。标准响应可能带可选 `telemetry` / `profile`，没有通用 `time` 字段；SDK 通常直接返回 `result` 对象。
 
 ## 技能管理操作
 
@@ -706,12 +705,12 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 | `from_source` | `false` | 根据已记录的 Git 来源更新；不能与 data/temp_file_id 同用 |
 | `target_uri` | 未指定 | 优先查找的 skills 根，参见读取接口的回退规则 |
 | `source_metadata` | 自动生成 | 更新来源信息 |
-| `wait` / `timeout` | `false` / `null` | 是否等待后台处理及超时秒数 |
+| `wait` | `false` | 是否等待后台处理 |
 | `telemetry` | `false` | 遥测配置 |
 
 必须提供新内容/上传包，或设 `from_source=true`。新内容的名称必须与 URL 中的 `skill_name` 一致；更新不是重命名或局部 patch。先解析并检查新包，再备份替换；同步失败会尝试恢复旧包。需保留的辅助文件应随新包一起提交。
 
-更新的文件、隐私配置和任务准备完成后才启动后台。需要恢复旧包时，包括 `wait=true` 超时，先取消本次摘要和索引任务，确认已开始的写入退出，再恢复原文件、索引及隐私配置；恢复失败会明确报告。超时响应可能晚于 `timeout`，但只等待取消收尾，不继续处理完整包。`wait=false` 已成功返回后的后台失败不自动恢复；新增 Skill 的等待超时仍只结束等待。
+更新的文件、隐私配置和任务准备完成后才启动后台。更新失败或等待期间被取消时，先取消本次摘要和索引任务，确认已开始的写入退出，再恢复原文件、索引及隐私配置；恢复失败会明确报告。`wait=false` 已成功返回后的后台失败不自动恢复。
 
 **Python SDK**：
 
