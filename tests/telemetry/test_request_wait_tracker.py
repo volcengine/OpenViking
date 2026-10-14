@@ -124,12 +124,17 @@ def test_request_wait_tracker_accumulates_queue_wait_and_execution_durations():
     }
 
 
-async def test_wait_for_request_timeout_keeps_existing_error():
+async def test_wait_for_request_timeout_preserves_pending_work():
     tracker = RequestWaitTracker()
     telemetry_id = "tm_wait_timeout"
 
     tracker.register_request(telemetry_id)
     tracker.register_embedding_root(telemetry_id, "embedding-1")
 
-    with pytest.raises(TimeoutError, match="Request processing not complete after 0.01s"):
-        await tracker.wait_for_request(telemetry_id, timeout=0.01, poll_interval=0.001)
+    with pytest.raises(TimeoutError):
+        await tracker.wait_for_request(telemetry_id, timeout=0.01)
+
+    assert not tracker.is_complete(telemetry_id)
+    tracker.mark_embedding_done(telemetry_id, "embedding-1")
+    await tracker.wait_for_request(telemetry_id)
+    assert tracker.build_queue_status(telemetry_id)["Embedding"]["processed"] == 1

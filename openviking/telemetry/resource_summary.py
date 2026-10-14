@@ -37,19 +37,6 @@ def _consume_semantic_tree_stats(telemetry_id: str, root_uri: str | None):
         return None
 
 
-def build_queue_status_payload(status: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Convert queue status objects to response payload format."""
-    return {
-        name: {
-            "processed": s.processed,
-            "requeue_count": getattr(s, "requeue_count", 0),
-            "error_count": s.error_count,
-            "errors": [{"message": e.message} for e in s.errors],
-        }
-        for name, s in status.items()
-    }
-
-
 def _queue_metrics(stats: Any) -> Dict[str, int]:
     if stats is None:
         return {"processed": 0, "requeue_count": 0, "error_count": 0}
@@ -94,6 +81,5 @@ def record_resource_queue_metrics(
 
 
 __all__ = [
-    "build_queue_status_payload",
     "record_resource_queue_metrics",
 ]

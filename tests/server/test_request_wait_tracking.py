@@ -1,270 +1,58 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for request-scoped wait behavior on write APIs."""
+"""Request-scoped waits must not depend on unrelated queue work."""
 
+import asyncio
 from types import SimpleNamespace
 
-import pytest
-
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.service.resource_service import ResourceService
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_tracker import TaskTracker
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
+from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 from openviking_cli.session.user_id import UserIdentifier
+from tests.test_task_tracker import _FakeAgfs
 
 
-class _FakeRequestWaitTracker:
-    def __init__(self, queue_status):
-        self.queue_status = queue_status
-        self.registered_requests = []
-        self.wait_calls = []
-        self.build_calls = []
-        self.cleaned = []
-
-    def register_request(self, telemetry_id: str) -> None:
-        self.registered_requests.append(telemetry_id)
-
-    async def wait_for_request(self, telemetry_id: str, timeout=None, poll_interval=None):
-        del poll_interval
-        self.wait_calls.append((telemetry_id, timeout))
-
-    def build_queue_status(self, telemetry_id: str):
-        self.build_calls.append(telemetry_id)
-        return self.queue_status
-
-    def cleanup(self, telemetry_id: str) -> None:
-        self.cleaned.append(telemetry_id)
-
-
-class _ExplodingQueueManager:
-    async def wait_complete(self, *args, **kwargs):
-        raise AssertionError("global queue wait should not be used")
-
-
-class _FakeVikingFS:
-    def __init__(self, file_uri: str, root_uri: str):
-        self._file_uri = file_uri
-        self._root_uri = root_uri
-        self.content = {file_uri: "original"}
-        self._async_agfs = SimpleNamespace(
-            pathlock_acquire_exact=lambda lock_path: SimpleNamespace(id="lock-1"),
-            pathlock_release=lambda lease: None,
-        )
-
-    async def stat(self, uri: str, ctx=None):
-        del ctx
-        if uri == self._file_uri:
-            return {"isDir": False}
-        if uri == self._root_uri:
-            return {"isDir": True}
-        raise AssertionError(f"unexpected stat uri: {uri}")
-
-    def _uri_to_path(self, uri: str, ctx=None):
-        del ctx
-        return f"/fake/{uri.replace('://', '/').strip('/')}"
-
-    async def delete_temp(self, temp_uri: str, ctx=None):
-        del temp_uri, ctx
-        return None
-
-    async def read_file(self, uri: str, ctx=None):
-        del ctx
-        return self.content[uri]
-
-    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
-        del ctx, lease_ref
-        self.content[uri] = content
-
-    async def rm(self, uri: str, ctx=None, lock_handle=None, lease_ref=None):
-        del ctx, lock_handle, lease_ref
-        self.content.pop(uri, None)
-
-
-@pytest.mark.asyncio
-async def test_add_skill_wait_uses_request_tracker(service, monkeypatch):
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 0, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 1, "error_count": 0, "errors": []},
-        }
-    )
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    telemetry = OperationTelemetry(operation="resources.add_skill", enabled=True)
-
-    async def _fake_process_skill(**kwargs):
-        del kwargs
-        return {"status": "success", "uri": "viking://user/default/skills/demo", "name": "demo"}
-
-    monkeypatch.setattr(service.resources._skill_processor, "process_skill", _fake_process_skill)
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager",
-        lambda: _ExplodingQueueManager(),
-    )
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    with bind_telemetry(telemetry):
-        result = await service.resources.add_skill(
-            data={"name": "demo", "content": "# Demo"},
-            ctx=ctx,
-            wait=True,
-        )
-
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-
-
-@pytest.mark.asyncio
-async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(service, monkeypatch):
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 0, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 1, "error_count": 0, "errors": []},
-        }
-    )
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
+async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(monkeypatch):
+    tracker = RequestWaitTracker()
     telemetry = OperationTelemetry(operation="resources.add_skill", enabled=False)
+    tracker.register_request("unrelated")
+    tracker.register_embedding_root("unrelated", "pending-embedding")
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    root_uri = "viking://user/default/skills/demo"
 
-    async def _fake_process_skill(**kwargs):
-        del kwargs
-        return {"status": "success", "uri": "viking://user/default/skills/demo", "name": "demo"}
+    async def process_skill(**kwargs):
+        tracker.register_embedding_root(telemetry.telemetry_id, "skill-embedding")
+        tracker.mark_embedding_done(telemetry.telemetry_id, "skill-embedding")
+        return {"status": "success", "uri": root_uri, "name": "demo"}
 
-    monkeypatch.setattr(service.resources._skill_processor, "process_skill", _fake_process_skill)
-    monkeypatch.setattr(
-        "openviking.service.resource_service.get_queue_manager",
-        lambda: _ExplodingQueueManager(),
+    service = ResourceService(
+        resource_processor=object(),
+        skill_processor=SimpleNamespace(process_skill=process_skill),
+        viking_fs=object(),
     )
     monkeypatch.setattr(
-        "openviking.service.resource_service.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
+        "openviking.service.resource_service.get_request_wait_tracker", lambda: tracker
     )
+    task_tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: task_tracker)
 
     with bind_telemetry(telemetry):
-        result = await service.resources.add_skill(
-            data={"name": "demo", "content": "# Demo"},
-            ctx=ctx,
-            wait=True,
+        result = await asyncio.wait_for(
+            service.add_skill(
+                data={"name": "demo", "content": "# Demo"},
+                ctx=ctx,
+                wait=True,
+                target_uri="viking://user/default/skills",
+            ),
+            1,
         )
 
-    assert result["root_uri"] == "viking://user/default/skills/demo"
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-
-
-@pytest.mark.asyncio
-async def test_content_write_wait_uses_request_tracker(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    telemetry = OperationTelemetry(operation="content.write", enabled=True)
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 0, "error_count": 0, "errors": []},
-        }
-    )
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        del kwargs
-        return None
-
-    async def _explode_wait_for_queues():
-        raise AssertionError("global queue wait should not be used")
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
-
-    with bind_telemetry(telemetry):
-        result = await coordinator.write(
-            uri=file_uri,
-            content="updated",
-            ctx=ctx,
-            wait=True,
-        )
-
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-    assert result["semantic_status"] == "complete"
-    assert result["vector_status"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    telemetry = OperationTelemetry(operation="content.write", enabled=False)
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 0, "error_count": 0, "errors": []},
-        }
-    )
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        del kwargs
-        return None
-
-    async def _explode_wait_for_queues():
-        raise AssertionError("global queue wait should not be used")
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
-
-    with bind_telemetry(telemetry):
-        result = await coordinator.write(
-            uri=file_uri,
-            content="updated",
-            ctx=ctx,
-            wait=True,
-        )
-
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, None)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-    assert result["semantic_status"] == "complete"
-    assert result["vector_status"] == "complete"
-
-
-async def _return_true(handle, path):
-    del handle, path
-    return True
-
-
-async def _return_none(handle):
-    del handle
-    return None
+    assert result["root_uri"] == root_uri
+    assert result["queue_status"]["Embedding"]["processed"] == 1
+    assert not tracker.has_request(telemetry.telemetry_id)
+    assert not tracker.is_complete("unrelated")

@@ -284,14 +284,7 @@ class TestWatchTaskCreation:
         async def fake_set_tags(self, **kwargs):
             raise AssertionError("add_resource(tags=...) must write tags during ingest")
 
-        class FakeQueueManager:
-            async def wait_complete(self, timeout=None):
-                return {}
-
         monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-        monkeypatch.setattr(
-            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
-        )
 
         result = await resource_service.add_resource(
             path="/test/path",
@@ -334,14 +327,7 @@ class TestWatchTaskCreation:
         async def fake_set_tags(self, **kwargs):
             return {"tags_updated": True}
 
-        class FakeQueueManager:
-            async def wait_complete(self, timeout=None):
-                return {}
-
         monkeypatch.setattr(ContentWriteCoordinator, "set_tags", fake_set_tags)
-        monkeypatch.setattr(
-            resource_service_module, "get_queue_manager", lambda: FakeQueueManager()
-        )
 
         await resource_service.add_resource(
             path="/test/path",

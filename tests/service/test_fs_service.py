@@ -267,8 +267,8 @@ class _FakeWaitTracker:
             }
         )
 
-    async def wait_for_request(self, telemetry_id, timeout=None):
-        self.wait_calls.append((telemetry_id, timeout))
+    async def wait_for_request(self, telemetry_id):
+        self.wait_calls.append(telemetry_id)
 
     def build_queue_status(self, telemetry_id):
         return {
@@ -914,50 +914,21 @@ async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
 
 
 @pytest.mark.asyncio
-async def test_resource_rm_enqueues_parent_delete_refresh_and_waits(request_context):
-    viking_fs = _FakeVikingFS()
-    service = FSService(viking_fs=viking_fs)
-    service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock(return_value={"Semantic": {"pending_count": 0}})
-
-    uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
-    result = await service.rm(
-        uri,
-        ctx=request_context,
-        recursive=True,
-        wait=True,
-    )
-
-    assert viking_fs.rm_calls == [{"uri": uri, "recursive": True, "ctx": request_context}]
-    service._enqueue_delete_refresh.assert_awaited_once_with(
-        root_uri="viking://resources/images/2026/06/10",
-        deleted_uri=uri,
-        context_type="resource",
-        ctx=request_context,
-        force_refresh=True,
-    )
-    service._wait_for_refresh.assert_awaited_once_with()
-    assert result["semantic_root_uri"] == "viking://resources/images/2026/06/10"
-    assert result["semantic_status"] == "complete"
-    assert result["queue_status"] == {"Semantic": {"pending_count": 0}}
-
-
-@pytest.mark.asyncio
 async def test_resource_rm_reports_failed_semantic_status_when_wait_queue_has_errors(
-    request_context,
+    request_context, monkeypatch
 ):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
     service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock(
-        return_value={
-            "Semantic": {
-                "processed": 1,
-                "error_count": 1,
-                "errors": [{"message": "refresh failed"}],
-            }
+    tracker = _FakeWaitTracker()
+    tracker.build_queue_status = lambda _id: {
+        "Semantic": {
+            "processed": 1,
+            "error_count": 1,
+            "errors": [{"message": "refresh failed"}],
         }
-    )
+    }
+    monkeypatch.setattr("openviking.service.fs_service.get_request_wait_tracker", lambda: tracker)
 
     result = await service.rm(
         "viking://resources/images/2026/06/10/不二周助_jpeg",
@@ -989,13 +960,11 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
     viking_fs = _FakeVikingFS()
     service = FSService(viking_fs=viking_fs)
     service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock()
 
     uri = "viking://resources/images/2026/06/10/不二周助_jpeg"
     result = await service.rm(uri, ctx=request_context, recursive=True)
 
     service._enqueue_delete_refresh.assert_awaited_once()
-    service._wait_for_refresh.assert_not_awaited()
     assert result["semantic_status"] == "queued"
 
 
@@ -1003,7 +972,6 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     service = FSService(viking_fs=_FakeVikingFS())
     service._enqueue_delete_refresh = AsyncMock()
-    service._wait_for_refresh = AsyncMock()
 
     result = await service.rm(
         "viking://resources",
@@ -1013,7 +981,6 @@ async def test_resource_scope_rm_does_not_refresh_global_root(request_context):
     )
 
     service._enqueue_delete_refresh.assert_not_awaited()
-    service._wait_for_refresh.assert_not_awaited()
     assert "semantic_root_uri" not in result
 
 
@@ -1504,9 +1471,11 @@ async def test_resource_rm_wait_registers_request_before_semantic_root(
     assert tracker.registered_roots
     assert tracker.registered_roots[0]["request_was_registered"] is True
     assert queue_manager.messages[0].recursive is False
-    assert tracker.wait_calls == [("tm-fs-rm", None)]
+    assert tracker.wait_calls == ["tm-fs-rm"]
     assert tracker.cleaned == ["tm-fs-rm"]
+    assert result["semantic_root_uri"] == "viking://resources/images/2026/06/10"
     assert result["semantic_status"] == "complete"
+    assert result["queue_status"]["Semantic"]["processed"] == 1
 
 
 @pytest.mark.asyncio

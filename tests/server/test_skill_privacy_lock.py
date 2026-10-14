@@ -182,7 +182,7 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
         assert shown.json()["result"]["description"] == "Original"
     finally:
         resume.set()
-        await get_queue_manager().wait_complete(timeout=5)
+        await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
         if not updating.done():
             updating.cancel()
         await asyncio.gather(updating, return_exceptions=True)

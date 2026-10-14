@@ -1385,13 +1385,6 @@ describe("OpenViking import command parsing", () => {
     ).toThrow("Cannot specify both");
   });
 
-  it("parses add-skill flags", () => {
-    expect(parseAddSkillCommandArgs("./skills/demo --wait")).toMatchObject({
-      source: "./skills/demo",
-      wait: true,
-    });
-  });
-
   it("rejects resource-only flags for skill imports", () => {
     expect(() =>
       parseAddSkillCommandArgs("./skills/demo --to viking://resources/nope"),

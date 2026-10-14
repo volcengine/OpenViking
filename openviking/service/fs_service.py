@@ -46,7 +46,6 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
@@ -506,7 +505,9 @@ class FSService:
                     ctx=ctx,
                 )
             if refresh_parent_uri and wait and refresh_action is not FreshnessAction.MARK_PENDING:
-                queue_status = await self._wait_for_refresh()
+                tracker = get_request_wait_tracker()
+                await tracker.wait_for_request(telemetry_id)
+                queue_status = tracker.build_queue_status(telemetry_id)
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
@@ -715,13 +716,6 @@ class FSService:
                 get_request_wait_tracker().mark_semantic_failed(telemetry_id, msg.id, str(exc))
             raise
         return "queued"
-
-    async def _wait_for_refresh(self) -> Dict[str, Any]:
-        telemetry_id = get_current_telemetry().telemetry_id
-        if telemetry_id:
-            await get_request_wait_tracker().wait_for_request(telemetry_id)
-            return get_request_wait_tracker().build_queue_status(telemetry_id)
-        return build_queue_status_payload(await get_queue_manager().wait_complete())
 
     async def cp(
         self,

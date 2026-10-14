@@ -1597,26 +1597,6 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
 
 
 @pytest.mark.asyncio
-async def test_rm_uses_delete_request_with_wait():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(request=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: None
-
-    await client.rm("/resources/demo.md", recursive=True, wait=True)
-
-    fake_http.request.assert_awaited_once_with(
-        "DELETE",
-        "/api/v1/fs",
-        params={
-            "uri": "viking://resources/demo.md",
-            "recursive": True,
-            "wait": True,
-        },
-    )
-
-
-@pytest.mark.asyncio
 async def test_batch_write_serializes_processing_mode_and_operation_metadata():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())

@@ -139,7 +139,7 @@ async def test_downstream_wait_remains_worker_occupied_time(monkeypatch, method)
     index.register_active("task", worker)
     try:
         now[0] = 3
-        waiter = asyncio.create_task(getattr(tracker, method)(request, poll_interval=0.001))
+        waiter = asyncio.create_task(getattr(tracker, method)(request))
         await asyncio.sleep(0.01)
         now[0] = 20
         assert index.processing_seconds("task") == 20

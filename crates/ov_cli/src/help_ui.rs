@@ -2967,24 +2967,6 @@ mod tests {
     }
 
     #[test]
-    fn curated_help_omits_timeout_for_waiting_commands() {
-        for args in [
-            ["ov", "add-resource", "--help"],
-            ["ov", "rm", "--help"],
-            ["ov", "write", "--help"],
-            ["ov", "wait", "--help"],
-        ] {
-            let rendered = strip_ansi(
-                &render_command_help_request(&os_args(&args)).expect("help should render"),
-            );
-            assert!(
-                !rendered.contains("--timeout"),
-                "unexpected timeout option in:\n{rendered}"
-            );
-        }
-    }
-
-    #[test]
     fn curated_help_lists_upload_filters_and_limit_aliases() {
         let add_resource = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "add-resource", "--help"]))

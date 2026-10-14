@@ -68,9 +68,6 @@ from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry, unregister_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import (
-    build_queue_status_payload,
-)
 from openviking.utils import is_git_repo_url, is_github_url, parse_code_hosting_url
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
@@ -2516,12 +2513,8 @@ class ResourceService:
 
             if wait:
                 wait_start = time.perf_counter()
-                if telemetry_id:
-                    await request_wait_tracker.wait_for_request(telemetry_id)
-                    status = request_wait_tracker.build_queue_status(telemetry_id)
-                else:
-                    qm = get_queue_manager()
-                    status = build_queue_status_payload(await qm.wait_complete())
+                await request_wait_tracker.wait_for_request(telemetry_id)
+                status = request_wait_tracker.build_queue_status(telemetry_id)
                 get_current_telemetry().set(
                     "queue.wait.duration_ms",
                     round((time.perf_counter() - wait_start) * 1000, 3),

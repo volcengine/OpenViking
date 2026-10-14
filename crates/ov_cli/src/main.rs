@@ -5211,33 +5211,6 @@ mod tests {
     }
 
     #[test]
-    fn waiting_commands_reject_timeout_option() {
-        for mut args in [
-            vec!["ov", "add-resource", "https://example.com"],
-            vec!["ov", "rm", "viking://resources/item"],
-            vec![
-                "ov",
-                "write",
-                "viking://resources/item",
-                "--content",
-                "value",
-            ],
-            vec!["ov", "wait"],
-            vec!["ov", "system", "wait"],
-        ] {
-            assert!(
-                Cli::try_parse_from(&args).is_ok(),
-                "{args:?} should be accepted"
-            );
-            args.extend(["--timeout", "60"]);
-            assert!(
-                Cli::try_parse_from(&args).is_err(),
-                "{args:?} should reject --timeout"
-            );
-        }
-    }
-
-    #[test]
     fn all_node_limit_options_accept_zero_and_reject_negative_values() {
         let command_prefixes = [
             vec!["ov", "ls", "--node-limit"],

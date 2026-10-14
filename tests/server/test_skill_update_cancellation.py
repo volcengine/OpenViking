@@ -157,7 +157,7 @@ async def test_update_cancellation_restores_package_and_index(
 
         # Releasing the fault after the response must not let stale work modify the restored pack.
         release.set()
-        await get_queue_manager().wait_complete(timeout=5)
+        await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
         for path, content in old_contents.items():
             assert await _download(client, f"{root}/{path}") == content
         for location, records in old_records.items():
@@ -168,7 +168,7 @@ async def test_update_cancellation_restores_package_and_index(
             assert await _indexed_record(client, f"{root}/{path}", 2) == []
     finally:
         release.set()
-        await get_queue_manager().wait_complete(timeout=5)
+        await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
         if not updating.done():
             updating.cancel()
         await asyncio.gather(updating, return_exceptions=True)
@@ -209,4 +209,4 @@ async def test_async_update_background_failure_keeps_successfully_returned_repla
         assert shown.json()["result"]["description"] == "Replacement description"
     finally:
         release_failure.set()
-        await get_queue_manager().wait_complete(timeout=5)
+        await asyncio.wait_for(get_queue_manager().wait_complete(), 5)

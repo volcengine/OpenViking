@@ -76,7 +76,6 @@ from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
@@ -1999,18 +1998,11 @@ class ContentWriteCoordinator:
         except AbstractOverviewFormatError as exc:
             raise InvalidArgumentError(str(exc)) from exc
 
-    async def _wait_for_queues(self) -> Dict[str, Any]:
-        queue_manager = get_queue_manager()
-        status = await queue_manager.wait_complete()
-        return build_queue_status_payload(status)
-
     async def _wait_for_request(
         self,
         *,
         telemetry_id: str,
     ) -> Dict[str, Any]:
-        if not telemetry_id:
-            return await self._wait_for_queues()
         tracker = get_request_wait_tracker()
         await tracker.wait_for_request(telemetry_id)
         return tracker.build_queue_status(telemetry_id)
@@ -2075,11 +2067,7 @@ class ContentWriteCoordinator:
             )
             queue_status = None
             if embedding_requested and wait:
-                queue_status = (
-                    await self._wait_for_request(telemetry_id=telemetry_id)
-                    if telemetry_id
-                    else await self._wait_for_queues()
-                )
+                queue_status = await self._wait_for_request(telemetry_id=telemetry_id)
             vector_status = self._queue_work_status(
                 requested=embedding_requested,
                 wait=wait,

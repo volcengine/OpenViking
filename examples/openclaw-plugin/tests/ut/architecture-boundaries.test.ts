@@ -458,32 +458,6 @@ describe("architecture boundaries", () => {
     expect(mcpSkillBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
   });
 
-  it("keeps OpenViking error response client tests on the injected transport seam", () => {
-    const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("surfaces OpenViking error responses"');
-    const end = clientTestSource.indexOf('  it.each([false, true])("uses configured request timeout for imports (wait=%s)"', start);
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-
-    const errorResponseBlock = clientTestSource.slice(start, end);
-    expect(errorResponseBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(errorResponseBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
-  });
-
-  it("keeps commit polling client tests on the injected transport seam", () => {
-    const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("keeps polling wait=true commit long enough for slow Phase 2 completion"');
-    const end = clientTestSource.indexOf('});\n\ndescribe("OpenVikingClient tenant headers', start);
-
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-
-    const commitPollingBlock = clientTestSource.slice(start, end);
-    expect(commitPollingBlock).not.toMatch(/vi\.stubGlobal\("fetch"/);
-    expect(commitPollingBlock).toMatch(/new OpenVikingClient\([\s\S]*\{\s*transport\s*\}/);
-  });
-
   it("keeps tenant header client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
     const start = clientTestSource.indexOf('describe("OpenVikingClient tenant headers');

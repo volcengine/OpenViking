@@ -8,7 +8,6 @@ All queues are managed through NamedQueue.
 import asyncio
 import atexit
 import threading
-import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
@@ -521,17 +520,8 @@ class QueueManager:
         statuses = await self.check_status(queue_name)
         return all(s.is_complete for s in statuses.values())
 
-    async def wait_complete(
-        self,
-        queue_name: Optional[str] = None,
-        timeout: Optional[float] = None,
-        poll_interval: float = 0.5,
-    ) -> Dict[str, QueueStatus]:
-        """Wait for completion and return final status."""
-        start = time.time()
-        while True:
-            if await self.is_all_complete(queue_name):
-                return await self.check_status(queue_name)
-            if timeout and (time.time() - start) > timeout:
-                raise TimeoutError(f"Queue processing not complete after {timeout}s")
-            await asyncio.sleep(poll_interval)
+    async def wait_complete(self) -> Dict[str, QueueStatus]:
+        """Wait for all queues to complete and return their final status."""
+        while not await self.is_all_complete():
+            await asyncio.sleep(0.5)
+        return await self.check_status()
