@@ -1615,25 +1615,59 @@ async def test_rm_uses_delete_request_with_timeout_when_provided():
             "wait": True,
             "timeout": 5.0,
         },
+        timeout=httpx.Timeout(60.0),
     )
 
 
 @pytest.mark.asyncio
-async def test_batch_write_http_timeout_outlives_server_wait_timeout():
-    client = AsyncHTTPClient(url="http://localhost:1933", timeout=180.0)
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
+@pytest.mark.parametrize(
+    "operation", ["add_resource", "add_skill", "update_skill", "rm", "write", "batch_write"]
+)
+@pytest.mark.parametrize(
+    "wait, timeout, client_timeout, read_timeout",
+    [
+        (True, 300.0, 180.0, 330.0),
+        (True, 300.0, 500.0, 500.0),
+        (False, 300.0, 180.0, 180.0),
+        (True, None, 180.0, 180.0),
+        (True, 0.0, 5.0, 30.0),
+    ],
+)
+async def test_waiting_mutations_preserve_http_timeout_budgets(
+    operation, wait, timeout, client_timeout, read_timeout
+):
+    requests = []
 
-    await client.batch_write(
-        "viking://resources/wiki",
-        [],
-        wait=True,
-        timeout=300.0,
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {}})
+
+    client = AsyncHTTPClient(url="http://localhost:1933", timeout=client_timeout)
+    client._http = httpx.AsyncClient(
+        base_url=client._url, timeout=client_timeout, transport=httpx.MockTransport(handle)
     )
+    arguments = {
+        "add_resource": ("https://example.invalid/demo.md",),
+        "add_skill": ({"name": "demo", "content": "body"},),
+        "update_skill": ("demo", {"name": "demo", "content": "body"}),
+        "rm": ("viking://resources/demo.md",),
+        "write": ("viking://resources/demo.md", "body"),
+        "batch_write": (
+            "viking://resources/demo",
+            [{"uri": "viking://resources/demo/file.md", "content": "body"}],
+        ),
+    }
+    try:
+        await getattr(client, operation)(*arguments[operation], wait=wait, timeout=timeout)
+    finally:
+        await client.close()
 
-    request_timeout = client._request.await_args.kwargs["timeout"]
-    assert request_timeout.read == 330.0
-    assert request_timeout.connect == 180.0
+    assert requests[0].extensions["timeout"] == {
+        "connect": client_timeout,
+        "read": read_timeout,
+        "write": client_timeout,
+        "pool": client_timeout,
+    }
 
 
 @pytest.mark.asyncio

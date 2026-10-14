@@ -34,6 +34,16 @@ You can configure the SDK in three ways, with this precedence:
 
 This means existing setups that relied on `ovcli.conf` continue to work after the SDK split.
 
+### HTTP and Processing Wait Timeouts
+
+The constructor's `timeout` sets the default HTTP I/O timeout. For `add_resource`,
+`add_skill`, `update_skill`, `rm`, `write`, and `batch_write`, `wait=True` with an
+explicit operation `timeout` sets the HTTP read timeout to
+`max(client_timeout, operation_timeout + 30)` seconds. Connect, upload/write, and
+pool timeouts stay unchanged. `wait=False` or `timeout=None` keeps the default HTTP timeout.
+The operation timeout still controls server-side waiting; a resource-import wait
+timeout does not cancel the background task. Use its error details' `task_id` to query `get_task()`.
+
 ## Authentication Model
 
 Most deployments use API key authentication.

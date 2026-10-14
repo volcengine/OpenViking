@@ -34,6 +34,15 @@ SDK 支持三种配置方式，优先级从高到低如下：
 
 这意味着之前依赖 `ovcli.conf` 的配置方式，在 SDK 拆分之后仍然可以继续使用。
 
+### HTTP 与处理等待超时
+
+构造参数 `timeout` 设置默认的 HTTP I/O 超时。对于 `add_resource`、`add_skill`、
+`update_skill`、`rm`、`write` 和 `batch_write`，当 `wait=True` 且显式指定操作的 `timeout` 时，
+HTTP 读取超时为 `max(client_timeout, operation_timeout + 30)` 秒；连接、上传/写入和连接池
+超时保持不变。`wait=False` 或 `timeout=None` 仍使用默认 HTTP 超时。
+操作超时仍控制服务端的处理等待；资源导入等待超时不会取消后台任务。
+可通过错误详情中的 `task_id` 调用 `get_task()` 查询任务状态。
+
 ## 认证模型
 
 大多数部署场景使用 API Key 认证。
