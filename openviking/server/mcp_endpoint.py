@@ -1424,9 +1424,13 @@ async def add_resource(
 
     Preserve the existing Resource layout and account policy. Resource directory rules do not
     apply to Memory, which is organized by the memory extraction system. Keep one stable root
-    per source; use ``parent`` for a new source and exact ``to`` for an in-place refresh. See
-    ``docs/*/guides/23-data-organize.md`` for directory conventions. When writing to shared
-    resources, inspect the existing layout when practical and choose ``parent`` carefully.
+    per source; use ``parent`` for a new source and exact ``to`` for an in-place refresh.
+    Inspect the target space with ``list``/``tree`` before adding when practical and reuse its
+    existing directories; never create a synonymous category (e.g. ``documents/``, ``pdfs/``)
+    when one already fits. For a new category prefer the conventional names ``repos/``,
+    ``docs/``, ``sites/``, ``datasets/``, ``media/``, ``artifacts/``,
+    ``projects/<name>/`` for a multi-category project, or another plural domain noun for entity
+    collections (``items/``, ``people/``).
 
     Where it goes: ``viking://resources/`` is shared with the whole account and is the
     default when ``to`` and ``parent`` are empty (unless a default add target is
