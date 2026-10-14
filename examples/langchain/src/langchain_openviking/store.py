@@ -159,7 +159,7 @@ class OpenVikingStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: Mapping[str, Any],
+        value: Mapping[str, Any] | None,
         index: bool | list[str] | None = None,
         *,
         ttl: Any = None,
@@ -170,6 +170,9 @@ class OpenVikingStore(BaseStore):
                 "OpenViking stores LangGraph values as durable content records."
             )
         namespace = tuple(namespace)
+        if value is None:
+            self.delete(namespace, key)
+            return
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
         record = self._write_record(data_uri, namespace, key, dict(value), now)
