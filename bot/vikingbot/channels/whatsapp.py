@@ -105,9 +105,9 @@ class WhatsAppChannel(BaseChannel):
 
         if msg_type == "message":
             # Incoming message from WhatsApp
-            # Deprecated by whatsapp: old phone number style typically: <phone>@s.whatspp.net
+            # Deprecated by WhatsApp: old phone number style typically: <phone>@s.whatsapp.net
             pn = data.get("pn", "")
-            # New LID sytle typically:
+            # New LID style typically:
             sender = data.get("sender", "")
             content = data.get("content", "")
 
