@@ -3,6 +3,7 @@
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import type { ComponentType } from 'react'
+import type { TaskSummary } from '@ov-server/api/v1/tasks'
 import type * as TanStackRouter from '@tanstack/react-router'
 import en from '#/i18n/locales/en/workspace'
 import zh from '#/i18n/locales/zh-CN/workspace'
@@ -30,7 +31,10 @@ import { commitSession } from '#/lib/sessions/api'
 import { Route } from './route'
 import type { TaskRecord } from './-lib/task-record'
 
-const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
+const clientMocks = vi.hoisted(() => ({
+  getTasks: vi.fn(),
+  getTaskSummary: vi.fn(),
+}))
 
 const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -41,7 +45,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
-  ovClient: { instance: { post: vi.fn() } },
+  ovClient: {
+    instance: { post: vi.fn() },
+    client: { get: clientMocks.getTaskSummary },
+  },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
@@ -116,6 +123,16 @@ function expectRunningRows(count: number) {
 beforeEach(() => {
   vi.clearAllMocks()
   records = runningTasks(12)
+  clientMocks.getTaskSummary.mockReset()
+  clientMocks.getTaskSummary.mockResolvedValue({
+    completed: 240,
+    failed: 60,
+    total: 300,
+    success_rate: 80,
+    window_seconds: 86400,
+    since: 0,
+    until: 86400,
+  } satisfies TaskSummary)
   clientMocks.getTasks.mockReset()
   // Model the API contract: filtering precedes ordering and the result limit.
   clientMocks.getTasks.mockImplementation(({ query }) =>
@@ -133,6 +150,56 @@ afterEach(() => {
 })
 
 describe('task status presentation', () => {
+  it('keeps the full-window success rate when list status and grouping change', async () => {
+    const user = await renderPage()
+    await screen.findByText('80.0%')
+    await screen.findByRole('row', { name: 'View details for task task-12' })
+
+    await user.click(
+      screen.getByRole('button', { name: 'Latest per Resource' }),
+    )
+    expect(screen.getByText('80.0%')).toBeDefined()
+
+    await user.click(screen.getByRole('combobox', { name: 'Task status' }))
+    await user.click(await screen.findByRole('option', { name: 'Pending' }))
+    await screen.findByText('No matching tasks')
+    expect(screen.getByText('80.0%')).toBeDefined()
+    expect(clientMocks.getTaskSummary).toHaveBeenCalledExactlyOnceWith({
+      url: '/api/v1/tasks/summary',
+      query: {},
+    })
+  })
+
+  it('scopes the summary by task type and refreshes it with the list', async () => {
+    const user = await renderPage()
+    await screen.findByText('80.0%')
+
+    clientMocks.getTaskSummary.mockResolvedValue({
+      completed: 1,
+      failed: 1,
+      total: 2,
+      success_rate: 50,
+      window_seconds: 86400,
+      since: 0,
+      until: 86400,
+    } satisfies TaskSummary)
+    await user.click(screen.getByRole('combobox', { name: 'Task type' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Resource processing' }),
+    )
+    await screen.findByText('50.0%')
+    expect(clientMocks.getTaskSummary).toHaveBeenLastCalledWith({
+      url: '/api/v1/tasks/summary',
+      query: { task_type: 'add_resource' },
+    })
+
+    clientMocks.getTaskSummary.mockClear()
+    clientMocks.getTasks.mockClear()
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(clientMocks.getTaskSummary).toHaveBeenCalledTimes(1)
+    expect(clientMocks.getTasks).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps all twelve running tasks running in both rows and the count', async () => {
     await renderPage()
     await screen.findByRole('row', { name: 'View details for task task-12' })
