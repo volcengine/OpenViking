@@ -188,6 +188,49 @@ async def test_cancelled_attempt_releases_semaphore():
 
 
 @pytest.mark.asyncio
+async def test_stalled_attempt_times_out_and_is_retried(monkeypatch):
+    # SDK/httpx timeouts bound each socket read; a response that keeps trickling
+    # bytes never trips them. ``timeout`` must bound the whole attempt.
+    async def _no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _no_sleep)
+
+    class StallOnceDenseEmbedder(FakeDenseEmbedder):
+        async def _next_async(self):
+            if self.calls == 0:
+                self.calls += 1
+                await asyncio.Event().wait()
+            return self._next()
+
+    inner = StallOnceDenseEmbedder([[0.1, 0.2]], max_retries=1)
+    inner.config["timeout"] = 0.05
+    semaphore = AsyncSemaphore(1)
+    inner._account_semaphore = semaphore
+
+    result = await asyncio.wait_for(RetryEmbedder(inner).embed_async("query"), 5)
+
+    assert result.dense_vector == [0.1, 0.2]
+    assert inner.calls == 2
+    assert semaphore._value == 1
+
+
+def test_factory_passes_timeout_to_provider(monkeypatch):
+    monkeypatch.setattr("openai.OpenAI", lambda **_kwargs: object())
+    config = EmbeddingConfig(
+        dense=EmbeddingModelConfig(
+            provider="openai",
+            model="text-embedding-3-small",
+            api_key="key",
+            dimension=2,
+        ),
+        timeout=7,
+    )
+
+    assert config.get_embedder().config["timeout"] == 7
+
+
+@pytest.mark.asyncio
 async def test_composite_retries_only_failed_branch(monkeypatch):
     async def no_sleep(_delay):
         return None

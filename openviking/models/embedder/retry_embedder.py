@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Retry decorator for one concrete embedding provider."""
 
+import asyncio
 from typing import Any, Dict
 
 from openviking.models.embedder.base import EmbedderBase, EmbeddingInput, EmbedResult
@@ -49,11 +50,21 @@ class RetryEmbedder(EmbedderBase):
         **kwargs: Any,
     ) -> EmbedResult:
         return await retry_async(
-            lambda: self.inner.embed_async(content, is_query=is_query, **kwargs),
+            lambda: self._bounded(self.inner.embed_async(content, is_query=is_query, **kwargs)),
             max_retries=self.max_retries,
             logger=logger,
             operation_name=f"{self.provider} async embedding",
         )
+
+    async def _bounded(self, call):
+        # SDK/httpx timeouts bound each socket read, so a response that keeps trickling
+        # bytes never trips them; ``timeout`` must bound the whole attempt.
+        timeout = self.config.get("timeout")
+        try:
+            return await asyncio.wait_for(call, timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            # errors are classified by message; "timeout" keeps the attempt retryable
+            raise TimeoutError(f"embedding request timeout after {timeout}s") from exc
 
     def prepare_embedding_input(self, content: EmbeddingInput) -> EmbeddingInput:
         return self.inner.prepare_embedding_input(content)
