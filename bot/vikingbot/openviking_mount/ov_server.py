@@ -1034,7 +1034,7 @@ class VikingClient:
                         "type": "tool",
                         "tool_id": tool_id,
                         "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
                         if session_id
                         else "",
                         "tool_input": tool_input,
