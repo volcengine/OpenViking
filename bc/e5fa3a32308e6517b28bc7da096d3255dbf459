@@ -1,0 +1,24 @@
+openviking/service/core.py
+  h_b34c679d17e2ac 637
+openviking/service/resource_memory_link_service.py
+  h_b34c679d17e2ac 28-29,31,40-41,45,245,247,294-295,302,304,309,381,395,418-424,432-448,493-592
+openviking/storage/queuefs/session_commit_processor.py
+  h_b34c679d17e2ac 22,30,33,126-135
+tests/service/test_fs_service.py
+  h_b34c679d17e2ac 36,43-45,257-258,1485,1503-1504,1507-1509
+tests/service/test_resource_memory_link_service.py
+  h_b34c679d17e2ac 7,20,22,38-39,163-164,169-178,199,219,230,233,238-243,247,250,258,277-297,299-332,344,375,588,590,594-605,612-633,640-648,657,661
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "bce5fa3a32308e6517b28bc7da096d3255dbf459",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
