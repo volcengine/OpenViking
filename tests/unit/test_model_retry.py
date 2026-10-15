@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for shared model retry helpers."""
 
+import asyncio
+
 import httpx
 import openai
 import pytest
@@ -69,6 +71,21 @@ def test_classify_other_agfs_errors(error, expected, wrapped):
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+def test_classify_api_error_recognizes_timed_out_message():
+    assert classify_api_error(RuntimeError("Request timed out.")) == ERROR_CLASS_TRANSIENT
+
+
+@pytest.mark.parametrize("error_type", [TimeoutError, asyncio.TimeoutError])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_classify_api_error_treats_bare_timeout_as_transient(error_type, wrapped):
+    error = error_type()
+    if wrapped:
+        wrapper = RuntimeError("vlm call failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
 class _ProviderError(RuntimeError):
