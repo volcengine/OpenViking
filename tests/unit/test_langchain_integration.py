@@ -11,7 +11,13 @@ pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
 import langchain_openviking.client as client_helpers
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    convert_to_openai_messages,
+)
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -174,6 +180,77 @@ def test_create_openviking_tools_exposes_common_viking_primitives():
     health = health_tool.invoke({})
     assert '"backend": "OpenViking"' in health
     assert "VikingDB is internal vector/index storage" in health
+
+
+@pytest.mark.parametrize("role", ["user", "assistant", "system", "tool"])
+@pytest.mark.parametrize("text_format", ["string", "block"])
+def test_viking_store_normalizes_langchain_text_blocks(role: str, text_format: str):
+    content = [
+        {"type": "text", "text": "Remember cobalt deployment."},
+        {"type": "text", "text": "中文确认"},
+    ]
+    messages = {
+        "user": HumanMessage(content=content),
+        "assistant": AIMessage(content=content),
+        "system": SystemMessage(content=content),
+        "tool": ToolMessage(content=content, tool_call_id="call-normal", name="ordinary_tool"),
+    }
+    wire = convert_to_openai_messages([messages[role]], text_format=text_format)
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+
+    result = json.loads(
+        store.invoke({"session_id": "text-blocks", "messages": wire, "commit": False})
+    )
+
+    assert result["messages_added"] == 1
+    stored = client.sessions["text-blocks"][0]
+    assert stored["role"] == ("assistant" if role in {"system", "tool"} else role)
+    part = stored["parts"][0]
+    assert (
+        part["tool_output" if role == "tool" else "text"] == "Remember cobalt deployment.\n中文确认"
+    )
+    if role == "tool":
+        assert part["tool_id"] == "call-normal"
+        assert part["tool_name"] == "ordinary_tool"
+        assert part["tool_status"] == "completed"
+
+
+@pytest.mark.parametrize("content", [None, False, 0])
+def test_viking_store_preserves_scalar_content(content: Any):
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+
+    store.invoke(
+        {
+            "session_id": "scalar",
+            "messages": [{"role": "user", "content": content}],
+            "commit": False,
+        }
+    )
+
+    assert client.sessions["scalar"][0]["parts"] == [{"type": "text", "text": str(content)}]
+
+
+@pytest.mark.parametrize("role", ["user", "system", "tool"])
+def test_viking_store_preserves_native_parts(role: str):
+    client = InMemoryOpenVikingClient()
+    store = create_openviking_tools(client=client, tool_names=["viking_store"])[0]
+    parts = [{"type": "text", "text": "explicit parts control"}]
+
+    store.invoke(
+        {
+            "session_id": "native-parts",
+            "messages": [
+                {"role": role, "content": [{"type": "text", "text": "unused"}], "parts": parts}
+            ],
+            "commit": False,
+        }
+    )
+
+    stored = client.sessions["native-parts"][0]
+    assert stored["role"] == ("assistant" if role in {"system", "tool"} else role)
+    assert stored["parts"] == parts
 
 
 def test_create_openviking_tools_uses_peer_id_only_for_message_attribution():
