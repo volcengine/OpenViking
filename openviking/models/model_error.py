@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import re
 from enum import Enum
 from typing import Any, Callable, TypeVar, cast
 
@@ -218,11 +219,18 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "NotFoundError": ModelErrorKind.MODEL_NOT_FOUND,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        kind = (
-            _kind_from_code(error)
-            or class_kinds.get(name)
-            or _kind_from_status(_status_code(error))
-        )
+        kind = _kind_from_code(error)
+        if kind is None and _status_code(error) == 500:
+            # llama.cpp reports inputs above its physical batch capacity as
+            # HTTP 500 without a business code. Retrying the same input cannot help.
+            message = _body(error).get("message")
+            if isinstance(message, str) and re.fullmatch(
+                r"input \(\d+ tokens\) is too large to process\. "
+                r"increase the physical batch size \(current batch size: \d+\)",
+                message,
+            ):
+                kind = ModelErrorKind.INPUT_TOO_LARGE
+        kind = kind or class_kinds.get(name) or _kind_from_status(_status_code(error))
         return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("volcenginesdkarkruntime"):
@@ -311,7 +319,7 @@ def model_error_from_status(
 
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Convert a recognized SDK/API exception without inspecting free-form text."""
+    """Convert a recognized SDK/API exception at the provider boundary."""
     for item in _exception_chain(error):
         if isinstance(item, ModelError):
             return item

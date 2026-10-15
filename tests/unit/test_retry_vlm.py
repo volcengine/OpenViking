@@ -11,7 +11,7 @@ import pytest
 from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.base import MultiCredentialVLM, VLMBase, VLMFactory
 from openviking.models.vlm.retry_vlm import RetryVLM
-from openviking.utils.circuit_breaker import CircuitBreaker
+from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -326,22 +326,46 @@ def test_vlm_config_fails_over_when_primary_model_is_not_found():
     assert instance.active_credential_id == "backup"
 
 
-def test_openai_500_context_length_code_is_terminal_and_does_not_trip_breaker():
+@pytest.mark.parametrize(
+    ("error_body", "expected_kind", "expected_attempts"),
+    [
+        (
+            {
+                "message": "Maximum context length exceeded",
+                "type": "server_error",
+                "code": "context_length_exceeded",
+            },
+            ModelErrorKind.INPUT_TOO_LARGE,
+            1,
+        ),
+        (
+            {
+                "message": (
+                    "input (8525 tokens) is too large to process. increase the physical batch size "
+                    "(current batch size: 2048)"
+                ),
+                "type": "server_error",
+                "code": 500,
+            },
+            ModelErrorKind.INPUT_TOO_LARGE,
+            1,
+        ),
+        (
+            {"message": "Internal server error", "type": "server_error", "code": 500},
+            ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+            4,
+        ),
+    ],
+)
+def test_openai_500_retry_and_breaker_follow_error_kind(
+    error_body, expected_kind, expected_attempts
+):
     calls = 0
 
     def handler(_request):
         nonlocal calls
         calls += 1
-        return httpx.Response(
-            500,
-            json={
-                "error": {
-                    "message": "Maximum context length exceeded",
-                    "type": "server_error",
-                    "code": "context_length_exceeded",
-                }
-            },
-        )
+        return httpx.Response(500, json={"error": error_body})
 
     config = VLMConfig(
         model="test-model",
@@ -355,10 +379,14 @@ def test_openai_500_context_length_code_is_terminal_and_does_not_trip_breaker():
     with pytest.raises(ModelError) as raised:
         instance.get_completion(prompt="too long")
 
-    assert raised.value.kind is ModelErrorKind.INPUT_TOO_LARGE
-    assert calls == 1
+    assert raised.value.kind is expected_kind
+    assert calls == expected_attempts
 
     breaker = CircuitBreaker(failure_threshold=1)
     breaker.record_failure(raised.value)
-    breaker.check()
-    assert breaker._failure_count == 0
+    if expected_kind is ModelErrorKind.INPUT_TOO_LARGE:
+        breaker.check()
+        assert breaker._failure_count == 0
+    else:
+        with pytest.raises(CircuitBreakerOpen):
+            breaker.check()
