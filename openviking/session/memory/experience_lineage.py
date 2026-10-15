@@ -9,7 +9,7 @@ import re
 from typing import Any, Iterable
 
 from openviking.core.namespace import uri_parts
-from openviking.message import Message, ToolPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.server.identity import RequestContext
 from openviking.utils.tags import normalize_search_tag
 
@@ -25,6 +25,14 @@ _READ_TOOL_OPERATIONS = {
 _MCP_OPENVIKING_READ_RE = re.compile(
     r"^mcp__(?:openviking|plugin_.+_openviking)__(read|multi_read)$",
     re.IGNORECASE,
+)
+_SKILL_EXPERIENCE_BLOCK_RE = re.compile(
+    r'<openviking-context source="skill-experience" '
+    r'format="experience-digest">\s*(.*?)\s*</openviking-context>',
+    re.DOTALL,
+)
+_SKILL_EXPERIENCE_ITEM_RE = re.compile(
+    r"^\s*-\s+\[experience\s+\d+%\].*\((viking://[^)\r\n]+)\)\s*$"
 )
 TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
@@ -105,7 +113,7 @@ def collect_read_experience_uris(
     *,
     ctx: RequestContext,
 ) -> list[str]:
-    """Collect Experiences successfully read in a committed session message set."""
+    """Collect Experiences read or injected in a committed session message set."""
     message_list = list(messages or [])
     tool_inputs: dict[tuple[str, str], dict[str, Any]] = {}
     for message in message_list:
@@ -122,6 +130,13 @@ def collect_read_experience_uris(
     seen: set[str] = set()
     for message in message_list:
         for part in message.parts:
+            if isinstance(part, TextPart):
+                for uri in _iter_skill_experience_uris(part.text):
+                    canonical_uri = canonical_experience_uri(uri, ctx)
+                    if canonical_uri and canonical_uri not in seen:
+                        seen.add(canonical_uri)
+                        result.append(canonical_uri)
+                continue
             if not isinstance(part, ToolPart):
                 continue
             operation = _read_operation(part.tool_name)
@@ -149,6 +164,15 @@ def collect_read_experience_uris(
                 seen.add(canonical_uri)
                 result.append(canonical_uri)
     return result
+
+
+def _iter_skill_experience_uris(text: str) -> Iterable[str]:
+    """Yield URIs from skill-experience digest lines emitted by the plugin."""
+    for block in _SKILL_EXPERIENCE_BLOCK_RE.finditer(str(text or "")):
+        for line in block.group(1).splitlines():
+            match = _SKILL_EXPERIENCE_ITEM_RE.fullmatch(line)
+            if match is not None:
+                yield match.group(1).strip()
 
 
 def _read_operation(tool_name: str) -> str | None:
