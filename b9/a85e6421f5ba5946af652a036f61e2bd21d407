@@ -1,0 +1,28 @@
+docs/en/api/02-resources.md
+  h_b34c679d17e2ac 165,187,227-229,627
+docs/zh/api/02-resources.md
+  h_b34c679d17e2ac 165,187,227-229,626
+openviking/service/core.py
+  h_b34c679d17e2ac 123-125
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 491-497,520,553-570
+openviking/service/resource_memory_link_service.py
+  h_b34c679d17e2ac 11,13,27,50,61-67,137,142,169,179-180,184-190,227,231,249,290-303,379,381-384,388-396,416-422,464,470-522
+tests/service/test_fs_service.py
+  h_b34c679d17e2ac 36,43,48-59,267-277,1493,1497,1506-1508,1528-1535
+tests/service/test_resource_memory_link_service.py
+  h_b34c679d17e2ac 8,16,18,35-37,184,202-211,213-215,220-223,228-241,244-251,277-279,281-282,294,305-307,317,328,348,365,375,542-547,550-557,564,571-572,576,581-642,646,676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b9a85e6421f5ba5946af652a036f61e2bd21d407",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
