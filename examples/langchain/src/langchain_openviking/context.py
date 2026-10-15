@@ -951,8 +951,12 @@ def _merge_system_message(messages: Sequence[Any], context_block: str) -> list[A
     updated = list(messages)
     for index, message in enumerate(updated):
         if isinstance(message, SystemMessage):
-            content = extract_message_text(message.content)
-            updated[index] = SystemMessage(content=f"{content}\n\n{context_block}".strip())
+            content = (
+                [*deepcopy(message.content), {"type": "text", "text": context_block}]
+                if isinstance(message.content, list)
+                else f"{extract_message_text(message.content)}\n\n{context_block}".strip()
+            )
+            updated[index] = message.model_copy(update={"content": content})
             return updated
     return [SystemMessage(content=context_block), *updated]
 

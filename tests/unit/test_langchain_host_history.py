@@ -1,5 +1,6 @@
 """Native host history and capture remain independent of OV archive summaries."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +10,7 @@ pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -145,3 +146,59 @@ def test_framework_summary_persists_and_resumes_with_no_ov_context(tmp_path):
     captured = [m for archive in client.archives["durable-host"] for m in archive["messages"]]
     assert len(captured) == 8  # Four user/assistant pairs, no replayed tail or synthetic summary.
     assert not any("Early constraint:" in str(message) for message in captured)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("inject_context", [False, True])
+@pytest.mark.asyncio
+async def test_recall_preserves_existing_system_message(asynchronous, structured, inject_context):
+    content = "Keep the deployment policy."
+    if structured:
+        content = [
+            {
+                "type": "text",
+                "text": "Keep the deployment policy.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    system = SystemMessage(
+        content=content,
+        id="policy-id",
+        name="policy",
+        additional_kwargs={"host_field": {"keep": True}},
+        response_metadata={"source": "host"},
+    )
+    before = deepcopy(system.model_dump())
+    client = InMemoryOpenVikingClient({"viking://resources/policy.md": "Deployment uses azure."})
+    seen = []
+
+    def answer(messages):
+        seen.extend(messages)
+        return AIMessage(content="Acknowledged.")
+
+    async with with_openviking_memory(
+        RunnableLambda(answer),
+        client=client,
+        history_factory=lambda _: InMemoryChatMessageHistory(),
+        inject_context=inject_context,
+    ) as runnable:
+        values = [system, HumanMessage(content="azure deployment")]
+        config = {"configurable": {"session_id": "policy"}}
+        if asynchronous:
+            await runnable.ainvoke(values, config=config)
+        else:
+            runnable.invoke(values, config=config)
+
+    observed = next(message for message in seen if isinstance(message, SystemMessage))
+    assert observed.model_dump(exclude={"content"}) == system.model_dump(exclude={"content"})
+    assert system.model_dump() == before
+    if not inject_context:
+        assert observed.content == content
+    elif structured:
+        assert observed.content[:-1] == content
+        assert observed.content[-1]["type"] == "text"
+        assert "Deployment uses azure." in observed.content[-1]["text"]
+    else:
+        assert observed.content.startswith(f"{content}\n\n<openviking_context>")
+        assert "Deployment uses azure." in observed.content
