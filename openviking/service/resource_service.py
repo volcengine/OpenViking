@@ -648,7 +648,7 @@ class ResourceService:
             return False
 
     async def close_background_tasks(self) -> None:
-        """Cancel in-flight connector monitoring tasks during service shutdown."""
+        """Cancel in-flight queue and connector monitoring tasks during service shutdown."""
         if not self._background_tasks:
             return
         tasks = list(self._background_tasks)
@@ -2256,6 +2256,15 @@ class ResourceService:
             logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
+    def _start_queue_monitor(
+        self, task_id: str, telemetry_id: str, account_id: str, user_id: str
+    ) -> None:
+        background = asyncio.create_task(
+            self._monitor_queue_processing(task_id, telemetry_id, account_id, user_id)
+        )
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+
     async def _monitor_queue_processing(
         self,
         task_id: str,
@@ -2503,10 +2512,8 @@ class ResourceService:
             processing_started = True
             if not wait:
                 monitor_started = True
-                asyncio.create_task(
-                    self._monitor_queue_processing(
-                        task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
-                    )
+                self._start_queue_monitor(
+                    task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
                 )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
@@ -2546,10 +2553,8 @@ class ResourceService:
                     # A cancelled standalone request leaves processing in the background.
                     # An update's caller separately cancels before restoring.
                     monitor_started = True
-                    asyncio.create_task(
-                        self._monitor_queue_processing(
-                            task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
-                        )
+                    self._start_queue_monitor(
+                        task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
                     )
                 else:
                     failure_message = str(exc) or "Skill processing cancelled"
