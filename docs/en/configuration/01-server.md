@@ -529,7 +529,10 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "topic_continuity": {
+      "enabled": false
+    }
   }
 }
 ```
@@ -545,8 +548,23 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+| `topic_continuity` | object | see below | Group adjacent Turns by topic continuity before long-term extraction; off by default |
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
+
+`topic_continuity` fields (all optional; off by default):
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Group adjacent Turns by topic continuity before extraction |
+| `max_turns` | integer, `>= 1` | `10` | Maximum complete Turns in one topic group |
+| `overlap_turns` | integer, `>= 0` | `1` | On `max_turns` cuts only, prefix the next group with the last N Turns |
+| `min_turns_to_split` | integer, `>= 1` | `2` | Skip grouping when the archive has fewer Turns |
+| `time_gap_seconds` | integer, `>= 0` | `0` | Adjacent Turn anchors farther apart than this are not continuous; `0` ignores time |
+| `embedding_similarity_threshold` | number, `0`–`1` | `0.45` | Cosine similarity floor when an embedder is provided |
+| `skip_max_user_chars` | integer, `>= 0` | `0` | Skip a group when owned user-query text is at most this many characters; `0` never skips |
+
+When a dedicated `query_planner` is configured, it decides whether neighboring Turns stay one topic. A timeout, error, or unclear reply stays continuous. Without that planner, the extraction model is not called; with `time_gap_seconds=0`, the flag then splits only on `max_turns`. The split stays inside one commit.
 
 ## Parser Settings
 

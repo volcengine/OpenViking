@@ -1967,6 +1967,7 @@ openviking-server --config /path/to/ov.conf
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
 | `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见下文 |
+| `topic_continuity` | 长期记忆提取前是否按相邻 Turn 话题连续性分组。默认关闭；详见 [Topic Continuity 配置](#topic-continuity-配置)。 | 见下文 |
 
 #### 记忆链接（`memory.link_enabled`）
 
@@ -2057,6 +2058,38 @@ openviking-server --config /path/to/ov.conf
 | `min_commit_interval_seconds` | int | 0 | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
+
+#### Topic Continuity 配置
+
+`memory.topic_continuity` 控制长期记忆提取前是否按相邻 Turn 的话题连续性分组。默认关闭；关闭时提取行为与现有 commit 批次一致。
+
+```json
+{
+  "memory": {
+    "topic_continuity": {
+      "enabled": false,
+      "max_turns": 10,
+      "overlap_turns": 1,
+      "min_turns_to_split": 2,
+      "time_gap_seconds": 0,
+      "embedding_similarity_threshold": 0.45,
+      "skip_max_user_chars": 0
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `enabled` | bool | 是否在长期记忆提取前按话题连续性分组。关闭时保持整包或按 auto-commit 阈值切批 | `false` |
+| `max_turns` | int | 同一话题组最多包含的完整 Turn 数，超出后切开 | `10` |
+| `overlap_turns` | int | 仅在因 `max_turns` 切开时，把上一组末尾若干 Turn 作为下一组的上下文前缀。话题切换切开不加前缀 | `1` |
+| `min_turns_to_split` | int | 归档 Turn 数少于此值时不分组 | `2` |
+| `time_gap_seconds` | int | 相邻 Turn 锚点时间间隔超过该值则视为不连续。`0` 表示忽略时间 | `0` |
+| `embedding_similarity_threshold` | float | 提供 embedder 时，余弦相似度低于该阈值视为不连续。未配置 embedder 时不生效 | `0.45` |
+| `skip_max_user_chars` | int | 一组 owned Turn 的用户提问总字符数不超过该值则跳过提取。`0` 表示不跳过 | `0` |
+
+配置了独立 `query_planner` 时，由它判断相邻 Turn 是否仍是同一话题。超时、异常或无法解析的回复都保持连续。没有独立 planner 时不会调用提取用的 VLM；此时若 `time_gap_seconds=0`，开启后只按 `max_turns` 切组。切开发生在同一次 commit 内部。
 
 ### ovcli.conf
 

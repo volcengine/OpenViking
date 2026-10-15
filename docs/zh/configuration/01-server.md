@@ -510,7 +510,10 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "topic_continuity": {
+      "enabled": false
+    }
   }
 }
 ```
@@ -526,8 +529,23 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
+| `topic_continuity` | object | 见下表 | 长期记忆提取前是否按相邻 Turn 话题连续性分组，默认关闭 |
 
 自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
+
+`topic_continuity` 字段（均可选；默认关闭）：
+
+| 字段 | 类型 | 默认值 | 作用 |
+|---|---|---|---|
+| `enabled` | boolean | `false` | 是否按相邻 Turn 话题连续性分组后再提取 |
+| `max_turns` | integer，`>= 1` | `10` | 同一话题组最多包含的完整 Turn 数 |
+| `overlap_turns` | integer，`>= 0` | `1` | 仅 `max_turns` 切开时，把上一组末尾若干 Turn 作为下一组上下文前缀 |
+| `min_turns_to_split` | integer，`>= 1` | `2` | Turn 数少于此值时不分组 |
+| `time_gap_seconds` | integer，`>= 0` | `0` | 相邻 Turn 锚点间隔超过该值视为不连续；`0` 忽略时间 |
+| `embedding_similarity_threshold` | number，`0`–`1` | `0.45` | 提供 embedder 时的余弦相似度下限 |
+| `skip_max_user_chars` | integer，`>= 0` | `0` | 用户提问总字符不超过该值则跳过该组；`0` 不跳过 |
+
+配置了独立 `query_planner` 时，由它判断相邻 Turn 是否仍是同一话题。超时、异常或无法解析的回复都保持连续。没有独立 planner 时不会调用提取用的 VLM；此时若 `time_gap_seconds=0`，开启后只按 `max_turns` 切组。切开发生在同一次 commit 内部。
 
 ## 解析器配置
 
