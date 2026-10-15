@@ -104,6 +104,67 @@ test("existing OpenViking sessions are reusable on DSH resume", async () => {
   assert.equal(state.initializationRetryable, false);
 });
 
+test("startup profile includes memories from the current actor peer", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-profile-peer-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const listedUris = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      return { ok: true };
+    },
+    async fetchJSON(path) {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname === "/api/v1/system/status") {
+        return { ok: true, result: { user: "default" } };
+      }
+      if (url.pathname === "/api/v1/content/read") {
+        return { ok: false, status: 404 };
+      }
+      if (url.pathname === "/api/v1/fs/ls") {
+        const uri = url.searchParams.get("uri");
+        if (uri === "viking://user") {
+          return { ok: true, result: [{ name: "default", isDir: true }] };
+        }
+        listedUris.push(uri);
+        if (uri?.endsWith("/peers/dsh-main/memories/preferences")) {
+          return {
+            ok: true,
+            result: [{ name: "project.md", rel_path: "project.md", isDir: false }],
+          };
+        }
+        return { ok: true, result: [] };
+      }
+      return { ok: true, result: {} };
+    },
+  }, {
+    ...config(),
+    peerId: "dsh-main",
+    explicitPeerId: "dsh-main",
+    syncTurns: false,
+    profileTokenBudget: 2000,
+    skillCatalog: false,
+  }, { debug() {} });
+
+  const state = await runtime.initialize({
+    session: { id: "profile-peer", header: { cwd: "/workspace" } },
+  });
+
+  assert.match(
+    state.profileBlock,
+    /viking:\/\/user\/default\/peers\/dsh-main\/memories\/preferences/,
+  );
+  assert.deepEqual(listedUris, [
+    "viking://user/default/memories/preferences",
+    "viking://user/default/memories/entities",
+    "viking://user/default/peers/dsh-main/memories/preferences",
+    "viking://user/default/peers/dsh-main/memories/entities",
+  ]);
+});
+
 test("a retryable threshold commit failure is queued", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-commit-"));
   tempDirs.push(pendingDir);

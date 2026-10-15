@@ -7,7 +7,7 @@ import { buildProfileBlock, estimateTokens, isRepeatInjection, truncateToBytes }
 
 const CATALOG = { skillCatalog: true, skillCatalogTokenBudget: 1200 };
 
-function fakeServer({ profile = "", skills = [], skillsResponse, memories = [] } = {}) {
+function fakeServer({ profile = "", skills = [], skillsResponse, memories = [], memoriesByUri = {} } = {}) {
   const calls = [];
   const fetchJSON = async (path) => {
     calls.push(path);
@@ -18,7 +18,14 @@ function fakeServer({ profile = "", skills = [], skillsResponse, memories = [] }
     if (path.startsWith("/api/v1/content/read")) {
       return profile ? { ok: true, result: profile } : { ok: false, status: 404 };
     }
-    if (path.startsWith("/api/v1/fs/ls") && path.includes("preferences")) return { ok: true, result: memories };
+    if (path.startsWith("/api/v1/fs/ls")) {
+      const uri = new URL(path, "http://localhost").searchParams.get("uri");
+      if (Object.hasOwn(memoriesByUri, uri)) {
+        const result = memoriesByUri[uri];
+        return result === null ? { ok: false, status: 404 } : { ok: true, result };
+      }
+      if (path.includes("preferences")) return { ok: true, result: memories };
+    }
     return { ok: true, result: [] };
   };
   return { calls, fetchJSON };
@@ -137,6 +144,42 @@ test("without the catalog option nothing asks for skills and the block is unchan
     assert.ok(!calls.some((path) => path.startsWith("/api/v1/skills")), JSON.stringify(options));
     assert.equal(result.block, '<user-profile uri="viking://user/default/memories/profile.md">\n# Alice\n</user-profile>');
   }
+});
+
+test("actor peer memories are opt-in, scoped, and tolerate a missing directory", async () => {
+  const userPref = "viking://user/default/memories/preferences";
+  const userEnt = "viking://user/default/memories/entities";
+  const peerPref = "viking://user/default/peers/dsh%2Fmain/memories/preferences";
+  const peerEnt = "viking://user/default/peers/dsh%2Fmain/memories/entities";
+  const entry = (name) => [{ name, rel_path: name, isDir: false, abstract: "" }];
+  const { calls, fetchJSON } = fakeServer({
+    memoriesByUri: {
+      [userPref]: entry("user/pref.md"),
+      [userEnt]: entry("user/entity.md"),
+      [peerPref]: entry("project/pref.md"),
+      [peerEnt]: null,
+    },
+  });
+
+  const result = await buildProfileBlock(fetchJSON, 2000, "dsh/main", {
+    includeActorPeerMemories: true,
+  });
+
+  assert.ok(result);
+  assert.match(result.block, /viking:\/\/user\/default\/memories\/preferences/);
+  assert.match(result.block, /viking:\/\/user\/default\/memories\/entities/);
+  assert.match(result.block, /viking:\/\/user\/default\/peers\/dsh%2Fmain\/memories\/preferences/);
+  assert.doesNotMatch(result.block, /peers\/dsh%2Fmain\/memories\/entities/);
+
+  const listedUris = calls
+    .filter((path) => path.startsWith("/api/v1/fs/ls"))
+    .map((path) => new URL(path, "http://localhost").searchParams.get("uri"))
+    .filter((uri) => uri?.includes("/memories/"));
+  assert.deepEqual(listedUris, [userPref, userEnt, peerPref, peerEnt]);
+
+  const withoutActor = fakeServer({ memoriesByUri: { [userPref]: entry("user/pref.md") } });
+  await buildProfileBlock(withoutActor.fetchJSON, 2000, "", { includeActorPeerMemories: true });
+  assert.ok(withoutActor.calls.every((path) => !path.includes("%2Fpeers%2F")));
 });
 
 test("the user's own skills keep their descriptions when the shared group needs little", async () => {
