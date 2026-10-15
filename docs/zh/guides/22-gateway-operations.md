@@ -575,7 +575,7 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 
 **按用户隔离。** 每把网关密钥绑定一位 OpenViking 用户。网关用这位用户自己的 OpenViking 密钥检索记忆、保存对话和调用工具，所以能做的事不会超出用户本人的权限；各用户的对话状态互相隔离。会话和记忆的正本始终在 OpenViking，网关只保存让对话继续所需的状态。
 
-**网关存储什么。** `storage_path` 下有两个 SQLite 数据库，文件只有运行网关的系统用户能读取；开启[加密](#加密)后，存储的每个值也都会加密：
+**网关存储什么。** `storage_path` 下有两个 SQLite 数据库（嵌入网关默认在 `storage.workspace/gateway`，见[配置参考](#配置参考)），文件只有运行网关的系统用户能读取；开启[加密](#加密)后，存储的每个值也都会加密：
 
 - `management.sqlite3`：上游、上下文配置、网关密钥、请求日志，以及每个 Responses 响应由哪个上游创建。其中包括上游 API Key、请求头的值，以及网关密钥绑定的 OpenViking 密钥，加密关闭时它们以明文存储；网关密钥本身只存哈希和一段短前缀。
 - `kernel.sqlite3`：每段对话的状态，包括补充到消息中的记忆原文（原样放回需要它）、OpenViking 工具的往返记录、摘要，以及等待保存的对话文本。
@@ -662,7 +662,7 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 | `workers` | 独立 | `1` | worker 进程数，1–64 |
 | `encryption` | 独立 | 不设置（明文） | 字段同 `ov.conf` 的 `encryption` 段，见[加密](#加密)；嵌入网关沿用 Server 的设置 |
 | `public_url` | 两者 | 空 | 客户端访问的对外地址，不带 `/gateway`（网关自己加）；嵌入时为空则沿用 Server 的对外地址；都没有时接入指南用请求来源地址，文件上传不可用 |
-| `storage_path` | 两者 | `~/.openviking/gateway` | 本地存储目录 |
+| `storage_path` | 两者 | 嵌入：`storage.workspace` 下的 `gateway`；独立：`~/.openviking/gateway` | 本地存储目录。嵌入网关不设置时跟随 Server 的数据目录，容器只把卷挂在数据目录上也不会丢；`~/.openviking/gateway` 里已经有网关数据时继续用它，并在启动日志里提示 |
 | `management_key` | 两者 | 空 | 可选的网关管理密钥，至少 32 个字符 |
 | `min_server_version` | 两者 | `0.4.16` | 独立网关要求的 OpenViking Server 最低版本 |
 | `session_ttl_days` | 两者 | `30` | 对话闲置多少天后过期，最小 1 |

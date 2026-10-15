@@ -575,7 +575,7 @@ Each request's detail in the request log shows the window number, whether the mo
 
 **Isolation by user.** Each gateway key is bound to one OpenViking user. The gateway searches memory, saves conversations and calls tools with that user's own OpenViking key, so it can never do more than the user can, and each user's conversation state is kept separate. Sessions and memories always live in OpenViking; the gateway keeps only the state it needs to continue conversations.
 
-**What the gateway stores.** `storage_path` holds two SQLite databases. Only the system user that runs the gateway can read the files, and with [encryption](#encryption) on, every stored value is encrypted as well:
+**What the gateway stores.** `storage_path` holds two SQLite databases (for an embedded gateway, `storage.workspace/gateway` by default; see [Configuration reference](#configuration-reference)). Only the system user that runs the gateway can read the files, and with [encryption](#encryption) on, every stored value is encrypted as well:
 
 - `management.sqlite3`: upstreams, context profiles, gateway keys, request logs, and which upstream created each Responses response. This includes upstream API keys, header values and the OpenViking keys bound to gateway keys, which are in plain text when encryption is off; gateway keys themselves are stored only as a hash and a short prefix.
 - `kernel.sqlite3`: the state of each conversation, including the memory text added to messages (needed for replay), OpenViking tool rounds, summaries and conversation text waiting to be saved.
@@ -662,7 +662,7 @@ Both forms use the same fields; they differ only in where the file lives and how
 | `workers` | Standalone | `1` | Worker processes, 1–64 |
 | `encryption` | Standalone | not set (plain text) | Same fields as the `encryption` section of `ov.conf`; see [Encryption](#encryption). Embedded gateways use the server's section |
 | `public_url` | Both | empty | The external address clients use, without `/gateway` (the gateway appends it); when empty, an embedded gateway uses the server's public address; with neither, setup guides use the request's origin and file uploads do not work |
-| `storage_path` | Both | `~/.openviking/gateway` | Local storage directory |
+| `storage_path` | Both | Embedded: `gateway` under `storage.workspace`; standalone: `~/.openviking/gateway` | Local storage directory. When unset, an embedded gateway keeps its data with the server's workspace, so a container that mounts a volume only on the workspace keeps it too; if `~/.openviking/gateway` already holds gateway data, the gateway keeps using it and says so in the startup log |
 | `management_key` | Both | empty | Optional gateway management key, at least 32 characters |
 | `min_server_version` | Both | `0.4.16` | Lowest OpenViking Server version a standalone gateway accepts |
 | `session_ttl_days` | Both | `30` | Days of inactivity before a conversation expires; minimum 1 |

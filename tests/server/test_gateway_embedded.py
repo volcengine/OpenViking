@@ -70,6 +70,49 @@ def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):
     assert public_url(own) == "https://gw.example.com"
 
 
+def embedded_storage(monkeypatch, gateway, workspace):
+    monkeypatch.setattr(
+        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
+    )
+    config = openviking_config(gateway)
+    config.storage = SimpleNamespace(workspace=str(workspace))
+    options = gateway_host.create_embedded_gateway(
+        config, SimpleNamespace(host="127.0.0.1", port=1987, public_base_url=None), lambda: None
+    )
+    return options["config"].storage_path
+
+
+def test_embedded_gateway_stores_data_in_the_server_workspace(tmp_path, monkeypatch):
+    # A container volume often covers only the workspace, not $HOME.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENVIKING_GATEWAY_STORAGE_PATH", raising=False)
+    path = embedded_storage(monkeypatch, EmbeddedGatewayConfig(enabled=True), tmp_path / "data")
+    assert path == str(tmp_path / "data" / "gateway")
+
+
+def test_embedded_gateway_keeps_data_already_in_the_home_directory(tmp_path, monkeypatch):
+    legacy = tmp_path / "home" / ".openviking" / "gateway"
+    legacy.mkdir(parents=True)
+    (legacy / "management.sqlite3").touch()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENVIKING_GATEWAY_STORAGE_PATH", raising=False)
+    path = embedded_storage(monkeypatch, EmbeddedGatewayConfig(enabled=True), tmp_path / "data")
+    assert path == str(legacy)
+
+
+def test_explicit_gateway_storage_path_wins(tmp_path, monkeypatch):
+    legacy = tmp_path / "home" / ".openviking" / "gateway"
+    legacy.mkdir(parents=True)
+    (legacy / "kernel.sqlite3").touch()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENVIKING_GATEWAY_STORAGE_PATH", raising=False)
+    configured = EmbeddedGatewayConfig(enabled=True, storage_path=str(tmp_path / "conf"))
+    assert embedded_storage(monkeypatch, configured, tmp_path / "data") == str(tmp_path / "conf")
+    monkeypatch.setenv("OPENVIKING_GATEWAY_STORAGE_PATH", str(tmp_path / "env"))
+    from_env = EmbeddedGatewayConfig.model_validate({"enabled": True})
+    assert embedded_storage(monkeypatch, from_env, tmp_path / "data") == str(tmp_path / "env")
+
+
 @pytest.fixture
 async def model_server():
     from aiohttp import web
