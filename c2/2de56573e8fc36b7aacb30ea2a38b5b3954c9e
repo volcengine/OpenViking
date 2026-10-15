@@ -1,0 +1,22 @@
+openviking/server/error_mapping.py
+  h_b34c679d17e2ac 432-433
+openviking/service/resource_memory_link_service.py
+  h_b34c679d17e2ac 208,268,363,380-386,394,415-428,441,443,448,522-535,537-578,583-585,648,677-678,695-696,729-730,732,734,738,743-747,752,832
+tests/server/test_error_mapping.py
+  h_b34c679d17e2ac 15,22,64-69
+tests/service/test_resource_memory_link_service.py
+  h_b34c679d17e2ac 155,218-220,281-282,495,535,549-552,584,643-650,656
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c22de56573e8fc36b7aacb30ea2a38b5b3954c9e",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
