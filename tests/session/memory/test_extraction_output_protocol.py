@@ -201,12 +201,48 @@ def test_python_contract_and_bindings_expose_only_selected_schema_fields():
 
     assert "sdk.create_preferences" in contract
     assert "sdk.create_projects" not in contract
-    assert "preferences_1 = sdk.existing" in bindings
+    assert "The variable 'preferences_1' is already bound by the system" in bindings
+    assert "bound object: preferences_1 -> existing 'preferences'" in bindings
     assert "topic='editor'" in bindings
     assert "content='Use Vim'" in bindings
     assert "version" not in bindings
     assert uri not in bindings
     assert protocol.render_new_bindings(context, source="duplicate read") == ""
+
+
+def test_python_bindings_render_as_comments_and_bound_variable_still_compiles():
+    uri = "viking://user/alice/memories/preferences/editor.md"
+    context = _context(
+        [_preference_schema()],
+        files=[_existing_preference(uri, "editor", "Use Vim", 2)],
+    )
+    protocol = create_extraction_output_protocol("python")
+
+    bindings = _bind(protocol, context)
+
+    # Bindings must be declarative comments: the reserved sdk.existing() call
+    # form must never appear for the model to mirror, while field values stay
+    # visible verbatim for the search=/drop text= anchor rule.
+    assert "sdk.existing(" not in bindings
+    assert "the reserved sdk.existing call form is rejected" in bindings
+    assert "The variable 'preferences_1' is already bound by the system" in bindings
+    assert "bound object: preferences_1 -> existing 'preferences'" in bindings
+    assert "memory_type='preferences'" in bindings
+    assert "topic='editor'" in bindings
+    assert "content='Use Vim'" in bindings
+    assert "score=2" in bindings
+
+    # The compiler pre-binds the same variable name (_load_existing_objects), so
+    # a program that uses the bound variable compiles unchanged even though the
+    # prompt never shows a binding call.
+    operations, error = protocol.parse(
+        "preferences_1.update(content='Use Vim daily')\nsdk.commit()",
+        context,
+    )
+
+    assert error is None
+    assert operations is not None
+    assert operations.preferences[0].content == "Use Vim daily"
 
 
 def test_python_update_preserves_unchanged_mutable_identity_fields():
@@ -483,7 +519,8 @@ def test_python_protocol_renders_read_result_directly_as_existing_binding():
     assert len(messages) == 1
     content = messages[0]["content"]
     assert content.startswith("# Existing memory loaded by tool call")
-    assert "preferences_1 = sdk.existing(" in content
+    assert "The variable 'preferences_1' is already bound by the system" in content
+    assert "bound object: preferences_1 -> existing 'preferences'" in content
     assert "content='Keep plugins small'" in content
     assert "2\\tKeep plugins small" not in content
     assert "Use Vim" not in content
@@ -543,7 +580,7 @@ def test_python_protocol_converts_prefetch_tool_messages_without_duplicating_rea
     assert f"# - {uri}" in combined
     assert "search_results = [" not in combined
     # The file that was actually read becomes a system-provided existing binding.
-    assert "preferences_1 = sdk.existing(" in combined
+    assert "The variable 'preferences_1' is already bound by the system" in combined
     assert combined.count("Use Vim") == 1
     assert "tool_call_name" not in combined
     assert '"result"' not in combined
@@ -704,7 +741,7 @@ def test_python_edits_aliased_field_on_existing_object():
     # Existing-object binding exposes the field under its identifier alias.
     assert "note_body=" in bindings
 
-    var = bindings.split(" = ", 1)[0].strip().splitlines()[-1]
+    var = protocol.binding_name("viking://user/alice/memories/project-notes/atlas.md")
     operations, error = protocol.parse(
         f"""
 {var}.note_body.edit(search=\"\"\"Kickoff on 2023-06-09.\"\"\", replace=\"\"\"Kickoff moved to 2023-07-01.\"\"\")
