@@ -805,10 +805,20 @@ def test_system_messages_are_never_persisted_to_openviking_history():
     assert payloads == []
 
 
-def test_session_context_assembler_uses_archive_active_messages_and_recall():
-    client = InMemoryOpenVikingClient(
-        {"viking://resources/runbooks/deploy.md": "Azure deployments use OpenViking context."}
-    )
+@pytest.mark.parametrize("metadata_prefix", ["openviking", "recall", "", "my_recall"])
+@pytest.mark.parametrize(
+    "uri, context_type",
+    [
+        ("viking://resources/runbooks/deploy.md", "resource"),
+        ("viking://user/default/memories/preferences/deploy.md", "memory"),
+        ("viking://skills/deploy.md", "skill"),
+    ],
+)
+def test_session_context_assembler_uses_archive_active_messages_and_recall(
+    metadata_prefix, uri, context_type
+):
+    content = "Azure deployments use OpenViking context. " * 20
+    client = InMemoryOpenVikingClient({uri: content})
     client.add_message("assembler-session", "user", content="Earlier user turn")
     client.add_message("assembler-session", "assistant", content="Earlier assistant turn")
     client.commit_session("assembler-session", enable_working_memory=True)
@@ -817,7 +827,9 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assembler = OpenVikingSessionContextAssembler(
         include_session_context=True,
         client=client,
-        target_uri="viking://resources",
+        retriever=OpenVikingRetriever(
+            client=client, target_uri=uri, metadata_prefix=metadata_prefix, search_mode="search"
+        ),
     )
     assembled = assembler.assemble(session_id="assembler-session", query="azure context")
 
@@ -827,7 +839,9 @@ def test_session_context_assembler_uses_archive_active_messages_and_recall():
     assert "Active session messages" in assembled.block
     assert "Active turn" in assembled.block
     assert "Azure deployments" in assembled.block
-    assert assembled.context_parts[0]["type"] == "context"
+    assert assembled.context_parts == [
+        {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
+    ]
 
 
 def test_session_context_assembler_keeps_peer_id_out_of_recall():

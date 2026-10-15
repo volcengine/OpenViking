@@ -314,7 +314,9 @@ class OpenVikingSessionContextAssembler:
         block = self._format_context_block(session_context, recall_documents)
         return OpenVikingAssembledContext(
             block=block,
-            context_parts=context_parts_from_documents(recall_documents),
+            context_parts=context_parts_from_documents(
+                recall_documents, metadata_prefix=self.retriever.metadata_prefix
+            ),
             session_context=session_context,
             recall_documents=recall_documents,
         )
