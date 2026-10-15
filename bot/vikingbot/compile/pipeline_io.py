@@ -16,6 +16,7 @@ import json_repair
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
+from openviking.models.model_error import ModelError
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.compile.hashing import digest
@@ -318,6 +319,12 @@ class JsonModel:
                     self.usage[name] = self.usage.get(name, 0) + value
                     self.metrics[f"{stage}_{name}"] += value
             if response.finish_reason == "error":
+                error_kind = getattr(response, "error_kind", None)
+                if error_kind is not None:
+                    raise ModelError(
+                        error_kind,
+                        response.content or "Model transport failure; see provider diagnostics",
+                    )
                 raise OSError(
                     response.content or "Model transport failure; see provider diagnostics"
                 )
