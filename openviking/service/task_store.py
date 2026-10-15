@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
@@ -13,6 +14,8 @@ from typing import Any, Dict, List, Optional, Protocol
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_tracker_concurrency import StoreIOLimiter, run_to_completion
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -34,6 +37,8 @@ class TaskStore(Protocol):
     async def list(
         self, account_id: str, *, user_id: Optional[str] = None
     ) -> List[Dict[str, Any]]: ...
+
+    async def list_all(self) -> List[Dict[str, Any]]: ...
 
     async def list_page(
         self,
@@ -111,6 +116,32 @@ class PersistentTaskStore:
             except (AGFSNotFoundError, FileNotFoundError):
                 continue
             tasks.append(json.loads(_decode_bytes(raw)))
+        return tasks
+
+    async def list_all(self) -> List[Dict[str, Any]]:
+        """Load every persisted task record across all accounts.
+
+        Used by startup reconciliation, which must see records no queue
+        references any more; scoped readers should use ``list``/``list_page``.
+        """
+        try:
+            accounts = await self._agfs.ls(self.ROOT_PREFIX)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return []
+        tasks: List[Dict[str, Any]] = []
+        for entry in accounts:
+            if not entry.get("isDir") or entry.get("name") in (".", ".."):
+                continue
+            try:
+                tasks.extend(await self.list(entry["name"]))
+            except Exception:
+                # One unreadable account must not disable reconciliation for
+                # every other one.
+                logger.warning(
+                    "[PersistentTaskStore] Could not scan tasks for account %s",
+                    entry["name"],
+                    exc_info=True,
+                )
         return tasks
 
     async def list_page(

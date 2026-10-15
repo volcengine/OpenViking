@@ -352,6 +352,10 @@ class TaskTracker:
     MAX_TASKS = 10_000
     TTL_COMPLETED = 86_400  # 24 hours
     TTL_FAILED = 604_800  # 7 days
+    # Recovery window for active statuses (pending/running/cancelling): a record
+    # untouched this long cannot be alive, so it becomes expirable. Collectors
+    # must confirm the work index holds nothing for the task first.
+    TTL_ACTIVE = 604_800  # 7 days
     CLEANUP_INTERVAL = 300  # 5 minutes
 
     def __init__(self, store: TaskStore, *, max_concurrent_store_io: int = 8) -> None:
@@ -386,13 +390,65 @@ class TaskTracker:
         self._install_work_index_callbacks()
 
     async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> List[TaskRecord]:
-        """Restore task records referenced by rebuilt QueueFS work."""
+        """Restore task records referenced by rebuilt QueueFS work.
+
+        After the referenced records are loaded, persisted records still in an
+        active state from a previous process are reconciled: they are not in
+        ``owners``, so their queue work is gone and the outcome recorded before
+        the crash is settled into a terminal state instead of reporting
+        ``running`` forever.
+        """
         restored = []
         for task_id, (account_id, user_id) in owners.items():
             task = await self.get(task_id, account_id=account_id, user_id=user_id)
             if task is not None:
                 restored.append(task)
+        await self._reconcile_abandoned_tasks(owners)
         return restored
+
+    async def _reconcile_abandoned_tasks(self, owners: Dict[str, tuple[str, str]]) -> None:
+        """Finalize active records whose work did not survive the last process.
+
+        Runs once at startup, before any consumer starts: nothing is in flight,
+        so an active record that owns no rebuilt work can only be a leftover
+        from a process that died before finalizing. ``_finalize_task`` derives
+        the outcome from what was persisted (result → completed, error or
+        nothing → failed) and appends the terminal status_changed event.
+        """
+        list_all = getattr(self._store, "list_all", None)
+        if list_all is None:
+            return
+        try:
+            payloads = await self._store_io.run("list_all", list_all)
+        except Exception:
+            logger.warning(
+                "[TaskTracker] Startup reconciliation could not scan persisted tasks",
+                exc_info=True,
+            )
+            return
+        reconciled = 0
+        for payload in payloads:
+            task_id = payload.get("task_id")
+            if not task_id or task_id in owners or self._work_index.has_work(task_id):
+                continue
+            try:
+                task = self._record_from_payload(payload)
+            except (KeyError, ValueError):
+                logger.warning(
+                    "[TaskTracker] Skipping malformed task record during reconciliation: %s",
+                    task_id,
+                )
+                continue
+            if task.status not in _ACTIVE_STATUSES:
+                continue
+            await self._finalize_task(
+                task.task_id, account_id=task.account_id, user_id=task.user_id
+            )
+            reconciled += 1
+        if reconciled:
+            logger.info(
+                "[TaskTracker] Reconciled %d orphaned active task(s) at startup", reconciled
+            )
 
     async def _finalize_before_ack(self, metadata: QueueTaskMetadata) -> None:
         """Persist the terminal state before QueueFS removes the last recovery message."""
@@ -472,12 +528,24 @@ class TaskTracker:
         age = now - task.updated_at
         if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
             return age > self.TTL_COMPLETED
-        return task.status == TaskStatus.FAILED and age > self.TTL_FAILED
+        if task.status == TaskStatus.FAILED:
+            return age > self.TTL_FAILED
+        # Active statuses: bounded by the recovery window so a record whose
+        # finalization was missed (e.g. the process died between persisting the
+        # result and finalizing) cannot report "running" forever. This is a pure
+        # age check on purpose — it is consulted while holding self._lock, and
+        # TaskWorkIndex.has_work takes its own lock, so the has-work confirmation
+        # belongs to the collectors, not here.
+        return age > self.TTL_ACTIVE
 
     async def _delete_expired_task(self, task_id: str, now: float) -> bool:
         async with self._task_locks.acquire(task_id):
             task = self._cached_task(task_id)
             if task is None or not self._is_expired(task, now):
+                return False
+            if task.status in _ACTIVE_STATUSES and self._work_index.has_work(task_id):
+                # A task that still owns queue work is alive, however stale its
+                # record looks; only the recovery window passed.
                 return False
             account_id = task.account_id
             user_id = task.user_id

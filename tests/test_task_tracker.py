@@ -16,6 +16,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
 from openviking.service.task_store import PersistentTaskStore, _task_to_payload
 from openviking.service.task_tracker import (
+    TaskRecord,
     TaskStatus,
     TaskTracker,
     _sanitize_error,
@@ -605,6 +606,189 @@ async def test_evict_fifo_when_over_limit(tracker: TaskTracker):
     assert await tracker.get(tasks[1].task_id) is None
     # Newest should remain
     assert await tracker.get(tasks[6].task_id) is not None
+
+
+# ── Orphaned active records (#6130) ──
+
+
+class _ListableAgfs(_FakeAgfs):
+    """Emit the isDir flag production AGFS includes in ls entries."""
+
+    def ls(self, path: str = "/"):
+        return [{**entry, "isDir": entry.get("is_dir", False)} for entry in super().ls(path)]
+
+
+async def test_is_expired_gives_active_statuses_a_recovery_window(tracker: TaskTracker):
+    now = time.time()
+    orphan = TaskRecord(
+        task_id="orphan-1",
+        task_type="session_commit",
+        status=TaskStatus.RUNNING,
+        created_at=now - 8 * 86_400,
+        updated_at=now - 8 * 86_400,
+    )
+    fresh = TaskRecord(
+        task_id="orphan-2",
+        task_type="session_commit",
+        status=TaskStatus.RUNNING,
+        created_at=now - 3_600,
+        updated_at=now - 3_600,
+    )
+    assert tracker._is_expired(orphan, now)
+    assert not tracker._is_expired(fresh, now)
+
+
+async def test_evict_reclaims_orphaned_running_record():
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    t = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.start(t.task_id)
+    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_ACTIVE - 1
+
+    await tracker._evict_expired()
+
+    assert await tracker.get(t.task_id) is None
+    assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
+
+
+async def test_evict_keeps_running_task_that_still_owns_work():
+    tracker = TaskTracker(store=PersistentTaskStore(_FakeAgfs()))
+    index = TaskWorkIndex()
+    tracker.attach_work_index(index)
+    t = await tracker.create("session_commit", **_owner_kwargs())
+    await tracker.start(t.task_id)
+    assert index.register("Semantic", QueueTaskMetadata(t.task_id, "work-1", "acme", "alice"))
+    tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_ACTIVE - 1
+
+    await tracker._evict_expired()
+
+    task = await tracker.get(t.task_id, **_owner_kwargs())
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
+
+
+async def test_ttl_terminal_behaviour_unchanged(tracker: TaskTracker):
+    now = time.time()
+
+    def record(status: TaskStatus, updated_at: float) -> TaskRecord:
+        return TaskRecord(
+            task_id=f"t-{status.value}",
+            task_type="session_commit",
+            status=status,
+            created_at=now,
+            updated_at=updated_at,
+        )
+
+    assert tracker._is_expired(record(TaskStatus.COMPLETED, now - tracker.TTL_COMPLETED - 1), now)
+    assert not tracker._is_expired(record(TaskStatus.COMPLETED, now - 3_600), now)
+    assert tracker._is_expired(record(TaskStatus.CANCELLED, now - tracker.TTL_COMPLETED - 1), now)
+    assert tracker._is_expired(record(TaskStatus.FAILED, now - tracker.TTL_FAILED - 1), now)
+    assert not tracker._is_expired(record(TaskStatus.FAILED, now - tracker.TTL_FAILED + 60), now)
+
+
+async def test_restore_work_tasks_finalizes_orphaned_running_record():
+    """The incident's on-disk shape: result persisted, finalize never ran."""
+    now = time.time()
+    orphan = TaskRecord(
+        task_id="5b3cbe7a",
+        task_type="session_commit",
+        status=TaskStatus.RUNNING,
+        created_at=now - 21 * 3_600,
+        updated_at=now - 20 * 3_600,
+        resource_id="sess-1",
+        account_id="acme",
+        user_id="alice",
+        result={"memories_extracted": {"memory_write": 7}},
+        execution_events={
+            "items": [
+                {"seq": 1, "kind": "created", "status": "pending"},
+                {"seq": 2, "kind": "status_changed", "status": "running"},
+            ],
+            "dropped_count": 0,
+            "started_mid_task": False,
+        },
+    )
+    done = TaskRecord(
+        task_id="done-1",
+        task_type="session_commit",
+        status=TaskStatus.COMPLETED,
+        account_id="acme",
+        user_id="alice",
+        result={},
+    )
+    agfs = _ListableAgfs()
+    store = PersistentTaskStore(agfs)
+    await store.create(orphan)
+    await store.create(done)
+
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    restored = await tracker.restore_work_tasks({})
+
+    assert restored == []
+    task = await tracker.get("5b3cbe7a", **_owner_kwargs())
+    assert task is not None
+    assert task.status is TaskStatus.COMPLETED
+    assert task.stage == "completed"
+    assert task.result["memories_extracted"] == {"memory_write": 7}
+    kinds = [event["kind"] for event in task.execution_events["items"]]
+    assert kinds == ["created", "status_changed", "status_changed"]
+    persisted = await tracker._store.get("5b3cbe7a", **_owner_kwargs())
+    assert persisted["status"] == "completed"
+    # Already-terminal records pass through reconciliation untouched.
+    untouched = await tracker.get("done-1", **_owner_kwargs())
+    assert untouched.status is TaskStatus.COMPLETED
+
+
+async def test_restore_work_tasks_finalizes_interrupted_orphan_as_failed():
+    """No persisted outcome either: the record must not claim success."""
+    now = time.time()
+    orphan = TaskRecord(
+        task_id="interrupted-1",
+        task_type="add_resource",
+        status=TaskStatus.RUNNING,
+        created_at=now - 2 * 3_600,
+        updated_at=now - 2 * 3_600,
+        account_id="acme",
+        user_id="alice",
+    )
+    agfs = _ListableAgfs()
+    store = PersistentTaskStore(agfs)
+    await store.create(orphan)
+
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    await tracker.restore_work_tasks({})
+
+    task = await tracker.get("interrupted-1", **_owner_kwargs())
+    assert task is not None
+    assert task.status is TaskStatus.FAILED
+    assert task.error == "Task operation interrupted before its result was persisted"
+
+
+async def test_restore_work_tasks_leaves_owned_active_records_alone():
+    now = time.time()
+    live = TaskRecord(
+        task_id="live-1",
+        task_type="session_commit",
+        status=TaskStatus.RUNNING,
+        created_at=now - 8 * 86_400,
+        updated_at=now - 8 * 86_400,
+        account_id="acme",
+        user_id="alice",
+    )
+    agfs = _ListableAgfs()
+    store = PersistentTaskStore(agfs)
+    await store.create(live)
+
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+    index = TaskWorkIndex()
+    tracker.attach_work_index(index)
+    assert index.register("Semantic", QueueTaskMetadata("live-1", "work-1", "acme", "alice"))
+
+    restored = await tracker.restore_work_tasks({"live-1": ("acme", "alice")})
+
+    assert [task.task_id for task in restored] == ["live-1"]
+    task = await tracker.get("live-1", **_owner_kwargs())
+    assert task is not None
+    assert task.status is TaskStatus.RUNNING
 
 
 # ── Singleton ──
