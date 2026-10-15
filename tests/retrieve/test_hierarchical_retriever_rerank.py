@@ -10,7 +10,9 @@ import time
 import pytest
 
 from openviking.core.context import ContextLevel
+from openviking.retrieve import rerank_cache
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.retrieve.rerank_cache import CachedRerankClient
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -510,3 +512,99 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
         markdown,
         "",
     ]
+
+
+class CountingRerankClient:
+    provider = "openai"
+
+    def __init__(self, scores):
+        self.scores = list(scores)
+        self.calls = []
+
+    def rerank_batch(self, query: str, documents: list[str]):
+        self.calls.append((query, list(documents)))
+        return list(self.scores[: len(documents)])
+
+
+def _cached_retriever(client) -> HierarchicalRetriever:
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+    )
+    retriever._rerank_client = CachedRerankClient(client)
+    return retriever
+
+
+@pytest.fixture(autouse=True)
+def _isolated_rerank_result_cache():
+    yield
+    rerank_cache._cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_cache_hit_skips_provider_call():
+    client = CountingRerankClient([0.9, 0.5, 0.1])
+    retriever = _cached_retriever(client)
+
+    first = await retriever._rerank_scores("hello", ["a", "b", "c"], [0.0, 0.0, 0.0])
+    second = await retriever._rerank_scores("hello", ["a", "b", "c"], [0.0, 0.0, 0.0])
+
+    assert first == second == [0.9, 0.5, 0.1]
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_cache_is_document_order_sensitive():
+    client = CountingRerankClient([0.9, 0.1])
+    retriever = _cached_retriever(client)
+
+    await retriever._rerank_scores("hello", ["a", "b"], [0.0, 0.0])
+    await retriever._rerank_scores("hello", ["b", "a"], [0.0, 0.0])
+
+    assert client.calls == [("hello", ["a", "b"]), ("hello", ["b", "a"])]
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_cache_expires_after_ttl(monkeypatch):
+    monkeypatch.setattr(rerank_cache, "_CACHE_TTL_SECONDS", 0.0)
+    client = CountingRerankClient([0.9, 0.1])
+    retriever = _cached_retriever(client)
+
+    await retriever._rerank_scores("hello", ["a", "b"], [0.0, 0.0])
+    await retriever._rerank_scores("hello", ["a", "b"], [0.0, 0.0])
+
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_cache_evicts_least_recently_used(monkeypatch):
+    monkeypatch.setattr(rerank_cache, "_CACHE_MAX_ENTRIES", 1)
+    client = CountingRerankClient([0.9, 0.1])
+    retriever = _cached_retriever(client)
+
+    await retriever._rerank_scores("hello", ["a", "b"], [0.0, 0.0])
+    await retriever._rerank_scores("hello", ["c", "d"], [0.0, 0.0])
+    await retriever._rerank_scores("hello", ["a", "b"], [0.0, 0.0])
+
+    assert [call[1] for call in client.calls] == [["a", "b"], ["c", "d"], ["a", "b"]]
+
+
+def test_retriever_wraps_rerank_client_when_configured():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=RerankConfig(ak="ak", sk="sk"),
+    )
+
+    assert isinstance(retriever._rerank_client, CachedRerankClient)
+
+
+def test_retriever_leaves_rerank_client_absent_without_config():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+    )
+
+    assert retriever._rerank_client is None

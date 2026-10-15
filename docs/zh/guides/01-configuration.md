@@ -1081,7 +1081,8 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 ### rerank
 
 用于搜索结果精排的 Rerank 模型。支持 VikingDB（火山引擎）、Cohere、OpenAI
-兼容接口、LiteLLM 和 Jev。
+兼容接口、LiteLLM 和 Jev。相同的 rerank 请求会由进程级 LRU 结果缓存（1024
+条、24 小时 TTL）直接返回；缓存命中不会产生 rerank token 用量或调用指标。
 
 **火山引擎 (VikingDB):**
 
