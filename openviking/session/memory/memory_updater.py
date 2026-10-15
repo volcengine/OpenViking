@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -218,6 +219,7 @@ class ExtractContext:
         chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
         *,
         split_long_text_messages: bool = True,
+        source_archive_uri: str = "",
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -228,6 +230,7 @@ class ExtractContext:
             self.messages = messages
             self.chunk_meta = chunk_meta
         self.page_id_map = PageIdMap()
+        self.source_archive_uri = (source_archive_uri or "").rstrip("/")
 
     @classmethod
     def _build_extraction_messages(
@@ -405,6 +408,17 @@ class ExtractContext:
                 except (ValueError, TypeError):
                     continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def get_source_archive_suffix(self) -> str:
+        """Namespace filenames by their full source archive without exposing its path.
+
+        Keep legacy naming for callers outside session commits that have no archive.
+        The suffix is stable across retries, not a new random record identifier.
+        """
+        if not self.source_archive_uri:
+            return ""
+        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8")).hexdigest()[:16]
+        return f"_{digest}"
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
