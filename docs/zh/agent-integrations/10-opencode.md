@@ -132,7 +132,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
-OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction 和 session 删除会强制提交；插件 cleanup 会提交自上次提交以来有新消息的所有 session。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
 
 工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 
