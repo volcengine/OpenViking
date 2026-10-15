@@ -484,6 +484,34 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
 
 
 @pytest.mark.asyncio
+async def test_process_direct_preserves_capture_exclusion_on_saved_turn(
+    make_loop, temp_dir: Path, monkeypatch
+):
+    async def fake_run_agent_loop(self, **kwargs):
+        return "scheduled answer", None, [], {}, 1
+
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: _FakeLangfuseClient()),
+    )
+    loop = make_loop()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="scheduled")
+
+    assert (
+        await loop.process_direct(
+            "scheduled prompt", session_key=session_key, openviking_capture=False
+        )
+        == "scheduled answer"
+    )
+
+    session = SessionManager(loop.config.bot_data_path).get_or_create(
+        session_key, skip_heartbeat=True
+    )
+    assert [message["openviking_capture"] for message in session.messages] == [False, False]
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tail(
     make_loop, temp_dir: Path, monkeypatch
 ):

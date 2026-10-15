@@ -763,6 +763,7 @@ Reminder message to deliver:
             cron_instruction,
             session_key=session_key,
             metadata=channel_metadata,
+            openviking_capture=False,
         )
         if job.payload.deliver:
             from vikingbot.bus.events import OutboundMessage
@@ -955,7 +956,9 @@ def chat(
         "--memory-user",
         help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
-    disabled_tools: Annotated[list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")] = None,
+    disabled_tools: Annotated[
+        list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")
+    ] = None,
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None

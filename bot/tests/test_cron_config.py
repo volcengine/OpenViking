@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Cron is opt-in for both tool registration and scheduler startup."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -11,6 +12,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.cli import commands
 from vikingbot.config.schema import Config
 from vikingbot.cron.service import CronService
+from vikingbot.cron.types import CronJob, CronPayload
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -30,6 +32,24 @@ def test_cron_tool_registration(tmp_path, enabled):
     without_service = ToolRegistry(config=config)
     register_default_tools(without_service, config)
     assert not without_service.has("cron")
+
+
+@pytest.mark.asyncio
+async def test_cron_turn_disables_automatic_openviking_capture(tmp_path, monkeypatch):
+    config = Config(storage_workspace=str(tmp_path), tools={"cron": {"enabled": True}})
+    monkeypatch.setattr(commands, "get_data_dir", lambda: tmp_path)
+    cron = commands.prepare_cron(config, SimpleNamespace())
+    agent = SimpleNamespace(process_direct=AsyncMock(return_value="done"))
+    cron._agent_holder["agent"] = agent
+    session_key = {"type": "cli", "channel_id": "default", "chat_id": "scheduled"}
+    job = CronJob(
+        id="job-1",
+        name="standup",
+        payload=CronPayload(message="send report", session_key_str=json.dumps(session_key)),
+    )
+
+    assert await cron.on_job(job) == "done"
+    assert agent.process_direct.await_args.kwargs["openviking_capture"] is False
 
 
 @pytest.mark.parametrize("enabled", [False, True])

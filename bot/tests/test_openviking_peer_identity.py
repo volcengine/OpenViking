@@ -43,6 +43,24 @@ def test_normalize_session_messages_skips_path_like_peer_ids():
     assert "peer_id" not in normalized[0]
 
 
+def test_normalize_session_messages_excludes_only_explicitly_disabled_capture():
+    client = _client()
+
+    normalized = client._normalize_session_messages(
+        [
+            {"role": "user", "content": "default"},
+            {"role": "assistant", "content": "enabled", "openviking_capture": True},
+            {"role": "user", "content": "scheduled input", "openviking_capture": False},
+            {"role": "assistant", "content": "scheduled output", "openviking_capture": False},
+        ]
+    )
+
+    assert [message["parts"][0]["text"] for message in normalized] == [
+        "default",
+        "enabled",
+    ]
+
+
 def test_normalize_session_messages_emits_tools_before_final_assistant_text():
     client = _client()
 

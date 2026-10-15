@@ -40,6 +40,7 @@ class InboundMessage:
     media: list[str | dict[str, Any]] = field(default_factory=list)  # Paths or image_url parts
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
     openviking_connection: dict[str, Any] | None = None  # Internal OpenViking identity
+    openviking_capture: bool = True  # Include this turn in automatic session capture
 
 
 @dataclass

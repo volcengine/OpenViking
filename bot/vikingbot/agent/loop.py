@@ -2166,6 +2166,9 @@ class AgentLoop:
             # For CLI/direct sessions, skip heartbeat by default
             skip_heartbeat = session_key.type == "cli"
             session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+            capture_options: dict[str, Any] = (
+                {"openviking_capture": False} if msg.openviking_capture is False else {}
+            )
 
             ov_tools_enable = self._get_ov_tools_enable(session_key)
             disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
@@ -2297,13 +2300,13 @@ class AgentLoop:
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message("user", msg.content, sender_id=msg.sender_id, **capture_options)
                 await self.sessions.save(session)
                 return None
 
             if not msg.need_reply:
                 await self._evaluate_previous_response_outcome(session, msg)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message("user", msg.content, sender_id=msg.sender_id, **capture_options)
                 await self.sessions.save(session)
                 return OutboundMessage(
                     session_key=msg.session_key,
@@ -2464,8 +2467,9 @@ class AgentLoop:
                         f"[Experience Reminder]\n## Relevant Agent Experience\n{newly_recalled_exp_content}",
                         exp_uris=newly_recalled_exp_uris,
                         experience_reminder=True,
+                        **capture_options,
                     )
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                session.add_message("user", msg.content, sender_id=msg.sender_id, **capture_options)
                 session.add_message(
                     "assistant",
                     final_content,
@@ -2475,6 +2479,7 @@ class AgentLoop:
                     sender_id=msg.sender_id,
                     reasoning_content=final_reasoning_content,
                     agent_turns=agent_turns if agent_turns else None,
+                    **capture_options,
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
@@ -2979,6 +2984,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         content: str,
         session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
         metadata: dict[str, object] | None = None,
+        openviking_capture: bool = True,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -2986,6 +2992,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         Args:
             content: The message content.
             session_key: Session identifier (overrides channel:chat_id for session lookup).
+            openviking_capture: Whether automatic OpenViking capture includes this turn.
 
         Returns:
             The agent's response.
@@ -2996,6 +3003,7 @@ Respond with ONLY valid JSON, no markdown fences."""
             sender_id="user",
             content=content,
             metadata=metadata or {},
+            openviking_capture=openviking_capture,
         )
 
         response = await self._process_message(msg)
