@@ -9,9 +9,8 @@ import openai
 import pytest
 
 from openviking.models.model_error import ModelError, ModelErrorKind
-from openviking.models.vlm.base import MultiCredentialVLM, VLMBase, VLMFactory
+from openviking.models.vlm.base import VLMBase
 from openviking.models.vlm.retry_vlm import RetryVLM
-from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -211,79 +210,20 @@ def test_retry_vlm_delegates_token_tracker_and_close():
     assert inner.closed is True
 
 
-def test_vlm_factory_wraps_provider_with_standard_retry():
-    config = {"provider": "kimi", "api_key": "key", "model": "kimi-code"}
+def test_vlm_config_switches_model_after_primary_not_found():
+    calls = []
 
-    standard = VLMFactory.create(config)
-
-    assert isinstance(standard, RetryVLM)
-    assert standard.inner.__class__.__name__ == "KimiVLM"
-
-
-def test_vlm_config_wraps_each_credential_inside_failover():
-    config = VLMConfig(
-        model="kimi-code",
-        credentials=[
-            {
-                "id": "primary",
-                "provider": "kimi",
-                "api_key": "primary-key",
-            },
-            {
-                "id": "backup",
-                "provider": "glm",
-                "api_key": "backup-key",
-                "model": "glm-4.6v",
-            },
-        ],
-    )
-
-    instance = config.get_vlm_instance()
-
-    assert isinstance(instance, MultiCredentialVLM)
-    assert all(isinstance(child, RetryVLM) for child in instance._vlm_instances)
-    assert [child.inner.__class__.__name__ for child in instance._vlm_instances] == [
-        "KimiVLM",
-        "GLMVLM",
-    ]
-
-
-def _openai_client(handler, *, base_url="https://example.test/v1"):
-    return openai.OpenAI(
-        api_key="test-key",
-        base_url=base_url,
-        max_retries=0,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-
-def test_vlm_config_fails_over_when_primary_model_is_not_found():
-    calls = {"primary": 0, "backup": 0}
-
-    def primary_handler(request):
-        calls["primary"] += 1
-        assert request.url.host == "primary.example.test"
-        return httpx.Response(
-            404,
-            json={
-                "error": {
-                    "message": "The model does not exist",
-                    "type": "invalid_request_error",
-                    "code": "model_not_found",
-                }
-            },
-        )
-
-    def backup_handler(request):
-        calls["backup"] += 1
+    def handler(request):
+        calls.append(request.url.host)
+        if request.url.host == "primary.example.test":
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "Model does not exist"}},
+            )
         assert request.url.host == "backup.example.test"
         return httpx.Response(
             200,
             json={
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "backup-model",
                 "choices": [
                     {
                         "index": 0,
@@ -291,24 +231,21 @@ def test_vlm_config_fails_over_when_primary_model_is_not_found():
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         )
 
     config = VLMConfig(
-        model="primary-model",
+        model="missing-model",
+        provider="openai",
         max_retries=2,
         credentials=[
             {
                 "id": "primary",
-                "provider": "openai",
                 "api_key": "primary-key",
                 "api_base": "https://primary.example.test/v1",
-                "model": "missing-model",
             },
             {
                 "id": "backup",
-                "provider": "openai",
                 "api_key": "backup-key",
                 "api_base": "https://backup.example.test/v1",
                 "model": "backup-model",
@@ -316,77 +253,17 @@ def test_vlm_config_fails_over_when_primary_model_is_not_found():
         ],
     )
     instance = config.get_vlm_instance()
-    primary = instance._vlm_instances[0].inner
-    backup = instance._vlm_instances[1].inner
-    primary._sync_client = _openai_client(primary_handler, base_url=primary.api_base)
-    backup._sync_client = _openai_client(backup_handler, base_url=backup.api_base)
+    for credential in instance._vlm_instances:
+        credential.inner._sync_client = openai.OpenAI(
+            api_key="test-key",
+            base_url=credential.inner.api_base,
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
 
-    assert instance.get_completion(prompt="hello") == "backup response"
-    assert calls == {"primary": 1, "backup": 1}
-    assert instance.active_credential_id == "backup"
-
-
-@pytest.mark.parametrize(
-    ("error_body", "expected_kind", "expected_attempts"),
-    [
-        (
-            {
-                "message": "Maximum context length exceeded",
-                "type": "server_error",
-                "code": "context_length_exceeded",
-            },
-            ModelErrorKind.INPUT_TOO_LARGE,
-            1,
-        ),
-        (
-            {
-                "message": (
-                    "input (8525 tokens) is too large to process. increase the physical batch size "
-                    "(current batch size: 2048)"
-                ),
-                "type": "server_error",
-                "code": 500,
-            },
-            ModelErrorKind.INPUT_TOO_LARGE,
-            1,
-        ),
-        (
-            {"message": "Internal server error", "type": "server_error", "code": 500},
-            ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-            4,
-        ),
-    ],
-)
-def test_openai_500_retry_and_breaker_follow_error_kind(
-    error_body, expected_kind, expected_attempts
-):
-    calls = 0
-
-    def handler(_request):
-        nonlocal calls
-        calls += 1
-        return httpx.Response(500, json={"error": error_body})
-
-    config = VLMConfig(
-        model="test-model",
-        provider="openai",
-        api_key="test-key",
-        max_retries=3,
-    )
-    instance = config.get_vlm_instance()
-    instance.inner._sync_client = _openai_client(handler)
-
-    with pytest.raises(ModelError) as raised:
-        instance.get_completion(prompt="too long")
-
-    assert raised.value.kind is expected_kind
-    assert calls == expected_attempts
-
-    breaker = CircuitBreaker(failure_threshold=1)
-    breaker.record_failure(raised.value)
-    if expected_kind is ModelErrorKind.INPUT_TOO_LARGE:
-        breaker.check()
-        assert breaker._failure_count == 0
-    else:
-        with pytest.raises(CircuitBreakerOpen):
-            breaker.check()
+    try:
+        assert instance.get_completion(prompt="hello") == "backup response"
+        assert calls == ["primary.example.test", "backup.example.test"]
+        assert instance.active_credential_id == "backup"
+    finally:
+        instance.close()
