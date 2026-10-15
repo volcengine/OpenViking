@@ -173,6 +173,11 @@ def test_startup_health_probe_carries_extra_headers(external_provider):
         )
         assert provider._client is not None, "provider dropped the client after a refused probe"
         assert provider._client._extra_headers == {"CF-Access-Client-Id": "id.access"}
+        # A 401/403 is the server itself asking for credentials: that retry keeps sending the
+        # key, exactly as it did before gateway support existed.
+        assert records[-1].get("X-API-Key") == "test-key", (
+            "the retry after 403 stopped carrying the key"
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -208,6 +213,14 @@ def test_startup_probe_retries_when_gateway_redirects_to_login(external_provider
         )
         assert records[-1].get("CF-Access-Client-Id") == "id.access", (
             "the retry after the redirect went out without the resolved headers"
+        )
+        leaked = [
+            r for r in records[-1:]
+            if r.get("X-API-Key") or r.get("Authorization") or r.get("X-OpenViking-Actor-Peer")
+        ]
+        assert not leaked, (
+            "the retry after a redirect carried more than the gateway headers: %s"
+            % json.dumps(leaked[-1])
         )
     finally:
         server.shutdown()
