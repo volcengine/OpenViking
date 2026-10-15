@@ -440,6 +440,8 @@ node "$(ls -d ~/.codex/plugins/cache/openviking/openviking-memory/*/ | sort -V |
 
 Or invoke the `$ov-memory-doctor` skill in Codex, which runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
 
+Codex fixes each session's hook paths to the versioned cache directory when the session starts, and a plugin upgrade deletes the old directory ([openai/codex#31383](https://github.com/openai/codex/issues/31383)). The hooks recreate a removed older version as a link to the running one, so sessions started before an upgrade recover as soon as a session on the new version runs a hook. Until then their hooks fail with `MODULE_NOT_FOUND`; restarting them also works.
+
 ## Testing
 
 There is no `package.json` and no build step, so the suite runs straight through Node's own test runner:
@@ -492,6 +494,7 @@ codex-memory-plugin/
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/
+│   ├── cache-heal.mjs           # Links removed older cache versions to the running one
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
 │   ├── ov-memory-doctor.mjs     # Diagnostics script ($ov-memory-doctor skill)
 │   ├── capture-utils.mjs        # Transcript text extraction, filtering, tool compression
