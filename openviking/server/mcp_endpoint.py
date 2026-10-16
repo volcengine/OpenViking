@@ -18,14 +18,25 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    get_args,
+)
 from urllib.parse import quote
 
+import mcp.types as mcp_types
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
@@ -36,7 +47,7 @@ from mcp.types import (
     TextContent,
     ToolAnnotations,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -241,6 +252,210 @@ class _IdentityASGIMiddleware:
         finally:
             _mcp_ctx.reset(ctx_token)
             _request_url_ctx.reset(url_token)
+
+
+def _client_request_method_literals() -> frozenset[str] | None:
+    """Derive the JSON-RPC method names the installed mcp SDK can route.
+
+    Walks ``mcp.types.ClientRequestType`` (a union of request models whose
+    ``method`` field is a ``Literal``) and collects every literal, so the set
+    tracks the installed SDK version instead of a hand-maintained list. Older
+    SDKs expose the same union as ``ClientRequest = Annotated[Union[...], ...]``;
+    both shapes are handled.
+
+    Returns ``None`` when the union cannot be introspected, in which case the
+    pre-check middleware must stay passive (fail-open) rather than risk
+    answering -32601 for a method the SDK would actually route.
+    """
+    union = getattr(mcp_types, "ClientRequestType", None) or getattr(
+        mcp_types, "ClientRequest", None
+    )
+    if union is None:
+        return None
+    stack = [union]
+    methods: set[str] = set()
+    while stack:
+        current = stack.pop()
+        args = get_args(current)
+        if args:
+            # Expand Annotated[...] / Union[...] wrappers down to model classes.
+            stack.extend(args)
+            continue
+        if isinstance(current, type):
+            field = current.model_fields.get("method")
+            if field is not None:
+                methods.update(
+                    literal for literal in get_args(field.annotation) if isinstance(literal, str)
+                )
+    return frozenset(methods) or None
+
+
+def _parse_jsonrpc_request(body: bytes) -> mcp_types.JSONRPCRequest | None:
+    """Parse a single JSON-RPC *request* using the SDK's own envelope model.
+
+    The middleware may only intercept messages the SDK transport itself accepts,
+    so envelope validation is delegated to ``mcp.types.JSONRPCMessage`` — the
+    exact model ``StreamableHTTPServerTransport._handle_post_request`` validates
+    the parsed body against. Batches (lists), non-JSON bodies, envelopes the SDK
+    rejects (wrong or missing ``jsonrpc``, non-object ``params``, ...) and
+    non-requests (notifications, responses) all return ``None``, leaving the SDK
+    to answer them exactly as before (-32700 parse error, 400 INVALID_PARAMS, or
+    202 respectively).
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        message = mcp_types.JSONRPCMessage.model_validate(payload)
+    except ValidationError:
+        return None
+    request = message.root
+    return request if isinstance(request, mcp_types.JSONRPCRequest) else None
+
+
+def _supported_protocol_versions() -> frozenset[str] | None:
+    """The ``MCP-Protocol-Version`` header values the installed SDK accepts.
+
+    Mirrors ``StreamableHTTPServerTransport._validate_protocol_version``, which
+    answers 400 for any other value. ``None`` when the SDK does not expose the
+    set, in which case a request carrying the header must not be intercepted at
+    all (its version may be one the SDK would reject).
+    """
+    try:
+        from mcp.shared.version import SUPPORTED_PROTOCOL_VERSIONS
+    except Exception:  # pragma: no cover - SDK always ships this module
+        return None
+    return frozenset(SUPPORTED_PROTOCOL_VERSIONS)
+
+
+def _replay_receive(buffered: list[dict], receive: Receive) -> Receive:
+    """Re-deliver an already-consumed ASGI request body to the wrapped app."""
+    queue = list(buffered)
+
+    async def replay() -> dict:
+        if queue:
+            return queue.pop(0)
+        return await receive()
+
+    return replay
+
+
+class _MethodPrecheckASGIMiddleware:
+    """Answer ``-32601 Method not found`` for JSON-RPC methods the SDK cannot route.
+
+    The pinned mcp SDK (``mcp>=1.27,<2``; upstream modelcontextprotocol/python-sdk#3557)
+    validates every request against its ``ClientRequest`` union and maps *any*
+    validation failure to ``INVALID_PARAMS`` (``mcp/shared/session.py``), so unknown
+    methods — e.g. the 2026-07-28-era ``server/discover`` probe — are answered
+    ``-32602`` instead of the spec-compliant ``-32601``. Clients treat ``-32602``
+    as a fixable-parameter error rather than the definitive legacy-fallback
+    signal, so they keep re-probing before falling back.
+
+    The middleware intercepts only when the SDK transport itself would have
+    accepted the request, so the shim changes *only* the unsupported-method error:
+
+    - **Envelope**: the body must validate as a single ``JSONRPCRequest`` under
+      ``mcp.types.JSONRPCMessage`` — the SDK transport's own validation. Anything
+      else (parse errors, wrong ``jsonrpc``, non-object ``params``, batches,
+      notifications, responses) keeps the SDK's existing answer.
+    - **Transport gates** (mirroring ``_handle_post_request`` in
+      ``mcp/server/streamable_http.py``): ``Content-Type`` must be
+      ``application/json`` (else the SDK's transport security answers 400), and
+      ``Accept`` must include both ``application/json`` and
+      ``text/event-stream`` (else 406 in the SDK's default SSE response mode;
+      requiring both is the intersection that passes in JSON mode too), and a
+      present ``MCP-Protocol-Version`` header must be one the SDK supports
+      (else 400). Any doubt passes through.
+    - **Known methods**: derived at init from the installed SDK (see
+      ``_client_request_method_literals``) and never intercepted; a known method
+      with bad params still gets the SDK's -32602.
+
+    This is a compatibility shim; the proper fix is upstream.
+    """
+
+    def __init__(self, app: ASGIApp, known_methods: frozenset[str] | None = None):
+        self.app = app
+        self.known_methods = (
+            known_methods if known_methods is not None else _client_request_method_literals()
+        )
+        self._supported_protocol_versions = _supported_protocol_versions()
+
+    def _passes_transport_validation(self, scope: Scope) -> bool:
+        """Mirror the SDK transport's HTTP-layer gates; ``False`` = pass through.
+
+        Only requests that pass every gate here can be intercepted, so a request
+        the SDK would answer 406 / 415 / 400 keeps that transport-level error
+        instead of getting a spurious -32601.
+        """
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []
+        }
+
+        # Content-Type must be application/json (the SDK transport security
+        # answers 400 for POSTs, and the transport itself 415).
+        content_type = headers.get("content-type", "")
+        media_types = [part.strip() for part in content_type.split(";")[0].split(",")]
+        if not any(part == "application/json" for part in media_types):
+            return False
+
+        # Accept must include both required media types (SDK: 406 Not Acceptable
+        # in the default SSE response mode; JSON response mode only requires
+        # application/json, so this is the conservative intersection).
+        accept_types = [part.strip() for part in headers.get("accept", "").split(",")]
+        has_json = any(part.startswith("application/json") for part in accept_types)
+        has_sse = any(part.startswith("text/event-stream") for part in accept_types)
+        if not (has_json and has_sse):
+            return False
+
+        # A present MCP-Protocol-Version header must be supported (SDK: 400 Bad
+        # Request). Initialize requests are exempt upstream, but initialize is a
+        # known method and never intercepted.
+        version = headers.get("mcp-protocol-version")
+        if version is not None:
+            supported = self._supported_protocol_versions
+            if supported is None or version not in supported:
+                return False
+
+        return True
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or scope.get("method") != "POST" or not self.known_methods:
+            return await self.app(scope, receive, send)
+
+        body = b""
+        buffered: list[dict] = []
+        while True:
+            message = await receive()
+            buffered.append(message)
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                break
+            body += message.get("body", b"")
+            if not message.get("more_body", False):
+                break
+
+        request = _parse_jsonrpc_request(body)
+        if request is None or request.method in self.known_methods:
+            # Not a single valid request envelope, or a known method: let the
+            # SDK answer as before (parse error, -32602, 202, or routing).
+            return await self.app(scope, _replay_receive(buffered, receive), send)
+        if not self._passes_transport_validation(scope):
+            # The SDK transport rejects this request on HTTP semantics (406/400);
+            # it must keep answering, never the -32601 shim.
+            return await self.app(scope, _replay_receive(buffered, receive), send)
+
+        response = JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request.id,
+                "error": {"code": -32601, "message": "Method not found", "data": ""},
+            }
+        )
+        return await response(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -2209,4 +2424,4 @@ def create_mcp_app() -> ASGIApp:
     """
     starlette_app = mcp.streamable_http_app()
     handler = starlette_app.routes[0].app
-    return _IdentityASGIMiddleware(handler)
+    return _IdentityASGIMiddleware(_MethodPrecheckASGIMiddleware(handler))

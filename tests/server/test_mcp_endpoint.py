@@ -8,6 +8,7 @@ and service dependency, avoiding MCP protocol complexity.
 """
 
 import base64
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,7 +16,10 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import AudioContent, ImageContent, TextContent
+from starlette.applications import Starlette
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
@@ -24,9 +28,11 @@ from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
+    _client_request_method_literals,
     _get_ctx,
     _IdentityASGIMiddleware,
     _mcp_ctx,
+    _MethodPrecheckASGIMiddleware,
     _resolve_mcp_workspace_uri,
     add_resource,
     add_skill,
@@ -889,6 +895,437 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
     assert response.status_code == 400
     assert "path separators" in response.text
+
+
+# ---------------------------------------------------------------------------
+# _MethodPrecheckASGIMiddleware (unknown-method -32601 shim)
+# ---------------------------------------------------------------------------
+
+
+# Headers a compliant MCP client sends on POST, i.e. the narrowest request the
+# middleware may intercept: the SDK transport accepts nothing less (406 without
+# both media types, 415 for a foreign Content-Type, 400 for an unsupported
+# MCP-Protocol-Version header).
+_MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+    "MCP-Protocol-Version": "2025-06-18",
+}
+
+
+def _precheck_app(downstream, **middleware_kwargs):
+    """Mount the method pre-check middleware over a raw downstream ASGI app."""
+    app = FastAPI()
+    app.routes.append(
+        Route(
+            "/mcp",
+            endpoint=_MethodPrecheckASGIMiddleware(downstream, **middleware_kwargs),
+            methods=["GET", "POST", "DELETE"],
+        )
+    )
+    return app
+
+
+def _real_sdk_parity_apps() -> tuple[Starlette, Starlette]:
+    """A real FastMCP Streamable HTTP app, raw and middleware-wrapped.
+
+    Composition mirrors ``create_mcp_app``: the middleware wraps the SDK route
+    handler, so every non-intercepted request is answered by the actual SDK
+    transport. Two separate FastMCP instances keep the two session managers
+    independent; each app's own lifespan starts them.
+    """
+
+    def build(name: str) -> Starlette:
+        fmcp = FastMCP(
+            name,
+            stateless_http=True,
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        )
+        sdk_app = fmcp.streamable_http_app()
+        return Starlette(
+            routes=[
+                Route(
+                    sdk_app.routes[0].path,
+                    endpoint=sdk_app.routes[0].app,
+                    methods=["GET", "POST", "DELETE"],
+                )
+            ],
+            lifespan=sdk_app.router.lifespan_context,
+        )
+
+    raw_app = build("parity-raw")
+    wrapped_sdk_app = build("parity-wrapped")
+    wrapped_app = Starlette(
+        routes=[
+            Route(
+                wrapped_sdk_app.routes[0].path,
+                endpoint=_MethodPrecheckASGIMiddleware(wrapped_sdk_app.routes[0].app),
+                methods=["GET", "POST", "DELETE"],
+            )
+        ],
+        lifespan=wrapped_sdk_app.router.lifespan_context,
+    )
+    return raw_app, wrapped_app
+
+
+async def _post_to_real_sdk(app: Starlette, body, headers) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+            return await client.post("/mcp", json=body, headers=headers)
+
+
+def _jsonrpc_error_code(response: httpx.Response) -> int | None:
+    """Extract the JSON-RPC error code from a JSON or SSE (``data:``) body."""
+    text = response.text
+    if text.lstrip().startswith("{"):
+        payload = json.loads(text)
+    else:
+        data_lines = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+        if not data_lines:
+            return None
+        payload = json.loads(data_lines[0])
+    error = payload.get("error")
+    return error.get("code") if isinstance(error, dict) else None
+
+
+def _recording_downstream(calls: list[bytes]):
+    async def downstream(scope, receive, send):
+        from starlette.requests import Request
+
+        body = await Request(scope, receive).body()
+        calls.append(body)
+        response = httpx.Response(200, json={"jsonrpc": "2.0", "id": None, "result": {}})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    return downstream
+
+
+@pytest.mark.parametrize("method", ["server/discover", "totally/unknown"])
+async def test_precheck_answers_32601_for_unknown_method(method):
+    """Unknown methods get the spec-compliant METHOD_NOT_FOUND, not -32602 (#5841)."""
+
+    async def downstream(scope, receive, send):
+        raise AssertionError("unknown method should not reach the SDK")
+
+    app = _precheck_app(downstream)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 7, "method": method, "params": {}},
+            headers=_MCP_HEADERS,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == 7
+    assert payload["error"]["code"] == -32601
+    assert payload["error"]["message"] == "Method not found"
+
+
+async def test_precheck_passes_known_method_through_with_intact_body():
+    import json as _json
+
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post("/mcp", json=body)
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert _json.loads(calls[0]) == body
+
+
+async def test_precheck_keeps_param_error_path_for_known_method():
+    """A known method with bad params still reaches the SDK (which answers -32602)."""
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            content=b'{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "bogus": 1}',
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"jsonrpc": "2.0", "method": "notifications/unknown"}',  # notification: no id
+        b"not-json-at-all",  # parse error: SDK answers -32700 itself
+        b'["still", "batch"]',  # batch payload: SDK owns that behavior
+        b'{"id": 1}',  # no method
+    ],
+)
+async def test_precheck_passes_non_request_bodies_through(body):
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post("/mcp", content=body, headers={"content-type": "application/json"})
+
+    assert len(calls) == 1
+    assert calls[0] == body
+
+
+async def test_precheck_passes_unknown_method_through_when_json_not_accepted():
+    """A client that cannot accept application/json keeps the SDK's own behavior."""
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+            headers={"Accept": "text/event-stream", "Content-Type": "application/json"},
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Wrong jsonrpc version: the SDK transport answers 400 / -32602 itself.
+        b'{"jsonrpc": "1.0", "id": 7, "method": "server/discover", "params": {}}',
+        # Missing jsonrpc member: same SDK path.
+        b'{"id": 7, "method": "server/discover", "params": {}}',
+        # params is not an object: the envelope is invalid, so not interceptable.
+        b'{"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": "oops"}',
+    ],
+)
+async def test_precheck_passes_malformed_envelopes_to_sdk(body):
+    """Only a *valid* JSON-RPC envelope may be intercepted (#5923 review).
+
+    Malformed envelopes keep the SDK's existing validation path: the middleware
+    must not answer -32601 for a message the SDK transport itself rejects with
+    400 / INVALID_PARAMS.
+    """
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post("/mcp", content=body, headers=_MCP_HEADERS)
+
+    assert len(calls) == 1
+    assert calls[0] == body
+
+
+async def test_precheck_passes_unknown_method_through_when_accept_lacks_event_stream():
+    """`Accept: application/json` alone is 406 in the SDK's SSE response mode.
+
+    The middleware must not replace that transport-level error with -32601
+    (#5923 review, blocking point 1).
+    """
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+        )
+
+    assert len(calls) == 1
+
+
+async def test_precheck_passes_unknown_method_through_when_protocol_version_unsupported():
+    """An unsupported MCP-Protocol-Version header is 400 in the SDK transport.
+
+    The middleware must not replace that transport-level error with -32601
+    (#5923 review, blocking point 1).
+    """
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "invalid",
+            },
+        )
+
+    assert len(calls) == 1
+
+
+async def test_precheck_passes_unknown_method_through_when_content_type_not_json():
+    """A non-JSON Content-Type is 415 in the SDK transport; keep that path."""
+    calls: list[bytes] = []
+    app = _precheck_app(_recording_downstream(calls))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "text/plain",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+        )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "headers", "expected_status"),
+    [
+        pytest.param(
+            {"jsonrpc": "1.0", "id": 7, "method": "server/discover", "params": {}},
+            _MCP_HEADERS,
+            400,
+            id="wrong-jsonrpc-version",
+        ),
+        pytest.param(
+            {"id": 7, "method": "server/discover", "params": {}},
+            _MCP_HEADERS,
+            400,
+            id="missing-jsonrpc",
+        ),
+        pytest.param(
+            {"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": "oops"},
+            _MCP_HEADERS,
+            400,
+            id="params-not-an-object",
+        ),
+        pytest.param(
+            {"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            {"Accept": "application/json", "Content-Type": "application/json"},
+            406,
+            id="accept-missing-event-stream",
+        ),
+        pytest.param(
+            {"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            {**_MCP_HEADERS, "MCP-Protocol-Version": "invalid"},
+            400,
+            id="unsupported-protocol-version",
+        ),
+        pytest.param(
+            {"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}},
+            {
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "text/plain",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+            400,
+            id="content-type-not-json",
+        ),
+    ],
+)
+async def test_precheck_matches_real_sdk_transport_for_non_interceptable_requests(
+    body, headers, expected_status
+):
+    """Blocking-review parity against the real FastMCP Streamable HTTP handler.
+
+    Requests the SDK transport rejects (406 / 400) must get byte-identical
+    responses through the middleware, so the shim can only change the outcome
+    for requests the transport itself accepts.
+    """
+    raw_app, wrapped_app = _real_sdk_parity_apps()
+    raw = await _post_to_real_sdk(raw_app, body, headers)
+    wrapped = await _post_to_real_sdk(wrapped_app, body, headers)
+
+    assert raw.status_code == expected_status, raw.text
+    assert wrapped.status_code == expected_status, wrapped.text
+    assert wrapped.content == raw.content
+
+
+async def test_precheck_answers_32601_where_real_sdk_answers_32602():
+    """The one intended difference: a *valid* request with an unsupported method.
+
+    Against the real SDK handler the raw path maps the unknown method to -32602
+    (the session union validation bug from #5841); the middleware answers the
+    spec-compliant -32601 without touching the transport semantics.
+    """
+    raw_app, wrapped_app = _real_sdk_parity_apps()
+    body = {"jsonrpc": "2.0", "id": 7, "method": "server/discover", "params": {}}
+    raw = await _post_to_real_sdk(raw_app, body, _MCP_HEADERS)
+    wrapped = await _post_to_real_sdk(wrapped_app, body, _MCP_HEADERS)
+
+    assert raw.status_code == wrapped.status_code == 200
+    assert _jsonrpc_error_code(raw) == -32602
+    assert _jsonrpc_error_code(wrapped) == -32601
+
+
+async def test_precheck_passes_get_through_without_consuming_body():
+    async def downstream(scope, receive, send):
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = _precheck_app(downstream)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.get("/mcp")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+async def test_precheck_fails_open_when_method_set_is_empty():
+    """Passive mode (empty known set): unknown methods are not intercepted."""
+
+    async def downstream(scope, receive, send):
+        response = httpx.Response(200, json={"reached": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = _precheck_app(downstream, known_methods=frozenset())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {}},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"reached": True}
+
+
+def test_client_request_method_literals_tracks_sdk_union():
+    """The known set is derived from the installed SDK, not a hand-maintained list."""
+    known = _client_request_method_literals()
+
+    assert known is not None
+    # Core routing methods of any MCP version.
+    assert {"ping", "initialize", "tools/list", "tools/call"} <= known
+    # The 2026-07-28-era probe is NOT in the pinned SDK's union — that's the bug.
+    assert "server/discover" not in known
 
 
 # ---------------------------------------------------------------------------
