@@ -86,10 +86,15 @@ async def test_process_binds_committing_identity_to_root_context(monkeypatch):
 
 async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypatch):
     queued = []
+    events = []
 
     class _QueueManager:
         async def enqueue(self, queue_name, data):
+            events.append("enqueue")
             queued.append((queue_name, data))
+
+    async def fake_sleep(seconds):
+        events.append(("sleep", seconds))
 
     processor = SessionCommitProcessor(
         SimpleNamespace(session=Mock(return_value=_FakeSession({}, processed=False))),
@@ -98,12 +103,17 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
         "openviking.storage.queuefs.get_queue_manager",
         lambda: _QueueManager(),
     )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.asyncio.sleep", fake_sleep
+    )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
     result = await processor._process(_make_msg(), ctx)
 
     assert result is False
     assert queued == [("SessionCommit", _make_msg().to_dict())]
+    # A waiting commit pauses before it goes back to the queue instead of cycling.
+    assert events == [("sleep", 2.0), "enqueue"]
     assert get_root_observability_context() is None
 
 

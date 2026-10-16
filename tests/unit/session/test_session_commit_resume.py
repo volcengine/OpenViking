@@ -15,6 +15,7 @@ from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.session import Session
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 from tests.test_task_tracker import _FakeAgfs
 
@@ -203,6 +204,47 @@ async def test_phase2_cancellation_marks_archive_only_when_requested(
         )
 
     assert (f"{archive_uri}/.failed.json" in files) is cancellation_requested
+
+
+@pytest.mark.asyncio
+async def test_phase2_lock_contention_requeues_without_failing_archive(monkeypatch):
+    session_uri = "viking://user/default/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    archived = Message(id="archived", role="user", parts=[TextPart("old")])
+    files = {
+        f"{session_uri}/.meta.json": json.dumps(
+            {"session_id": "session-1", "message_count": 0, "commit_count": 1}
+        ),
+        f"{archive_uri}/messages.jsonl": f"{archived.to_jsonl()}\n",
+    }
+    session = Session(
+        viking_fs=_MemoryVikingFS(files), session_id="session-1", session_uri=session_uri
+    )
+    tracker = TaskTracker(_TaskStore())
+    set_task_tracker(tracker)
+
+    async def locked(*_args, **_kwargs):
+        raise LockAcquisitionError("lock acquire timed out after 30000ms: /local/session-1")
+
+    monkeypatch.setattr(session, "_prepare_phase2_archive_messages", locked)
+    message = SessionCommitMsg(
+        task_id="task-1",
+        session_id="session-1",
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user={"account_id": "default", "user_id": "default"},
+        memory_policy={"memory_types": []},
+    )
+
+    try:
+        processed = await session.resume_queued_commit(message)
+        task = await tracker.get("task-1", account_id="default", user_id="default")
+    finally:
+        set_task_tracker(None)
+
+    assert processed is False  # SessionCommitProcessor requeues it
+    assert f"{archive_uri}/.failed.json" not in files
+    assert task.status != TaskStatus.FAILED
 
 
 @pytest.mark.asyncio
