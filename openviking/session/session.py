@@ -1861,6 +1861,9 @@ class Session:
         if not await self._can_run_archive(self._archives.archive_index_from_uri(msg.archive_uri)):
             return False
 
+        # Deferred and terminal deliveries need no full read of the live conversation.
+        await self.load()
+
         archive_error = ""
         try:
             archive_messages = await self._archives.read_messages(msg.archive_uri)
