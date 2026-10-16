@@ -17,7 +17,6 @@ import {
   BookOpenIcon,
   BracesIcon,
   BrainIcon,
-  ChevronLeftIcon,
   ChevronRightIcon,
   ListChecksIcon,
   HistoryIcon,
@@ -517,20 +516,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       <Sidebar variant="sidebar" collapsible="icon">
         <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
           <div className="flex h-full items-center gap-1 group-data-[collapsible=icon]:justify-center">
-            {!isGatewayHost ? (
-              <Link
-                to="/config"
-                aria-label={t('header.backToConfig', { ns: 'appShell' })}
-                title={t('header.backToConfig', { ns: 'appShell' })}
-                className="flex size-7 shrink-0 items-center justify-center text-sidebar-foreground/45 transition-colors hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:hidden"
-              >
-                <ChevronLeftIcon
-                  className="size-3.5"
-                  strokeWidth={1.75}
-                  aria-hidden="true"
-                />
-              </Link>
-            ) : null}
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
               <AccountSwitcher />
             </div>
