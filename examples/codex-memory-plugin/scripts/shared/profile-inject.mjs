@@ -157,32 +157,47 @@ async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
  * meaningfully (<HEAD_LINES + 4 lines) or the budget is too tight to fit
  * both head and a useful tail.
  */
-function elideProfile(content, maxTokens) {
+function elideProfile(content, maxTokens, maxBytes = Infinity) {
   // Compute char budget from token budget using *this* content's CJK density,
   // not chars/4 — otherwise the truncated string can still blow the token cap
   // for CJK-heavy profiles (Copilot review point).
   const maxChars = Math.max(400, tokensToCharsBudget(content, maxTokens));
-  if (estimateTokens(content) <= maxTokens) return content;
+  if (estimateTokens(content) <= maxTokens && utf8Bytes(content) <= maxBytes) return content;
 
   const HEAD_LINES = 8;
   const ELLIPSIS = "\n... [profile middle elided] ...\n";
   const lines = content.split("\n");
 
-  const fallbackHeadTruncate = () =>
-    content.slice(0, maxChars).trimEnd() + "\n... [profile truncated]";
+  const fallbackHeadTruncate = () => {
+    const marker = "\n... [profile truncated]";
+    if (maxBytes === Infinity) return content.slice(0, maxChars).trimEnd() + marker;
+    let used = utf8Bytes(marker);
+    let prefix = "";
+    for (const character of content) {
+      const cost = utf8Bytes(character);
+      if (prefix.length + character.length > maxChars || used + cost > maxBytes) break;
+      prefix += character;
+      used += cost;
+    }
+    return prefix.trimEnd() ? prefix.trimEnd() + marker : null;
+  };
 
   if (lines.length <= HEAD_LINES + 4) return fallbackHeadTruncate();
 
   const head = lines.slice(0, HEAD_LINES).join("\n");
   const reserveForTail = maxChars - head.length - ELLIPSIS.length;
-  if (reserveForTail < 200) return fallbackHeadTruncate();
+  const reserveTailBytes = maxBytes - utf8Bytes(head + ELLIPSIS);
+  if (reserveForTail < 200 || reserveTailBytes <= 0) return fallbackHeadTruncate();
 
   let tailChars = 0;
+  let tailBytes = 0;
   let tailStart = lines.length;
   for (let i = lines.length - 1; i > HEAD_LINES; i--) {
     const lineLen = lines[i].length + 1;
-    if (tailChars + lineLen > reserveForTail) break;
+    const lineBytes = utf8Bytes(lines[i]) + 1;
+    if (tailChars + lineLen > reserveForTail || tailBytes + lineBytes > reserveTailBytes) break;
     tailChars += lineLen;
+    tailBytes += lineBytes;
     tailStart = i;
   }
   if (tailStart >= lines.length - 1) return fallbackHeadTruncate();
@@ -371,8 +386,8 @@ function formatSkillCatalog(groups, budgetTokens) {
 export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
   const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0 } = options;
   // Hosts that spill (Claude Code, Codex) or drop (ZCode) oversized hook output
-  // get a byte cap. An estimated token is about 4 UTF-8 bytes at most, so the
-  // token budgets shrink to fit under it.
+  // get a byte cap. Shrink the token budgets first, then check the actual
+  // retained UTF-8 bytes: elision can change the profile's character density.
   const capTokens = sessionStartMaxBytes > 0
     ? Math.max(0, Math.floor(sessionStartMaxBytes / 4) - 50)
     : Infinity;
@@ -409,7 +424,7 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const entBudget = Math.max(0, listingBudget - prefBlock.used);
   const entBlock = formatListing(entUri, ents, entBudget);
 
-  const profileLines = profileTrunc
+  let profileLines = profileTrunc
     ? [`<user-profile uri="${profileUri}">`, profileTrunc, `</user-profile>`]
     : [];
   let memoryLines = prefBlock.lines.length > 0 || entBlock.lines.length > 0
@@ -426,6 +441,13 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   }
   if (sessionStartMaxBytes > 0 && utf8Bytes(block) > sessionStartMaxBytes) {
     skillLines = [];
+    block = render();
+  }
+  if (sessionStartMaxBytes > 0 && utf8Bytes(block) > sessionStartMaxBytes) {
+    const [open, , close] = profileLines;
+    const frameBytes = utf8Bytes(`${open}\n\n${close}`);
+    const boundedProfile = elideProfile(profile, profileBudget, sessionStartMaxBytes - frameBytes);
+    profileLines = boundedProfile ? [open, boundedProfile, close] : [];
     block = render();
   }
   if (!block) return null;

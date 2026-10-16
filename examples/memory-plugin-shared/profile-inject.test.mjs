@@ -190,8 +190,52 @@ test("a byte cap keeps the whole block under it with profile, index and catalog"
 test("when the cap cannot hold everything, the memory index goes before the catalog", async () => {
   const { fetchJSON } = fakeServer({ profile: HEAVY_PROFILE, memories: HEAVY_MEMORIES, skills: HEAVY_SKILLS });
   const result = await buildProfileBlock(fetchJSON, 10000, "", { ...CATALOG, sessionStartMaxBytes: 1000 });
-  assert.ok(Buffer.byteLength(result.block) <= 1000 || !result.block.includes("<available-"), result.block);
+  assert.ok(Buffer.byteLength(result.block) <= 1000, result.block);
   assert.doesNotMatch(result.block, /<available-memories>/);
+});
+
+test("the byte cap uses the retained profile's density and keeps its envelope complete", async () => {
+  for (const [width, tailWidth, tailCount] of [[400, 1000, 100], [350, 100, 1000]]) {
+    const head = Array.from({ length: 8 }, () => "中".repeat(width)).join("\n");
+    const profile = `${head}\n${Array.from({ length: tailCount }, () => "x".repeat(tailWidth)).join("\n")}`;
+    const { fetchJSON } = fakeServer({ profile, memories: HEAVY_MEMORIES });
+    const result = await buildProfileBlock(fetchJSON, 10000, "", { sessionStartMaxBytes: 9500 });
+    assert.ok(Buffer.byteLength(result.block) <= 9500, `${width}: ${Buffer.byteLength(result.block)} bytes`);
+    assert.match(result.block, /^<user-profile uri="viking:\/\/user\/default\/memories\/profile\.md">\n/);
+    assert.match(result.block, /\n<\/user-profile>$/);
+    assert.doesNotMatch(result.block, /<available-/);
+    if (width === 350) {
+      assert.ok(result.block.includes(head));
+      assert.match(result.block, /profile middle elided/);
+      assert.ok(result.block.endsWith(`${"x".repeat(tailWidth)}\n</user-profile>`));
+    }
+  }
+});
+
+test("small byte caps retain whole Unicode characters or omit a profile that cannot fit", async () => {
+  for (const profile of ["x".repeat(3000), "中".repeat(3000), "😀".repeat(3000), HEAVY_PROFILE]) {
+    const { fetchJSON } = fakeServer({ profile });
+    for (const cap of [1, 80, 100, 128, 500, 1000]) {
+      const result = await buildProfileBlock(fetchJSON, 10000, "", { sessionStartMaxBytes: cap });
+      if (!result) continue;
+      assert.ok(Buffer.byteLength(result.block) <= cap, `${cap}: ${Buffer.byteLength(result.block)} bytes`);
+      assert.match(result.block, /^<user-profile uri="viking:\/\/user\/default\/memories\/profile\.md">\n/);
+      assert.match(result.block, /\n<\/user-profile>$/);
+      assert.equal(Buffer.from(result.block).toString("utf8"), result.block);
+    }
+    assert.equal(await buildProfileBlock(fetchJSON, 10000, "", { sessionStartMaxBytes: 1 }), null);
+  }
+});
+
+test("uncapped and fitting profiles keep the same output", async () => {
+  for (const profile of ["# Alice\n- prefers small PRs", "中文".repeat(50), "x".repeat(100), "😀".repeat(20)]) {
+    const { fetchJSON } = fakeServer({ profile });
+    const expected = `<user-profile uri="viking://user/default/memories/profile.md">\n${profile}\n</user-profile>`;
+    for (const cap of [0, 9500]) {
+      const result = await buildProfileBlock(fetchJSON, 2000, "", { sessionStartMaxBytes: cap });
+      assert.equal(result.block, expected);
+    }
+  }
 });
 
 test("the two roots share no client-side cap, so shared skills survive a full private root", async () => {
