@@ -650,26 +650,26 @@ def _drop_nested(ranked: Sequence[Candidate]) -> List[Candidate]:
 
     A single-file resource is a directory holding that file, and every level carries
     its own vector, so one document otherwise fills several slots with the same text.
-    A slot covers the subtree of the highest hit seen; a hit inside its directory hit
-    takes over the slot, since a directory abstract only summarises what the file or
-    section says.
+    A hit above a kept hit is dropped; a hit inside a kept directory hit takes over its
+    slot (keeping the slot's rank), since a directory abstract only summarises what the
+    file or section says. Siblings keep their own slots, whatever the ranking order.
     """
     kept: List[Candidate] = []
-    roots: Dict[int, str] = {}  # slot index -> top of the tree it covers
     for candidate in ranked:
         uri = candidate.base_uri
         slot = None
         if candidate.category == "resources":
             slot = next(
-                (i for i, root in roots.items() if _is_under(uri, root) or _is_under(root, uri)),
+                (
+                    i
+                    for i, other in enumerate(kept)
+                    if other.category == "resources"
+                    and (_is_under(uri, other.base_uri) or _is_under(other.base_uri, uri))
+                ),
                 None,
             )
         if slot is None:
-            if candidate.category == "resources":
-                roots[len(kept)] = uri
             kept.append(candidate)
-        elif _is_under(roots[slot], uri):
-            roots[slot] = uri
         elif (
             kept[slot].is_directory
             and uri != kept[slot].base_uri

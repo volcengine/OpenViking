@@ -1534,5 +1534,28 @@ async def test_resource_tree_slot_shows_the_most_specific_hit():
         params=AssembleParams(query="q", quotas={"resources": 4}, peer_scope="actor"),
     )
 
-    # the section replaces its directory's abstract; the tree still takes one slot
-    assert [entry.uri for entry in result.entries] == [f"{doc}/routing/routing_1.md", other]
+    # the section replaces its directory's abstract; its sibling section keeps its own slot
+    assert [entry.uri for entry in result.entries] == [
+        f"{doc}/routing/routing_1.md",
+        f"{doc}/status/status_1.md",
+        other,
+    ]
+
+
+def test_resource_tree_slots_do_not_depend_on_ranking_order():
+    from itertools import permutations
+    from types import SimpleNamespace
+
+    from openviking.retrieve.context_assembler.gather import _drop_nested
+
+    doc = "viking://resources/doc"
+
+    def res(path, is_directory=False):
+        return SimpleNamespace(base_uri=doc + path, category="resources", is_directory=is_directory)
+
+    hits = [res("", True), res("/a.md", True), res("/a.md/s1"), res("/b.md")]
+    for ranked in permutations(hits):
+        assert sorted(c.base_uri for c in _drop_nested(ranked)) == [
+            f"{doc}/a.md/s1",
+            f"{doc}/b.md",
+        ], [c.base_uri for c in ranked]
