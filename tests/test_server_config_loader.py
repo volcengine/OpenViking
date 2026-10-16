@@ -58,6 +58,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "port": 1944,
                     "workers": 2,
                     "executor_threads": 64,
+                    "session_delete_concurrency": 8,
                     "timeout_keep_alive": 120,
                     "auth_mode": "trusted",
                     "with_bot": True,
@@ -76,6 +77,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.port == 1944
     assert config.workers == 2
     assert config.executor_threads == 64
+    assert config.session_delete_concurrency == 8
     assert config.timeout_keep_alive == 120
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
@@ -92,6 +94,16 @@ def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
 
     assert config.timeout_keep_alive == 5
     assert config.executor_threads == 0
+    assert config.session_delete_concurrency == 4
+
+
+@pytest.mark.parametrize("concurrency", [0, -1, 1.5])
+def test_load_server_config_rejects_invalid_session_delete_concurrency(tmp_path, concurrency):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"session_delete_concurrency": concurrency}}))
+
+    with pytest.raises(ValueError, match=r"server\.session_delete_concurrency"):
+        load_server_config(str(config_path))
 
 
 def test_load_server_config_rejects_negative_default_executor_size(tmp_path):

@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
+    is_session_uri,
     may_include_hidden_actor_peers,
     uri_parts,
 )
@@ -229,6 +230,10 @@ class _OpsMixin:
         Raises ResourceBusyError when the target is locked by an ongoing
         operation (e.g. semantic processing).
 
+        Session subtrees are not indexed and have no per-entry ACLs. They use
+        the same namespace permission checks and path lock, but skip vector
+        cleanup and the directory walk needed by indexed resources.
+
         When ``auto_pathlock`` is False and no outer ``lease_ref`` is supplied,
         the VikingFS-level tree/exact lease is skipped and the underlying AGFS
         delete runs with automatic pathlock disabled. Callers must guarantee the
@@ -246,6 +251,7 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        session_subtree = is_session_uri(target_uri)
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -272,6 +278,8 @@ class _OpsMixin:
                 raise
             if recursive:
                 await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
+            if session_subtree:
+                return {"estimated_deleted_count": 0}
             # Path does not exist: clean up any orphan index records and return
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
@@ -312,15 +320,17 @@ class _OpsMixin:
                     ctx=ctx,
                     strict=is_dir and await self._acl_enabled(ctx),
                 )
-                if is_dir
+                if is_dir and not session_subtree
                 else []
             )
             uris_to_delete.append(target_uri)
             if is_dir:
                 await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
-            real_ctx = self._ctx_or_default(ctx)
-            estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            estimated_count = 0
+            if not session_subtree:
+                real_ctx = self._ctx_or_default(ctx)
+                estimated_count = await _estimate_deleted_count(path, real_ctx)
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             try:
                 result = await self._async_agfs.rm(
                     path,

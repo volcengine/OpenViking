@@ -91,6 +91,22 @@ class SessionService:
         # Strong refs so spawned tasks aren't GC'd mid-await.
         self._auto_commit_tasks: set[asyncio.Task] = set()
         self._session_expiry_adapter: Optional["SessionExpiryAdapter"] = None
+        # Queue delete bursts before they consume storage threads or path locks.
+        self._delete_concurrency = 4
+        self._delete_semaphore = asyncio.Semaphore(4)
+
+    def set_delete_concurrency(self, max_concurrent: int) -> None:
+        """Set the per-instance delete limit during initialization, before requests run."""
+        if (
+            isinstance(max_concurrent, bool)
+            or not isinstance(max_concurrent, int)
+            or max_concurrent < 1
+        ):
+            raise ValueError("Session delete concurrency must be a positive integer")
+        if max_concurrent == self._delete_concurrency:
+            return
+        self._delete_concurrency = max_concurrent
+        self._delete_semaphore = asyncio.Semaphore(max_concurrent)
 
     def configure_expiry(
         self,
@@ -384,9 +400,12 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
+        async with self._delete_semaphore:
+            return await self._delete(session_id, ctx)
 
+    async def _delete(self, session_id: str, ctx: RequestContext) -> bool:
         session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
+        session = self.session(ctx, session_id)
         if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
