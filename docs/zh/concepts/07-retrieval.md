@@ -95,7 +95,7 @@ class TypedQuery:
 
 ## Rerank 策略
 
-Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例如 `limit=10`，启用 Rerank 时先召回向量分数最高的 20 条，再按 Rerank 结果返回最多 10 条；未启用时直接召回 10 条。
+Rerank 只处理本次全局召回的候选，不会触发下一轮检索（默认关闭的[关联扩展](#关联扩展默认关闭)会额外对被关联的 URI 执行一次限定检索）。例如 `limit=10`，启用 Rerank 时先召回向量分数最高的 20 条，再按 Rerank 结果返回最多 10 条；未启用时直接召回 10 条。
 
 - 使用候选索引记录的 `abstract` 字段作为 Rerank 文本。
 - 分数与排序使用 Rerank 分数，否则使用向量分数；访问频次、更新时间和父目录分数不参与加权。
@@ -104,6 +104,29 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 - 不再使用目录优先队列、父子分数传播或多轮收敛判断。
 
 支持的 provider 和配置见 [Rerank 配置](../guides/01-configuration.md#rerank)。
+
+## 关联扩展（默认关闭）
+
+文件可以在 YAML frontmatter 中用 `related` 列表声明与之相关的资源：
+
+```markdown
+---
+related:
+  - viking://resources/auth/token-validation.md
+---
+# JWT authentication
+```
+
+关联写在文件内容中，因此写入、移动、复制、删除、恢复、导出和导入都会随内容一起处理，不存在单独的关联存储。关联由用户或 Agent 显式编写，只扩展一跳，且只读取 `viking://` URI。
+
+当 `retrieval.relation_expansion.enabled` 为 true，且查询以 THINKING 模式并配置了可用 Rerank 执行（`search()`）时，检索会：
+
+1. 取最多 `max_seeds` 个已通过分数阈值、排名最高的 L2 文件命中作为种子。
+2. 每个种子最多读取开头 8 KB，所有种子合计最多检查 `max_edges` 条关联。跳过指向自身、重复以及已被召回的关联。
+3. 通过与普通检索相同的限定检索（租户与权限过滤、`target_uri`、上下文类型、`filter`、`level`）获取被关联的 URI，并限定为这些精确 URI。关联不会扩大检索范围：调用方本无法检索到的资源不会被返回，也不会透露其任何信息。
+4. 对关联候选按查询执行 Rerank，应用相同的分数阈值，最多加入 `max_added` 条，再与其他候选一起排序并按 `limit` 截断。
+
+仅有关联不会让资源进入结果。QUICK 模式（包括 `find()` 和 `mode="context"` 组装）不受影响：该模式下关联候选只能以召回分竞争，而召回分已经把它们排除在外。通过关联加入的命中在 JSON 响应中带有 `related_from`（种子 URI），但不会渲染进面向 LLM 的工具输出。目标已被移动或删除的关联会被忽略。
 
 ## 检索结果
 
