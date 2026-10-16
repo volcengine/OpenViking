@@ -2207,6 +2207,33 @@ def _make_memory_diff(
     }
 
 
+def _memory_op_identity(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Stable identity for one memory_diff operation row.
+
+    A (uri, before, after) triple uniquely identifies an exact edit. Adds omit
+    before; deletes use deleted_content in place of after. Two genuine edits to
+    the same URI within one archive necessarily differ in before/after, so
+    collapsing on this key does not hide real changes.
+    """
+    uri = item.get("uri")
+    if "deleted_content" in item and "after" not in item and "before" not in item:
+        return (uri, None, item.get("deleted_content"))
+    return (uri, item.get("before"), item.get("after"))
+
+
+def _dedupe_memory_ops(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the first occurrence of each identical operation row."""
+    seen: set[tuple[Any, ...]] = set()
+    unique: list[dict[str, Any]] = []
+    for item in items:
+        key = _memory_op_identity(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
 def _merge_memory_diffs(
     diffs: list[dict[str, Any]],
     *,
@@ -2233,9 +2260,9 @@ def _merge_memory_diffs(
         deletes.extend([item for item in operations.get("deletes", []) if isinstance(item, dict)])
     merged = _make_memory_diff(
         archive_uri=archive_uri,
-        adds=adds,
-        updates=updates,
-        deletes=deletes,
+        adds=_dedupe_memory_ops(adds),
+        updates=_dedupe_memory_ops(updates),
+        deletes=_dedupe_memory_ops(deletes),
         skipped_operations=skipped_operations,
     )
     merged["trace_id"] = trace_id
