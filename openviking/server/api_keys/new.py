@@ -182,7 +182,7 @@ class APIKeyManager:
         self, account_id: str, user_id: str, role: Role
     ) -> ResolvedIdentity:
         user = await self._require_authenticatable_user(account_id, user_id)
-        if role.rank > Role(user["role"]).rank:
+        if not Role(user["role"]).allows_token_role(role):
             raise UnauthenticatedError(
                 "OAuth token's embedded role exceeds the user's current role; "
                 "please re-authorize the client."

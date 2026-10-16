@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import read_user_memory_policy
 from openviking.service.session_auto_commit import (
     compute_next_check_at,
@@ -40,6 +40,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
     NotInitializedError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
@@ -231,6 +232,8 @@ class SessionService:
             Session instance
         """
         self._ensure_initialized()
+        if ctx.role == Role.ANALYST:
+            raise PermissionDeniedError("Analysts do not have personal sessions")
         ctx = replace(ctx, actor_peer_id=None)
         return Session(
             viking_fs=self._viking_fs,

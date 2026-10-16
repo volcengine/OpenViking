@@ -42,13 +42,13 @@ from openviking.server.account_stores.mysql_schema import (
     GroupMember,
     User,
 )
+from openviking.server.api_keys.models import validate_account_user_role
 from openviking.server.identity import Role
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -72,14 +72,6 @@ def _validate(value: str, validator, name: str) -> None:
     if error := validator(value):
         raise InvalidArgumentError(error)
     _validate_length(value, name)
-
-
-def _validate_role(role: str) -> Role:
-    if role == Role.ROOT:
-        raise PermissionDeniedError("Account users cannot be assigned ROOT")
-    if role not in (Role.ADMIN, Role.USER):
-        raise InvalidArgumentError("Account user role must be user or admin.")
-    return Role(role)
 
 
 def _like_pattern(pattern: str) -> str:
@@ -503,7 +495,7 @@ class MySQLAccountStore(AccountStore):
 
     async def create_user(self, account_id: str, user_id: str, role: str) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = validate_account_user_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -528,7 +520,7 @@ class MySQLAccountStore(AccountStore):
         api_key: str,
     ) -> None:
         _validate(user_id, validate_user_id, "user_id")
-        role = _validate_role(role)
+        role = validate_account_user_role(role)
         try:
             async with self._transaction() as session:
                 account = await self._lock_account(session, account_id)
@@ -683,7 +675,7 @@ class MySQLAccountStore(AccountStore):
         }
 
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
-        role = _validate_role(role)
+        role = validate_account_user_role(role)
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -691,6 +683,7 @@ class MySQLAccountStore(AccountStore):
             self._require_active(user)
             if role != Role.ADMIN:
                 await self._protect_last_admin(session, account, user)
+            validate_account_user_role(role, current_role=user.role)
             user.role = role
 
     async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:

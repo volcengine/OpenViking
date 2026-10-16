@@ -15,7 +15,7 @@ OpenViking 的多租户不是“为每个团队部署一套独立服务”，而
 - 用 `account` 隔离不同团队的数据
 - 在同一个 `account` 内共享 `resources`，并用 ACL 对目录或文件细化授权
 - 用 `user` 隔离用户级记忆和会话
-- 用 ROOT / ADMIN / USER 角色分层管理权限
+- 用 ROOT / ADMIN / USER 管理和使用数据，用 ANALYST 跨 user 只读分析
 - 支持 OpenClaw 插件、Vikingbot、CLI、HTTP SDK 等不同接入方式
 
 ## 核心身份模型
@@ -43,6 +43,26 @@ OpenViking 的多租户不是“为每个团队部署一套独立服务”，而
 | ROOT | 全局 | 创建/删除 account、管理用户；API Key 模式下不用于租户数据读写 |
 | ADMIN | 单个 account | 管理本 account 的用户、重置 user key |
 | USER | 单个 account | 访问自己的 user/peer/session 数据和 account 内共享资源 |
+| ANALYST | 单个 account | 读取用户本人授权的业务空间，执行检索和 compile；没有个人 user 空间 |
+
+## 跨 user 分析
+
+`analyst` 有自己的身份 ID、API Key 和任务归属，但不会创建个人 user 目录，也不能创建个人会话或使用 `viking://~`。创建时不能传个人 `user_config`。首版不支持在 `analyst` 与 `user/admin` 之间切换角色。
+
+授权分两步：
+
+1. 管理员通过 `POST /api/v1/admin/accounts/{account}/users` 创建分析身份，例如 `{"user_id":"team-analyst","role":"analyst"}`。
+2. 每个数据空间的主人，用自己的身份在 `viking://user/{自己的 user_id}` 上授予 `user:team-analyst` 的 `read` 权限。管理员身份本身不能代替其他用户授权。
+
+授权覆盖该空间的 `memories`、`resources`、`skills`、`sessions`、`peers` 业务目录，包含以后新增的业务内容。`privacy` 和个人设置不在授权范围内；读取 skill 时不恢复源用户的密钥。分析身份不能修改源空间，也不能转授权限。
+
+同一个分析身份可以获得多个空间的授权。默认检索会搜索这些空间和可读的共享内容；结果 URI 保留来源 user。上下文检索的 `origin` 用 `other_user` 表示授权来源，用 `shared` 表示共享内容。会话内容可通过文件接口读取，但不会变成分析身份自己的会话。
+
+Compile 使用分析身份提交和执行，来源目录和 skill 都必须可读，`to` 必须显式指向有写权限的 `viking://resources/...`。不支持原地整理用户记忆的 `skill=memory`。共享输出沿用现有共享 ACL；账号未开启共享 ACL 时，仍采用原有的账号内共享规则。
+
+撤销授权后，后续请求重新检查权限。已读取到执行器中的内容不会被追回，已经生成的共享产物也不会自动删除。删除分析身份会清理对它的空间授权，再次创建相同 ID 不会恢复这些授权。
+
+详细请求见 [ACL API](../api/12-acl.md)。
 
 ## 认证模式
 
@@ -52,6 +72,8 @@ OpenViking Server 支持两种多租户相关认证模式：
 |------|------|----------|----------|
 | `api_key` | `server.auth_mode = "api_key"` | Root key 或 user key | 标准部署方式 |
 | `trusted` | `server.auth_mode = "trusted"` | 上游显式注入 `X-OpenViking-Account` / `X-OpenViking-User` | 受信网关后面 |
+
+`analyst` 在 `api_key` 和 `trusted` 模式下均须先注册。trusted 网关可传 `X-OpenViking-Role: analyst`，也可省略角色头，由服务端读取已注册角色；不能把已注册的分析身份断言为 `user/admin`。
 
 在 trusted 模式下，上游网关还可以断言 `X-OpenViking-Role: user` 或 `X-OpenViking-Role: admin`。角色断言要求服务端已配置 `root_api_key`，且请求携带匹配的 API Key。`X-OpenViking-Role: root` 会被拒绝；ROOT 只保留给已校验的 Admin API 回退路径。
 

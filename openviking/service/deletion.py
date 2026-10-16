@@ -321,6 +321,7 @@ class DeletionService:
             await run_to_completion(lambda: self._cancel_tasks(account_id, user_id))
             if user_id is not None:
                 await run_to_completion(lambda: tracker.delete_user_tasks(account_id, user_id))
+                await run_to_completion(lambda: self._remove_user_space_grants(ctx))
 
             vectors = self._service.viking_fs.vector_store
             if vectors is not None:
@@ -370,6 +371,21 @@ class DeletionService:
             return error
         await tracker.complete(task_id, {"deleted": True}, **owner)
         return None
+
+    async def _remove_user_space_grants(self, ctx: RequestContext) -> None:
+        """Remove incoming grants before the fenced identity can be recreated."""
+        fs = self._service.viking_fs
+        for owner_id in await fs.acl_manager.readable_user_ids(ctx):
+            owner_ctx = RequestContext(
+                user=UserIdentifier(ctx.account_id, owner_id), role=Role.ROOT
+            )
+            try:
+                await fs.revoke_acl(
+                    f"viking://user/{owner_id}", f"user:{ctx.user.user_id}", ctx=owner_ctx
+                )
+            except NotFoundError:
+                # Concurrent owner deletion also removes its root ACL records.
+                continue
 
     async def _delete_account_files(self, account_id: str) -> None:
         agfs = self._service.viking_fs._async_agfs

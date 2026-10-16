@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Protocol, Seq
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
-from openviking.core.namespace import uri_parts
+from openviking.core.namespace import classify_uri, uri_parts
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import FilterExpr, Or, PathScope
+from openviking.storage.expr import And, FilterExpr, In, Or, PathScope
 from openviking_cli.exceptions import InvalidArgumentError
 
 if TYPE_CHECKING:
@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 
 class AccountConfigReader(Protocol):
     async def get_account(self, account_id: str, field: str) -> Any: ...
+
+
+class IdentityReader(Protocol):
+    async def get_registered_user_role(self, account_id: str, user_id: str) -> Role | None: ...
+
+    async def get_deletion(self, account_id: str, user_id: str) -> Any: ...
 
 
 class AclLevel(str, Enum):
@@ -262,9 +268,11 @@ def is_acl_uri(uri: str) -> bool:
 
 def acl_ancestors(uri: str) -> list[str]:
     """Return ACL-bearing ancestors from the resource root through *uri*."""
+    if classify_uri(uri).is_user_namespace_root:
+        return [uri]
     parts = uri_parts(uri)
     if parts[:1] != ["resources"]:
-        raise InvalidArgumentError("ACL is only supported for viking://resources")
+        raise InvalidArgumentError("ACL requires shared resources or an explicit user root")
     return [f"viking://{'/'.join(parts[:depth])}" for depth in range(1, len(parts) + 1)]
 
 
@@ -287,6 +295,46 @@ class AclManager:
     ) -> None:
         self._context_store = context_store
         self._runtime_config = runtime_config
+        self._identity_reader: IdentityReader | None = None
+
+    def set_identity_reader(self, reader: IdentityReader) -> None:
+        self._identity_reader = reader
+
+    async def readable_user_ids(self, ctx: RequestContext) -> tuple[str, ...]:
+        """Read only root grants, scoped to this account, independent of shared ACLs."""
+        records = await self._scroll_all(
+            And(
+                [
+                    PathScope("uri", "viking://user", depth=1),
+                    In("acl_direct_grants", [f"1:user:{ctx.user.user_id}"]),
+                ]
+            ),
+            ["uri"],
+            replace(ctx, bypass_acl=True),
+        )
+        return tuple(
+            sorted(
+                {
+                    uri_parts(record["uri"])[1]
+                    for record in records
+                    if classify_uri(record["uri"]).is_user_namespace_root
+                }
+            )
+        )
+
+    async def _validate_analysts(self, entries: Sequence[AclEntry], ctx: RequestContext) -> None:
+        if not entries:
+            return
+        if self._identity_reader is None:
+            raise RuntimeError("Identity reader is not initialized")
+        for entry in entries:
+            user_id = entry.principal.removeprefix("user:")
+            role = await self._identity_reader.get_registered_user_role(ctx.account_id, user_id)
+            deleting = await self._identity_reader.get_deletion(ctx.account_id, user_id)
+            if role != Role.ANALYST or deleting is not None:
+                raise InvalidArgumentError(
+                    "User-space grants require an active analyst in this account"
+                )
 
     def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
         """Bind the authoritative account configuration reader."""
@@ -302,6 +350,8 @@ class AclManager:
     @staticmethod
     def _effective_from_record(record: Mapping[str, Any]) -> EffectiveAcl:
         direct = DirectAcl.from_context_fields(record, "acl_direct")
+        if record.get("uri") and classify_uri(record["uri"]).is_user_namespace_root:
+            return EffectiveAcl(AclMode.RESTRICTED, direct, DirectAcl())
         inherited = DirectAcl.from_context_fields(record, "acl_inherited")
         raw_mode = record.get(ACL_MODE_FIELD, AclMode.NONE.value)
         if raw_mode is None:
@@ -368,8 +418,10 @@ class AclManager:
             if cursor is None:
                 return records
 
-    async def _subtree_records(self, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
-        refs = await self._scroll_all(PathScope("uri", uri, depth=-1), ["id"], ctx)
+    async def _subtree_records(
+        self, uri: str, ctx: RequestContext, *, depth: int = -1
+    ) -> list[dict[str, Any]]:
+        refs = await self._scroll_all(PathScope("uri", uri, depth=depth), ["id"], ctx)
         ids = [str(record["id"]) for record in refs if record.get("id")]
         records: list[dict[str, Any]] = []
         for offset in range(0, len(ids), 500):
@@ -389,7 +441,15 @@ class AclManager:
         exact_records = await self._records_for_uris(unique_uris, ctx)
         exact_groups = self._group_by_uri(exact_records)
         result: dict[str, EffectiveAcl] = {}
+        for uri in unique_uris:
+            if classify_uri(uri).is_user_namespace_root:
+                direct = self._effective_from_records(exact_groups.get(uri, [])).direct
+                if update is not None and update.uri == uri and update.acl.entries is not None:
+                    direct = DirectAcl.from_entries(update.acl.entries)
+                result[uri] = EffectiveAcl(AclMode.RESTRICTED, direct, DirectAcl())
         for uri, records in exact_groups.items():
+            if uri in result:
+                continue
             effective = self._effective_from_records(records)
             if not effective.enabled:
                 continue
@@ -448,7 +508,10 @@ class AclManager:
             if not uri:
                 continue
             resource_uri = str(uri)
-            if not is_acl_uri(resource_uri):
+            if (
+                not is_acl_uri(resource_uri)
+                and not classify_uri(resource_uri).is_user_namespace_root
+            ):
                 continue
             resource_uris.add(resource_uri)
         if not resource_uris:
@@ -563,7 +626,28 @@ class AclManager:
         if entries is None and acl_mode is None:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
-        old_records = await self._subtree_records(uri, ctx)
+        is_user_root = classify_uri(uri).is_user_namespace_root
+        if is_user_root:
+            if acl_mode not in (None, AclMode.RESTRICTED):
+                raise InvalidArgumentError("User-space grants do not support ACL inheritance")
+            acl_mode = AclMode.RESTRICTED
+            for entry in proposed_direct.entries if proposed_direct is not None else ():
+                if (
+                    entry.level != AclLevel.READ
+                    or not entry.principal.startswith("user:")
+                    or entry.principal == "user:*"
+                ):
+                    raise InvalidArgumentError(
+                        "User-space grants require read access for a specific analyst"
+                    )
+        old_records = await self._subtree_records(uri, ctx, depth=0 if is_user_root else -1)
+        added = ()
+        if is_user_root and proposed_direct is not None:
+            previous = self._effective_from_records(old_records).direct
+            added = tuple(
+                entry for entry in proposed_direct.entries if entry not in previous.entries
+            )
+            await self._validate_analysts(added, ctx)
         try:
             effective = await self._apply_subtree(
                 uri,
@@ -572,6 +656,9 @@ class AclManager:
                 root_direct=proposed_direct,
                 root_mode=acl_mode,
             )
+            if is_user_root:
+                # A deletion fence may have been installed while the write was in flight.
+                await self._validate_analysts(added, ctx)
         except Exception:
             if old_records:
                 await self._context_store._upsert_many_raw(old_records, ctx=ctx)

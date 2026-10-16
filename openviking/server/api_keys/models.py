@@ -9,15 +9,23 @@ from openviking.server.identity import Role
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 
 
-def validate_account_user_role(role: str) -> Role:
-    """Account users may be USER or ADMIN; ROOT is the configured server identity."""
+def validate_account_user_role(role: str, *, current_role: str | None = None) -> Role:
+    """Validate account identities; ROOT is the configured server identity."""
     resolved_role = Role(role)
     if resolved_role == Role.ROOT:
         raise PermissionDeniedError(
             "Account users cannot be assigned ROOT; use server.root_api_key for ROOT access."
         )
-    if resolved_role not in (Role.USER, Role.ADMIN):
-        raise InvalidArgumentError("Account user role must be user or admin.")
+    if resolved_role not in (Role.USER, Role.ADMIN, Role.ANALYST):
+        raise InvalidArgumentError("Account user role must be user, admin, or analyst.")
+    if (
+        current_role is not None
+        and current_role != resolved_role
+        and Role.ANALYST in (current_role, resolved_role)
+    ):
+        raise InvalidArgumentError(
+            "Analyst identities cannot change to or from a space-owning role"
+        )
     return resolved_role
 
 

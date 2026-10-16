@@ -18,6 +18,7 @@ _CONTENT_TYPES_BY_SCOPE = {
 _PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
 _CONTENT_SEGMENT_BY_KIND = {"resource": "resources", "skill": "skills"}
+_ANALYST_READ_SEGMENTS = ("memories", "resources", "skills", "sessions", "peers")
 
 
 class NamespaceShapeError(ValueError):
@@ -149,6 +150,8 @@ def context_type_for_uri(uri: str) -> str:
 
 
 def canonical_user_root(ctx: RequestContext) -> str:
+    if ctx.role == Role.ANALYST:
+        raise NamespaceShapeError("Analyst identities do not have a personal user space")
     return f"viking://user/{user_space_fragment(ctx)}"
 
 
@@ -178,6 +181,16 @@ AGENT_SKILLS_ROOT = "viking://agent/skills"
 
 
 def visible_roots(ctx: RequestContext) -> list[str]:
+    if ctx.role == Role.ANALYST:
+        return [
+            "viking://resources",
+            "viking://agent",
+            *(
+                f"viking://user/{user_id}/{segment}"
+                for user_id in ctx.readable_user_ids
+                for segment in _ANALYST_READ_SEGMENTS
+            ),
+        ]
     return [
         "viking://resources",
         "viking://agent",
@@ -328,6 +341,13 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
     if target.scope == "upload":
         return False
     if target.scope == "user":
+        if ctx.role == Role.ANALYST:
+            if not target.owner_user_id:
+                return True
+            if target.owner_user_id not in ctx.readable_user_ids:
+                return False
+            parts = uri_parts(uri)
+            return len(parts) == 2 or parts[2] in _ANALYST_READ_SEGMENTS
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
             return False
         return True

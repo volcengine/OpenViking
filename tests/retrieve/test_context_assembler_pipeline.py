@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from types import SimpleNamespace
 
+import pytest
+
 from openviking.retrieve.context_assembler import pipeline as pipeline_module
 from openviking.retrieve.context_assembler import rewrite as rewrite_module
 from openviking.retrieve.context_assembler.budget import (
@@ -1059,7 +1061,8 @@ async def test_preset_scope_directories_are_not_served():
     assert [entry.uri for entry in result.entries] == [project, doc]
 
 
-async def test_flat_retrieval_skips_preset_directories():
+@pytest.mark.parametrize("role", [Role.USER, Role.ANALYST])
+async def test_flat_retrieval_skips_preset_directories(role):
     memory = f"{USER_ROOT}/memories/preferences/lang.md"
     hits = [
         _hit(f"{USER_ROOT}/memories/.overview.md", 0.7, "Memory root"),
@@ -1068,13 +1071,23 @@ async def test_flat_retrieval_skips_preset_directories():
     ]
     service = _service(hits=hits, bodies={})
 
+    ctx = _ctx()
+    if role == Role.ANALYST:
+        ctx = RequestContext(
+            user=UserIdentifier(ctx.account_id, "reader"),
+            role=Role.ANALYST,
+            readable_user_ids=("test_user",),
+        )
     result = await assemble_context(
         service=service,
-        ctx=_ctx(),
+        ctx=ctx,
         params=AssembleParams(query="q", limit=5, peer_scope="actor"),
     )
 
     assert [entry.uri for entry in result.entries] == [memory]
+
+    if role == Role.ANALYST:
+        assert result.entries[0].origin == "other_user"
 
 
 async def test_unused_bucket_slots_backfill_with_the_best_remaining_hits():

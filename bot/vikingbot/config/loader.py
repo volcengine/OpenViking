@@ -678,7 +678,7 @@ def _validate_api_key_mode_key(ov_server: Any, server_url: str) -> None:
     role = str(data.get("role") or "").strip().lower()
     account_id = str(data.get("account_id") or "").strip()
     user_id = str(data.get("user_id") or "").strip()
-    if role in {"user", "admin"} and account_id and user_id:
+    if role in {"user", "admin", "analyst"} and account_id and user_id:
         return
     if role == "root":
         _raise_api_key_mode_root_key()

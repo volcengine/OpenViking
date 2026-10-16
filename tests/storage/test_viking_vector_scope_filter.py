@@ -12,10 +12,12 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -518,6 +520,83 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
                 "restricted-direct-shared",
                 "denied-shared",
             ]
+        )
+
+        # Whole-user grants remain enforced with shared ACL both on and off.
+        owner = RequestContext(user=UserIdentifier("acct", "bob"), role=Role.USER)
+        analyst = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.ANALYST)
+        root = "viking://user/bob"
+        private = f"{root}/privacy/skill/wiki/current.json"
+        for record_id, uri in (("bob-root", root), ("bob-secret", private)):
+            await backend._upsert_many_raw(
+                [
+                    {
+                        "id": record_id,
+                        "uri": uri,
+                        "account_id": "acct",
+                        "level": 2,
+                        "context_type": "resource",
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                    }
+                ],
+                ctx=owner,
+            )
+        fs = VikingFS(agfs=SimpleNamespace())
+        fs._async_agfs = SimpleNamespace(
+            stat=AsyncMock(return_value={"isDir": True}),
+            pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "root"}),
+            pathlock_release=AsyncMock(),
+        )
+        fs.acl_manager = backend.acl_manager
+        identity_reader = SimpleNamespace(
+            get_registered_user_role=AsyncMock(return_value=Role.ANALYST),
+            get_deletion=AsyncMock(return_value=None),
+        )
+        fs.acl_manager.set_identity_reader(identity_reader)
+        assert await fs.acl_manager.readable_user_ids(analyst) == ()
+        with pytest.raises(PermissionDeniedError):
+            await fs.grant_acl(root, "user:reader", "read", ctx=_ctx(role=Role.ADMIN))
+        with pytest.raises(InvalidArgumentError):
+            await fs.grant_acl(root, "user:reader", "write", ctx=owner)
+        with pytest.raises(InvalidArgumentError):
+            await fs.grant_acl(root, "user:*", "read", ctx=owner)
+        await fs.grant_acl(root, "user:reader", "read", ctx=owner)
+        # A new manager resolves the persisted grant without descendant rewrites.
+        backend.acl_manager = AclManager(backend, acl_config)
+        fs.acl_manager = backend.acl_manager
+        fs.acl_manager.set_identity_reader(identity_reader)
+        analyst.readable_user_ids = await fs.acl_manager.readable_user_ids(analyst)
+        assert analyst.readable_user_ids == ("bob",)
+        for enabled in (True, False):
+            acl_config.enabled = enabled
+            await fs._ensure_access(cross_user_uri, analyst)
+            for uri in (cross_user_uri, "viking://user/reader/resources/output"):
+                with pytest.raises(PermissionDeniedError):
+                    await fs._ensure_access(uri, analyst, action=AclAction.WRITE)
+            for uri in (private, own_uri):
+                with pytest.raises(PermissionDeniedError):
+                    await fs._ensure_access(uri, analyst)
+            hits = await backend.search_in_tenant(
+                ctx=analyst,
+                query_vector=[1.0, 0.0, 0.0, 0.0],
+                context_type="resource",
+                target_directories=["viking://user"],
+            )
+            assert {hit["id"] for hit in hits} == {"cross-user"}
+        foreign = RequestContext(user=UserIdentifier("other", "reader"), role=Role.ANALYST)
+        assert await fs.acl_manager.readable_user_ids(foreign) == ()
+        await fs.revoke_acl(root, "user:reader", ctx=owner)
+        analyst.readable_user_ids = await fs.acl_manager.readable_user_ids(analyst)
+        assert analyst.readable_user_ids == ()
+        with pytest.raises(PermissionDeniedError):
+            await fs._ensure_access(cross_user_uri, analyst)
+        assert (
+            await backend.search_in_tenant(
+                ctx=analyst,
+                query_vector=[1.0, 0.0, 0.0, 0.0],
+                target_directories=[root],
+            )
+            == []
         )
 
     finally:

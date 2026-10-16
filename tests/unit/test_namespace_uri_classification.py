@@ -220,16 +220,26 @@ def test_reserved_user_root_shorthand_rejection_message(segment, role):
     assert f"viking://user/{{user_id}}/{segment}/nested/leaf.md" in nested_message
 
 
-def test_bare_user_uri_stays_the_user_space_container():
+@pytest.mark.parametrize("role", [Role.USER, Role.ANALYST])
+def test_bare_user_uri_stays_the_user_space_container(role):
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="alice"),
-        role=Role.USER,
+        role=role,
     )
 
     assert resolve_request_uri("viking://user", ctx) == "viking://user"
     assert resolve_request_uri("viking://user/", ctx) == "viking://user"
     assert resolve_uri("viking://user").is_container is True
     assert resolve_uri("viking://user").owner_user_id is None
+
+    if role == Role.ANALYST:
+        # Analysts only have explicit source URIs, including users whose IDs
+        # happen to be legacy shorthand names.
+        assert resolve_request_uri("viking://user/resources/resources/doc.md", ctx) == (
+            "viking://user/resources/resources/doc.md"
+        )
+        with pytest.raises(NamespaceShapeError, match="personal user space"):
+            resolve_request_uri("viking://~/resources", ctx)
 
 
 def test_unreserved_user_root_segment_keeps_canonical_meaning():

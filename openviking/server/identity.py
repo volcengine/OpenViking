@@ -17,7 +17,7 @@ from openviking_cli.session.user_id import UserIdentifier
 class Role(str):
     """Role type — supports built-in roles and custom plugin-defined roles.
 
-    Built-in roles (root/admin/user) are available as class attributes.
+    Built-in roles (root/admin/user/analyst) are available as class attributes.
     Custom roles can be registered via ``Role.register(name, rank)``.
 
     Role comparison is string-based, so ``Role.ROOT == "root"`` and
@@ -27,11 +27,13 @@ class Role(str):
     ROOT = "root"
     ADMIN = "admin"
     USER = "user"
+    ANALYST = "analyst"
 
     # Privilege ranking for role-downgrade detection.
     # Higher rank => more privilege.
     _BUILTIN_RANK: dict[str, int] = {
         USER: 0,
+        ANALYST: 0,
         ADMIN: 1,
         ROOT: 2,
     }
@@ -51,6 +53,12 @@ class Role(str):
     def rank(self) -> int:
         """Return the privilege rank for this role."""
         return self._BUILTIN_RANK.get(self, self._CUSTOM_RANK.get(self, 0))
+
+    def allows_token_role(self, role: Role) -> bool:
+        """An analyst is not a privilege superset or subset of a space owner."""
+        if self == self.ANALYST or role == self.ANALYST:
+            return self == role
+        return self.rank >= role.rank
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Role):
@@ -97,6 +105,9 @@ class RequestContext:
     # Account-scoped groups resolved by the server for this request. Callers do
     # not supply these values through headers or ACL payloads.
     group_ids: tuple[str, ...] = ()
+    # Derived from space-root grants for this request only, never supplied by
+    # clients or persisted in background tasks.
+    readable_user_ids: tuple[str, ...] = ()
     # Request-level view filter for the current user's peers collection. This does
     # not change tenant/user identity or session ownership.
     actor_peer_id: Optional[str] = None

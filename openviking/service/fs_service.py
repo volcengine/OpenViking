@@ -26,7 +26,7 @@ from openviking.privacy import (
 )
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
 from openviking.session.memory.memory_updater import MemoryUpdater
@@ -1088,7 +1088,7 @@ class FSService:
             content = await viking_fs.read_file(legacy_uri, ctx=ctx)
             resolved_uri = legacy_uri
         skill_name = get_skill_name_from_uri(resolved_uri)
-        if skill_name and self._privacy_config_service:
+        if skill_name and self._privacy_config_service and ctx.role != Role.ANALYST:
             current = await self._privacy_config_service.get_current(
                 ctx=ctx,
                 category="skill",

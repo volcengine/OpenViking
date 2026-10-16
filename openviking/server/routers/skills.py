@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi import Path as ApiPath
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from openviking.core.namespace import canonical_user_root
+from openviking.core.namespace import canonical_user_root, classify_uri, uri_parts, visible_roots
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.skill_loader import validate_skill_format
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -26,7 +26,7 @@ from openviking.privacy.service import UserPrivacyConfigVersion
 from openviking.retrieve.skill_results import skill_root_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.skill_package_update import (
     clear_skill_package_contents,
@@ -105,6 +105,16 @@ class ValidateSkillRequest(BaseModel):
 
 
 def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) -> str:
+    if ctx.role == Role.ANALYST:
+        if not target_uri:
+            raise InvalidArgumentError("Analysts must specify the skill target_uri")
+        resolved = validate_request_viking_uri(
+            resolve_path_variables(target_uri), ctx, field_name="target_uri"
+        ).rstrip("/")
+        classification = classify_uri(resolved)
+        if classification.is_skill_namespace or classification.is_skill_root:
+            return "viking://" + "/".join(uri_parts(resolved)[: classification.content_index + 1])
+        raise InvalidArgumentError("target_uri must identify a skills namespace or package")
     user_root = f"{canonical_user_root(ctx)}/skills"
     if not target_uri:
         return user_root
@@ -281,6 +291,9 @@ async def _require_skill(
             pass
         except Exception as exc:
             raise NotFoundError(root_uri, "skill") from exc
+
+    if ctx.role == Role.ANALYST:
+        raise NotFoundError(target_uri or skill_name, "skill")
 
     user_root_uri = _skill_root_uri(ctx, skill_name)
     try:
@@ -573,22 +586,21 @@ async def list_skills(
             status="ok", result={"root_uri": resolved_uri, "skills": skills, "total": len(skills)}
         )
     else:
-        user_skills = await _list_skills_from_root(
-            service, _ctx, f"{canonical_user_root(_ctx)}/skills", limit
+        roots = (
+            [root for root in visible_roots(_ctx) if root.endswith("/skills")]
+            if _ctx.role == Role.ANALYST
+            else [f"{canonical_user_root(_ctx)}/skills"]
         )
-        agent_skills = await _list_skills_from_root(service, _ctx, "viking://agent/skills", limit)
-        # Intentionally concatenate without deduplication: when the same skill
-        # name exists in both the user-private and the account-shared agent
-        # scope, both entries should be visible so the caller can tell them
-        # apart by ``root_uri``.
-        merged_skills = [*user_skills, *agent_skills]
+        roots.append("viking://agent/skills")
+        # Keep same-named packages separate; root_uri identifies their owner.
+        merged_skills = [
+            skill
+            for root in roots
+            for skill in await _list_skills_from_root(service, _ctx, root, limit)
+        ]
         return Response(
             status="ok",
-            result={
-                "root_uris": [f"{canonical_user_root(_ctx)}/skills", "viking://agent/skills"],
-                "skills": merged_skills,
-                "total": len(merged_skills),
-            },
+            result={"root_uris": roots, "skills": merged_skills, "total": len(merged_skills)},
         )
 
 
@@ -600,9 +612,16 @@ async def find_skills(
     """Find agent skills by semantic search."""
     service = get_service()
     target_uri = request.target_uri
-    if target_uri:
-        resolved_uri = validate_request_viking_uri(
-            resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+    if target_uri or _ctx.role == Role.ANALYST:
+        resolved_uri = (
+            validate_request_viking_uri(
+                resolve_path_variables(target_uri), _ctx, field_name="target_uri"
+            )
+            if target_uri
+            else [
+                *[root for root in visible_roots(_ctx) if root.endswith("/skills")],
+                "viking://agent/skills",
+            ]
         )
         execution = await run_operation(
             operation="skills.find",
@@ -624,7 +643,11 @@ async def find_skills(
         ]
         return Response(
             status="ok",
-            result={"root_uri": resolved_uri, "skills": hits, "total": len(hits)},
+            result={
+                **({"root_uri": resolved_uri} if target_uri else {"root_uris": resolved_uri}),
+                "skills": hits,
+                "total": len(hits),
+            },
             telemetry=execution.telemetry,
         ).model_dump(exclude_none=True)
     else:

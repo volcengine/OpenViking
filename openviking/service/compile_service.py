@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import (
     ExternalTaskError,
     ExternalTaskService,
@@ -25,6 +25,7 @@ from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
     UnavailableError,
 )
@@ -344,6 +345,8 @@ class CompileService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
     ) -> TaskRecord:
+        if ctx.role == Role.ANALYST and request.is_memory_mode:
+            raise PermissionDeniedError("Analysts cannot consolidate user memories in place")
         if request.is_memory_mode:
             if self._memory_runner is None:
                 raise UnavailableError(
@@ -469,6 +472,8 @@ class CompileService:
         target = validate_request_viking_uri(
             resolve_path_variables(request.to), ctx, field_name="to"
         ).rstrip("/")
+        if ctx.role == Role.ANALYST and uri_parts(target)[:1] != ["resources"]:
+            raise PermissionDeniedError("Analyst compile output must be in shared resources")
         self._validate_target(target)
         return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
 

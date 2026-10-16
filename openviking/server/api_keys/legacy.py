@@ -925,6 +925,7 @@ class FileStore(AccountStore):
         if account.users[user_id].get("deletion"):
             raise FailedPreconditionError("User deletion is in progress")
 
+        validate_account_user_role(resolved_role, current_role=account.users[user_id]["role"])
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index

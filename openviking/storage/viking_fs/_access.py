@@ -11,11 +11,12 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    is_accessible as namespace_is_accessible,
-)
-from openviking.core.namespace import (
+    classify_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+)
+from openviking.core.namespace import (
+    is_accessible as namespace_is_accessible,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
@@ -181,11 +182,18 @@ class _AccessMixin:
         valid: List[str] = []
         for uri in dict.fromkeys(uris):
             try:
-                self._safe_uri_parts(uri)
+                parts = self._safe_uri_parts(uri)
             except ValueError:
                 result[uri] = False
             else:
-                valid.append(uri)
+                if (
+                    real_ctx.role == Role.ANALYST
+                    and action is not AclAction.READ
+                    and (not parts or parts[0] not in {"resources", "temp"})
+                ):
+                    result[uri] = False
+                else:
+                    valid.append(uri)
 
         acl_manager = self.acl_manager
         if acl_manager is None or not await acl_manager.is_enabled(real_ctx.account_id):
@@ -285,8 +293,15 @@ class _AccessMixin:
         if self.acl_manager is None:
             raise RuntimeError("ACL is not initialized")
         real_ctx = self._ctx_or_default(ctx)
-        self._safe_uri_parts(uri)
+        parts = self._safe_uri_parts(uri)
         acl_ancestors(uri)
+        if classify_uri(uri).is_user_namespace_root:
+            if real_ctx.role != Role.ANALYST and parts[1] == real_ctx.user.user_id:
+                await self._ensure_identity_not_deleting(real_ctx)
+                return real_ctx
+            raise PermissionDeniedError(
+                "Only the space owner can manage user-space grants", resource=uri
+            )
         if has_implicit_manage(real_ctx, uri):
             return real_ctx
         if await self.acl_manager.is_enabled(real_ctx.account_id):
@@ -402,7 +417,8 @@ class _AccessMixin:
             await self._async_agfs.pathlock_release(lease)
 
     async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
-        return await self.set_acl(uri, [], acl_mode=AclMode.INHERIT, ctx=ctx)
+        mode = AclMode.RESTRICTED if classify_uri(uri).is_user_namespace_root else AclMode.INHERIT
+        return await self.set_acl(uri, [], acl_mode=mode, ctx=ctx)
 
     async def _ensure_identity_not_deleting(self, ctx: RequestContext) -> None:
         guard = getattr(self, "_deletion_guard", None)

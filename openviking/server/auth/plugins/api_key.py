@@ -212,7 +212,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         ):
             raise PermissionDeniedError(
                 "ROOT API keys cannot access tenant-scoped data APIs in api_key mode. "
-                "Use a user/admin API key for data access, or trusted mode for upstream "
+                "Use a user/admin/analyst API key for data access, or trusted mode for upstream "
                 "identity assertion."
             )
 

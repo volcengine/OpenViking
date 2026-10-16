@@ -13,7 +13,12 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from openviking.core.directories import preset_directory_uris
-from openviking.core.namespace import AGENT_SKILLS_ROOT, canonical_user_root
+from openviking.core.namespace import (
+    AGENT_SKILLS_ROOT,
+    canonical_user_root,
+    uri_parts,
+    visible_roots,
+)
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
 from openviking.retrieve.context_assembler.params import (
@@ -25,7 +30,7 @@ from openviking.retrieve.context_assembler.params import (
     REPORTED_CATEGORY_KEYS,
 )
 from openviking.retrieve.skill_results import package_abstract, skill_root_uri
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.utils.search_filters import merge_context_type_filter
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
@@ -97,6 +102,15 @@ def memory_target_roots(ctx: RequestContext) -> List[str]:
 
 def category_targets(category: str, ctx: RequestContext) -> List[str]:
     """Retrieval scopes owning ``category``."""
+    if ctx.role == Role.ANALYST:
+        roots = visible_roots(ctx)
+        if category in {"resources", "skills"}:
+            return default_target_directories(ctx)
+        return [
+            f"{root}/{category}" if root.endswith("/memories") else root
+            for root in roots
+            if root.endswith(("/memories", "/peers"))
+        ]
     user_root = canonical_user_root(ctx)
     if category == "resources":
         targets = default_target_directories(ctx, context_type=ContextType.RESOURCE)
@@ -120,7 +134,9 @@ def _is_under(uri: str, root: str) -> bool:
     return uri == root or uri.startswith(f"{root}/")
 
 
-def origin_for_uri(uri: str, actor_peer_id: Optional[str], user_root: str) -> str:
+def origin_for_uri(uri: str, actor_peer_id: Optional[str], user_root: Optional[str]) -> str:
+    if user_root is None:
+        return "other_user" if uri_parts(uri)[:1] == ["user"] else "shared"
     peers_root = f"{user_root.rstrip('/')}/peers"
     if _is_under(uri, peers_root):
         suffix = uri[len(peers_root) :].strip("/")
@@ -221,7 +237,7 @@ async def gather_candidates(
 ) -> Tuple[List[Candidate], Dict[str, Any]]:
     """Retrieve and rank candidates, returning ``(candidates, stats)``."""
     peer_scope = "actor" if peer_scope == "actor" else "all"
-    user_root = canonical_user_root(ctx)
+    user_root = None if ctx.role == Role.ANALYST else canonical_user_root(ctx)
     open_ctx = replace(ctx, actor_peer_id=None)
     penalties = penalties or {}
     excluded = excluded or set()
@@ -373,7 +389,7 @@ async def gather_candidates(
                 for target in targets
             ]
         peer_offset = len(searches)
-        if peer_scope == "all" and bucket in MEMORY_CATEGORIES:
+        if user_root is not None and peer_scope == "all" and bucket in MEMORY_CATEGORIES:
             searches.extend(
                 _find(
                     query=query,
@@ -389,6 +405,8 @@ async def gather_candidates(
         found: List[Any] = []
         for result in results[:peer_offset]:
             found.extend(_extract(result, bucket))
+        if ctx.role == Role.ANALYST and bucket in MEMORY_CATEGORIES:
+            found = [item for item in found if category_for(item, None) == bucket]
         for result in results[peer_offset:]:
             found.extend(
                 item
@@ -415,7 +433,7 @@ async def gather_candidates(
             for query in planned
         ]
         peer_offset = len(searches)
-        if peer_scope == "all":
+        if user_root is not None and peer_scope == "all":
             searches.extend(
                 _find(
                     query=query,

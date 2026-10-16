@@ -886,12 +886,12 @@ class OpenAPIChannel(BaseChannel):
             account_id = str(health.get("account_id") or "").strip()
             user_id = str(health.get("user_id") or "").strip()
             if auth_mode == "api_key":
-                if role not in {"user", "admin"} or not account_id or not user_id:
+                if role not in {"user", "admin", "analyst"} or not account_id or not user_id:
                     raise HTTPException(
                         status_code=401,
                         detail=(
                             "OpenViking credentials did not resolve to a usable "
-                            "User/Admin identity"
+                            "User/Admin/Analyst identity"
                         ),
                     )
                 api_key_type = "user"
@@ -966,10 +966,10 @@ class OpenAPIChannel(BaseChannel):
         role = str(health.get("role") or "").strip().lower()
         account_id = str(health.get("account_id") or "").strip()
         user_id = str(health.get("user_id") or "").strip()
-        if role not in {"user", "admin"} or not account_id or not user_id:
+        if role not in {"user", "admin", "analyst"} or not account_id or not user_id:
             raise HTTPException(
                 status_code=401,
-                detail="OpenViking credentials did not resolve to a usable User/Admin identity",
+                detail="OpenViking credentials did not resolve to a usable User/Admin/Analyst identity",
             )
         return self._build_openviking_connection(
             api_key=self._extract_api_key(request),

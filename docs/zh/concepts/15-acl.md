@@ -6,7 +6,7 @@ ACL 采用协作文档式的继承模型。目录授权默认持续作用于所�
 
 ## 适用 URI
 
-ACL 只作用于共享资源：
+目录和文件级 ACL 作用于共享资源：
 
 ```text
 viking://resources/...
@@ -14,9 +14,17 @@ viking://resources/...
 
 - `viking://resources/...` 的 account `ADMIN` 隐式拥有 `manage`。
 - `viking://resources` 的根 ACL 固定为 `user:* = manage`，不可修改；下级节点默认继承，直到 restricted 边界。
-- `viking://user/{user_id}/resources/...` 是个人私有区，不接受 ACL。需要分享时，将资源移动到有权写入的共享目录，并继承该目录的 ACL。
+- `viking://user/{user_id}/resources/...` 等个人子目录不接受单独的 ACL。空间主人可以在 `viking://user/{user_id}` 根节点上给分析身份授权整个业务空间的只读访问。
 
 隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证共享资源始终有人能够首次设置或恢复权限。
+
+## 用户空间的分析授权
+
+用户根目录仅保存对同一 account 内具体 `analyst` 身份的直接 `read` 授权。只允许空间主人管理，ADMIN 不享有代授权能力；不支持 group、通配符、write、manage 或目录级继承。
+
+这里的 `acl_mode` 固定为 `restricted`，`DELETE ACL` 只会清空授权。授权只存根节点，不复制到后代；重新索引保留根授权。服务端每次请求读取根授权，统一用于文件访问和向量检索。共享资源的 `acl.enabled` 开关不会关闭这项检查。
+
+授权范围和 compile 输出规则见[跨 user 分析](11-multi-tenant.md#跨-user-分析)。下面的继承规则和账号管理员隐式管理权均针对共享资源。
 
 ## Principal 与权限级别
 

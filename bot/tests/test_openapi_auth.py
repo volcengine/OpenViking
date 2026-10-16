@@ -1273,11 +1273,13 @@ class TestOpenAPIAuth:
         assert response.status_code == 401
         assert response.json()["detail"] == "OpenViking API key header required"
 
+    @pytest.mark.parametrize("role", ["user", "analyst"])
     def test_compile_status_validates_request_key_when_not_statically_configured(
         self,
         message_bus,
         temp_workspace,
         monkeypatch,
+        role,
     ):
         config = SimpleNamespace(
             gateway=SimpleNamespace(host="127.0.0.1", token=""),
@@ -1319,7 +1321,7 @@ class TestOpenAPIAuth:
                         "status": "ok",
                         "auth_mode": "trusted",
                         "root_api_key_required": True,
-                        "role": "user",
+                        "role": role,
                         "account_id": "acct",
                         "user_id": "alice",
                     },

@@ -1190,7 +1190,7 @@ fn health_has_user_identity(health: &OpenVikingHealth) -> bool {
     let role = health_role(health);
     let account_id = health.account_id.as_deref().unwrap_or_default().trim();
     let user_id = health.user_id.as_deref().unwrap_or_default().trim();
-    matches!(role, "user" | "admin") && !account_id.is_empty() && !user_id.is_empty()
+    matches!(role, "user" | "admin" | "analyst") && !account_id.is_empty() && !user_id.is_empty()
 }
 
 fn openviking_info_from_health(
@@ -1538,21 +1538,17 @@ mod tests {
     }
 
     #[test]
-    fn health_identity_accepts_user_or_admin_only() {
-        let user_health = OpenVikingHealth {
-            auth_mode: Some("api_key".to_string()),
-            role: Some("user".to_string()),
-            account_id: Some("default".to_string()),
-            user_id: Some("alice".to_string()),
-            ..OpenVikingHealth::default()
-        };
-        let admin_health = OpenVikingHealth {
-            auth_mode: Some("api_key".to_string()),
-            role: Some("admin".to_string()),
-            account_id: Some("default".to_string()),
-            user_id: Some("alice".to_string()),
-            ..OpenVikingHealth::default()
-        };
+    fn health_identity_accepts_account_roles() {
+        for role in ["user", "admin", "analyst"] {
+            let health = OpenVikingHealth {
+                auth_mode: Some("api_key".to_string()),
+                role: Some(role.to_string()),
+                account_id: Some("default".to_string()),
+                user_id: Some("alice".to_string()),
+                ..OpenVikingHealth::default()
+            };
+            assert!(health_has_user_identity(&health));
+        }
         let root_health = OpenVikingHealth {
             auth_mode: Some("api_key".to_string()),
             role: Some("root".to_string()),
@@ -1568,8 +1564,6 @@ mod tests {
             ..OpenVikingHealth::default()
         };
 
-        assert!(health_has_user_identity(&user_health));
-        assert!(health_has_user_identity(&admin_health));
         assert!(!health_has_user_identity(&root_health));
         assert!(!health_has_user_identity(&missing_identity));
     }

@@ -263,7 +263,9 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     ],
     ids=["no-args", "empty-args", "empty-key", "private-only", "full-args"],
 )
-@pytest.mark.parametrize("identity", [{}, {"account_id": "acct", "user_id": "alice"}])
+@pytest.mark.parametrize(
+    "identity", [{}, {"account_id": "acct", "user_id": "alice", "role": "analyst"}]
+)
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
     monkeypatch, tmp_path, caplog, finish, args, identity
 ):
@@ -357,7 +359,24 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     )
     connection = {"api_key": "active-user-key", "request_id": "compile-request-123", **identity}
     owner = {"account_id": "acct", "user_id": "alice"}
-    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice"), role=Role(identity.get("role", Role.USER))
+    )
+    if ctx.role == Role.ANALYST:
+        with pytest.raises(compile_service_module.PermissionDeniedError, match="shared resources"):
+            await service.create(
+                request.model_copy(update={"to": "viking://user/source/resources/result"}),
+                connection=connection,
+                ctx=ctx,
+            )
+        with pytest.raises(compile_service_module.PermissionDeniedError, match="in place"):
+            await service.create(
+                compile_service_module.CompileRequest(
+                    to="viking://user/source/memories", skill="memory"
+                ),
+                connection=connection,
+                ctx=ctx,
+            )
     task = await service.create(
         request,
         connection=connection,
@@ -541,7 +560,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             payload={**restored.meta["request"], "to": target},
             private_payload=private_payload,
             connection=connection,
-            ctx=RequestContext(user=UserIdentifier(account, user), role=Role.USER),
+            ctx=RequestContext(
+                user=UserIdentifier(account, user), role=Role(identity.get("role", Role.USER))
+            ),
         )
 
     async def state(task):
@@ -559,7 +580,10 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         include_events=False,
         _ctx=ctx,
     )
-    assert queried.result == (await state(first)).to_dict()
+    expected = (await state(first)).to_dict()
+    assert {k: v for k, v in queried.result.items() if k != "processing_seconds"} == {
+        k: v for k, v in expected.items() if k != "processing_seconds"
+    }
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
     await queue.dequeue()  # Same target rotates, including across users.

@@ -390,12 +390,12 @@ async def _rollback_account_creation(
         )
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> Role:
     manager = manager or _get_api_key_manager(request)
-    if await manager.get_user_for_management(account_id, user_id) is None:
+    user = await manager.get_user_for_management(account_id, user_id)
+    if user is None:
         raise NotFoundError(user_id, "user")
+    return Role(user["role"])
 
 
 def _user_settings_result(
@@ -943,6 +943,8 @@ async def register_user(
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
     resolved_role = validate_account_user_role(body.role)
+    if resolved_role == Role.ANALYST and body.user_config is not None:
+        raise InvalidArgumentError("Analysts do not have personal user configuration")
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
@@ -1023,13 +1025,15 @@ async def get_user_settings(
     """Return the configured and effective memory policy for one User."""
     _check_account_access(ctx, account_id)
     manager = await _check_account_exists(request, account_id)
-    await _check_user_exists(request, account_id, user_id, manager)
+    user_role = await _check_user_exists(request, account_id, user_id, manager)
+    if user_role == Role.ANALYST:
+        raise InvalidArgumentError("Analysts do not have personal user configuration")
     service = get_service()
     if service.viking_fs is None:
         raise FailedPreconditionError("OpenViking service is not initialized.")
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, user_id),
-        role=Role.USER,
+        role=user_role,
     )
     user_config = await read_user_config(service.viking_fs, user_ctx)
     return Response(
@@ -1055,13 +1059,15 @@ async def patch_user_settings(
     """Update or clear the allowlisted User memory policy without restarting."""
     _check_account_access(ctx, account_id)
     manager = await _check_account_exists(request, account_id)
-    await _check_user_exists(request, account_id, user_id, manager)
+    user_role = await _check_user_exists(request, account_id, user_id, manager)
+    if user_role == Role.ANALYST:
+        raise InvalidArgumentError("Analysts do not have personal user configuration")
     service = get_service()
     if service.viking_fs is None:
         raise FailedPreconditionError("OpenViking service is not initialized.")
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, user_id),
-        role=Role.USER,
+        role=user_role,
     )
     await write_user_memory_policy(service.viking_fs, user_ctx, body.memory_policy)
     user_config = await read_user_config(service.viking_fs, user_ctx)

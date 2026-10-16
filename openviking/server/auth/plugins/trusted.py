@@ -29,6 +29,7 @@ _TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
 _TRUSTED_ASSERTABLE_ROLES = {
     Role.USER: Role.USER,
     Role.ADMIN: Role.ADMIN,
+    Role.ANALYST: Role.ANALYST,
 }
 
 logger = get_logger(__name__)
@@ -82,7 +83,7 @@ def _asserted_role_from_header(request: Request, *, allow_assertion: bool) -> Op
 
     role = normalized_role.lower()
     if role not in _TRUSTED_ASSERTABLE_ROLES:
-        raise InvalidArgumentError(f"{_TRUSTED_ROLE_HEADER} must be one of: user, admin.")
+        raise InvalidArgumentError(f"{_TRUSTED_ROLE_HEADER} must be one of: user, admin, analyst.")
     return _TRUSTED_ASSERTABLE_ROLES[role]
 
 
@@ -170,13 +171,17 @@ class TrustedAuthPlugin(AuthPlugin):
         _validate_trusted_identity(effective_account_id, effective_user_id)
 
         local_role = None
+        if self._api_key_manager is not None:
+            local_role = await self._api_key_manager.get_registered_user_role(
+                effective_account_id, effective_user_id
+            )
+        if asserted_role == Role.ANALYST and local_role != Role.ANALYST:
+            raise InvalidArgumentError("Analyst identities must be registered before use")
+        if local_role == Role.ANALYST and asserted_role not in (None, Role.ANALYST):
+            raise InvalidArgumentError("An analyst cannot assert a space-owning role")
         if asserted_role is not None:
             trusted_role = asserted_role
         else:
-            if self._api_key_manager and effective_account_id and effective_user_id:
-                local_role = await self._api_key_manager.get_registered_user_role(
-                    effective_account_id, effective_user_id
-                )
             trusted_role = local_role or Role.USER
 
         identity = ResolvedIdentity(

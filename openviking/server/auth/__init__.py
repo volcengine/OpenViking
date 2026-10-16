@@ -142,6 +142,10 @@ async def _build_request_context(
             "Identity deletion is in progress",
             details={"task_id": deletion.get("task_id")},
         )
+    if ctx.role == Role.ANALYST:
+        from openviking.server.dependencies import get_service
+
+        ctx.readable_user_ids = await get_service().viking_fs.acl_manager.readable_user_ids(ctx)
     update_root_span_identity(
         request_state=request.state,
         account_id=identity.account_id,
@@ -198,6 +202,8 @@ async def get_session_request_context(
     authorization_ctx: Optional[str] = Header(None, alias="Authorization"),
 ) -> RequestContext:
     """Build a Session context without accepting an actor peer view."""
+    if identity.role == Role.ANALYST:
+        raise PermissionDeniedError("Analysts do not have personal sessions")
     return await _build_request_context(
         request,
         identity,
@@ -219,8 +225,8 @@ async def get_upload_request_context(
     When an API key (``X-API-Key`` / ``Authorization: Bearer``) is present, resolve identity
     normally — an authenticated caller is never downgraded to the token path. Otherwise, if a
     ``?token=`` is present, consume it (single-use) and rebuild the bound identity/business
-    params. In API-key mode the issuing role is retained only while the account user
-    exists and has not been downgraded. Other auth modes retain their USER token context.
+    params. API-key mode and analyst tokens retain the issuing role only while the
+    registered identity still permits it. Other tokens retain their USER context.
     Spoofed identity headers are ignored. The consumed token is stashed on
     ``request.state.signed_upload`` so the handler can finish ingestion.
     """
@@ -231,14 +237,14 @@ async def get_upload_request_context(
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
-        if _auth_mode(request) == AuthMode.API_KEY:
+        if _auth_mode(request) == AuthMode.API_KEY or consumed.role == Role.ANALYST:
             manager = get_api_key_manager_or_raise(request)
             current_role = await manager.get_registered_user_role(
                 consumed.account_id, consumed.user_id
             )
             if current_role is None:
                 raise UnauthenticatedError("Upload token's user no longer exists")
-            if Role(consumed.role).rank > current_role.rank:
+            if not current_role.allows_token_role(Role(consumed.role)):
                 raise UnauthenticatedError(
                     "Upload token's role exceeds the user's current role; request a new upload"
                 )

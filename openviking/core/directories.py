@@ -18,7 +18,7 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
@@ -233,7 +233,7 @@ class DirectoryInitializer:
         are still created lazily when content is written. This keeps a new user
         root discoverable without materializing the full empty taxonomy.
         """
-        if "user" not in PRESET_DIRECTORIES:
+        if ctx.role == Role.ANALYST or "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
         return len(await self._initialize_directory_trees((user_root,), user_children))
@@ -432,6 +432,15 @@ class DirectoryInitializer:
 def preset_directory_uris(ctx: RequestContext) -> frozenset[str]:
     """URIs of the preset directories whose boilerplate L0/L1 is vectorized for ``ctx``."""
     account_roots, account_children = DirectoryInitializer._account_directory_targets(ctx)
+    if ctx.role == Role.ANALYST:
+        return frozenset(
+            [target.uri for target in (*account_roots, *account_children)]
+            + [
+                f"viking://user/{user_id}/{child.path}"
+                for user_id in ctx.readable_user_ids
+                for child in PRESET_DIRECTORIES["user"].children
+            ]
+        )
     user_root, user_children = DirectoryInitializer._user_directory_targets(ctx)
     targets = (*account_roots, *account_children, user_root, *user_children)
     return frozenset(target.uri for target in targets)

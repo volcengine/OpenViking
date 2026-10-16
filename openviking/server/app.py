@@ -158,6 +158,8 @@ async def _initialize_auth_plugin(
     plugin = plugin_cls()
     app.state.auth_plugin = plugin
     await plugin.initialize(app, service, config)
+    if app.state.api_key_manager is not None:
+        service.viking_fs.acl_manager.set_identity_reader(app.state.api_key_manager)
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 

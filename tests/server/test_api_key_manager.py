@@ -348,20 +348,21 @@ async def test_account_mutation_preserves_registry_when_baseline_is_missing(
 # ---- User lifecycle tests ----
 
 
-async def test_register_user(manager: APIKeyManager):
+@pytest.mark.parametrize("role", [Role.USER, Role.ANALYST])
+async def test_register_user(manager: APIKeyManager, role):
     """register_user should create a user with given role."""
     from openviking.server.api_keys import parse_api_key
 
     acct = _uid()
     await manager.create_account(acct, "alice")
-    key = await manager.register_user(acct, "bob", "user")
+    key = await manager.register_user(acct, "bob", role)
     assert parse_api_key(key)[:2] == (acct, "bob")
 
     identity = await manager.resolve_identity(key)
-    assert identity.role == Role.USER
+    assert identity.role == role
     assert identity.account_id == acct
     assert identity.user_id == "bob"
-    assert await manager.get_registered_user_role(acct, "bob") == Role.USER
+    assert await manager.get_registered_user_role(acct, "bob") == role
 
 
 async def test_register_duplicate_user_raises(manager: APIKeyManager):
@@ -502,6 +503,12 @@ async def test_set_role(manager: APIKeyManager):
     with pytest.raises(PermissionDeniedError, match="server.root_api_key"):
         await manager.set_role(acct, "bob", Role.ROOT)
     assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
+
+    analyst_key = await manager.register_user(acct, "reader", Role.ANALYST)
+    for user_id, role in (("bob", Role.ANALYST), ("reader", Role.USER), ("reader", Role.ADMIN)):
+        with pytest.raises(InvalidArgumentError, match="cannot change"):
+            await manager.set_role(acct, user_id, role)
+    assert (await manager.resolve_identity(analyst_key)).role == Role.ANALYST
 
 
 async def test_get_users(manager: APIKeyManager):

@@ -24,6 +24,7 @@ from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 from tests.server.account_store_fakes import InMemoryAGFS
@@ -74,8 +75,16 @@ async def make_request(
     return request
 
 
-async def test_key_identity_and_groups_are_resolved_independently(runtime):
-    key = await runtime.register_user("acme", "bob")
+@pytest.mark.parametrize("role", [Role.USER, Role.ANALYST])
+async def test_key_identity_and_groups_are_resolved_independently(runtime, monkeypatch, role):
+    key = await runtime.register_user("acme", "bob", role)
+    grants = AsyncMock(side_effect=[("alice",), ()])
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: SimpleNamespace(
+            viking_fs=SimpleNamespace(acl_manager=SimpleNamespace(readable_user_ids=grants))
+        ),
+    )
     await runtime.create_group("acme", "team")
     await runtime.add_group_member("acme", "team", "bob")
     request = await make_request(runtime, headers=[(b"x-openviking-user", b"spoof")])
@@ -84,12 +93,19 @@ async def test_key_identity_and_groups_are_resolved_independently(runtime):
         request, api_key=key, x_openviking_user="spoof", x_openviking_account="spoof"
     )
     ctx = await get_request_context(request, identity, "peer", key, None)
-    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, ("team",))
+    assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", role, ("team",))
     assert ctx.actor_peer_id == "peer"
     assert ctx.api_key == key
     assert "x-openviking-user" not in request.headers
-    session = await get_session_request_context(request, identity, key, None)
-    assert session.actor_peer_id is None
+    if role == Role.ANALYST:
+        assert ctx.readable_user_ids == ("alice",)
+        refreshed = await get_request_context(request, identity, None, key, None)
+        assert refreshed.readable_user_ids == ()
+        with pytest.raises(PermissionDeniedError, match="personal sessions"):
+            await get_session_request_context(request, identity, key, None)
+    else:
+        session = await get_session_request_context(request, identity, key, None)
+        assert session.actor_peer_id is None
 
 
 async def test_key_store_error_and_unknown_identity_fail_closed():
@@ -122,6 +138,16 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
         x_openviking_user="alice",
     )
     assert identity.role == Role.USER
+
+    await runtime.register_user("acme", "reader", Role.ANALYST)
+    analyst = await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user="reader"
+    )
+    assert analyst.role == Role.ANALYST
+    with pytest.raises(InvalidArgumentError, match="space-owning"):
+        await plugin.resolve_identity(
+            asserted, api_key="root", x_openviking_account="acme", x_openviking_user="reader"
+        )
 
 
 async def test_oversized_trusted_identity_does_not_block_valid_registration(runtime):

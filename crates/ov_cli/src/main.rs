@@ -2070,7 +2070,7 @@ enum AdminCommands {
         /// User ID to register
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// Role: admin or user
+        /// Role: admin, user, or analyst (without a personal space)
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
         /// Deterministic API key seed

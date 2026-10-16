@@ -222,6 +222,7 @@ async def admin_app(admin_service):
     manager = build_api_key_manager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+    admin_service.viking_fs.acl_manager.set_identity_reader(manager)
     app.state.deletion_service = await setup_deletion(
         service=admin_service,
         manager=manager,
@@ -2472,17 +2473,18 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 # ---- User CRUD ----
 
 
-async def test_register_user(admin_client: httpx.AsyncClient):
+@pytest.mark.parametrize("role", [Role.USER, Role.ANALYST])
+async def test_register_user(admin_client: httpx.AsyncClient, admin_service, role):
     """ROOT can register a user in an account."""
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
+        json={"user_id": "bob", "role": role},
         headers=root_headers(),
     )
     assert resp.status_code == 200
@@ -2497,6 +2499,71 @@ async def test_register_user(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": bob_key},
     )
     assert resp.status_code == 200
+
+    assert await _agfs_exists(admin_service, f"/local/{acct}/user/bob") == (role != Role.ANALYST)
+
+    if role == Role.ANALYST:
+        owner_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+        reader_headers = {"X-API-Key": bob_key}
+        owner_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
+        source = "viking://user/alice/resources/report.txt"
+        await admin_service.viking_fs.write_file(source, "source evidence", ctx=owner_ctx)
+        denied = await admin_client.get(
+            "/api/v1/content/read", params={"uri": source}, headers=reader_headers
+        )
+        assert denied.status_code == 403
+        await asyncio.wait_for(admin_service._queue_manager.wait_complete(), 10)
+        granted = await admin_client.post(
+            "/api/v1/acl/grant",
+            headers=owner_headers,
+            json={"uri": "viking://user/alice", "principal": "user:bob", "level": "read"},
+        )
+        assert granted.status_code == 200, granted.text
+        visible = await admin_client.get(
+            "/api/v1/content/read", params={"uri": source}, headers=reader_headers
+        )
+        assert visible.status_code == 200, visible.text
+        assert visible.json()["result"] == "source evidence"
+        settings = await admin_client.patch(
+            f"/api/v1/admin/accounts/{acct}/users/bob/settings",
+            headers=owner_headers,
+            json={"memory_policy": None},
+        )
+        assert settings.status_code == 400
+        revoked = await admin_client.post(
+            "/api/v1/acl/revoke",
+            headers=owner_headers,
+            json={"uri": "viking://user/alice", "principal": "user:bob"},
+        )
+        assert revoked.status_code == 200
+        denied = await admin_client.get(
+            "/api/v1/content/read", params={"uri": source}, headers=reader_headers
+        )
+        assert denied.status_code == 403
+        granted = await admin_client.post(
+            "/api/v1/acl/grant",
+            headers=owner_headers,
+            json={"uri": "viking://user/alice", "principal": "user:bob", "level": "read"},
+        )
+        assert granted.status_code == 200
+        deleted = await admin_client.delete(
+            f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+        )
+        assert deleted.status_code == 202, deleted.text
+        task = await _wait_for_task(admin_client, deleted.json()["result"]["task_id"])
+        assert task["status"] == "completed", task
+        recreated = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            headers=owner_headers,
+            json={"user_id": "bob", "role": "analyst"},
+        )
+        assert recreated.status_code == 200, recreated.text
+        denied = await admin_client.get(
+            "/api/v1/content/read",
+            params={"uri": source},
+            headers={"X-API-Key": recreated.json()["result"]["user_key"]},
+        )
+        assert denied.status_code == 403
 
 
 async def test_root_can_register_admin_role_user(

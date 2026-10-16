@@ -10,6 +10,7 @@ from openviking.core.namespace import (
     canonical_user_root,
     is_hidden_by_actor_peer_view,
     uri_parts,
+    visible_roots,
 )
 from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext, Role
@@ -57,6 +58,9 @@ def default_target_directories(
     if not ctx or ctx.role == Role.ROOT:
         return []
 
+    if ctx.role == Role.ANALYST:
+        return visible_roots(ctx)
+
     user_root = canonical_user_root(ctx)
     if context_type == ContextType.MEMORY:
         if ctx.actor_peer_id:
@@ -100,6 +104,8 @@ def _target_directories_for_uri(
     *,
     ctx: RequestContext,
 ) -> List[str]:
+    if ctx.role == Role.ANALYST:
+        return [target_uri]
     if _is_current_user_root(target_uri, ctx):
         return _default_user_root_targets(ctx)
 
