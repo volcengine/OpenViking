@@ -361,13 +361,15 @@ The plugin retains the existing `keep_recent_count: 0` commit behavior.
 The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.
 
-### Non-primary contexts
+### Non-primary contexts and kanban workers
 
 When Hermes initializes the provider with `agent_context` set to `cron`, `subagent`,
-or `flush`, recall and profile reads keep working. Automatic turn uploads,
-session-end/switch commits, and native memory mirroring are skipped for that
-context. Startup recovery also skips commits in these contexts. Pending messages
-remain available for recovery when the next primary context starts.
+or `flush`, recall and profile reads keep working. The same rule applies when Hermes
+marks a CLI process as a kanban worker through `HERMES_KANBAN_TASK` or
+`HERMES_SESSION_SOURCE=kanban`. Automatic turn uploads, session-end/switch commits,
+and native memory mirroring are skipped for that process. Startup recovery also
+skips commits. Pending messages remain available for recovery when the next primary
+context starts.
 Explicit `viking_*` tools keep their normal behavior, including writes and deletes.
 Interactive sessions (and hosts that predate `agent_context`) keep the previous
 automatic write behavior.
