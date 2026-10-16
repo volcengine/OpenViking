@@ -7,6 +7,8 @@ Session Extract Context Provider - 会话提取 Provider 实现
 """
 
 import re
+from itertools import zip_longest
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import TextPart, ToolPart
@@ -23,6 +25,7 @@ from openviking.session.memory.memory_type_registry import (
     get_default_registry,
 )
 from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
+from openviking.session.memory.prefetch_query import MaintenanceTarget, build_maintenance_targets
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
@@ -84,7 +87,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
-        self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
+        self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 10
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
@@ -365,7 +368,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return normalized[: max_chars - 3].rstrip() + "..."
 
     def _build_prefetch_search_query(self) -> str:
-        """Build a compact semantic query from raw conversation messages.
+        """Build the original conversation query as a planning-failure fallback.
 
         The LLM already receives the full conversation via pre_fetch_messages.
         Search only needs topical recall signals, so use the raw message content
@@ -404,6 +407,52 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             query = self._assemble_conversation(self.messages)
 
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
+
+    async def _build_prefetch_search_queries(self) -> List[str]:
+        return [target["query"] for target in await self._build_prefetch_search_targets()]
+
+    async def _build_prefetch_search_targets(self) -> List[MaintenanceTarget]:
+        """Locate information to maintain, leaving update decisions to extraction."""
+        fallback_reason = "model_unavailable"
+        try:
+            if self._vlm_config is not None and self._vlm_config.is_available():
+                return await build_maintenance_targets(self.messages, self._vlm_config)
+        except Exception as exc:
+            fallback_reason = type(exc).__name__
+            logger.warning(
+                "Maintenance prefetch query planning failed (%s); using conversation query",
+                type(exc).__name__,
+            )
+        fallback_query = self._build_prefetch_search_query() or "conversation"
+        logger.info("Memory prefetch query fallback: reason=%s", fallback_reason)
+        logger.debug("Memory prefetch fallback query: %s", fallback_query)
+        return [
+            MaintenanceTarget(
+                subject="conversation participants",
+                aspect="existing information affected by this conversation",
+                scope="",
+                query=fallback_query,
+                message_indices=[],
+            )
+        ]
+
+    @staticmethod
+    def _merge_prefetch_search_results(results: List[List[str]], limit: int) -> List[str]:
+        """Interleave per-target ranks and deduplicate under the configured read budget.
+
+        Search scores from different queries are not comparable. Round-robin
+        selection prevents the first query from consuming every prefetch slot.
+        """
+        merged = []
+        seen = set()
+        for row in zip_longest(*results):
+            for uri in row:
+                if uri and uri not in seen:
+                    seen.add(uri)
+                    merged.append(uri)
+                    if len(merged) >= limit:
+                        return merged
+        return merged
 
     def create_tool_context(self, default_search_uris=[]):
         extract_context = self.get_extract_context()
@@ -495,6 +544,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             tracer.error(f"Expected List[Message], got {type(messages)}")
             return []
 
+        started = perf_counter()
         # 先构建 Conversation History user message
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
@@ -555,28 +605,57 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
 
-        # 批量 search：所有目录一次搜索
+        # Each maintenance query retains the same allowed directories. Merge
+        # candidates before reading, using the configured total read budget.
         if ls_dirs:
-            dir_list = list(ls_dirs)
-            search_query = self._build_prefetch_search_query()
-            if not search_query:
-                search_query = "conversation"
-            search_uris = await self.search_files(
-                query=search_query,
-                search_uris=dir_list,
-            )
-            result_value = search_uris
+            dir_list = sorted(ls_dirs)
+            search_results = []
+            search_targets = await self._build_prefetch_search_targets()
+            for query_index, target in enumerate(search_targets):
+                search_query = target["query"]
+                search_started = perf_counter()
+                search_uris = await self.search_files(
+                    query=search_query,
+                    search_uris=dir_list,
+                )
+                search_results.append(search_uris)
+                logger.info(
+                    "Memory prefetch search: query_index=%d query_count=%d result_count=%d elapsed_ms=%.1f",
+                    query_index,
+                    len(search_targets),
+                    len(search_uris),
+                    (perf_counter() - search_started) * 1000,
+                )
+                logger.debug(
+                    "Memory prefetch search detail: %s",
+                    {
+                        "query_index": query_index,
+                        "query": search_query,
+                        "directories": dir_list,
+                        "uris": search_uris,
+                    },
+                )
+                add_tool_call_pair_to_messages(
+                    messages=pre_fetch_messages,
+                    call_id=call_id_seq,
+                    tool_name="search",
+                    params={"query": search_query, "search_uri": dir_list},
+                    result=search_uris,
+                )
+                call_id_seq += 1
             if self._eager_prefetch:
-                files_to_read_from_search.extend(search_uris)
-
-            add_tool_call_pair_to_messages(
-                messages=pre_fetch_messages,
-                call_id=call_id_seq,
-                tool_name="search",
-                params={"query": "[Keywords]", "search_uri": dir_list},
-                result=result_value,
+                files_to_read_from_search.extend(
+                    self._merge_prefetch_search_results(search_results, self._prefetch_search_topn)
+                )
+            logger.info(
+                "Memory prefetch selection: candidate_count=%d unique_count=%d selected_count=%d budget=%d eager=%s",
+                sum(map(len, search_results)),
+                len({uri for group in search_results for uri in group if uri}),
+                len(files_to_read_from_search),
+                self._prefetch_search_topn,
+                self._eager_prefetch,
             )
-            call_id_seq += 1
+            logger.debug("Memory prefetch selected URIs: %s", files_to_read_from_search)
 
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
@@ -598,6 +677,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     file_uri=file_uri,
                 )
 
+        logger.info(
+            "Memory prefetch complete: read_count=%d elapsed_ms=%.1f",
+            len(self._read_file_contents),
+            (perf_counter() - started) * 1000,
+        )
+        logger.debug("Memory prefetch read URIs: %s", list(self._read_file_contents))
         return pre_fetch_messages
 
     async def execute_tool(

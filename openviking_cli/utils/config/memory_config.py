@@ -67,12 +67,12 @@ class MemoryConfig(BaseModel):
         ),
     )
     prefetch_search_topn: int = Field(
-        default=5,
+        default=10,
         ge=1,
         description=(
-            "Number of top search results to read during prefetch. "
+            "Total number of unique search results to select and read during prefetch. "
             "Only applies when eager_prefetch is enabled. "
-            "When multiple directories are searched, results are merged and top-N are read."
+            "Results from maintenance queries are interleaved by rank and deduplicated by URI before top-N are read."
         ),
     )
     maintenance_review_tokens: int = Field(
