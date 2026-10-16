@@ -4,6 +4,7 @@ import json
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import Mock
 
 import pytest
 
@@ -1354,3 +1355,51 @@ def test_runtime_spawn_uses_provider_home_under_another_profile(external_provide
     assert spawned[0]["OPENAI_API_KEY"] == "owner-key"
     assert (home_a / "logs/openviking-server.log").exists()
     assert not (home_b / "logs/openviking-server.log").exists()
+
+
+@pytest.mark.parametrize("query", ["", "Recall my preferences"])
+@pytest.mark.parametrize("source", ["config", "env"])
+def test_auto_recall_off_skips_all_prefetch_io(external_provider, monkeypatch, query, source):
+    home, provider, _, _ = external_provider("recall-off")
+    provider._hermes_home = str(home)
+    provider._hermes_home_bound = True
+    if source == "config":
+        provider.save_config({"auto_recall": False}, str(home))
+    else:
+        (home / ".env").write_text("OPENVIKING_AUTO_RECALL=false\n")
+    ensure_client = Mock(side_effect=AssertionError("automatic recall performed client I/O"))
+    monkeypatch.setattr(provider, "_ensure_client", ensure_client)
+    assert provider.prefetch(query, session_id="new-session") == ""
+    ensure_client.assert_not_called()
+
+
+def test_auto_recall_default_preserves_both_context_blocks(external_provider, monkeypatch):
+    home, provider, _, _ = external_provider("recall-default")
+    provider._hermes_home = str(home)
+    provider._hermes_home_bound = True
+    monkeypatch.setattr(provider, "_ensure_client", lambda: True)
+    startup = Mock(return_value="profile context")
+    recall = Mock(return_value="query context")
+    monkeypatch.setattr(provider, "_session_start_memory_context", startup)
+    monkeypatch.setattr(provider, "_search_prefetch_context", recall)
+    assert provider.prefetch("Recall preferences", session_id="session") == (
+        "## OpenViking Context\nprofile context\n\nquery context"
+    )
+    startup.assert_called_once_with("session")
+    recall.assert_called_once_with("Recall preferences", session_id="session")
+
+
+def test_auto_recall_off_preserves_explicit_tools_and_capture(external_provider, monkeypatch):
+    home, provider, _ = _live_provider(external_provider, monkeypatch, "capture-only")
+    schemas = provider.get_tool_schemas()
+    provider.save_config({"auto_recall": False}, str(home))
+    assert provider.prefetch("Remember preferences", session_id="live-sid") == ""
+    assert provider.get_tool_schemas() == schemas
+    provider._client.post.return_value = {"result": {"memories": [{"uri": "viking://user/test/memories/preference.md", "abstract": "A preference"}]}}
+    result = provider.handle_tool_call("viking_search", {"query": "preferences", "mode": "deep"})
+    assert json.loads(result)["results"][0]["abstract"] == "A preference"
+    assert any(c.args[0].endswith("/search") for c in provider._client.post.call_args_list)
+    _finish_turn(provider, user="A new preference")
+    captured = [c for c in provider._client.post.call_args_list if c.args[0].endswith("/messages/batch")]
+    assert captured
+    assert [m["role"] for m in captured[0].args[1]["messages"]] == ["user", "assistant"]
