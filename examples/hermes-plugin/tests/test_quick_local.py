@@ -438,9 +438,12 @@ def test_existing_openviking_without_local_embedding_runtime_is_not_reused(
     assert "import llama_cpp" in run.call_args.args[0][2]
 
 
-def test_existing_openviking_with_local_embedding_runtime_is_reused(
+@pytest.mark.parametrize("version, compatible", [("0.4.22", False), ("0.4.23", True), ("0.4.24", True), ("0.5.0", False)])
+def test_existing_local_runtime_meets_mcp_server_requirement(
     tmp_path,
     monkeypatch,
+    version,
+    compatible,
 ):
     paths = quick_local.managed_paths(tmp_path)
     paths.runtime_python.parent.mkdir(parents=True)
@@ -451,12 +454,12 @@ def test_existing_openviking_with_local_embedding_runtime_is_reused(
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
-            stdout="0.4.22\n",
+            stdout=version + "\n",
             stderr="",
         ),
     )
 
-    assert quick_local.openviking_install_satisfies_requirement(paths) is True
+    assert quick_local.openviking_install_satisfies_requirement(paths) is compatible
 
 
 def test_validation_server_does_not_inherit_stdin(tmp_path, monkeypatch):
@@ -932,7 +935,8 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
         if request.url.path == "/health":
             assert "X-API-Key" not in request.headers
             return httpx.Response(
-                200, json={"status": "ok", "auth_mode": mode, "root_api_key_required": True}
+                200, json={"status": "ok", "healthy": True, "version": "0.4.23",
+                           "auth_mode": mode, "root_api_key_required": True}
             )
         assert request.url.path == "/api/v1/admin/accounts"
         assert request.headers["X-API-Key"] == "local-test-key"
@@ -944,6 +948,36 @@ def test_reuse_authenticates_profile_key(tmp_path, monkeypatch, mode, code, acce
     )
     assert quick_local.server_belongs_to_profile(paths, "http://127.0.0.1:1938") is accepted
     assert len(requests) == (1 if mode == "dev" else 2)
+
+
+@pytest.mark.parametrize("health_status,health_fields", [
+    (401, {"status": "ok", "healthy": True, "version": "0.4.23"}),
+    (403, {"status": "ok", "healthy": True, "version": "0.4.23"}),
+    (302, {"status": "ok", "healthy": True, "version": "0.4.23"}),
+    (200, {}),
+    (200, {"status": "ok", "healthy": False, "version": "0.4.23"}),
+    (200, {"status": "ok", "healthy": True, "version": ""}),
+])
+def test_ownership_probe_requires_successful_openviking_health(
+    tmp_path, monkeypatch, health_status, health_fields
+):
+    paths, _cfg = _saved_local(tmp_path)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(health_status, json={
+            "auth_mode": "trusted", "root_api_key_required": True, **health_fields,
+        })
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs)
+    )
+    assert not quick_local.server_belongs_to_profile(paths, "http://127.0.0.1:1938")
+    assert len(requests) == 1
+    assert requests[0].url.path == "/health"
+    assert "X-API-Key" not in requests[0].headers
 
 
 def test_wrong_listener_is_not_reused(tmp_path, monkeypatch):

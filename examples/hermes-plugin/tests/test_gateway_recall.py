@@ -224,7 +224,7 @@ def test_gateway_capture_commit_and_sender_scoped_recall(
         assert not provider._state_path("pending", "shared-group").exists()
         # Sender recall never changes the configured identity used for capture/tools.
         with profile_scope(home):
-            provider.handle_tool_call("viking_search", {"query": "preference"})
+            provider._ensure_client().post("/api/v1/search/find", {"query": "preference"})
         assert backend.searches[-1][0].headers["X-OpenViking-Actor-Peer"] == "telegram.assistant"
     finally:
         manager.shutdown_all()

@@ -31,7 +31,7 @@ DEPLOYMENT = "quick_local"
 EMBEDDING_MODEL = "bge-small-zh-v1.5-f16"
 EMBEDDING_DIMENSION = 512
 # Accept new releases in the server API series; resolve only in explicit setup.
-OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.22,<0.5"
+OPENVIKING_REQUIREMENT = "openviking[local-embed]>=0.4.23,<0.5"
 # Later LiteLLM releases exclude Python 3.14. OpenViking supports this version.
 # This restriction applies only to the private server, never Hermes's dependencies.
 
@@ -927,6 +927,17 @@ def server_belongs_to_profile(paths: QuickLocalPaths, endpoint: str) -> bool:
         return False
 
 
+def is_openviking_health(health: Any) -> bool:
+    """Recognize the modern server's anonymous health response."""
+    return (
+        isinstance(health, dict)
+        and health.get("status") == "ok"
+        and health.get("healthy") is True
+        and isinstance(health.get("version"), str)
+        and bool(health["version"].strip())
+    )
+
+
 def _server_accepts_config(config: Mapping[str, Any], endpoint: str) -> bool:
     import httpx
 
@@ -935,9 +946,12 @@ def _server_accepts_config(config: Mapping[str, Any], endpoint: str) -> bool:
         if not key:
             return False
         with httpx.Client(timeout=3.0, trust_env=False) as client:
-            health = client.get(f"{endpoint}/health").json()
+            response = client.get(f"{endpoint}/health")
+            response.raise_for_status()
+            health = response.json()
             if (
-                health.get("auth_mode") != "trusted"
+                not is_openviking_health(health)
+                or health.get("auth_mode") != "trusted"
                 or health.get("root_api_key_required") is not True
             ):
                 return False

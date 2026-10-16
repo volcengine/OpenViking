@@ -136,6 +136,18 @@ def test_server_selection_uses_latest_compatible_stable_wheel(external_provider)
     )
 
 
+def test_server_selection_requires_mcp_read_only_annotations(external_provider):
+    _h, _p, module, _s = external_provider("mcp-server-minimum")
+    packages = importlib.import_module(module.__name__ + ".local_packages")
+    ql = importlib.import_module(module.__name__ + ".quick_local")
+    releases = {"0.4.22": [_distribution("0.4.22")]}
+    with pytest.raises(ql.QuickLocalSetupError, match="No compatible"):
+        packages._select_server_requirement(releases, python_version="3.14", tags=[Tag("py3", "none", "any")])
+    releases["0.4.23"] = [_distribution("0.4.23")]
+    selected = packages._select_server_requirement(releases, python_version="3.14", tags=[Tag("py3", "none", "any")])
+    assert "openviking-0.4.23-" in selected
+
+
 def test_source_build_requires_explicit_consent(external_provider):
     _h, _p, module, _s = external_provider("releases")
     packages = importlib.import_module(module.__name__ + ".local_packages")

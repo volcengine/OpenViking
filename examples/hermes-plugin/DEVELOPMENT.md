@@ -16,7 +16,7 @@ Preserve the existing copyright and permission notice.
 The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files, data paths, and
-`viking_*` tools keep their current behavior.
+automatic recall, capture and commit retain their behavior. Explicit tools use the server's MCP schemas.
 
 The active-session commit lifecycle was ported from
 [KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
@@ -74,6 +74,30 @@ needs a tested OpenViking/embedding-wheel pair for the prebuilt path.
 Setup also checks LLM access through the installed OpenViking backend. The CI
 fixture must serve an actual completion; an unreachable LLM must fail setup.
 
+MCP tools adapt the intent of [Hermes PR #86052](https://github.com/NousResearch/hermes-agent/pull/86052).
+A profile-scoped stdio adapter forwards to `/mcp`; it reuses the provider's
+connection resolver so linked credentials and Quick Local ports stay current.
+It does not manage the server process, rewrite tool schemas or retry writes.
+
+### MCP host compatibility
+
+New MCP connections default to `trust: untrusted`. Hermes v0.21.6 includes
+both the SDK 2 read-only annotation fix (Hermes #133532) and the CLI approval
+callback fix. The plugin manifest requires `>=0.21.6`, and CI uses the release
+commit `818c13be1dc4fd28987e1e881a9408224afd4535`.
+
+The server minimum is OpenViking 0.4.23, which adds MCP read-only annotations.
+Quick Local setup upgrades older runtimes to a compatible release before use.
+
+Existing trust settings and filters are preserved. An existing entry without
+`trust` retains Hermes's implicit `full` policy. Do not change server annotations
+in the adapter. `search`, `remember`, `write` and `forget` require approval under
+`untrusted`; unattended runs cannot approve them.
+
+Before release, verify read-only calls without approval, interactive approval
+and denial with backend checks, and unattended refusal through the installed
+external plugin. Green unit tests alone do not establish the approval UI works.
+
 ## Migration coordination
 
 Hermes publishes this provider through `plugin-catalog/openviking.yaml`. The
@@ -106,9 +130,9 @@ copy first.
 
 This plugin does not add a Desktop `config_schema.py`.
 The wizard uses private helpers from `hermes_cli.memory_setup`; changes to
-those helpers require compatibility checks. The plugin uses HTTP. Quick Local installs the server in a separate
-profile runtime through Hermes PM, or the earlier Hermes uv installer on the
-tested release baseline. It does not add server dependencies to Hermes.
+those helpers require compatibility checks. The plugin uses HTTP. Quick Local
+installs the server in a separate profile runtime through Hermes PM. It does not
+add server dependencies to Hermes.
 Explicit Quick Local setup resolves the latest stable, Python/platform-compatible
 OpenViking 0.4 release from PyPI and verifies the wheel against PyPI's download
 hash. The native embedding package remains pinned and hash-verified. The resolved
@@ -121,9 +145,10 @@ recovery do not resolve or upgrade packages.
 The `Hermes Plugin Tests` workflow runs this directory's complete external-provider
 suite on plugin changes, pushes to `main`/`develop`, and manual dispatch.
 It uses Python 3.14 and a reviewed Hermes commit, with test retries disabled.
-The release-host job runs the complete provider suite on Hermes v2026.9.24
-with Python 3.13. Legacy autostart uses Hermes's profile environment helper and
-credential scrubber on both hosts. Unrelated process and profile secrets are
+The reviewed host is Hermes v0.21.6, with Python 3.14 as required by its
+release lockfile. Platform jobs use the same host for service checks.
+Legacy autostart uses Hermes's profile environment helper and credential
+scrubber. Unrelated process and profile secrets are
 removed; missing helpers or secret-scope errors prevent spawning.
 When updating the host SHA in `.github/workflows/hermes-plugin-tests.yml`, check
 the host dependency pins and run the suite before submitting the change.

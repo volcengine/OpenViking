@@ -38,7 +38,7 @@
 | [DSH](#dsh) | 同进程 Cordis 插件 + MCP 代理 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [pi](#pi) | 原生扩展，内置 MCP 客户端 | 服务端 MCP 工具；MCP 握手成功后注册为 `openviking_<tool>` |
 | [OpenClaw](#openclaw) | context-engine 插件 | 15 个原生工具，默认启用 14 个 |
-| [Hermes](#hermes) | Hermes memory provider | 6 个原生 `viking_*` 工具 |
+| [Hermes](#hermes) | Hermes memory provider 和 MCP 适配器 | 服务端 MCP 工具，名为 `mcp__openviking__<tool>` |
 | [MCP 客户端、Agent Plugins](#其他集成) | 仅 MCP | 服务端 MCP 工具 |
 | [ov CLI](#ov-cli) | 命令行客户端 | 每个操作都是显式命令，不经过 Agent |
 
@@ -119,7 +119,9 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 
 ### Hermes 工具
 
-Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget` 和 `viking_add_resource`，没有 skill 工具。`viking_remember` 通过独立会话提交一条事实，在抽取完成前就返回；抽取可能新增、合并或跳过这条事实。内置 provider 与外部插件的区别见 [Hermes](#hermes)。
+Hermes 外部插件使用服务端 MCP 工具，包括资源和 skill 工具。新连接使用 `trust: untrusted`。只读工具无需批准，其他工具需要批准，无法在无人值守运行中执行。已有的信任设置和工具过滤器保持不变。自动召回、捕获和提交不受此批准策略限制。
+
+旧版内置 provider 提供 6 个原生 `viking_*` 工具。内置 provider 与外部插件的区别见 [Hermes](#hermes)。
 
 <a id="_3-5-写入与删除的类型边界"></a><a id="_3-5-1-写入边界"></a><a id="_3-5-2-删除边界"></a>
 
@@ -135,11 +137,11 @@ Hermes 有 6 个工具：`viking_search`、`viking_read`、`viking_browse`、`vi
 
 | 入口 | 能删除 | 客户端限制 |
 |---|---|---|
-| MCP `forget`（所有 MCP 集成，含 DSH 与 pi） | 传入的任意 URI | 除非 `recursive=true`，否则不递归；不检查类型或分数 |
+| MCP `forget`（所有 MCP 集成，含 Hermes、DSH 与 pi） | 传入的任意 URI | 除非 `recursive=true`，否则不递归；不检查类型或分数 |
 | `ov rm` | 任意 URI | 不确认；`-r` 递归删除 |
 | `ov tui` 的 `d` 键 | 根目录和 scope 目录以外的任意 URI | 需要确认 |
 | OpenClaw `memory_forget` | 只能删记忆文件 | URI 必须匹配用户、peer 或 agent 的记忆路径。按搜索删除时，只有唯一候选且分数不低于 0.85 才执行，否则列出候选。始终不递归 |
-| Hermes `viking_forget` | 一个用户记忆 `.md` 文件 | 拒绝目录、非 `.md` 文件、自动生成的 `.abstract.md` 和 `.overview.md`，以及带 query 或 fragment 的 URI |
+| 旧版 Hermes `viking_forget` | 一个用户记忆 `.md` 文件 | 拒绝目录、非 `.md` 文件、自动生成的 `.abstract.md` 和 `.overview.md`，以及带 query 或 fragment 的 URI |
 | LangChain `viking_forget` | 任意 URI | 只在 `profile="admin"` 或 `allow_forget=True` 时提供；`recursive` 由模型决定 |
 | Open WebUI | 无 | 没有删除工具 |
 
@@ -691,7 +693,7 @@ OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置
 | 会话中的提交 | 无，只在会话边界 | 待提交 token 达到 20,000 时后台提交（`commit_token_threshold`） |
 | 召回摘要 | 不支持 | 可选的服务端摘要（`recall_compress`） |
 | 镜像 Hermes 内置记忆 | 只同步新增 | 同步新增、替换和删除，用 URI 注册表跟踪 |
-| `viking_forget` | 带明确用户 ID 的用户记忆文件 | 还接受 `viking://~/`，拒绝不带用户 ID 的路径，删除前检查归属 |
+| 显式工具 | 6 个原生 `viking_*` 工具 | 服务端 MCP 工具，使用 Hermes 配置的批准策略 |
 | cron、子代理和 flush 上下文 | 该提交中没有说明 | 召回可用；跳过自动写入和镜像 |
 
 上述固定提交中内置 provider 的行为：

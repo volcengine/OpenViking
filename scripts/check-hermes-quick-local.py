@@ -6,6 +6,7 @@ and interactive setup are separate live release checks.
 """
 
 import argparse
+import asyncio
 import importlib
 import json
 import os
@@ -26,6 +27,21 @@ def wait_for_provider(provider, timeout=180):
             return
         time.sleep(.1)
     raise AssertionError("The retained external provider did not recover its managed server")
+
+
+def check_mcp(provider, home):
+    """Use the real MCP transport with the provider's current profile connection."""
+    from mcp import types
+
+    module = importlib.import_module(type(provider).__module__)
+    adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+    connection = adapter.Connection(home, module)
+    tools = asyncio.run(connection.request("tools/list", None))
+    assert {"find", "read", "remember", "forget"} <= {tool.name for tool in tools.tools}
+    result = asyncio.run(connection.request(
+        "tools/call", types.CallToolRequestParams(name="health", arguments={})
+    ))
+    assert not result.is_error, result
 
 
 def check_llm_transports(home, ql, runtime_python):
@@ -217,6 +233,9 @@ def main():
                 servers.append(server)
                 providers.append(provider)
                 module = importlib.import_module(type(provider).__module__)
+                adapter = importlib.import_module(module.__name__ + ".mcp_tools")
+                adapter.configure(config, str(home))
+                (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
                 setup = ql.QuickLocalSetup(health_check=module._validate_openviking_reachability)
                 setup.provision(hermes_home=home)
                 assert len(llm_requests) >= len(evidence["profiles"]) + 1
@@ -277,12 +296,8 @@ def main():
                 assert provider._drain_writers("local-smoke-" + name, timeout=15)
                 session = provider._client.get("/api/v1/sessions/local-smoke-" + name)["result"]
                 assert session["pending_tokens"] > 0
-                browse = json.loads(
-                    provider.handle_tool_call(
-                        "viking_browse", {"path": "viking://", "action": "list"}
-                    )
-                )
-                assert not browse.get("error")
+                assert provider.get_tool_schemas() == []
+                check_mcp(provider, home)
                 # Keep this provider/session alive through a crash and an
                 # explicit stop. Later use must recover without a new agent.
                 import psutil
@@ -305,6 +320,7 @@ def main():
                     wait_for_provider(provider)
                     assert server.status()["pid"] != old_pid
                     assert provider._client.get("/api/v1/sessions/local-smoke-" + name)["result"]["pending_tokens"] > 0
+                    check_mcp(provider, home)
                 old_pid = server.status()["pid"]
                 updated = server._config()
                 updated["vlm"]["api_key"] = "updated-isolated-static-key"
@@ -347,6 +363,7 @@ def main():
             wait_for_provider(providers[0])
             assert providers[0]._endpoint != previous and b.status()["pid"] == foreign_pid
             assert providers[0]._client.get("/api/v1/sessions/local-smoke-a")["result"]["pending_tokens"] > 0
+            check_mcp(providers[0], a.paths.root.parent)
         finally:
             reset_hermes_home_override(token)
         evidence.update(
@@ -358,6 +375,7 @@ def main():
             retained_provider_recovery=True,
             llm_access_validated=True,
             llm_failure_preserved_configuration=True,
+            mcp_discovery_and_recovery=True,
         )
         print(json.dumps(evidence))
     finally:

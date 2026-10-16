@@ -71,7 +71,10 @@ def install_requirements(*, allow_source_build=False):
         ]
     # The PM resolver otherwise chooses a LiteLLM release that excludes Python
     # 3.14. This constraint belongs only to OpenViking's private environment.
-    return [*requirements, 'litellm==1.83.7; python_version >= "3.14"']
+    return [
+        *requirements,
+        'litellm==1.83.7; python_version >= "3.14"',
+    ]
 
 
 def resolve_server_requirement(*, allow_source_build=False):
