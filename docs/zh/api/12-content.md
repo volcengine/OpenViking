@@ -545,6 +545,18 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 `ov get <uri> <local-path>` 通过上述 HTTP API 下载文件并写入本地路径。
 
+**MCP 下载 URL**
+
+MCP `get` 工具接受 `{"uri":"viking://resources/images/logo.png"}`，返回包含短时有效的一次性 URL 的下载指引：
+
+```http
+GET /api/v1/content/download/{token}
+```
+
+token 授权此次下载，默认 10 分钟过期，无需 OpenViking API Key；若私有网关要求额外请求头，仍需携带。此端点返回与上例相同的 HTTP `200`、`Content-Type`、`Content-Disposition` 和原始字节。客户端自行选择本地保存路径，`get` 不接受本地路径参数，也不支持目录下载。
+
+token 保存在进程内，重启后失效，MCP 调用与下载请求必须落到同一个 worker。完整流程及公共 URL 配置见 [MCP 下载](../guides/06-mcp-integration.md#下载原始文件get)。
+
 ---
 
 ### set_tags()

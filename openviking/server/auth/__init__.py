@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Query, Request
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.server.download_token_store import DownloadTokenError, download_token_store
 from openviking.server.identity import (
     AuthMode,
     RequestContext,
@@ -202,6 +203,41 @@ async def get_session_request_context(
         request,
         identity,
         api_key=_extract_api_key(x_api_key_ctx, authorization_ctx),
+    )
+
+
+async def get_download_request_context(request: Request, token: str) -> RequestContext:
+    """Consume a file-bound download token without trusting request credentials.
+
+    This dependency is exclusive to the token download route. Identity, role, and
+    peer scope come from the issuing MCP call; current groups, deletion status,
+    and file ACLs are checked again when the download executes.
+    """
+    try:
+        consumed = download_token_store.consume(token)
+    except DownloadTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    request.state.signed_download = consumed
+    mode = _auth_mode(request)
+    role = consumed.role
+    if mode == AuthMode.API_KEY:
+        manager = get_api_key_manager_or_raise(request)
+        current_role = await manager.get_registered_user_role(consumed.account_id, consumed.user_id)
+        if current_role is None:
+            raise UnauthenticatedError("Download token's user no longer exists")
+        if Role(role).rank > Role(current_role).rank:
+            raise UnauthenticatedError(
+                "Download token's role exceeds the user's current role; request a new download"
+            )
+    return await _build_request_context(
+        request,
+        ResolvedIdentity(
+            role=role,
+            account_id=consumed.account_id,
+            user_id=consumed.user_id,
+            from_oauth=consumed.from_oauth,
+        ),
+        actor_peer_id=consumed.actor_peer_id,
     )
 
 

@@ -5,7 +5,7 @@
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +19,7 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.server.auth import (
+    get_download_request_context,
     get_request_context,
     require_role,
 )
@@ -232,6 +233,18 @@ async def download(
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
+
+
+@router.get("/download/{token}")
+async def download_with_token(
+    request: Request,
+    _ctx: RequestContext = Depends(get_download_request_context),
+):
+    """Download the single file bound to a short-lived MCP-issued token."""
+    response = await download(uri=request.state.signed_download.uri, _ctx=_ctx)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @router.post("/write")

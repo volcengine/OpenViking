@@ -66,6 +66,7 @@ from openviking.server.auth import (
     should_expose_user_key,
 )
 from openviking.server.dependencies import get_server_config, get_service
+from openviking.server.download_token_store import download_token_store
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
@@ -233,6 +234,7 @@ class _IdentityASGIMiddleware:
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
             "x_forwarded_host": request.headers.get("x-forwarded-host"),
             "host": request.headers.get("host"),
+            "scheme": request.url.scheme,
         }
         ctx_token = _mcp_ctx.set(ctx)
         url_token = _request_url_ctx.set(url_info)
@@ -765,6 +767,59 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
     )
 
 
+# -- get -------------------------------------------------------------------
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def get(uri: str) -> str:
+    """Download one viking:// file's original bytes, like ov get.
+
+    Returns a short-lived, single-use download URL. HTTP GET that URL and save the
+    response bytes to the local path requested by the user; the server cannot write
+    to the client's filesystem. Create missing parent directories and refuse to
+    overwrite an existing destination, as ov get does. No OpenViking API key is
+    needed, but private gateway headers may still be required.
+
+    Works for text and binary files, including PDFs, images, audio, and video.
+    Directories are not supported; use list or tree to find individual files.
+    To put file content directly into the conversation, use read instead.
+    """
+    service = get_service()
+    ctx = _get_ctx()
+    uri = _resolve_mcp_workspace_uri(uri, ctx)
+    stat = await service.fs.stat(uri, ctx=ctx, skip_count=True)
+    if stat.get("isDir"):
+        raise InvalidArgumentError(
+            "get downloads a single file, not a directory. Use list or tree to find a file URI.",
+            details={"resource": uri, "expected": "file", "actual": "directory"},
+        )
+
+    token, expires_at = download_token_store.issue(uri, ctx)
+    base_url, url_source = _resolve_public_base_url()
+    download_url = f"{base_url}/api/v1/content/download/{quote(token, safe='')}"
+    expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
+    prose = (
+        f"Download the original file: {uri}\n\n"
+        "HTTP GET the following URL and save the response bytes to the user's chosen local path:\n\n"
+        f"  {download_url}\n\n"
+        "No file has been saved yet. Create missing parent directories and refuse to overwrite "
+        "an existing destination, as ov get does.\n\n"
+        "The URL authorizes only this file against OpenViking (no OpenViking API key needed). "
+        "If a private gateway or reverse proxy requires extra headers, replay those gateway "
+        "headers from your MCP connection on this download request.\n\n"
+        f"This URL is single-use and expires at {expires_iso}. "
+        "Call get again if the download fails or the URL has expired."
+    )
+    if url_source not in ("env", "config"):
+        prose += (
+            "\n\nThis download URL was auto-detected. If the host, port, or TLS scheme is wrong, "
+            "ask the server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
+            "server URL and call get again."
+        )
+    return prose
+
+
 # -- read ------------------------------------------------------------------
 
 
@@ -837,6 +892,7 @@ def _mcp_media_download_hint(uri: str) -> str:
     filename = PurePosixPath(path).name or "download"
     encoded_uri = quote(uri, safe="")
     return (
+        "Call the get tool with this URI for a one-time download URL. "
         f'Use `ov get "{uri}" "./{filename}"` or GET '
         f"`/api/v1/content/download?uri={encoded_uri}` to fetch the original file."
     )
@@ -1299,7 +1355,7 @@ _DEFAULT_UPLOAD_TTL_SECONDS = 600
 
 
 def _resolve_public_base_url() -> tuple[str, str]:
-    """Pick the URL the agent should POST uploads to. Returns ``(base_url, source)``.
+    """Pick the public base URL for file transfers. Returns ``(base_url, source)``.
 
     Resolution order (first match wins):
 
@@ -1345,7 +1401,8 @@ def _resolve_public_base_url() -> tuple[str, str]:
             proto = xfp or "https"
             return f"{proto}://{xfh}", "forwarded"
         if host_hdr:
-            return f"http://{host_hdr}", "host"
+            proto = xfp or url_info.get("scheme") or "http"
+            return f"{proto}://{host_hdr}", "host"
 
     if config is not None:
         from openviking.server.config import map_bind_host_to_loopback

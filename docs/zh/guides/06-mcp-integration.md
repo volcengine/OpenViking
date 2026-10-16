@@ -125,6 +125,7 @@ claude mcp add --transport http openviking \
 | `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
 | `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频 | `uris`（单个字符串或数组）, `offset`, `limit`（文本行数） |
+| `get` | 通过短时有效的一次性 URL 下载单个文件的原始字节。客户端请求 URL 并选择本地保存路径，对应 `ov get` 的下载能力 | `uri` |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述) |
 | `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
@@ -192,6 +193,25 @@ claude mcp add --transport http openviking \
 支持结构化输出的工具还返回 `error.code/message/details`，同时保留原有 `result` 文本。
 批量读取或搜索部分失败时保留成功结果，并在失败项中显示原因。
 
+### 下载原始文件（`get`）
+
+调用 `get` 并传入文件 URI，例如 `{"uri":"viking://resources/reports/report.pdf"}`。工具返回纯文本下载指引，其中的 URL 使用 `/api/v1/content/download/{token}` 路径。客户端向该 URL 发出 HTTP GET，将响应的原始字节保存到自己选择的本地路径：
+
+本地目标文件应不存在；客户端必须拒绝覆盖已有文件，与 `ov get` 一致。执行以下示例前请先检查目标路径。
+
+```bash
+curl --fail 'https://ov.example.com/api/v1/content/download/<token>' \
+  --output ./report.pdf
+```
+
+URL 内含一次性凭证，默认 10 分钟过期，下载时无需 OpenViking API Key。请将其作为凭证保管并及时使用；过期或使用后需重新调用 `get` 获取 URL。如果私有网关要求额外请求头，下载请求也需要携带这些请求头。
+
+在 `api_key` 鉴权模式下（包括 OAuth 调用），用户已不存在或角色已降级时会拒绝下载。在 `trusted` 和自定义鉴权模式下，token 是仅针对该文件的短期授权：有效期内保留签发时已认证的角色，后续角色变更不会立即撤销此授权。使用 token 时仍会重新查询服务端管理的群组，并检查文件访问权限。
+
+`get` 只接受单个文件 URI，不接受本地路径。服务端会检查调用方的访问权限，不会向客户端文件系统写入文件。客户端需要具备请求 URL 并保存响应的能力，无需预装 `ov` CLI。暂不支持目录下载，可先用 `list` 或 `tree` 找到具体文件。需要在 MCP 响应中直接读取文本、图片或音频时使用 `read`；PDF、视频等无法通过 `read` 返回的二进制文件也可通过 `get` 下载。
+
+下载 token 保存在进程内，服务重启后失效。多 worker 部署时，MCP `get` 调用与后续下载 GET 必须落到同一个 worker（或以单 worker 运行）。下载和上传均需使用客户端可访问的基础 URL，配置方式见下文。
+
 ### 添加本地文件资源(单步上传)
 
 `add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
@@ -205,7 +225,7 @@ claude mcp add --transport http openviking \
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 
-工具响应里给出的上传 URL,server 端按以下顺序解析:
+工具响应里给出的下载和上传 URL，server 端按以下顺序解析：
 
 1. 环境变量 `OPENVIKING_PUBLIC_BASE_URL`
 2. `ov.conf` 中的 `server.public_base_url`

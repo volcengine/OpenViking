@@ -24,7 +24,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 ### Agent-callable tools
 
-"Server MCP tools" means whatever the server's `tools/list` returns: 20 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
+"Server MCP tools" means whatever the server's `tools/list` returns: 21 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
 
 | Integration | How it connects | Tools the agent can call |
 |---|---|---|
@@ -83,6 +83,7 @@ Every MCP-based integration exposes the same server-defined tools and keeps no c
 | Group | Tools |
 |---|---|
 | Search and browse | `find`, `search`, `read`, `list`, `tree`, `grep`, `glob` |
+| Download | `get` |
 | Write | `remember`, `write`, `edit`, `add_resource`, `add_skill` |
 | Delete | `forget` |
 | Watched resources | `list_watches`, `cancel_watch` (not yet available on the commercial edition) |
@@ -93,6 +94,7 @@ Behavior to know before relying on a tool:
 
 - **`remember`** creates a one-shot session named `mcp-store-<id>`, adds the messages, and commits it at once. It is the only MCP tool that commits. It returns as soon as the commit is accepted, with the `task_id` of the background extraction; extraction then decides which memories to create or update. No MCP tool commits the agent's current conversation; that is the job of the automatic hooks.
 - **`find` and `search`**: `find` is a fast search without session context. `search` can take a `session_id` and run intent analysis (`retrieval.enable_intent`, on by default). `find` with `context_type="skill"` returns one hit per skill package, pointing at its `SKILL.md`, from both the user's and the account's skills.
+- **`get`** returns a one-shot download URL (valid for 600 seconds by default) for one file's original bytes. The client fetches it and saves the response to a local path; no OpenViking API key or `ov` CLI is needed for that request. Private-gateway headers still apply. See [Downloading original files](../guides/06-mcp-integration.md#downloading-original-files-get) for client and deployment requirements.
 - **`write` and `edit`** can write only under `viking://resources`, `viking://user`, and `viking://agent`. A new file must end in `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, or `.ts`. The user's `skills/`, `peers/`, `privacy/`, and `sessions/` directories are read-only. A write under `viking://agent/skills` is accepted but skips skill installation, so use `add_skill` for skills.
 - **`add_resource` with a local path** returns a signed upload URL (valid for 600 seconds by default). The model must upload the file to it, for example with a shell command; ingestion then starts on its own. Remote URLs are ingested directly.
 - **`forget`** deletes whatever URI it is given, non-recursively by default. It does not check whether the URI is a memory, resource, or skill. See [Write and delete limits](#write-and-delete-limits).

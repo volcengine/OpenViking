@@ -24,7 +24,7 @@
 
 ### 可调用工具
 
-“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 20 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
+“服务端 MCP 工具”指服务端 `tools/list` 返回的工具：当前服务端有 21 个，列在[服务端 MCP 工具](#服务端-mcp-工具)。
 
 | 集成 | 接入方式 | Agent 可调用的工具 |
 |---|---|---|
@@ -82,6 +82,7 @@
 | 分组 | 工具 |
 |---|---|
 | 检索与浏览 | `find`、`search`、`read`、`list`、`tree`、`grep`、`glob` |
+| 下载 | `get` |
 | 写入 | `remember`、`write`、`edit`、`add_resource`、`add_skill` |
 | 删除 | `forget` |
 | 监听资源 | `list_watches`、`cancel_watch`（商业版暂不支持） |
@@ -92,6 +93,7 @@
 
 - **`remember`** 会创建一个名为 `mcp-store-<id>` 的一次性会话，写入消息后立即提交。它是唯一会提交的 MCP 工具。提交被接受后它立刻返回，结果里带后台记忆提取任务的 `task_id`；提取过程再决定新建或更新哪些记忆。没有任何 MCP 工具会提交 Agent 当前的对话，那是自动 hook 的工作。
 - **`find` 与 `search`**：`find` 是不带会话上下文的快速检索。`search` 可以传 `session_id`，并做意图分析（`retrieval.enable_intent`，默认开启）。`find` 传 `context_type="skill"` 时，每个 skill 包只返回一条命中，指向它的 `SKILL.md`，范围包括用户自己的和账户共享的 skill。
+- **`get`** 为单个文件的原始字节返回一次性下载 URL（默认 600 秒有效）。客户端请求 URL 并保存到本地路径，此请求无需 OpenViking API Key 或 `ov` CLI；私有网关要求的额外请求头仍需携带。客户端和部署要求见[下载原始文件](../guides/06-mcp-integration.md#下载原始文件get)。
 - **`write` 与 `edit`** 只能写 `viking://resources`、`viking://user` 和 `viking://agent`。新文件的扩展名必须是 `.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js` 或 `.ts`。用户的 `skills/`、`peers/`、`privacy/` 和 `sessions/` 目录只读。写入 `viking://agent/skills` 不会被拒绝，但会跳过 skill 安装流程，skill 请用 `add_skill`。
 - **`add_resource` 传本地路径**时返回一个签名上传 URL（默认 600 秒有效）。模型需要把文件上传到这个 URL，例如用一条 shell 命令；上传后自动开始入库。远程 URL 会直接入库。
 - **`forget`** 删除传入的任意 URI，默认不递归。它不检查 URI 是记忆、资源还是 skill，见[写入与删除限制](#写入与删除限制)。

@@ -545,6 +545,18 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 `ov get <uri> <local-path>` downloads through the HTTP API above and writes the file to a local path.
 
+**MCP download URL**
+
+The MCP `get` tool accepts `{"uri":"viking://resources/images/logo.png"}` and returns instructions with a short-lived, one-shot URL:
+
+```http
+GET /api/v1/content/download/{token}
+```
+
+The token authorizes the download without an OpenViking API key and expires after 10 minutes by default. Private-gateway headers, if required, must still be supplied. This endpoint returns the same HTTP `200`, `Content-Type`, `Content-Disposition`, and raw bytes shown above. The client chooses the local output path; `get` does not accept one. Directory downloads are not supported.
+
+Tokens are held in-process, expire on restart, and require the MCP call and download request to reach the same worker. See [MCP downloads](../guides/06-mcp-integration.md#downloading-original-files-get) for the full flow and public URL configuration.
+
 ---
 
 ### set_tags()

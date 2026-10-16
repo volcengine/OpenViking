@@ -129,6 +129,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
 | `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block | `uris` (single string or array), `offset`, `limit` (text lines) |
+| `get` | Download one file's original bytes through a short-lived, one-shot URL. The client fetches the URL and chooses where to save the file, as with `ov get` | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
 | `remember` | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away | `messages` (list of `{role, content}`) |
@@ -200,6 +201,25 @@ text. Tools supporting structured output also include `error.code/message/detail
 existing `result` text. Partial batch reads or searches preserve successful results and report
 failed items separately.
 
+### Downloading original files (`get`)
+
+Call `get` with a file URI, for example `{"uri":"viking://resources/reports/report.pdf"}`. It returns plain-text download instructions with a URL at `/api/v1/content/download/{token}`. The client sends an HTTP GET to that URL and saves the raw response bytes to its chosen local path:
+
+The local destination must not already exist; the client must refuse to overwrite it, as `ov get` does. Check this before running the example below.
+
+```bash
+curl --fail 'https://ov.example.com/api/v1/content/download/<token>' \
+  --output ./report.pdf
+```
+
+The URL contains a one-shot credential that expires after 10 minutes by default, so no OpenViking API key is needed for the download. Treat it as a credential and use it promptly; request a new URL with `get` if it has expired or been used. If a private gateway requires additional headers, include those headers on the download request as well.
+
+In `api_key` mode (including OAuth callers), downloads reject users who no longer exist or whose role has been downgraded. In `trusted` and custom auth modes, the token is a short-lived grant for this file: it retains the authenticated role from issuance until expiry, so later role changes do not revoke it immediately. Server-managed groups and file access are checked again when the token is used.
+
+`get` accepts one file URI and no local path. The server checks the caller's access and does not write to the client's filesystem. The client must be able to fetch the URL and save its response; no `ov` CLI is required. Directory downloads are not supported: use `list` or `tree` to locate individual files. Use `read` to return text, image, or audio content inside the MCP response; `get` also works for PDFs, videos, and other binary files that `read` cannot return.
+
+Download tokens are held in-process and are lost on a server restart. In a multi-worker deployment, the MCP `get` call and its download GET must reach the same worker (or run single-worker). Configure the externally reachable base URL as described below for both downloads and uploads.
+
 ### Adding local-file resources (single-step upload)
 
 The `add_resource` tool accepts both **remote URLs** and **local file paths**, handled differently:
@@ -213,7 +233,7 @@ A client that can read the source bytes and send a multipart HTTP request can up
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 
-The upload URL the tool returns is resolved server-side in this order:
+The download and upload URLs the tools return are resolved server-side in this order:
 
 1. Environment variable `OPENVIKING_PUBLIC_BASE_URL`
 2. `server.public_base_url` in `ov.conf`
