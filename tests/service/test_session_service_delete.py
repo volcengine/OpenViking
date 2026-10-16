@@ -20,7 +20,8 @@ from tests.utils.mock_agfs import MockLocalAGFS
 def session_storage(tmp_path):
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
     agfs = MockLocalAGFS(root_path=tmp_path)
-    viking_fs = VikingFS(agfs=agfs)
+    vector = SimpleNamespace(count=AsyncMock(), delete_uris=AsyncMock())
+    viking_fs = VikingFS(agfs=agfs, vector_store=vector)
     service = SessionService(viking_fs=viking_fs)
     session_id = "delete-session"
     session_uri = canonical_session_uri(ctx, session_id)
@@ -45,6 +46,7 @@ def session_storage(tmp_path):
         sibling_path=sibling_path,
         memory_path=memory_path,
         agfs=agfs,
+        vector=vector,
         expiry=expiry,
     )
 
@@ -59,6 +61,8 @@ async def test_delete_does_not_read_or_parse_session_contents(session_storage, f
 
     assert not state.agfs.exists(state.path)
     state.agfs.read.assert_not_called()
+    state.vector.count.assert_not_awaited()
+    state.vector.delete_uris.assert_not_awaited()
 
 
 @pytest.mark.asyncio
