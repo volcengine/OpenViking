@@ -1040,7 +1040,7 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API, failures fail the import), and `auto` (use the configured remote parser when there is one, otherwise local).
 
 ```json
 {
@@ -1063,8 +1063,67 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
 | `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
 | `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_token` | str | Bearer token for the hosted MinerU service. Setting it also selects the hosted batch protocol (see below) |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+**MinerU protocols**: which one is used follows from whether `mineru_token` is set.
+
+| Config | Protocol | Flow |
+|---|---|---|
+| no `mineru_token` | self-hosted (v1) | `POST {mineru_endpoint}/file_parse`, markdown returned inline |
+| `mineru_token` set | hosted batch (v4) | `POST /file-urls/batch` to reserve an upload URL, `PUT` the PDF there, poll `GET /extract-results/batch/{batch_id}` until it settles, then download `full_zip_url` and take the markdown plus its images |
+
+The hosted service has no `/file_parse` route at all, so a token is treated as the
+signal for that API rather than as a credential to bolt onto the v1 call. If the batch
+handshake is refused the parser retries once against `/file_parse`, which keeps a
+token-gated self-hosted deployment working.
+
+**Choosing a strategy:**
+
+| `strategy` | Remote parser used? | On remote failure | `mineru_endpoint` required |
+|---|---|---|---|
+| `local` | no | n/a | no |
+| `mineru` | always | the import fails | yes |
+| `auto` | yes, if one is configured | falls back to the local parser | optional |
+
+`auto` (the default) uses whichever remote parser is configured and treats the local
+parser as the last resort. With `mineru_endpoint` set, every PDF is converted remotely;
+if that call fails — missing token, rate limit, outage — that single document falls back
+to local and the import still succeeds. With nothing configured, `auto` uses the local
+parser directly. `mineru` is the strict variant: MinerU is the result, and a failure
+fails the import rather than degrading.
+
+Whether a remote parser is in play is `PDFConfig.remote_enabled`, expressed over the
+provider list rather than any single service, so adding a provider does not mean
+revisiting `auto`, the preflight, or this page. `mineru_enabled` remains the MinerU
+provider's own check.
+
+`auto` tries each configured remote provider in turn and uses the first one that
+succeeds. A provider that raises is logged and the next option is tried, so any
+remote failure -- `404`, `405`, `429`, a timeout, a `5xx` -- degrades that document
+to local rather than failing it. The path actually taken is recorded in
+`pdf_strategy_effective`, so a batch that quietly stopped using the remote parser is
+visible after the fact.
+
+The startup preflight follows the same rule: `mineru` fails fast if the endpoint is not
+ready, `auto` only warns and leaves the retry to the first parse.
+
+:::warning Behavior change
+`auto` previously tried the local parser **first** and only used MinerU when local
+parsing failed. It now prefers the configured remote parser. If you have `mineru_endpoint`
+set, every PDF is sent to that service, so expect a change in latency, quota usage and
+rate-limit exposure. Set `strategy: local` to keep the previous remote-as-last-resort
+behaviour, or `strategy: mineru` if you want the remote path to be mandatory.
+:::
+
+Service-specific settings live in their own fields (`mineru_endpoint`, `mineru_token`,
+`mineru_bodys`), so supporting a new remote parser is a provider change rather than a new
+`strategy` value.
+
+:::tip `auto` degrades on any remote error
+A remote failure of any kind -- `404`, `405`, `429`, a timeout, a 5xx -- falls back to the
+local parser for that document, so the import still succeeds. Set `mineru_token` when
+pointing `mineru_endpoint` at the hosted MinerU service: that both authenticates the call
+and selects the protocol the service actually speaks.
 
 ### External parser API (`parser_api`) {#parser-api}
 

@@ -1034,7 +1034,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### pdf
 
-PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API，失败即导入失败）、`auto`（配置了远程解析服务就优先使用，否则走本地）。
 
 ```json
 {
@@ -1057,8 +1057,44 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
 | `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
 | `mineru_bodys` | dict | MinerU API multipart form 参数 |
+| `mineru_token` | str | 托管 MinerU 服务的 Bearer token。配置它同时会选中托管批处理协议（见下） |
 
-**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+**MinerU 协议**：使用哪种协议取决于是否配置了 `mineru_token`。
+
+| 配置 | 协议 | 流程 |
+|---|---|---|
+| 未配 `mineru_token` | 自托管 v1 | `POST {mineru_endpoint}/file_parse`，同步返回 markdown |
+| 配置了 `mineru_token` | 托管批处理 v4 | `POST /file-urls/batch` 预留上传 URL → `PUT` 上传 PDF → 轮询 `GET /extract-results/batch/{batch_id}` → 下载 `full_zip_url` 并解包 markdown 与图片 |
+
+托管服务根本没有 `/file_parse` 路由，因此 token 在这里是“选中托管 API”的信号，而不是简单地贴到 v1 请求上。若批处理握手被拒，解析器会再尝试一次 `/file_parse`，以保持带 token 的自托管部署仍然可用。
+
+**如何选择策略：**
+
+| `strategy` | 是否使用远程解析 | 远程失败时 | 是否必填 `mineru_endpoint` |
+|---|---|---|---|
+| `local` | 否 | — | 否 |
+| `mineru` | 始终使用 | 导入失败 | 是 |
+| `auto` | 配置了就使用 | 回退到本地解析器 | 否 |
+
+`auto`（默认）使用已配置的远程解析服务，并把本地解析器作为最后兜底。若配置了 `mineru_endpoint`，每份 PDF 都会走远程转换；若该调用失败（token 缺失、限流、服务不可用），只该份文档会降级为本地解析，导入仍然成功。若什么都没配，`auto` 直接使用本地解析。`mineru` 是严格变体：远程失败就使导入失败，而不降级。
+
+是否有远程解析服务在场，由 `PDFConfig.remote_enabled` 判定，它是从 provider 列表的角度表达的，而不是绑定某一个具体服务；因此新增 provider 时无需重新修改 `auto`、预检或本页。`mineru_enabled` 仍是 MinerU 这个 provider 自身的判定。
+
+为避免一个已降级的批次变得明显更慢，`auto` 不会无目的地重试：
+
+`auto` 依次尝试每个已配置的远程 provider，并使用第一个成功的。某个 provider 抛出异常时只记录日志并尝试下一个，因此任何远程失败（`404`、`405`、`429`、超时、`5xx`）都会使该文档降级为本地解析，而不会使导入失败。实际走的路径记录在
+`pdf_strategy_effective`，因此静默失效的远程解析在之后仍可见。
+
+启动预检遵循同一规则：`mineru` 在端点未就绪时快速失败，`auto` 仅告警，重试留给首次解析。
+
+:::warning 行为变更
+`auto` 之前是**先本地、本地失败才用 MinerU**；现在改为**优先使用已配置的远程服务**。若你配置了 `mineru_endpoint`，每份 PDF 都会发往该服务，延迟、额度消耗与限流风险都会变化。若希望保持原有行为，设为 `strategy: local`；若希望远程解析必须成功，设为 `strategy: mineru`。
+:::
+
+服务类配置各自独立（`mineru_endpoint`、`mineru_token`、`mineru_bodys`），因此接入新的远程解析服务只需增加 provider，而不是新增 `strategy` 取值。
+
+:::tip `auto` 在任意远程错误时都会降级
+任何远程失败——`404`、`405`、`429`、超时、5xx——都会让该份文档降级到本地解析器，导入仍然成功。当 `mineru_endpoint` 指向托管版 MinerU 时请配置 `mineru_token`：它既能完成认证，也会选中该服务实际支持的协议。
 
 ### 外部解析 API（`parser_api`） {#parser-api}
 
