@@ -114,7 +114,12 @@ export function ConnectionProfilesList() {
             {t(`providers.${profile.connection.serviceSelection}`)}
           </Badge>
           {profile.id === activeProfileId && (
-            <Badge>{t('profiles.active')}</Badge>
+            <Badge
+              variant="outline"
+              className="border-emerald-600/20 bg-emerald-600/10 text-emerald-700 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-400"
+            >
+              {t('profiles.active')}
+            </Badge>
           )}
         </div>
         <p className="mt-1 break-all text-sm text-muted-foreground">
@@ -187,7 +192,14 @@ export function ConnectionProfilesList() {
                       </Badge>
                       {group.some(
                         (profile) => profile.id === activeProfileId,
-                      ) && <Badge>{t('profiles.active')}</Badge>}
+                      ) && (
+                        <Badge
+                          variant="outline"
+                          className="border-emerald-600/20 bg-emerald-600/10 text-emerald-700 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-400"
+                        >
+                          {t('profiles.active')}
+                        </Badge>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         {t('profiles.title')} · {group.length}
                       </span>
