@@ -34,6 +34,7 @@ export type CommitOpenVikingSessionParams = {
   logger: ContextEngineLifecycleLogger;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
+    senderId?: string;
     sessionId?: string;
     sessionKey?: string;
     ovSessionId?: string;
@@ -82,6 +83,7 @@ export type AssembleOpenVikingSessionParams = {
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
+    senderId?: string;
     sessionId?: string;
     sessionKey?: string;
     ovSessionId?: string;
@@ -151,6 +153,7 @@ export type AfterTurnOpenVikingSessionParams = {
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
   rememberSessionAgentId?: (ctx: {
     agentId?: string;
+    senderId?: string;
     sessionId?: string;
     sessionKey?: string;
     ovSessionId?: string;
@@ -586,6 +589,7 @@ async function assembleSessionContext(params: AssembleOpenVikingSessionParams): 
     sessionId,
     sessionKey,
     agentId: extractRuntimeAgentId(runtimeContext),
+    senderId: sender.senderId,
     ovSessionId,
   });
   diag("assemble_entry", ovSessionId, {
@@ -925,9 +929,10 @@ export async function afterTurnOpenVikingSession({
     const sender = extractRuntimeSenderId(runtimeContext);
     const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
     const runtimeAgentId = extractRuntimeAgentId(runtimeContext);
-    if (runtimeAgentId) {
+    if (runtimeAgentId || sender.senderId) {
       rememberSessionAgentId?.({
         agentId: runtimeAgentId,
+        senderId: sender.senderId,
         sessionId,
         sessionKey,
         ovSessionId,
