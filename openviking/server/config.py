@@ -340,14 +340,6 @@ class ServerConfig(BaseModel):
             "executor. Zero keeps Python's default sizing policy."
         ),
     )
-    session_delete_concurrency: int = Field(
-        default=4,
-        gt=0,
-        description=(
-            "Maximum concurrent session deletions in each server process. "
-            "Additional deletions wait before accessing storage."
-        ),
-    )
     # Seconds an idle HTTP keep-alive connection is kept open before the server
     # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
     # the existing service behavior. Raise it above the idle-connection lifetime

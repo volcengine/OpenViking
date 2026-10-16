@@ -294,10 +294,6 @@ def create_app(
 
     def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
-        delete_concurrency_setter = getattr(sessions, "set_delete_concurrency", None)
-        if callable(delete_concurrency_setter):
-            delete_concurrency_setter(config.session_delete_concurrency)
-
         tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
         if callable(tool_output_setter):
             tool_output_setter(config.tool_output_externalization)

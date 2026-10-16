@@ -6,7 +6,7 @@
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -14,25 +14,6 @@ import pytest
 from openviking.server.app import _initialize_auth_plugin, _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
 from openviking_cli.exceptions import UnauthenticatedError
-
-
-@pytest.mark.parametrize("concurrency", [1, 8])
-def test_create_app_configures_session_delete_concurrency(concurrency, monkeypatch):
-    monkeypatch.setattr(
-        "openviking.server.app.get_openviking_config",
-        lambda: SimpleNamespace(
-            service_name="test",
-            oauth=SimpleNamespace(enabled=False),
-            gateway=SimpleNamespace(enabled=False),
-        ),
-    )
-    monkeypatch.setattr("openviking.server.app.set_server_config", lambda config: None)
-    setter = Mock()
-    service = SimpleNamespace(sessions=SimpleNamespace(set_delete_concurrency=setter))
-
-    create_app(config=ServerConfig(session_delete_concurrency=concurrency), service=service)
-
-    setter.assert_called_once_with(concurrency)
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
