@@ -828,10 +828,12 @@ class _SingleAccountBackend:
             raise
 
     @_backend_operation
-    async def delete_by_filter(self, filter: FilterExpr) -> int:
+    async def delete_by_filter(self, filter: FilterExpr, *, raise_on_error: bool = False) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
-            return await self._async_adapter.call("delete", filter=filter)
+            return await self._async_adapter.call(
+                "delete", filter=filter, **({"raise_on_error": True} if raise_on_error else {})
+            )
         except Exception as e:
             logger.error("Error deleting by filter: %s", e)
             raise
@@ -2551,7 +2553,9 @@ class VikingVectorIndexBackend:
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
 
-    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+    async def delete_uris(
+        self, ctx: RequestContext, uris: List[str], *, raise_on_error: bool = False
+    ) -> None:
         for uri in uris:
             conds: List[FilterExpr] = [
                 Eq("account_id", ctx.account_id),
@@ -2559,7 +2563,9 @@ class VikingVectorIndexBackend:
             ]
 
             backend = await self._get_backend_for_context(ctx)
-            await backend.delete_by_filter(And(conds))
+            await backend.delete_by_filter(
+                And(conds), **({"raise_on_error": True} if raise_on_error else {})
+            )
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
         scopes: List[FilterExpr] = [Eq("uri", uri)]

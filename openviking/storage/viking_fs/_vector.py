@@ -16,7 +16,11 @@ class _VectorMixin:
     """Vector store integration: delete/update URIs, get store/embedder."""
 
     async def _delete_from_vector_store(
-        self, uris: List[str], ctx: Optional[RequestContext] = None
+        self,
+        uris: List[str],
+        ctx: Optional[RequestContext] = None,
+        *,
+        raise_on_error: bool = False,
     ) -> None:
         """Delete records with specified URIs from vector store.
 
@@ -28,7 +32,9 @@ class _VectorMixin:
         real_ctx = self._ctx_or_default(ctx)
 
         try:
-            await vector_store.delete_uris(real_ctx, uris)
+            await vector_store.delete_uris(
+                real_ctx, uris, **({"raise_on_error": True} if raise_on_error else {})
+            )
             for uri in uris:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:

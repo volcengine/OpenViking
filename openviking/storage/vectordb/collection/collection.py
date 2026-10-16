@@ -544,6 +544,8 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        *,
+        raise_on_error: bool = False,
     ):
         """Retrieve documents sorted by a scalar field value.
 
@@ -567,6 +569,20 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            from .volcengine_collection import VolcengineCollection
+
+            if isinstance(self.__collection, VolcengineCollection):
+                return self.__collection.search_by_scalar(
+                    index_name,
+                    field,
+                    order,
+                    limit,
+                    offset,
+                    filters,
+                    output_fields,
+                    raise_on_error=True,
+                )
         return self.__collection.search_by_scalar(
             index_name, field, order, limit, offset, filters, output_fields
         )
@@ -674,7 +690,7 @@ class Collection:
             raise RuntimeError("Collection is closed")
         return self.__collection.fetch_data(primary_keys)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, raise_on_error: bool = False):
         """
         Delete specific data documents from the collection using their primary keys.
 
@@ -683,6 +699,11 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
+        if raise_on_error:
+            from .volcengine_collection import VolcengineCollection
+
+            if isinstance(self.__collection, VolcengineCollection):
+                return self.__collection.delete_data(primary_keys, raise_on_error=True)
         return self.__collection.delete_data(primary_keys)
 
     def delete_all_data(self):

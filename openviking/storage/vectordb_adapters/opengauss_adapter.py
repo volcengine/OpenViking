@@ -274,6 +274,7 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: Optional[int] = None,
+        raise_on_error: bool = False,
     ) -> int:
         if ids is not None or filter is None:
             return super().delete(ids=ids, filter=filter)

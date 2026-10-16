@@ -446,14 +446,14 @@ class VolcengineCollection(ICollection):
         # print(resp_data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, raise_on_error: bool = False):
         path = "/api/vikingdb/data/delete"
         data = {
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
-        return self._data_post(path, data, raise_for_status=True)
+        return self._data_post(path, data, raise_for_status=raise_on_error)
 
     def delete_all_data(self):
         path = "/api/vikingdb/data/delete"
@@ -462,7 +462,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "del_all": True,
         }
-        return self._data_post(path, data, raise_for_status=True)
+        return self._data_post(path, data)
 
     def _parse_fetch_result(self, data: Dict[str, Any]) -> FetchDataInCollectionResult:
         result = FetchDataInCollectionResult()
@@ -633,6 +633,8 @@ class VolcengineCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        *,
+        raise_on_error: bool = False,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/scalar"
         data = {
@@ -647,7 +649,7 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
-        resp_data = self._data_post(path, data, raise_for_status=True)
+        resp_data = self._data_post(path, data, raise_for_status=raise_on_error)
         return self._parse_search_result(resp_data)
 
     def _parse_aggregate_result(

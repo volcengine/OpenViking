@@ -485,6 +485,7 @@ class CollectionAdapter(ABC):
         order_by: Optional[str] = None,
         order_desc: bool = False,
         advance: Optional[Dict[str, Any]] = None,
+        raise_on_error: bool = False,
     ) -> list[Dict[str, Any]]:
         decay_request = (advance or {}).get("time_decay")
         if decay_request is not None and self.mode != "opengauss":
@@ -531,6 +532,7 @@ class CollectionAdapter(ABC):
                 return_detail_info=decay_request is not None,
             )
         elif order_by:
+            error_options: Dict[str, Any] = {"raise_on_error": True} if raise_on_error else {}
             result = coll.search_by_scalar(
                 index_name=self._index_name,
                 field=order_by,
@@ -539,6 +541,7 @@ class CollectionAdapter(ABC):
                 offset=offset,
                 filters=vectordb_filter,
                 output_fields=output_fields,
+                **error_options,
             )
         else:
             # Approximate random sampling with a client-generated random
@@ -611,13 +614,15 @@ class CollectionAdapter(ABC):
         *,
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        raise_on_error: bool = False,
     ) -> int:
         """Submit IDs for deletion in batches, without waiting for index visibility."""
         coll = self.get_collection()
+        error_options: Dict[str, Any] = {"raise_on_error": True} if raise_on_error else {}
         batch_size = self._DATA_BATCH_SIZE or 100
         if ids is not None:
             for start in range(0, len(ids), batch_size):
-                coll.delete_data(ids[start : start + batch_size])
+                coll.delete_data(ids[start : start + batch_size], **error_options)
             return len(ids)
         if filter is None:
             return 0
@@ -634,6 +639,7 @@ class CollectionAdapter(ABC):
                     output_fields=["id"],
                     order_by="updated_at",
                     order_desc=False,
+                    **error_options,
                 )
                 if not matched:
                     break
@@ -642,7 +648,7 @@ class CollectionAdapter(ABC):
 
             pending_ids.seek(0)
             for batch in pending_ids:
-                coll.delete_data(json.loads(batch))
+                coll.delete_data(json.loads(batch), **error_options)
             return offset
 
     @staticmethod

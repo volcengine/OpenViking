@@ -8,20 +8,24 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+import requests
 
 from openviking.pyagfs import get_binding_client
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.errors import ConnectionError
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.agfs_utils import RagfsBindingConfig, mount_agfs_backend
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.agfs_config import AGFSConfig
-from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 
 
 class _EnabledAclConfig:
@@ -76,6 +80,76 @@ async def seed_vector(backend, uri, content):
         },
         ctx=root_ctx(),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raise_on_error", [False, True])
+@pytest.mark.parametrize("failure_path", ["/search/scalar", "/delete"])
+@pytest.mark.parametrize("response_kind", [429, 500, "invalid_json", "success"])
+async def test_rm_cloud_errors_are_opt_in(
+    binding_fs, vector_backend_factory, monkeypatch, raise_on_error, failure_path, response_kind
+):
+    fs, ctx = binding_fs, root_ctx()
+    uri = "viking://resources/expired.md"
+    await fs.write_file_bytes(uri, b"keep on failure", ctx=ctx)
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="volcengine",
+            name="context",
+            volcengine=VolcengineConfig(ak="test-ak", sk="test-sk", region="cn-beijing"),
+        )
+    )
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    backend._shared_adapter._collection = Collection(collection)
+    fs.vector_store = backend
+
+    def fake_request(method, path, req_body):
+        response = requests.Response()
+        response.status_code = 200
+        if path.endswith("/search/scalar"):
+            response._content = (
+                b'{"result":{"data":[{"id":"doc-1"}]}}'
+                if req_body["offset"] == 0
+                else b'{"result":{"data":[]}}'
+            )
+        elif path.endswith("/delete"):
+            response._content = b'{"result":{}}'
+        else:
+            assert path.endswith("/agg")  # Existing pre-delete estimate only.
+            response._content = b'{"result":{"_total":0}}'
+        if path.endswith(failure_path) and response_kind != "success":
+            response.status_code = response_kind if isinstance(response_kind, int) else 200
+            response._content = b"invalid JSON" if response_kind == "invalid_json" else b"{}"
+        return response
+
+    monkeypatch.setattr(collection.data_client, "do_req", fake_request)
+    options = {"raise_on_error": True} if raise_on_error else {}
+    try:
+        if raise_on_error and response_kind != "success":
+            message = "invalid JSON" if response_kind == "invalid_json" else str(response_kind)
+            with pytest.raises(ConnectionError, match=message):
+                await fs.rm(uri, ctx=ctx, **options)
+            assert await fs.read_file_bytes(uri, ctx=ctx) == b"keep on failure"
+            await fs.remove_files(uri, ctx=ctx)
+            with pytest.raises(ConnectionError, match=message):
+                await fs.rm(uri, ctx=ctx, **options)
+        else:
+            await fs.rm(uri, ctx=ctx, **options)
+            assert not await fs.exists(uri, ctx=ctx)
+            await fs.rm(uri, ctx=ctx, **options)
+        # Opting in for deletion must not change the shared collection's defaults.
+        if response_kind != "success":
+            if failure_path == "/search/scalar":
+                assert collection.search_by_scalar("default", "updated_at").data == []
+            else:
+                assert collection.delete_all_data() == {}
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
@@ -625,6 +699,7 @@ async def test_acl_failure_restores_only_moved_vectors_after_directory_merge(
     await seed_vector(backend, f"{source}/file.txt", "new")
     await seed_vector(backend, f"{target}/only.txt", "keep")
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+
     async def acl_enabled(_account_id):
         return True
 

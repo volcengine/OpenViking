@@ -219,6 +219,8 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
+        *,
+        raise_on_error: bool = False,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -235,6 +237,10 @@ class _OpsMixin:
         target is not concurrently mutated (e.g. best-effort shared upload
         cleanup that only deletes already-expired directories).
 
+        Internal TTL callers can set ``raise_on_error=True`` to propagate
+        Volcengine request failures without waiting for index visibility.
+        The default preserves the existing backend error handling.
+
         Returns:
             Dict with 'estimated_deleted_count' indicating the estimated number
             of nodes deleted from vector index.
@@ -246,6 +252,7 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        delete_options = {"raise_on_error": True} if raise_on_error else {}
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -277,7 +284,7 @@ class _OpsMixin:
             uris_to_delete.append(target_uri)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx, **delete_options)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -320,7 +327,7 @@ class _OpsMixin:
                 await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx, **delete_options)
             try:
                 result = await self._async_agfs.rm(
                     path,
