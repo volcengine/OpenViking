@@ -100,6 +100,14 @@ class MemoryConfig(BaseModel):
             "'json' preserves the legacy structured JSON protocol."
         ),
     )
+    session_secret_masking_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, mask supported credentials in copies of new session messages "
+            "before tool-output externalization and persistence. Disabled by default. "
+            "Does not depend on memory extraction or modify historical content."
+        ),
+    )
     session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(

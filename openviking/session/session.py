@@ -56,6 +56,7 @@ from openviking.session.retention import (
     is_user_query,
     plan_retention,
 )
+from openviking.session.secret_masking import mask_message_specs_async
 from openviking.session.tool_output_externalizer import ToolOutputExternalizer
 from openviking.session.working_memory import (
     WM_CREATE_WITH_CHECKPOINTS_TOOL,
@@ -924,7 +925,11 @@ class Session:
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
-        message_groups = self._build_message_groups(messages_spec)
+        specs = messages_spec
+        if get_openviking_config().memory.session_secret_masking_enabled:
+            # The full batch must pass before externalization or append.
+            specs = await mask_message_specs_async(messages_spec)
+        message_groups = self._build_message_groups(specs)
         messages = []
         for group in message_groups:
             await self._tool_outputs.externalize_group(

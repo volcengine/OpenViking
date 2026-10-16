@@ -655,3 +655,12 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         logger_module._shared_log_handler_key = None
         logger_module._stop_std_stream_listeners()
         OpenVikingConfigSingleton.reset_instance()
+
+
+@pytest.mark.parametrize("memory", [{}, {"session_secret_masking_enabled": True}])
+def test_session_secret_masking_startup_config(monkeypatch, memory):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+    config = OpenVikingConfig.from_dict({"memory": memory})
+    expected = memory.get("session_secret_masking_enabled", False)
+    assert config.memory.session_secret_masking_enabled is expected
+    assert config.to_dict()["memory"]["session_secret_masking_enabled"] is expected

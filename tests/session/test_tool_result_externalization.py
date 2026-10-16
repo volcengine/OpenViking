@@ -23,7 +23,7 @@ def _drain_background_tasks():
 
 
 @pytest.fixture
-def session(tmp_path):
+def session(tmp_path, service):
     return Session(
         VikingFS(agfs=MockLocalAGFS(root_path=tmp_path)),
         session_id="test_session_tool_results",
