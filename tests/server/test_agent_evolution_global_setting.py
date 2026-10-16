@@ -52,11 +52,7 @@ class _FakeAGFS:
         self.files.pop(path, None)
         return {}
 
-    def pathlock_acquire_exact(self, ctx, path, timeout_secs, owner_lease_ref):
-        del ctx
-        del path
-        del timeout_secs
-        del owner_lease_ref
+    async def pathlock_acquire_batch_async(self, *args):
         return {"lease_ref": "test-lease"}
 
     def pathlock_release(self, ctx, lease):
