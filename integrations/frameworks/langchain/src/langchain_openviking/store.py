@@ -18,6 +18,7 @@ from langchain_openviking.client import (
     OptionalDependencyError,
     call_openviking,
     ensure_client,
+    is_not_found_error,
     item_value,
     iter_result_items,
     missing_dependency,
@@ -145,7 +146,9 @@ class OpenVikingStore(BaseStore):
     def get(self, namespace: tuple[str, ...], key: str, *, refresh_ttl: Any = None) -> Any:
         try:
             record = self._read_record(self._data_uri(namespace, key))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             return None
         return Item(
             namespace=tuple(record["namespace"]),
@@ -309,7 +312,9 @@ class OpenVikingStore(BaseStore):
     ) -> dict[str, Any]:
         try:
             existing = self._read_record(uri)
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             record = _store_record(namespace, key, value, created_at=now, updated_at=now)
             self._write_create(uri, json.dumps(record, ensure_ascii=False, indent=2))
             return record
