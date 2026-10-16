@@ -36,7 +36,10 @@ vi.mock('#/lib/connection/onboarding', async (original) => ({
   verifyStudioSetup: mocks.verify,
   completeStudioSetup: mocks.complete,
 }))
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
 beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
@@ -524,4 +527,12 @@ it('keeps each workspace draft isolated when switching on the first step', () =>
   )
   fireEvent.click(screen.getByRole('button', { name: 'next' }))
   expect(key().value).toBe('synthetic-cloud')
+})
+
+it('loads the logo from the deployment base path', () => {
+  vi.stubEnv('BASE_URL', '/studio/')
+  const { container } = render(<StudioSetup onComplete={vi.fn()} />)
+  expect(container.querySelector('img')?.getAttribute('src')).toBe(
+    '/studio/ov-logo.png',
+  )
 })

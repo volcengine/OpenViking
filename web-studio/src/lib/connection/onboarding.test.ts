@@ -52,15 +52,20 @@ describe('first-use detection', () => {
     )
     expect(needsStudioSetup()).toBe(true)
   })
-  it('shows workspace choice even when a profile or legacy connection exists', () => {
+  it('restores a legacy connection even after the upgrade marked setup pending', () => {
+    localStorage.setItem(SETUP_STORAGE_KEY, 'pending')
     localStorage.setItem('ov_console_connection', JSON.stringify(draft))
-    expect(needsStudioSetup()).toBe(true)
-    localStorage.clear()
+    expect(needsStudioSetup()).toBe(false)
+  })
+  it('restores saved profiles in a new tab without a session marker', () => {
     localStorage.setItem(
       PROFILES_STORAGE_KEY,
-      JSON.stringify({ profiles: [{ connection: draft }] }),
+      JSON.stringify({
+        activeId: 'saved',
+        profiles: [{ id: 'saved', name: 'Saved', connection: draft }],
+      }),
     )
-    expect(needsStudioSetup()).toBe(true)
+    expect(needsStudioSetup()).toBe(false)
   })
   it('does not treat an automatically persisted empty same-origin connection as configured', () => {
     localStorage.setItem(
@@ -76,9 +81,11 @@ describe('first-use detection', () => {
     )
     expect(needsStudioSetup()).toBe(false)
     expect(sessionStorage.getItem(WORKSPACE_SESSION_KEY)).toBe('selected')
+    sessionStorage.clear()
+    expect(needsStudioSetup()).toBe(false)
     localStorage.removeItem(PROFILES_STORAGE_KEY)
+    expect(needsStudioSetup()).toBe(false)
     localStorage.removeItem('ov_console_connection')
-    sessionStorage.removeItem(WORKSPACE_SESSION_KEY)
     expect(needsStudioSetup()).toBe(true)
   })
   it('completes setup when randomUUID is unavailable on an HTTP origin', () => {

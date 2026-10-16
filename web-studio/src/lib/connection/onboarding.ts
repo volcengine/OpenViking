@@ -66,7 +66,12 @@ function hasConnection(value: unknown, completed = false): boolean {
 
 export function needsStudioSetup(): boolean {
   try {
-    return sessionStorage.getItem(WORKSPACE_SESSION_KEY) !== 'selected'
+    // A new tab must reuse an existing connection, including pre-onboarding
+    // installations. The session marker alone only survives a tab reload.
+    return (
+      sessionStorage.getItem(WORKSPACE_SESSION_KEY) !== 'selected' &&
+      savedSetupConnections().length === 0
+    )
   } catch {
     return true
   }
@@ -103,7 +108,12 @@ export function savedSetupConnections(): Array<{
     const legacy: unknown = JSON.parse(
       localStorage.getItem('ov_console_connection') || 'null',
     )
-    if (hasConnection(legacy))
+    if (
+      hasConnection(
+        legacy,
+        localStorage.getItem(SETUP_STORAGE_KEY) === 'complete',
+      )
+    )
       return [
         {
           id: 'default',
