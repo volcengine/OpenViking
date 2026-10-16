@@ -283,6 +283,8 @@ class TrajectoryRolloutAnalyzer:
                     isolation_handler=isolation_handler,
                     consumed_experience_uris=consumed_experience_uris,
                 )
+            if strict_extract_errors and memory_result.errors:
+                raise memory_result.errors[0][1]
             tracer.info(
                 "[trajectory] Applied memory ops: "
                 f"written={len(memory_result.written_uris)}, "

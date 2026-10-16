@@ -90,6 +90,8 @@ class FakeVikingFS:
         ]
 
     async def read_file(self, uri: str, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
@@ -148,6 +150,17 @@ def _memory_file(
         memory_type="experiences",
         extra_fields=fields,
     )
+
+
+def _experience_files(policy_set):
+    return {
+        policy.uri: MemoryFileUtils.write(
+            _memory_file(
+                name=policy.name, uri=policy.uri, content=policy.content, version=policy.version
+            )
+        )
+        for policy in policy_set.policies
+    }
 
 
 def _patch_gradient(
@@ -338,7 +351,7 @@ async def test_dry_run_policy_updater_simulates_delete_plan_items():
 @pytest.mark.asyncio
 async def test_memory_file_policy_updater_writes_experience_files():
     policy_set = _experience_set()
-    fs = FakeVikingFS({})
+    fs = FakeVikingFS(_experience_files(policy_set))
     gradient = _patch_gradient(
         uri=policy_set.policies[0].uri,
         before="content",
@@ -365,7 +378,7 @@ async def test_memory_file_policy_updater_writes_experience_files():
 @pytest.mark.asyncio
 async def test_memory_file_policy_updater_does_not_expand_lock_without_trajectory_links():
     policy_set = _experience_set()
-    fs = FakeVikingFS({})
+    fs = FakeVikingFS(_experience_files(policy_set))
     lock_handle = object()
     gradient = _patch_gradient(
         uri=policy_set.policies[0].uri,
@@ -392,7 +405,7 @@ async def test_memory_file_policy_updater_does_not_expand_lock_without_trajector
 @pytest.mark.asyncio
 async def test_memory_file_policy_updater_vectorizes_written_experience_files():
     policy_set = _experience_set()
-    fs = FakeVikingFS({})
+    fs = FakeVikingFS(_experience_files(policy_set))
     vikingdb = FakeVikingDB()
     gradient = _patch_gradient(
         uri=policy_set.policies[0].uri,
@@ -429,6 +442,7 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
     transaction_lease = {"lease_ref": "experience-tree-lease"}
     fs = FakeVikingFS(
         {
+            **_experience_files(policy_set),
             traj_uri: MemoryFileUtils.write(
                 MemoryFile(
                     uri=traj_uri,
@@ -439,7 +453,7 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
                         "trajectory_name": "booking_duplicate",
                     },
                 )
-            )
+            ),
         }
     )
     gradient = _patch_gradient(
@@ -526,6 +540,7 @@ async def test_memory_file_policy_updater_locks_and_writes_multiple_trajectory_b
             for index, uri in enumerate(trajectory_uris, start=1)
         }
     )
+    fs.files.update(_experience_files(policy_set))
     gradient = _patch_gradient(
         uri=exp_uri,
         before="content",
@@ -570,6 +585,31 @@ async def test_memory_file_policy_updater_locks_and_writes_multiple_trajectory_b
             link.get("from_uri") == exp_uri and link.get("to_uri") == trajectory_uri
             for link in trajectory_mf.backlinks
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previously_existed", [False, True])
+async def test_memory_file_policy_updater_distinguishes_new_from_deleted(previously_existed):
+    policy_set = _experience_set()
+    uri = policy_set.policies[0].uri
+    if not previously_existed:
+        policy_set.policies = []
+    fs = FakeVikingFS({})
+    gradient = _patch_gradient(uri=uri, before="content" if previously_existed else None, links=[])
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        _plan_from_gradient(gradient),
+        policy_set,
+        fake_request_context(),
+    )
+    if previously_existed:
+        assert len(result.errors) == 1
+        assert "no longer exists" in result.errors[0]
+        assert result.written_uris == []
+        assert fs.files == {}
+    else:
+        assert result.errors == []
+        assert result.written_uris == [uri]
+        assert fs.files[uri].startswith("new content")
 
 
 @pytest.mark.asyncio
@@ -941,7 +981,9 @@ async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_s
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(monkeypatch):
+async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(
+    monkeypatch,
+):
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
