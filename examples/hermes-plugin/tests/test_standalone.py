@@ -291,7 +291,7 @@ def test_external_native_memory_lifecycle_survives_restart(external_provider, ta
 
         def post(self, path, payload):
             requests.append(("write", dict(payload)))
-            files[payload["uri"]] = payload["content"]
+            files[payload["uri"]] = payload["content"].split("\n\n<!-- MEMORY_FIELDS", 1)[0]
             return {"result": {"uri": payload["uri"]}}
 
         def delete(self, path, *, params):

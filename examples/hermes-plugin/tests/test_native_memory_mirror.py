@@ -109,7 +109,10 @@ def test_replace_updates_the_same_openviking_uri_and_registry(mirror):
     _wait_for(lambda: len(client.snapshot()) == 1)
     create = client.snapshot()[0]
     uri = create[2]["uri"]
-    assert create[2]["content"] == "Preferred provider is DeepInfra"
+    assert _memory_fields(create[2]["content"]) == (
+        "Preferred provider is DeepInfra",
+        {"user": "default", "topic": "hermes_user_memory"},
+    )
 
     provider.on_memory_write(
         "replace",
@@ -149,6 +152,39 @@ def test_replace_updates_the_same_openviking_uri_and_registry(mirror):
         ],
     }
     provider.shutdown()
+
+
+def _memory_fields(content):
+    body, sep, trailer = content.partition("\n\n<!-- MEMORY_FIELDS\n")
+    if not sep:
+        return body, None
+    assert trailer.endswith("\n-->")
+    return body, json.loads(trailer[: -len("\n-->")])
+
+
+def test_add_carries_preferences_embedding_template_fields(mirror):
+    client = _FakeVikingClient()
+    provider = mirror.provider(client)
+
+    provider.on_memory_write("add", "user", "Prefers dark mode")
+    provider.on_memory_write("add", "memory", "Repo uses ruff")
+    _wait_for(lambda: len(client.snapshot()) == 2)
+
+    user_write, memory_write = (call[2] for call in client.snapshot())
+    assert "/memories/preferences/" in user_write["uri"]
+    assert _memory_fields(user_write["content"]) == (
+        "Prefers dark mode",
+        {"user": "default", "topic": "hermes_user_memory"},
+    )
+    assert "/memories/patterns/" in memory_write["uri"]
+    assert memory_write["content"] == "Repo uses ruff"
+
+    provider.shutdown()
+    registry = json.loads(_registry_path(mirror.home).read_text(encoding="utf-8"))
+    assert [entry["content"] for entry in registry["entries"]] == [
+        "Prefers dark mode",
+        "Repo uses ruff",
+    ]
 
 
 def test_add_requires_server_confirmed_user_without_fallback(mirror, caplog):

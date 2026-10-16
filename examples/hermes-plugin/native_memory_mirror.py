@@ -64,6 +64,17 @@ def _connection_fingerprint(client: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _with_memory_fields(uri: str, subdir: str, content: str) -> str:
+    """Attach the fields the ``preferences`` embedding template renders from."""
+    if subdir != "preferences":
+        return content
+    fields = {
+        "user": uri.removeprefix("viking://user/").split("/", 1)[0],
+        "topic": "hermes_user_memory",
+    }
+    return f"{content}\n\n<!-- MEMORY_FIELDS\n{json.dumps(fields, indent=2)}\n-->"
+
+
 class NativeMemoryMirror:
     """FIFO, profile-scoped mirror of Hermes native memory into OpenViking."""
 
@@ -289,7 +300,11 @@ class NativeMemoryMirror:
             )
             response = client.post(
                 "/api/v1/content/write",
-                {"uri": requested_uri, "content": content, "mode": "create"},
+                {
+                    "uri": requested_uri,
+                    "content": _with_memory_fields(requested_uri, event["subdir"], content),
+                    "mode": "create",
+                },
             )
             result = response.get("result", {}) if isinstance(response, dict) else {}
             if isinstance(result, dict) and result.get("content_updated") is False:
