@@ -136,19 +136,18 @@ const data = {
       config: {
         max_retries: 3,
         max_concurrent: 10,
-        dense: {
-          model: 'embedding-model',
-          dimension: 1024,
-          input: 'text',
-          credentials: [
-            {
-              id: 'embed',
-              provider: 'openai',
-              api_key: 'embedding-key',
-              api_base: 'https://e.example.com',
-            },
-          ],
-        },
+        model: 'embedding-model',
+        output: 'dense',
+        dimension: 1024,
+        input: 'text',
+        credentials: [
+          {
+            id: 'embed',
+            provider: 'openai',
+            api_key: 'embedding-key',
+            api_base: 'https://e.example.com',
+          },
+        ],
       },
     },
   },
@@ -270,7 +269,7 @@ it('allows keyless OpenAI-compatible embedding endpoints but requires an address
   fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
   await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
   expect(
-    JSON.parse(state.save.mock.calls[0][0]).embedding.dense.credentials[0],
+    JSON.parse(state.save.mock.calls[0][0]).embedding.credentials[0],
   ).toMatchObject({ api_key: null, api_base: 'http://localhost:8000/v1' })
 })
 it('shows file scope, restart and override warnings and blocks saves to read-only files', async () => {
@@ -375,34 +374,6 @@ it('adds an embedding credential without changing its model contract', async () 
     section('embeddingType').getAllByRole('button', { name: 'models.edit' }),
   ).toHaveLength(2)
 })
-it('offers the target vector group when adding to multiple embedding groups', async () => {
-  const payload = structuredClone(data)
-  Object.assign(payload.models.embedding.config, {
-    sparse: {
-      model: 'sparse-model',
-      credentials: [{ provider: 'local', model: 'sparse-model' }],
-    },
-  })
-  mount(payload)
-  await screen.findByText('sparse-model')
-  const embedding = section('embeddingType')
-  expect(
-    embedding.getAllByRole('button', { name: 'models.addModel' }),
-  ).toHaveLength(1)
-  await userEvent.click(
-    embedding.getByRole('button', { name: 'models.addModel' }),
-  )
-  await userEvent.click(
-    await screen.findByRole('menuitem', { name: 'models.sparse' }),
-  )
-  fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
-    target: { value: 'sparse-key' },
-  })
-  await apply()
-  expect(
-    embedding.getAllByRole('button', { name: 'models.edit' }),
-  ).toHaveLength(3)
-})
 it.each(['vlmType', 'embeddingType'])(
   'supports a custom OpenAI-compatible endpoint for %s',
   async (kind) => {
@@ -438,7 +409,7 @@ it.each(['vlmType', 'embeddingType'])(
     const credentials =
       kind === 'vlmType'
         ? changes.vlm.credentials
-        : changes.embedding.dense.credentials
+        : changes.embedding.credentials
     expect(credentials[index]).toMatchObject({
       provider: 'openai',
       api_base: 'https://gateway.example.com/v1',
@@ -502,7 +473,7 @@ it.each(['vlmType', 'embeddingType'])(
     const config =
       kind === 'vlmType'
         ? payload.models.vlm.config
-        : payload.models.embedding.config.dense
+        : payload.models.embedding.config
     delete (config.credentials[0] as { model?: string }).model
     mount(payload)
     await screen.findByText(config.model)
@@ -526,7 +497,7 @@ it.each(['vlmType', 'embeddingType'])(
     const binding =
       kind === 'vlmType'
         ? changes.vlm.credentials[0]
-        : changes.embedding.dense.credentials[0]
+        : changes.embedding.credentials[0]
     expect(binding.model).toBeUndefined()
     expect(binding.api_key).toBe('rotated-key')
 
@@ -541,7 +512,7 @@ it.each(['vlmType', 'embeddingType'])(
     expect(
       (kind === 'vlmType'
         ? updated.vlm.credentials[0]
-        : updated.embedding.dense.credentials[0]
+        : updated.embedding.credentials[0]
       ).model,
     ).toBe('explicit-model')
   },
@@ -1059,8 +1030,7 @@ it('retains the configuration draft when switching settings tabs', async () => {
 
 it('edits uppercase VikingDB credentials with the correct auth controls', async () => {
   const payload = structuredClone(data)
-  const credential: ModelConfig =
-    payload.models.embedding.config.dense.credentials[0]
+  const credential: ModelConfig = payload.models.embedding.config.credentials[0]
   Object.assign(credential, {
     provider: 'VIKINGDB',
     ak: 'dummy-ak',
@@ -1090,7 +1060,7 @@ it('edits uppercase VikingDB credentials with the correct auth controls', async 
   })
   await apply()
   expect(
-    state.preview.mock.lastCall![1].embedding.dense.credentials[0],
+    state.preview.mock.lastCall![1].embedding.credentials[0],
   ).toMatchObject({ provider: 'VIKINGDB', sk: 'rotated-sk' })
 })
 

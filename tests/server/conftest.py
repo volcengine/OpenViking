@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 import uvicorn
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
@@ -55,7 +55,7 @@ This is a sample markdown document for server testing.
 def _install_fake_embedder(monkeypatch):
     """Use an in-process fake embedder so server tests never hit external APIs."""
 
-    class FakeEmbedder(DenseEmbedderBase):
+    class FakeEmbedder(EmbedderBase):
         def __init__(self, dimension: int = 2048):
             super().__init__(model_name="test-fake-embedder")
             self._dimension = dimension

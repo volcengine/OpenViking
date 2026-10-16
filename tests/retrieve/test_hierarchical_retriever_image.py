@@ -147,7 +147,7 @@ async def account_embedding_provider(monkeypatch):
     clients = []
 
     def create(config):
-        client = _ProviderEmbedder(config.dense.input == "multimodal")
+        client = _ProviderEmbedder(config.input == "multimodal")
         clients.append(client)
         return client
 
@@ -159,13 +159,11 @@ async def account_embedding_provider(monkeypatch):
     base = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "model": "fake-multimodal",
-                    "dimension": 1,
-                    "provider": "openai",
-                    "api_key": "cluster-key",
-                    "input": "multimodal",
-                }
+                "model": "fake-multimodal",
+                "dimension": 1,
+                "provider": "openai",
+                "api_key": "cluster-key",
+                "input": "multimodal",
             }
         }
     )
@@ -215,12 +213,10 @@ async def test_image_query_capability_follows_account_embedding_config(
         "acc",
         {
             "embedding": {
-                "dense": {
-                    "model": "fake-text",
-                    "dimension": 1,
-                    "input": "text",
-                    "credentials": [{"provider": "openai", "api_key": "acc-key"}],
-                }
+                "model": "fake-text",
+                "dimension": 1,
+                "input": "text",
+                "credentials": [{"provider": "openai", "api_key": "acc-key"}],
             }
         },
         creating=True,

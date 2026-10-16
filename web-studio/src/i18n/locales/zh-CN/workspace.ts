@@ -841,12 +841,13 @@ const workspace = {
       environmentObject:
         '配置含环境变量引用或转义的引用符号，表单只读。Web Studio 不提供环境变量配置支持；依赖环境变量时，请直接在服务器上维护 ov.conf。',
       embeddingContract:
-        '模型身份、向量维度与输入类型为创建时配置，不能在此修改。',
+        '模型身份、向量维度、输入类型与向量输出为创建时配置，不能在此修改。',
       fields: {
         provider: '服务提供商',
         text_source: '嵌入文本来源',
         dimension: '向量维度',
         input: '输入类型',
+        output: '向量输出',
         query_param: '查询任务参数',
         document_param: '文档任务参数',
         version: '模型版本',

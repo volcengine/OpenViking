@@ -105,10 +105,6 @@ def _bind_account_state(
     embedder._token_tracker = tracker
     embedder._account_id = account_id
     children = list(getattr(embedder, "_embedders", []))
-    for name in ("dense_embedder", "sparse_embedder"):
-        child = getattr(embedder, name, None)
-        if child is not None:
-            children.append(child)
     if isinstance(embedder, RetryEmbedder):
         children.append(embedder.inner)
     for child in children:

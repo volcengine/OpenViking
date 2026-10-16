@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
+from typing import Any, ClassVar, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -40,12 +40,15 @@ class EmbeddingCredential(BaseModel):
 class EmbeddingModelConfig(BaseModel):
     """Configuration for a specific embedding model"""
 
+    model_config = ConfigDict(extra="forbid")
+
     model: Optional[str] = Field(default=None, description="Model name")
+    output: Literal["dense", "dense_sparse"] = Field(default="dense")
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
-    input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
+    input: Literal["text", "multimodal"] = Field(default="multimodal")
     query_param: Optional[str] = Field(
         default=None,
         description=(
@@ -163,6 +166,16 @@ class EmbeddingModelConfig(BaseModel):
                 if isinstance(value, str):
                     data[key] = value.lower()
         return data
+
+    # Verified against the Ark vectorization and VikingDB embedding API contracts.
+    # None denotes the provider's unversioned/default model selection.
+    _DENSE_SPARSE_MODELS: ClassVar[dict[str, dict[str, frozenset[Optional[str]]]]] = {
+        "volcengine": {
+            "doubao-embedding-vision-250615": frozenset({None}),
+            "doubao-embedding-vision-251215": frozenset({None}),
+        },
+        "vikingdb": {"bge-m3": frozenset({None, "default"})},
+    }
 
     _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
         "openai",
@@ -305,6 +318,16 @@ class EmbeddingModelConfig(BaseModel):
         if not provider:
             return
 
+        if self.output == "dense_sparse":
+            if self.input != "text":
+                raise ValueError(f"{label}: dense_sparse output requires input='text'")
+            versions = self._DENSE_SPARSE_MODELS.get(provider, {}).get(model, frozenset())
+            if self.version not in versions:
+                raise ValueError(
+                    f"{label}: dense_sparse output is not supported for "
+                    f"provider={provider!r}, model={model!r}, version={self.version!r}"
+                )
+
         if provider == "gemini":
             _GEMINI_TASK_TYPES = {
                 "RETRIEVAL_QUERY",
@@ -378,7 +401,13 @@ class EmbeddingModelConfig(BaseModel):
             self._validate_provider_specific_options(
                 label=label,
                 provider=resolved_provider,
-                model=resolved_model,
+                model=(
+                    self.model
+                    if resolved_provider == "volcengine"
+                    and resolved_model
+                    and resolved_model.startswith("ep-")
+                    else resolved_model
+                ),
             )
 
     def _validate_credential_dimensions(self) -> None:
@@ -439,6 +468,9 @@ class EmbeddingModelConfig(BaseModel):
                 "text-embedding-3-large": 3072,
             }
             return mapping.get((model or "").lower())
+
+        if provider == "vikingdb" and model == "bge-m3":
+            return 1024
 
         if provider == "voyage":
             from openviking.models.embedder.voyage_embedders import (
@@ -523,41 +555,9 @@ class EmbeddingModelConfig(BaseModel):
 
         provider = (self._effective_provider() or "").lower()
         effective_model = self._effective_model()
-        if provider in {"openai", "azure"}:
-            openai_model_dimensions = {
-                "text-embedding-ada-002": 1536,
-                "text-embedding-3-small": 1536,
-                "text-embedding-3-large": 3072,
-            }
-            model_lower = (effective_model or "").lower()
-            if model_lower in openai_model_dimensions:
-                return openai_model_dimensions[model_lower]
-
-        if provider == "voyage":
-            from openviking.models.embedder.voyage_embedders import (
-                get_voyage_model_default_dimension,
-            )
-
-            return get_voyage_model_default_dimension(effective_model)
-
-        if provider == "cohere":
-            from openviking.models.embedder.cohere_embedders import (
-                get_cohere_model_default_dimension,
-            )
-
-            return get_cohere_model_default_dimension(effective_model)
-
-        if provider == "jina":
-            from openviking.models.embedder.jina_embedders import (
-                get_jina_model_default_dimension,
-            )
-
-            return get_jina_model_default_dimension(effective_model)
-
-        if provider == "gemini":
-            from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-            return GeminiDenseEmbedder._default_dimension(effective_model)
+        resolved = self._resolve_dimension_for(provider, effective_model)
+        if resolved is not None:
+            return resolved
 
         if provider == "ollama":
             # Common Ollama embedding models and their dimensions
@@ -589,23 +589,23 @@ class EmbeddingModelConfig(BaseModel):
                 f"Known models: {list(ollama_model_dimensions.keys())}"
             )
 
-        if provider == "local":
-            from openviking.models.embedder.local_embedders import get_local_model_default_dimension
-
-            return get_local_model_default_dimension(effective_model)
-
-        if provider == "dashscope":
-            try:
-                from openviking.models.embedder.dashscope_embedders import (
-                    get_dashscope_model_default_dimension,
-                )
-
-                return get_dashscope_model_default_dimension(effective_model)
-            except ImportError:
-                # Fallback dimension if dashscope_embedders module doesn't exist yet
-                return 1024
-
         return 2048
+
+
+def normalize_embedding_config(data: Any) -> Any:
+    """Accept the published dense-only config shape at raw configuration boundaries."""
+    if not isinstance(data, dict) or "dense" not in data:
+        return data
+    dense = data["dense"]
+    if not isinstance(dense, dict):
+        raise ValueError("embedding.dense must be an object")
+    if EmbeddingModelConfig.model_fields.keys() & data.keys():
+        raise ValueError("embedding.dense cannot be combined with flat model fields")
+    if dense.keys() - EmbeddingModelConfig.model_fields.keys():
+        raise ValueError("embedding.dense must contain only model configuration fields")
+    if dense.get("output", "dense") != "dense":
+        raise ValueError("embedding.dense only supports dense output; use flat embedding config")
+    return {**{key: value for key, value in data.items() if key != "dense"}, **dense}
 
 
 class EmbeddingCircuitBreakerConfig(BaseModel):
@@ -632,21 +632,9 @@ class EmbeddingCircuitBreakerConfig(BaseModel):
         return self
 
 
-class EmbeddingConfig(BaseModel):
-    """
-    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
+class EmbeddingConfig(EmbeddingModelConfig):
+    """One embedding model, its output contract, and execution policy."""
 
-    Structure:
-    - dense: Configuration for dense embedder
-    - sparse: Configuration for sparse embedder
-    - hybrid: Configuration for hybrid embedder (single model returning both)
-
-    Environment variables are mapped to these configurations.
-    """
-
-    dense: Optional[EmbeddingModelConfig] = Field(default=None)
-    sparse: Optional[EmbeddingModelConfig] = Field(default=None)
-    hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
     circuit_breaker: EmbeddingCircuitBreakerConfig = Field(
         default_factory=EmbeddingCircuitBreakerConfig
     )
@@ -674,7 +662,7 @@ class EmbeddingConfig(BaseModel):
         description=(
             "When true, allow starting up against an existing collection whose "
             "embedding metadata (provider/model) differs from the current config, "
-            "as long as dimension is unchanged. The collection metadata will be "
+            "as long as dimension and output are unchanged. The collection metadata will be "
             "rewritten to the new config and a warning will be logged. "
             "Useful when migrating an existing index to a new model deployment "
             "(e.g. switching ARK endpoint id) while keeping previously indexed "
@@ -685,27 +673,19 @@ class EmbeddingConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def apply_default_local_dense(cls, data: Any) -> Any:
+    def apply_default_local_model(cls, data: Any) -> Any:
+        data = normalize_embedding_config(data)
         if data is None:
             data = {}
-        if not isinstance(data, dict):
-            return data
-
-        if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
-            data = dict(data)
-            data["dense"] = {
-                "provider": "local",
-                "model": "bge-small-zh-v1.5-f16",
-            }
+        if isinstance(data, dict) and not any(
+            key in data for key in ("model", "provider", "backend", "credentials")
+        ):
+            data = {**data, "provider": "local", "model": "bge-small-zh-v1.5-f16"}
         return data
 
     @model_validator(mode="after")
-    def validate_config(self):
-        """Validate configuration completeness and consistency"""
-        if not self.dense and not self.sparse and not self.hybrid:
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
+    def validate_runtime(self):
+        self.dimension = self.get_effective_dimension()
         if self.text_source == "summary_only":
             logger.warning(
                 "embedding.text_source=summary_only is deprecated; use summary_first instead. "
@@ -716,25 +696,9 @@ class EmbeddingConfig(BaseModel):
             raise ValueError("embedding.text_source must be one of: summary_first, content_only")
         return self
 
-    def _create_embedder(
-        self,
-        provider: str,
-        embedder_type: str,
-        config: EmbeddingModelConfig,
-    ):
-        """Factory method to create embedder instance based on provider and type.
-
-        Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
-            embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
-            config: EmbeddingModelConfig instance
-
-        Returns:
-            Embedder instance
-
-        Raises:
-            ValueError: If provider/type combination is not supported
-        """
+    def _create_embedder(self, config: EmbeddingModelConfig):
+        """Create a provider client for the configured output contract."""
+        provider = config.provider.lower()
         from openviking.models.embedder import (
             CohereDenseEmbedder,
             DashScopeDenseEmbedder,
@@ -745,19 +709,15 @@ class EmbeddingConfig(BaseModel):
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             RetryEmbedder,
-            VikingDBDenseEmbedder,
-            VikingDBHybridEmbedder,
-            VikingDBSparseEmbedder,
-            VolcengineDenseEmbedder,
-            VolcengineHybridEmbedder,
-            VolcengineSparseEmbedder,
+            VikingDBEmbedder,
+            VolcengineEmbedder,
             VoyageDenseEmbedder,
         )
 
         if provider == "litellm" and LiteLLMDenseEmbedder is None:
             raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
 
-        # Factory registry: (provider, type) -> (embedder_class, param_builder)
+        # Provider -> client and request configuration
         runtime_config = {
             "max_retries": self.max_retries,
             "max_concurrent": self.max_concurrent,
@@ -765,7 +725,7 @@ class EmbeddingConfig(BaseModel):
         }
 
         factory_registry = {
-            ("openai", "dense"): (
+            "openai": (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -793,7 +753,7 @@ class EmbeddingConfig(BaseModel):
                     **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
-            ("azure", "dense"): (
+            "azure": (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -815,42 +775,21 @@ class EmbeddingConfig(BaseModel):
                     **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
                 },
             ),
-            ("volcengine", "dense"): (
-                VolcengineDenseEmbedder,
+            "volcengine": (
+                VolcengineEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "output": cfg.output,
                     "config": dict(runtime_config),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
-            ("volcengine", "sparse"): (
-                VolcengineSparseEmbedder,
-                lambda cfg: {
-                    "model_name": cfg.model,
-                    "api_key": cfg.api_key,
-                    "api_base": cfg.api_base,
-                    "config": dict(runtime_config),
-                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
-                },
-            ),
-            ("volcengine", "hybrid"): (
-                VolcengineHybridEmbedder,
-                lambda cfg: {
-                    "model_name": cfg.model,
-                    "api_key": cfg.api_key,
-                    "api_base": cfg.api_base,
-                    "dimension": cfg.dimension,
-                    "input_type": cfg.input,
-                    "config": dict(runtime_config),
-                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
-                },
-            ),
-            ("vikingdb", "dense"): (
-                VikingDBDenseEmbedder,
+            "vikingdb": (
+                VikingDBEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "model_version": cfg.version,
@@ -859,41 +798,13 @@ class EmbeddingConfig(BaseModel):
                     "region": cfg.region,
                     "host": cfg.host,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input,
+                    "output": cfg.output,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
-            ("vikingdb", "sparse"): (
-                VikingDBSparseEmbedder,
-                lambda cfg: {
-                    "model_name": cfg.model,
-                    "model_version": cfg.version,
-                    "ak": cfg.ak,
-                    "sk": cfg.sk,
-                    "region": cfg.region,
-                    "host": cfg.host,
-                    "config": dict(runtime_config),
-                },
-            ),
-            ("vikingdb", "hybrid"): (
-                VikingDBHybridEmbedder,
-                lambda cfg: {
-                    "model_name": cfg.model,
-                    "model_version": cfg.version,
-                    "ak": cfg.ak,
-                    "sk": cfg.sk,
-                    "region": cfg.region,
-                    "host": cfg.host,
-                    "dimension": cfg.dimension,
-                    "input_type": cfg.input,
-                    "config": dict(runtime_config),
-                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
-                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
-                },
-            ),
-            ("jina", "dense"): (
+            "jina": (
                 JinaDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -905,7 +816,7 @@ class EmbeddingConfig(BaseModel):
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
-            ("gemini", "dense"): (
+            "gemini": (
                 GeminiDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -917,7 +828,7 @@ class EmbeddingConfig(BaseModel):
                 },
             ),
             # Ollama: local OpenAI-compatible embedding server, no real API key needed
-            ("ollama", "dense"): (
+            "ollama": (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -929,7 +840,7 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                 },
             ),
-            ("voyage", "dense"): (
+            "voyage": (
                 VoyageDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -939,7 +850,7 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                 },
             ),
-            ("minimax", "dense"): (
+            "minimax": (
                 MinimaxDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -952,7 +863,7 @@ class EmbeddingConfig(BaseModel):
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
-            ("dashscope", "dense"): (
+            "dashscope": (
                 DashScopeDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -974,7 +885,7 @@ class EmbeddingConfig(BaseModel):
                     ),
                 },
             ),
-            ("cohere", "dense"): (
+            "cohere": (
                 CohereDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -984,7 +895,7 @@ class EmbeddingConfig(BaseModel):
                     "config": dict(runtime_config),
                 },
             ),
-            ("litellm", "dense"): (
+            "litellm": (
                 LiteLLMDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -997,7 +908,7 @@ class EmbeddingConfig(BaseModel):
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
-            ("local", "dense"): (
+            "local": (
                 LocalDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
@@ -1009,15 +920,10 @@ class EmbeddingConfig(BaseModel):
             ),
         }
 
-        key = (provider, embedder_type)
-        if key not in factory_registry:
-            raise ValueError(
-                f"Unsupported combination: provider='{provider}', type='{embedder_type}'. "
-                f"Supported combinations: {list(factory_registry.keys())}"
-            )
-
-        embedder_class, param_builder = factory_registry[key]
-        if embedder_class is None and key == ("gemini", "dense"):
+        if provider not in factory_registry:
+            raise ValueError(f"Unsupported embedding provider: {provider!r}")
+        embedder_class, param_builder = factory_registry[provider]
+        if embedder_class is None and provider == "gemini":
             raise ValueError(
                 "google-genai is not installed. Install it with: pip install openviking[gemini]"
             )
@@ -1025,93 +931,29 @@ class EmbeddingConfig(BaseModel):
         embedder = embedder_class(**params)
         if provider == "local":
             return embedder
-        if isinstance(embedder, RetryEmbedder):
-            return embedder
         return RetryEmbedder(embedder)
 
     def get_embedder(self):
-        """Get embedder instance based on configuration.
-
-        Returns:
-            Embedder instance (Dense, Sparse, Hybrid, or Composite)
-
-        Raises:
-            ValueError: If configuration is invalid or unsupported
-        """
-        from openviking.models.embedder import CompositeHybridEmbedder
-        from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
-
-        if self.hybrid:
-            if self.hybrid.credentials:
-                return self._create_failover_embedder("hybrid", self.hybrid)
-            provider = self._require_provider(self.hybrid.provider)
-            return self._create_embedder(provider, "hybrid", self.hybrid)
-
-        if self.dense and self.sparse:
-            # Handle failover for both dense and sparse if credentials are configured
-            dense_embedder = self._create_single_or_failover_embedder("dense", self.dense)
-            sparse_embedder = self._create_single_or_failover_embedder("sparse", self.sparse)
-            return CompositeHybridEmbedder(
-                cast(DenseEmbedderBase, dense_embedder),
-                cast(SparseEmbedderBase, sparse_embedder),
-            )
-
-        if self.dense:
-            return self._create_single_or_failover_embedder("dense", self.dense)
-
-        if self.sparse:
-            return self._create_single_or_failover_embedder("sparse", self.sparse)
-
-        raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
-
-    def _create_single_or_failover_embedder(
-        self, embedder_type: str, config: "EmbeddingModelConfig"
-    ):
-        """Create either a single embedder or a FailoverEmbedder based on credentials config."""
-        if config.credentials:
-            return self._create_failover_embedder(embedder_type, config)
-        provider = self._require_provider(config.provider)
-        return self._create_embedder(provider, embedder_type, config)
-
-    def _create_failover_embedder(self, embedder_type: str, config: "EmbeddingModelConfig"):
-        """Create a FailoverEmbedder with multiple credentials."""
+        """Create one provider or an ordered failover group for the same contract."""
+        if not self.credentials:
+            return self._create_embedder(self)
         from openviking.models.embedder import FailoverEmbedder
 
+        config = self
         embedders = []
         credential_ids = []
 
         for cred in config.credentials:
-            # Preserve whether `input` was explicitly set; the default multimodal
-            # value must not opt OpenAI-compatible failover configs into image input.
-            merged_config = EmbeddingModelConfig(
-                model=cred.model or config.model,
-                dimension=config.dimension,
-                batch_size=config.batch_size,
-                query_param=config.query_param,
-                document_param=config.document_param,
-                provider=cred.provider or config.provider,
-                version=config.version,
-                ak=cred.ak or config.ak,
-                sk=cred.sk or config.sk,
-                region=cred.region or config.region,
-                host=cred.host or config.host,
-                api_key=cred.api_key or config.api_key,
-                api_base=cred.api_base or config.api_base,
-                api_version=cred.api_version or config.api_version,
-                extra_headers=cred.extra_headers or config.extra_headers,
-                # Model-behavior fields are shared by all credentials of the
-                # same model and live only on the parent config.
-                encoding_format=config.encoding_format,
-                extra_body=config.extra_body,
-                model_path=config.model_path,
-                cache_dir=config.cache_dir,
-                enable_fusion=config.enable_fusion,
-                res_level=config.res_level,
-                max_video_frames=config.max_video_frames,
-                **({"input": config.input} if "input" in config.model_fields_set else {}),
+            # The parent validator has checked every resolved target. Preserve
+            # the shared output/input contract and only replace connection fields.
+            merged_config = config.model_copy(
+                update={
+                    name: getattr(cred, name) or getattr(config, name)
+                    for name in EmbeddingCredential.model_fields
+                    if name != "id"
+                }
             )
-            provider = self._require_provider(merged_config.provider)
-            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            embedders.append(self._create_embedder(merged_config))
             credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
 
         if len(embedders) == 1:
@@ -1123,24 +965,3 @@ class EmbeddingConfig(BaseModel):
             failback_timeout_seconds=config.failback_timeout_seconds,
             failback_request_count=config.failback_request_count,
         )
-
-    @property
-    def dimension(self) -> int:
-        """Get dimension from active config."""
-        return self.get_dimension()
-
-    def get_dimension(self) -> int:
-        """Helper to get dimension from active config"""
-        if self.hybrid:
-            return self.hybrid.get_effective_dimension()
-        if self.dense:
-            return self.dense.get_effective_dimension()
-        if self.sparse:
-            return self.sparse.get_effective_dimension()
-        return 2048
-
-    @staticmethod
-    def _require_provider(provider: Optional[str]) -> str:
-        if not provider:
-            raise ValueError("Embedding provider is required")
-        return provider.lower()

@@ -415,7 +415,7 @@ The project provides a Helm chart located at `deploy/helm/openviking/`:
 ```bash
 helm install openviking ./deploy/helm/openviking \
   --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
-  --set-string config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set-string config.embedding.api_key="YOUR_API_KEY" \
   --set-string config.vlm.api_key="YOUR_API_KEY"
 ```
 

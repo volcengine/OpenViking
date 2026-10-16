@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import openai
 
 from openviking.models.embedder.base import (
-    DenseEmbedderBase,
+    EmbedderBase,
     EmbedResult,
 )
 from openviking.models.model_error import model_error_boundary
@@ -43,7 +43,7 @@ def _get_default_task_params(model_name: str) -> tuple[str, str]:
     return DEFAULT_JINA_QUERY_TASK, DEFAULT_JINA_DOCUMENT_TASK
 
 
-class JinaDenseEmbedder(DenseEmbedderBase):
+class JinaDenseEmbedder(EmbedderBase):
     """Jina AI Dense Embedder Implementation
 
     Uses Jina AI embedding API via OpenAI-compatible client.

@@ -878,12 +878,13 @@ const workspace = {
       environmentObject:
         'This configuration contains environment references or escaped reference symbols. The form is read-only. Web Studio does not support environment variable configuration. If your configuration uses environment variables, maintain ov.conf directly on the server.',
       embeddingContract:
-        'Model identity, dimensions and input type are fixed at account creation.',
+        'Model identity, dimensions, input type and vector output are fixed at account creation.',
       fields: {
         provider: 'Provider',
         text_source: 'Embedding text source',
         dimension: 'Dimensions',
         input: 'Input type',
+        output: 'Vector output',
         query_param: 'Query task',
         document_param: 'Document task',
         version: 'Model version',

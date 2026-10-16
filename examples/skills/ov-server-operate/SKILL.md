@@ -60,14 +60,12 @@ Note 2: Replace the root_api_key with your own root-api-key. Ask the user to set
     }
   },
   "embedding": {
-    "dense": {
-        "model": "doubao-embedding-vision-251215",
-        "api_key": "your-volcengine-api-key",
-        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-        "dimension": 1024,
-        "input": "multimodal",
-        "provider": "volcengine"
-    }
+    "model": "doubao-embedding-vision-251215",
+    "api_key": "your-volcengine-api-key",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "dimension": 1024,
+    "input": "multimodal",
+    "provider": "volcengine"
   },
   "vlm": {
     "model": "doubao-seed-1-8-251228",
@@ -424,9 +422,9 @@ nohup openviking-server --port 1934 > ~/.openviking/log/openviking-server.log 2>
 python3 -c '
 import json, os
 cfg = json.load(open(os.path.expanduser("~/.openviking/ov.conf")))
-print("Embedding provider:", cfg.get("embedding", {}).get("dense", {}).get("provider"))
+print("Embedding provider:", cfg.get("embedding", {}).get("provider"))
 print("VLM provider:", cfg.get("vlm", {}).get("provider"))
-print("API keys set:", bool(cfg.get("embedding", {}).get("dense", {}).get("api_key")), bool(cfg.get("vlm", {}).get("api_key")))
+print("API keys set:", bool(cfg.get("embedding", {}).get("api_key")), bool(cfg.get("vlm", {}).get("api_key")))
 '
 ```
 

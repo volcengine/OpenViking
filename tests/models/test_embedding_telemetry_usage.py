@@ -6,7 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
-from openviking.models.embedder.volcengine_embedders import VolcengineDenseEmbedder
+from openviking.models.embedder.volcengine_embedders import VolcengineEmbedder
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
 from openviking.telemetry.context import bind_telemetry
 
@@ -55,7 +55,7 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage(monkeypatch
 
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     with bind_telemetry(telemetry):
-        embedder = VolcengineDenseEmbedder(
+        embedder = VolcengineEmbedder(
             model_name="doubao-embedding-vision-251215",
             api_key="test",
             input_type="multimodal",
@@ -91,7 +91,7 @@ def test_volcengine_dense_embedder_reports_embedding_telemetry_usage_from_dict_u
 
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
     with bind_telemetry(telemetry):
-        embedder = VolcengineDenseEmbedder(
+        embedder = VolcengineEmbedder(
             model_name="doubao-embedding-vision-251215",
             api_key="test",
             input_type="multimodal",

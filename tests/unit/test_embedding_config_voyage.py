@@ -14,38 +14,21 @@ def test_voyage_provider_requires_api_key():
 
 
 def test_voyage_dense_dimension_defaults_to_model_dimension():
-    config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="voyage",
-            model="voyage-4-lite",
-            api_key="voyage-key",
-        )
-    )
+    config = EmbeddingConfig(provider="voyage", model="voyage-4-lite", api_key="voyage-key")
 
     assert config.dimension == 1024
 
 
 def test_voyage_dense_dimension_honors_explicit_output_dimension():
     config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="voyage",
-            model="voyage-4-lite",
-            api_key="voyage-key",
-            dimension=512,
-        )
+        provider="voyage", model="voyage-4-lite", api_key="voyage-key", dimension=512
     )
 
     assert config.dimension == 512
 
 
 def test_voyage_get_embedder_returns_voyage_dense_embedder():
-    config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="voyage",
-            model="voyage-4-lite",
-            api_key="voyage-key",
-        )
-    )
+    config = EmbeddingConfig(provider="voyage", model="voyage-4-lite", api_key="voyage-key")
 
     embedder = config.get_embedder()
     assert isinstance(embedder, RetryEmbedder)

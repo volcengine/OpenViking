@@ -304,11 +304,9 @@ def test_openviking_config_handles_nested_parser_compatibility(monkeypatch):
     config = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "api_key": "test-key",
-                    "model": "text-embedding-3-small",
-                }
+                "provider": "openai",
+                "api_key": "test-key",
+                "model": "text-embedding-3-small",
             },
             "parsers": {"excel": {"enable_process_pool": True}},
         }

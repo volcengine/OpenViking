@@ -52,7 +52,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account for the service context |
 | `default_user` | string | `"default"` | Default user for the service context |
-| `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
+| `embedding` | object | built-in local dense model | One embedding model with dense or dense_sparse output; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
 | `rerank` | object | disabled | Retrieval result reranking |
@@ -88,14 +88,12 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "<your-ark-api-key>",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",
@@ -132,17 +130,18 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 | `api_version` | Embedding, VLM, Query Planner | API version for providers such as Azure |
 | `extra_headers` | Embedding, VLM, Query Planner, Rerank | Additional request headers |
 | `extra_request_body` | VLM, Query Planner | Additional completion request fields |
-| `extra_body` | `embedding.dense` / `sparse` / `hybrid` | Additional embedding request fields |
+| `extra_body` | `embedding` | Additional embedding request fields |
 | `timeout` | VLM, Query Planner, Rerank | Per-request timeout in seconds |
 | `embedding.max_retries`, `vlm.max_retries`, `query_planner.max_retries` | Embedding, VLM, Query Planner | Retry count; Rerank has no `max_retries` field |
 
-### `embedding.dense`
+### `embedding`
 
 | Field | Type / values | Purpose |
 |---|---|---|
 | `provider` | `openai`, `volcengine`, `azure`, `ollama`, `local`, etc. | Dense embedding service |
 | `dimension` | integer, `> 0` | Vector dimension; must match model output and existing collections |
 | `input` | `"text"` / `"multimodal"` | Input type |
+| `output` | `"dense"` / `"dense_sparse"` | Single-model output; defaults to `dense`. `dense_sparse` requires a supported model and `input: "text"`. |
 | `encoding_format` | `"float"` / `"base64"` | OpenAI-compatible vector encoding |
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
@@ -456,14 +455,12 @@ Provider-, parser-, storage-, and encryption-specific fields are documented in [
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "<your-ark-api-key>",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",

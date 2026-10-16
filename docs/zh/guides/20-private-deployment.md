@@ -183,14 +183,12 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check smoketest --target vdb --p0
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "<embedding-api-key>",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<embedding-api-key>",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",

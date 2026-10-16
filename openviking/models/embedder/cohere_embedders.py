@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, truncate_and_normalize
+from openviking.models.embedder.base import EmbedderBase, EmbedResult, truncate_and_normalize
 from openviking.models.model_error import model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
@@ -38,7 +38,7 @@ def get_cohere_model_default_dimension(model_name: Optional[str]) -> int:
     return COHERE_MODEL_DIMENSIONS.get(model_name.lower(), 1024)
 
 
-class CohereDenseEmbedder(DenseEmbedderBase):
+class CohereDenseEmbedder(EmbedderBase):
     """Cohere dense embedder.
 
     Cohere uses its own REST API (not OpenAI-compatible), so we call it

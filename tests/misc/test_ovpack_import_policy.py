@@ -320,9 +320,9 @@ class FakeVectorStore:
     async def resolve(self, account_id):
         from openviking_cli.utils.config.embedding_config import EmbeddingConfig
         return SimpleNamespace(
-            embedding=EmbeddingConfig(dense={
-                "provider": "openai", "model": "test", "dimension": 3, "api_key": "test"
-            }),
+            embedding=EmbeddingConfig(
+                **{"provider": "openai", "model": "test", "dimension": 3, "api_key": "test"}
+            ),
             vectordb=SimpleNamespace(sparse_weight=0),
         )
 

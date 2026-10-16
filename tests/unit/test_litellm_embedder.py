@@ -216,7 +216,7 @@ class TestLiteLLMEmbeddingFactory:
             api_base="https://openrouter.ai/api/v1",
             dimension=1536,
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         assert isinstance(embedder, RetryEmbedder)
         assert isinstance(embedder.inner, LiteLLMDenseEmbedder)
@@ -237,7 +237,7 @@ class TestLiteLLMEmbeddingFactory:
             query_param="query",
             document_param="passage",
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         assert embedder.query_param == "query"
         assert embedder.document_param == "passage"
@@ -288,4 +288,4 @@ class TestLiteLLMEmbeddingFactory:
         )
         with patch("openviking.models.embedder.LiteLLMDenseEmbedder", None):
             with pytest.raises(ValueError, match="not installed"):
-                EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
+                EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)

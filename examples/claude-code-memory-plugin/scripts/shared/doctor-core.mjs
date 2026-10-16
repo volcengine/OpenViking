@@ -940,7 +940,7 @@ const PLUGIN_ONLY_OV_CONF_KEYS = Object.fromEntries(
 );
 const READY_OK_VALUES = new Set(["ok", "not_configured", "not_supported"]);
 const READY_FIXES = {
-  embedding: "the server cannot embed with the configured provider — check embedding.dense.{provider,model,api_key,api_base} in ov.conf; `openviking-server doctor` shows the provider's reply",
+  embedding: "the server cannot embed with the configured provider — check embedding.{provider,model,api_key,api_base} in ov.conf; `openviking-server doctor` shows the provider's reply",
   vectordb: "the vector index is unhealthy — check <storage.workspace>/vectordb and the server log; stop duplicate servers on the same workspace",
   agfs: "the content filesystem failed — check <storage.workspace>/viking, free disk space and the server log",
   api_key_manager: "the api key store failed to load — check <storage.workspace>/viking/_system and the server log",

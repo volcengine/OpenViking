@@ -33,14 +33,12 @@
     }
   },
   "embedding": {
-    "dense": {
-      "model": "doubao-embedding-vision-251215",
-      "api_key": "<your-ark-api-key>",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "provider": "volcengine",
-      "input": "multimodal"
-    }
+    "model": "doubao-embedding-vision-251215",
+    "api_key": "<your-ark-api-key>",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "dimension": 1024,
+    "provider": "volcengine",
+    "input": "multimodal"
   },
   "vlm": {
     "model": "doubao-seed-2-0-lite-260428",

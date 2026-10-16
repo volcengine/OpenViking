@@ -138,7 +138,7 @@ class TestConfigBuilding:
 
         assert config["storage"]["workspace"] == "/tmp/ov_test"
 
-        dense = config["embedding"]["dense"]
+        dense = config["embedding"]
         assert dense["provider"] == "ollama"
         assert dense["model"] == "qwen3-embedding:0.6b"
         assert dense["dimension"] == 1024
@@ -172,7 +172,7 @@ class TestConfigBuilding:
                 config = _build_ollama_config(emb, vlm, "/tmp/test")
                 assert "embedding" in config
                 assert "vlm" in config
-                assert config["embedding"]["dense"]["dimension"] > 0
+                assert config["embedding"]["dimension"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ class TestConfigWriting:
         assert config_path.stat().st_mode & 0o777 == 0o600
 
         loaded = json.loads(config_path.read_text(encoding="utf-8"))
-        assert loaded["embedding"]["dense"]["provider"] == "ollama"
+        assert loaded["embedding"]["provider"] == "ollama"
 
     def test_backup_existing(self, tmp_path):
         config_path = tmp_path / "ov.conf"
@@ -387,12 +387,10 @@ class TestConfigWriting:
         config_path = tmp_path / "ov.conf"
         config = {
             "embedding": {
-                "dense": {
-                    "provider": "local",
-                    "model": "secret-model",
-                    "dimension": 1024,
-                    "model_path": "/very/secret/model.gguf",
-                }
+                "provider": "local",
+                "model": "secret-model",
+                "dimension": 1024,
+                "model_path": "/very/secret/model.gguf",
             },
             "vlm": {
                 "provider": "openai",
@@ -437,7 +435,7 @@ class TestConfigWriting:
     def test_run_init_writes_to_env_config_path(self, tmp_path):
         config_path = tmp_path / "runtime" / "ov.conf"
         config = {
-            "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}},
+            "embedding": {"provider": "ollama", "model": "qwen", "dimension": 1024},
             "storage": {"workspace": str(config_path.parent / "data")},
         }
         with (
@@ -1146,9 +1144,7 @@ class TestGatewayWizard:
 
     def test_new_config_writes_gateway_and_summary_hides_management_key(self, tmp_path):
         config_path = tmp_path / "ov.conf"
-        config = {
-            "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}}
-        }
+        config = {"embedding": {"provider": "ollama", "model": "qwen", "dimension": 1024}}
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
             patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
@@ -1337,7 +1333,7 @@ class TestRecommendedOllamaSetup:
         assert ollama_running is True
         assert config is not None
         # 16 GB RAM tier: qwen3-embedding:0.6b + qwen3.5:4b
-        assert config["embedding"]["dense"]["model"] == "qwen3-embedding:0.6b"
+        assert config["embedding"]["model"] == "qwen3-embedding:0.6b"
         assert config["vlm"]["model"] == "ollama/qwen3.5:4b"
         assert config["query_planner"]["model"] == QUERY_PLANNER_PRESETS[0].litellm_model
 
@@ -1354,7 +1350,7 @@ class TestRecommendedOllamaSetup:
             config, _ = _wizard_ollama()
 
         assert config is not None
-        assert config["embedding"]["dense"]["model"] == EMBEDDING_PRESETS[0].model
+        assert config["embedding"]["model"] == EMBEDDING_PRESETS[0].model
         assert config["vlm"]["model"] == VLM_PRESETS[0].litellm_model
         assert "query_planner" not in config
 
@@ -1441,7 +1437,7 @@ class TestEnvApiKey:
 def _existing_config() -> dict:
     return {
         "storage": {"workspace": "/tmp/ov"},
-        "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}},
+        "embedding": {"provider": "ollama", "model": "qwen", "dimension": 1024},
         "vlm": {"provider": "openai", "model": "old-vlm", "api_base": "https://old"},
         "server": {"host": "127.0.0.1"},
     }
@@ -1518,9 +1514,20 @@ class TestPartialUpdate:
             "workers": 4,
         }
 
-    def test_embedding_dimension_change_requires_confirmation(self, tmp_path):
+    @pytest.mark.parametrize("confirmed", [False, True])
+    @pytest.mark.parametrize("output", ["dense", "dense_sparse"])
+    def test_embedding_contract_change_requires_confirmation(self, tmp_path, confirmed, output):
         config_path = tmp_path / "ov.conf"
         original = _existing_config()
+        original["embedding"].update(
+            output=output,
+            dimension=512 if output == "dense_sparse" else 1024,
+            credentials=[{"provider": "volcengine", "model": "ep-old", "api_key": "old"}],
+            max_retries=7,
+        )
+        if output == "dense":
+            policy = original["embedding"].pop("max_retries")
+            original["embedding"] = {"dense": original["embedding"], "max_retries": policy}
         config_path.write_text(json.dumps(original), encoding="utf-8")
         new_dense = {"provider": "local", "model": "bge-small-zh-v1.5-f16", "dimension": 512}
 
@@ -1529,13 +1536,18 @@ class TestPartialUpdate:
                 "openviking_cli.setup_wizard._prompt_embedding_flow",
                 return_value=(new_dense, None),
             ),
-            # Decline the dimension-change warning → nothing written.
-            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=False),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=confirmed),
+            patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
             patch("builtins.print"),
         ):
             assert _update_existing_config(config_path, "embedding") == 0
 
-        assert json.loads(config_path.read_text(encoding="utf-8")) == original
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        if confirmed:
+            assert saved["embedding"] == {**new_dense, "max_retries": 7}
+            assert saved["vlm"] == original["vlm"]
+        else:
+            assert saved == original
 
     def test_unreadable_config_returns_error(self, tmp_path):
         config_path = tmp_path / "ov.conf"
@@ -1594,7 +1606,7 @@ class TestTwoStepWizard:
             config, ollama_running = _wizard_two_step()
 
         assert config is not None
-        assert config["embedding"]["dense"] == dense
+        assert config["embedding"] == dense
         assert config["vlm"] == {
             "provider": "openai-codex",
             "model": "gpt-5.6-terra",
@@ -1622,7 +1634,7 @@ class TestTwoStepWizard:
             config, _ = _wizard_two_step()
 
         assert config is not None
-        assert config["embedding"]["dense"] == dense
+        assert config["embedding"] == dense
         assert "vlm" not in config
 
     def test_embedding_key_offered_for_vlm_reuse(self):
@@ -1759,12 +1771,12 @@ class TestBackNavigation:
             config, _ = _wizard_two_step()
 
         assert config is not None
-        assert config["embedding"]["dense"] == dense2
+        assert config["embedding"] == dense2
 
     def test_run_init_back_from_two_step_reshows_mode_menu(self, tmp_path):
         config_path = tmp_path / "ov.conf"
         ollama_config = {
-            "embedding": {"dense": {"provider": "ollama", "model": "q", "dimension": 1024}},
+            "embedding": {"provider": "ollama", "model": "q", "dimension": 1024},
             "storage": {"workspace": str(tmp_path / "data")},
         }
         with (

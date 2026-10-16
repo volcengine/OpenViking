@@ -416,7 +416,9 @@ cuVS 调优和自定义适配器参数。
 `vikingdb` 远端后端。
 
 ```json
-{"settings":{"embedding":{"dense":{"credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]}}}}
+{"settings":{"embedding":{
+  "credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]
+}}}
 ```
 
 查询、队列写入、Reindex 和 OVPack 都使用目标 Account 配置，ROOT 也遵守此规则。
@@ -585,15 +587,13 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5,
-        "dense": {
-          "credentials": [{
-            "id": "primary",
-            "provider": "openai",
-            "model": "embed-deployment-v2",
-            "api_key": "<new-api-key>",
-            "api_base": "https://embedding.example/v1"
-          }]
-        }
+        "credentials": [{
+          "id": "primary",
+          "provider": "openai",
+          "model": "embed-deployment-v2",
+          "api_key": "<new-api-key>",
+          "api_base": "https://embedding.example/v1"
+        }]
       }
     }
   }'
@@ -607,17 +607,15 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5,
-        "dense": {
-          "model": "text-embedding-3-large",
-          "dimension": 3072,
-          "credentials": [{
-            "id": "primary",
-            "provider": "openai",
-            "model": "embed-deployment-v2",
-            "api_key": "<new-api-key>",
-            "api_base": "https://embedding.example/v1"
-          }]
-        }
+        "model": "text-embedding-3-large",
+        "dimension": 3072,
+        "credentials": [{
+          "id": "primary",
+          "provider": "openai",
+          "model": "embed-deployment-v2",
+          "api_key": "<new-api-key>",
+          "api_base": "https://embedding.example/v1"
+        }]
       }
     }
   }
@@ -664,12 +662,12 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 **Account Embedding 字段**
 
 未设置的字段不写入 Account；向量解析器在运行时按需使用 Cluster 的相应值。若 Account
-创建时声明 `dense`、`sparse` 或 `hybrid`，该 mode 必须是完整的 Account binding。
-`hybrid` 不能与 `dense` 或 `sparse` 同时出现。
+创建时声明模型，必须同时提供 `model`、`dimension` 和完整的 `credentials`。
+`output` 选择 `dense` 或 `dense_sparse`，后者必须使用受支持的模型并设置 `input: "text"`。
 
 | 路径 | 生命周期 | 类型和约束 | 含义 |
 | --- | --- | --- | --- |
-| `embedding.dense` / `sparse` / `hybrid` | mode 存在性创建期 | object/null | 三种模型输出模式；创建后不能新增、删除或切换 |
+| `embedding.output` | 创建期 | `dense` / `dense_sparse` | 单模型输出选择；创建后不能切换 |
 | `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的 provider 调用并发上限 |
 | `embedding.max_retries` | 动态 | integer，`>= 0` | 瞬时 provider 错误重试次数 |
 | `embedding.circuit_breaker.failure_threshold` | 动态 | integer，`>= 1` | 熔断前的连续失败次数 |
@@ -677,16 +675,16 @@ credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 Open
 | `embedding.circuit_breaker.max_reset_timeout` | 动态 | number，`> 0` | 熔断恢复等待上限秒数 |
 | `embedding.text_source` | 创建期 | `content_only` / `summary_first` | 写入向量使用的文本来源 |
 | `embedding.max_input_tokens` | 创建期 | integer，`>= 100` | 单次向量化的输入 token 上限 |
-| `embedding.*.model` | 创建期 | 非空 string，mode 首次声明时必填 | 模型身份 |
-| `embedding.*.dimension` | 创建期 | integer，`> 0`，mode 首次声明时必填 | 向量维度；必须与有效 VectorDB 一致 |
-| `embedding.*.input` | 创建期 | `text` / `multimodal`，可选 | 输入模式 |
-| `embedding.*.query_param` / `document_param` | 创建期 | string，可选 | 非对称检索的 query/document 参数 |
-| `embedding.*.version` | 创建期 | string，可选 | 模型版本 |
-| `embedding.*.credentials` | 动态 | 非空 array，整体替换 | Account provider/failover binding |
-| `embedding.*.failback_timeout_seconds` | 动态 | number，`> 0` | 回切主 credential 前的等待秒数 |
-| `embedding.*.failback_request_count` | 动态 | integer，`>= 1` | 使用备用 credential 后尝试回切的请求数 |
+| `embedding.model` | 创建期 | 非空 string，模型首次声明时必填 | 模型身份 |
+| `embedding.dimension` | 创建期 | integer，`> 0`，模型首次声明时必填 | 向量维度；必须与有效 VectorDB 一致 |
+| `embedding.input` | 创建期 | `text` / `multimodal`，可选 | 输入模式 |
+| `embedding.query_param` / `document_param` | 创建期 | string，可选 | 非对称检索的 query/document 参数 |
+| `embedding.version` | 创建期 | string，可选 | 模型版本 |
+| `embedding.credentials` | 动态 | 非空 array，整体替换 | Account provider/failover binding |
+| `embedding.failback_timeout_seconds` | 动态 | number，`> 0` | 回切主 credential 前的等待秒数 |
+| `embedding.failback_request_count` | 动态 | integer，`>= 1` | 使用备用 credential 后尝试回切的请求数 |
 
-`embedding.*.credentials` 是有序数组，数组首项优先；失败时按数组顺序尝试后续
+`embedding.credentials` 是有序数组，数组首项优先；失败时按数组顺序尝试后续
 credential。每个元素的 schema 如下：
 
 | 字段 | 类型和约束 | 含义 |
@@ -866,14 +864,12 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
     "admin_user_id": "alice",
     "settings": {
       "embedding": {
-        "dense": {
-          "model": "text-embedding-3-large",
-          "dimension": 3072,
-          "credentials": [{
-            "provider": "openai",
-            "api_key": "<embedding-api-key>"
-          }]
-        }
+        "model": "text-embedding-3-large",
+        "dimension": 3072,
+        "credentials": [{
+          "provider": "openai",
+          "api_key": "<embedding-api-key>"
+        }]
       },
       "vectordb": {
         "backend": "vikingdb",

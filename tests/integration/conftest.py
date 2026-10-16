@@ -101,14 +101,12 @@ def gemini_config_dict(
             "vectordb": {"name": "test", "backend": "local", "project": "default"},
         },
         "embedding": {
-            "dense": {
-                "provider": "gemini",
-                "api_key": GOOGLE_API_KEY,
-                "model": model,
-                "dimension": dim,
-                **({"query_param": query_param} if query_param else {}),
-                **({"document_param": doc_param} if doc_param else {}),
-            }
+            "provider": "gemini",
+            "api_key": GOOGLE_API_KEY,
+            "model": model,
+            "dimension": dim,
+            **({"query_param": query_param} if query_param else {}),
+            **({"document_param": doc_param} if doc_param else {}),
         },
     }
 

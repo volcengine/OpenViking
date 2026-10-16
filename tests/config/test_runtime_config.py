@@ -182,29 +182,25 @@ def test_cluster_rebuild_preserves_explicit_and_default_field_semantics():
     base = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "text-embedding-3-small",
-                    "api_key": "test-key",
-                }
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
             }
         }
     )
-    assert "input" not in base.embedding.dense.model_fields_set
+    assert "input" not in base.embedding.model_fields_set
 
     rebuilt = _build_cluster(base, {"agent_evolution": {"enabled": True}})
-    assert rebuilt.embedding.dense.input == "multimodal"
-    assert "input" not in rebuilt.embedding.dense.model_fields_set
+    assert rebuilt.embedding.input == "multimodal"
+    assert "input" not in rebuilt.embedding.model_fields_set
 
     explicit = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "text-embedding-3-small",
-                    "api_key": "test-key",
-                    "input": "multimodal",
-                }
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "test-key",
+                "input": "multimodal",
             }
         }
     )
@@ -212,7 +208,7 @@ def test_cluster_rebuild_preserves_explicit_and_default_field_semantics():
         explicit,
         {"agent_evolution": {"enabled": True}},
     )
-    assert "input" in rebuilt_explicit.embedding.dense.model_fields_set
+    assert "input" in rebuilt_explicit.embedding.model_fields_set
 
 
 def test_account_patch_keeps_sparse_explicit_field_semantics():
@@ -368,7 +364,9 @@ def test_multi_field_patch_publishes_atomically():
             sections={"vlm", "memory"},
             consumer=consumer,
         )
-        await manager.patch_cluster({"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}})
+        await manager.patch_cluster(
+            {"vlm": {"model": "m2"}, "memory": {"extraction_enabled": False}}
+        )
         assert seen == [(False, "m2")]
 
     asyncio.run(run())
@@ -454,9 +452,7 @@ def test_account_storage_wait_does_not_block_unrelated_account_load():
     async def run():
         source = BlockingSource()
         manager, _ = _make_manager(source)
-        patch = asyncio.create_task(
-            manager.patch_account("ov-a", {"vlm": {"model": "slow"}})
-        )
+        patch = asyncio.create_task(manager.patch_account("ov-a", {"vlm": {"model": "slow"}}))
         await source.started.wait()
 
         other = asyncio.create_task(manager.get_account("ov-b", "vlm"))
@@ -503,7 +499,6 @@ def test_refresh_does_not_resurrect_unloaded_account():
         assert "ov-x" not in manager._accounts
 
     asyncio.run(run())
-
 
 
 def test_patch_waits_for_matching_consumers_and_filters_registration():
@@ -696,13 +691,11 @@ async def test_account_runtime_binding_and_updates_are_isolated():
     cluster = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "cluster",
-                    "dimension": 4,
-                    "api_key": "cluster-secret",
-                    "api_base": "https://cluster.invalid/v1",
-                }
+                "provider": "openai",
+                "model": "cluster",
+                "dimension": 4,
+                "api_key": "cluster-secret",
+                "api_base": "https://cluster.invalid/v1",
             },
             "vlm": {"provider": "openai", "model": "cluster-vlm", "api_key": "cluster-secret"},
         }
@@ -717,7 +710,7 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         "api_base": "https://account.invalid/v1",
     }
     settings = {
-        "embedding": {"dense": {"model": "account", "dimension": 8, "credentials": [credential]}},
+        "embedding": {"model": "account", "dimension": 8, "credentials": [credential]},
         "vectordb": {
             "backend": "http",
             "url": "http://account-vectors.invalid",
@@ -739,9 +732,9 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         await manager.patch_account("a", settings, creating=True)
         account, default = await resolver.resolve("a"), await resolver.resolve("b")
         assert account.dedicated_vectordb and account.vectordb.dimension == 8
-        assert account.embedding.dense.credentials[0].api_key == "account-secret"
-        assert account.embedding.dense.api_key is None
-        assert default.embedding.dense.api_key == "cluster-secret"
+        assert account.embedding.credentials[0].api_key == "account-secret"
+        assert account.embedding.api_key is None
+        assert default.embedding.api_key == "cluster-secret"
         assert default.vectordb.dimension == 4 and not default.dedicated_vectordb
         vlm = (await manager.get_account("a", "vlm")).to_vlm_config(cluster.vlm)
         assert vlm.model == "account-vlm" and vlm.credentials[0].api_key == "account-secret"
@@ -749,19 +742,17 @@ async def test_account_runtime_binding_and_updates_are_isolated():
 
         before = await source.load(ConfigScope.account("a"))
         with pytest.raises(ConfigPatchError, match="create-only"):
-            await manager.patch_account(
-                "a", {"embedding": {"max_retries": 9, "dense": {"dimension": 4}}}
-            )
+            await manager.patch_account("a", {"embedding": {"dimension": 4, "max_retries": 9}})
         with pytest.raises(ConfigPatchError, match="api_ky"):
             await manager.patch_account(
                 "a", {"vlm": {"credentials": [{"provider": "openai", "api_ky": "typo"}]}}
             )
         assert await source.load(ConfigScope.account("a")) == before
         await manager.patch_account(
-            "a", {"embedding": {"dense": {"credentials": [{**credential, "api_key": "rotated"}]}}}
+            "a", {"embedding": {"credentials": [{**credential, "api_key": "rotated"}]}}
         )
-        assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
-        assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
+        assert (await resolver.resolve("a")).embedding.credentials[0].api_key == "rotated"
+        assert (await resolver.resolve("b")).embedding.api_key == "cluster-secret"
     finally:
         OpenVikingConfigSingleton.reset_instance()
 
@@ -815,9 +806,9 @@ def test_account_patch_rejects_inactive_fields_and_allows_active_fields():
     validate_patch(AccountConfig, {"query_planner": {"timeout": 30}})
     with pytest.raises(ConfigPatchError, match="max_concurrent"):
         validate_patch(AccountConfig, {"vlm": {"max_concurrent": 2}})
-    validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}}, creating=True)
+    validate_patch(AccountConfig, {"embedding": {"model": "m"}}, creating=True)
     with pytest.raises(ConfigPatchError, match="create-only"):
-        validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}})
+        validate_patch(AccountConfig, {"embedding": {"model": "m"}})
 
 
 def test_feishu_cluster_patch_rejects_unknown_fields():
@@ -946,9 +937,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             OpenVikingConfigSingleton,
         )
 
-        base = OpenVikingConfig.from_dict(
-            {"agent_evolution": {"enabled": False}}
-        )
+        base = OpenVikingConfig.from_dict({"agent_evolution": {"enabled": False}})
         set_openviking_config(base)
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
@@ -958,9 +947,7 @@ def test_real_agent_evolution_precedence_and_fallback():
             await manager.patch_cluster({"agent_evolution": {"enabled": True}})
             assert (await manager.get_account("ov-a", "agent_evolution")).enabled
 
-            await manager.patch_account(
-                "ov-a", {"agent_evolution": {"enabled": False}}
-            )
+            await manager.patch_account("ov-a", {"agent_evolution": {"enabled": False}})
             assert not (await manager.get_account("ov-a", "agent_evolution")).enabled
 
             await manager.patch_account("ov-a", {"agent_evolution": None})
@@ -988,9 +975,7 @@ def test_real_feishu_account_override_and_cluster_fallback():
         manager = manager_over_source(MemoryConfigSource(), base_config=base)
         await manager.initialize()
         try:
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
 
             await manager.patch_account(
                 "ov-a", {"feishu": {"app_id": "account-a", "app_secret": "a-secret"}}
@@ -998,14 +983,10 @@ def test_real_feishu_account_override_and_cluster_fallback():
             effective_a = await get_effective_feishu_config(manager, "ov-a")
             assert effective_a.app_id == "account-a"
             assert effective_a.domain == base.feishu.domain
-            assert (
-                await get_effective_feishu_config(manager, "ov-b")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-b")).app_id == "cluster-v1"
 
             await manager.patch_account("ov-a", {"feishu": None})
-            assert (
-                await get_effective_feishu_config(manager, "ov-a")
-            ).app_id == "cluster-v1"
+            assert (await get_effective_feishu_config(manager, "ov-a")).app_id == "cluster-v1"
         finally:
             OpenVikingConfigSingleton.reset_instance()
 
@@ -1279,9 +1260,7 @@ def test_plugin_source_receives_params_without_kernel_dependencies():
         captured["ctx"] = ctx
         return MemoryConfigSource(ctx)
 
-    src = build_config_source(
-        {"source": "params-only-test", "params": {"namespace": "ns-1"}}
-    )
+    src = build_config_source({"source": "params-only-test", "params": {"namespace": "ns-1"}})
     assert isinstance(src, MemoryConfigSource)
     assert captured["ctx"].params == {"namespace": "ns-1"}
     assert not hasattr(captured["ctx"], "extras")

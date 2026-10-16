@@ -106,7 +106,7 @@ def _query_cache_key(embedder: "EmbedderBase", embedding_input: "EmbeddingInput"
     """Stable cache key for a prepared embedding input and its embedder.
 
     Keyed by embedder identity rather than ``model_name`` so two embedder
-    instances that happen to share a name (e.g. a future dense/sparse pair)
+    instances that happen to share a name (e.g. different account deployments)
     never serve each other's vectors. The embedder is a long-lived process
     singleton, so its id stays stable for the lifetime of the request scope.
     """
@@ -281,10 +281,12 @@ class EmbedResult:
 class EmbedderBase(ABC):
     """Base class for all embedders
 
-    Provides unified embedding interface supporting dense, sparse, and hybrid modes.
+    Provides unified embedding interface supporting dense and dense_sparse output.
     """
 
-    def __init__(self, model_name: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, model_name: str, config: Optional[Dict[str, Any]] = None, *, output: str = "dense"
+    ):
         """Initialize embedder
 
         Args:
@@ -292,6 +294,7 @@ class EmbedderBase(ABC):
             config: Configuration dict containing api_key, api_base, etc.
         """
         self.model_name = model_name
+        self.output = output
         self.config = config or {}
         self.max_input_tokens = resolve_embedding_max_input_tokens(self.config)
         self.max_retries = int(self.config.get("max_retries", 3))
@@ -310,6 +313,12 @@ class EmbedderBase(ABC):
         list. Embedders that do not support multimodal input get the
         text parts extracted, so image parts are safely dropped.
         """
+        if (
+            self.output == "dense_sparse"
+            and isinstance(content, list)
+            and any(part.get("type") != "text" for part in content)
+        ):
+            raise ValueError("dense_sparse output only accepts text input")
         if isinstance(content, list) and self.supports_multimodal:
             if self.max_input_tokens is None:
                 return content
@@ -426,21 +435,6 @@ class EmbedderBase(ABC):
             self._active_call_started_at = previous_started_at
             semaphore.release()
 
-    @property
-    def is_dense(self) -> bool:
-        """Check if result contains dense vector"""
-        return True
-
-    @property
-    def is_sparse(self) -> bool:
-        """Check if result contains sparse vector"""
-        return False
-
-    @property
-    def is_hybrid(self) -> bool:
-        """Check if result is hybrid (contains both dense and sparse vectors)"""
-        return False
-
     def _resolve_metrics_duration_seconds(self, duration_seconds: float = 0.0) -> float:
         """Resolve per-call metrics duration from an explicit value or the active call timer."""
         try:
@@ -530,173 +524,6 @@ class EmbedderBase(ABC):
         chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
         other_chars = len(text) - chinese_chars
         return max(1, (chinese_chars // 1) + (other_chars // 4))
-
-
-class DenseEmbedderBase(EmbedderBase):
-    """Dense embedder base class that returns dense vectors
-
-    Subclasses must implement:
-    - embed(): Return EmbedResult containing only dense_vector
-    - get_dimension(): Return vector dimension
-    """
-
-    @abstractmethod
-    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
-        """Perform dense embedding on text or multimodal content
-
-        Args:
-            content: Input text, or a list of multimodal content parts
-            is_query: Flag to indicate if this is a query embedding
-
-        Returns:
-            EmbedResult: Result containing only dense_vector
-        """
-        pass
-
-    @abstractmethod
-    def get_dimension(self) -> int:
-        """Get embedding dimension
-
-        Returns:
-            int: Vector dimension
-        """
-        pass
-
-
-class SparseEmbedderBase(EmbedderBase):
-    """Sparse embedder base class that returns sparse vectors
-
-    Sparse vector format is Dict[str, float], mapping terms to weights.
-    Example: {'information': 0.8, 'retrieval': 0.6, 'system': 0.4}
-
-    Subclasses must implement:
-    - embed(): Return EmbedResult containing only sparse_vector
-    """
-
-    @abstractmethod
-    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
-        """Perform sparse embedding on text or multimodal content
-
-        Args:
-            content: Input text, or a list of multimodal content parts
-            is_query: Flag to indicate if this is a query embedding
-
-        Returns:
-            EmbedResult: Result containing only sparse_vector
-        """
-        pass
-
-    @property
-    def is_sparse(self) -> bool:
-        """Check if result contains sparse vector"""
-        return True
-
-
-class HybridEmbedderBase(EmbedderBase):
-    """Hybrid embedder base class that returns both dense and sparse vectors
-
-    Used for hybrid search, combining advantages of both dense and sparse vectors.
-
-    Subclasses must implement:
-    - embed(): Return EmbedResult containing both dense_vector and sparse_vector
-    - get_dimension(): Return dense vector dimension
-    """
-
-    @abstractmethod
-    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
-        """Perform hybrid embedding on text or multimodal content
-
-        Args:
-            content: Input text, or a list of multimodal content parts
-            is_query: Flag to indicate if this is a query embedding
-
-        Returns:
-            EmbedResult: Result containing both dense_vector and sparse_vector
-        """
-        pass
-
-    @abstractmethod
-    def get_dimension(self) -> int:
-        """Get dense embedding dimension
-
-        Returns:
-            int: Dense vector dimension
-        """
-        pass
-
-    @property
-    def is_sparse(self) -> bool:
-        """Check if result contains sparse vector"""
-        return True
-
-    @property
-    def is_hybrid(self) -> bool:
-        """Check if result is hybrid (contains both dense and sparse vectors)"""
-        return True
-
-
-class CompositeHybridEmbedder(HybridEmbedderBase):
-    """Composite Hybrid Embedder that combines a dense embedder and a sparse embedder
-
-    Example:
-        >>> dense = OpenAIDenseEmbedder(...)
-        >>> sparse = VolcengineSparseEmbedder(...)
-        >>> embedder = CompositeHybridEmbedder(dense, sparse)
-        >>> result = embedder.embed("test")
-    """
-
-    def __init__(self, dense_embedder: DenseEmbedderBase, sparse_embedder: SparseEmbedderBase):
-        """Initialize with two separate embedders"""
-        super().__init__(
-            model_name=f"{dense_embedder.model_name}+{sparse_embedder.model_name}",
-            config={},
-        )
-        self.dense_embedder = dense_embedder
-        self.sparse_embedder = sparse_embedder
-
-    @property
-    def supports_multimodal(self) -> bool:
-        """Supports multimodal input only if both sub-embedders do."""
-        return self.dense_embedder.supports_multimodal and self.sparse_embedder.supports_multimodal
-
-    def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
-        """Combine results from both embedders"""
-        dense_input = self.dense_embedder.prepare_embedding_input(content)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
-        dense_res = self.dense_embedder.embed(dense_input, is_query=is_query)
-        sparse_res = self.sparse_embedder.embed(sparse_input, is_query=is_query)
-
-        return EmbedResult(
-            dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
-        )
-
-    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
-        dense_input = self.dense_embedder.prepare_embedding_input(content)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
-        calls = asyncio.gather(
-            self.dense_embedder.embed_async(dense_input, is_query=is_query),
-            self.sparse_embedder.embed_async(sparse_input, is_query=is_query),
-            return_exceptions=True,
-        )
-        # Keep the parent borrow alive until every child has stopped. Shielding
-        # also lets cancellation wait for providers with asynchronous cleanup.
-        from openviking.service.task_tracker_concurrency import run_to_completion
-
-        results = await run_to_completion(lambda: calls)
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-        dense_res, sparse_res = results
-        return EmbedResult(
-            dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
-        )
-
-    def get_dimension(self) -> int:
-        return self.dense_embedder.get_dimension()
-
-    def close(self):
-        self.dense_embedder.close()
-        self.sparse_embedder.close()
 
 
 def exponential_backoff_retry(
@@ -809,6 +636,7 @@ class FailoverEmbedder(EmbedderBase):
         super().__init__(
             model_name=first.model_name,
             config=first.config,
+            output=first.output,
         )
 
         self._embedders = embedders
@@ -931,20 +759,7 @@ class FailoverEmbedder(EmbedderBase):
         return await self._embed_with_failover_async("embed_async", content, is_query=is_query)
 
     def get_dimension(self) -> int:
-        """Get the dense dimension from the first embedder.
-
-        Raises:
-            AttributeError: if the wrapped embedders are sparse; sparse
-                embedders have no fixed dense dimension, so a dimension should
-                never be requested from them.
-        """
-        first = self._embedders[0]
-        if not hasattr(first, "get_dimension"):
-            raise AttributeError(
-                f"{type(first).__name__} has no get_dimension "
-                "(sparse embedders have no fixed dimension)"
-            )
-        return first.get_dimension()
+        return self._embedders[0].get_dimension()
 
     @property
     def active_credential_id(self) -> str:
@@ -953,21 +768,6 @@ class FailoverEmbedder(EmbedderBase):
         if idx < len(self._credential_ids):
             return self._credential_ids[idx]
         return "exhausted"
-
-    @property
-    def is_dense(self) -> bool:
-        """Check if the first embedder is dense."""
-        return self._embedders[0].is_dense
-
-    @property
-    def is_sparse(self) -> bool:
-        """Check if the first embedder is sparse."""
-        return self._embedders[0].is_sparse
-
-    @property
-    def is_hybrid(self) -> bool:
-        """Check if the first embedder is hybrid."""
-        return self._embedders[0].is_hybrid
 
     def close(self):
         """Close all embedder instances."""

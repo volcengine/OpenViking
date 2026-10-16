@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.storage.errors import EmbeddingConfigurationError
 from openviking_cli.utils import get_logger
 
@@ -74,7 +74,7 @@ def get_local_model_identity(model_name: str, model_path: Optional[str] = None) 
     return get_local_model_spec(model_name).filename
 
 
-class LocalDenseEmbedder(DenseEmbedderBase):
+class LocalDenseEmbedder(EmbedderBase):
     """Dense embedder backed by a local GGUF model via llama-cpp-python."""
 
     def __init__(
@@ -116,7 +116,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             raise EmbeddingConfigurationError(
                 "Local embedding is enabled but 'llama-cpp-python' is not installed. "
                 'Install it with: pip install "openviking[local-embed]". '
-                "If you prefer a remote provider, set embedding.dense.provider explicitly in ov.conf."
+                "If you prefer a remote provider, set embedding.provider explicitly in ov.conf."
             ) from exc
 
         llama_cls = getattr(module, "Llama", None)

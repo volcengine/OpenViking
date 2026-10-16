@@ -52,7 +52,9 @@ class TestGeminiContextRouting:
     def test_nonsymmetric_passes_query_document_params(self, _mock):
         """get_embedder() passes query_param/document_param to GeminiDenseEmbedder."""
         cfg = EmbeddingConfig(
-            dense=_gcfg(query_param="RETRIEVAL_QUERY", document_param="RETRIEVAL_DOCUMENT")
+            **_gcfg(query_param="RETRIEVAL_QUERY", document_param="RETRIEVAL_DOCUMENT").model_dump(
+                exclude_unset=True
+            )
         )
         embedder = cfg.get_embedder()
         assert embedder.query_param == "retrieval_query"
@@ -61,7 +63,7 @@ class TestGeminiContextRouting:
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_only_query_param_set(self, _mock):
         """When only query_param is set, document_param is None."""
-        cfg = EmbeddingConfig(dense=_gcfg(query_param="RETRIEVAL_QUERY"))
+        cfg = EmbeddingConfig(**_gcfg(query_param="RETRIEVAL_QUERY").model_dump(exclude_unset=True))
         embedder = cfg.get_embedder()
         assert embedder.query_param == "retrieval_query"
         assert embedder.document_param is None
@@ -72,7 +74,7 @@ def test_factory_raises_clear_error_when_google_genai_not_installed():
 
     with patch("openviking.models.embedder.GeminiDenseEmbedder", None):
         with pytest.raises(ValueError) as excinfo:
-            EmbeddingConfig(dense=cfg).get_embedder()
+            EmbeddingConfig(**cfg.model_dump(exclude_unset=True)).get_embedder()
 
     message = str(excinfo.value)
     assert "google-genai" in message

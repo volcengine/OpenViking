@@ -56,9 +56,9 @@ def _reset_fake_llama():
 def test_embedding_config_defaults_to_local_dense():
     config = EmbeddingConfig()
 
-    assert config.dense is not None
-    assert config.dense.provider == "local"
-    assert config.dense.model == DEFAULT_LOCAL_DENSE_MODEL
+    assert config.output == "dense"
+    assert config.provider == "local"
+    assert config.model == DEFAULT_LOCAL_DENSE_MODEL
     assert config.dimension == 512
 
 

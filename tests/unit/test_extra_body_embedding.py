@@ -127,7 +127,7 @@ class TestExtraBodyViaFactory:
             dimension=8,
             extra_body={"provider": {"sort": "latency"}},
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
         embedder.embed("hello")
 
         mock_client.embeddings.create.assert_called_once()
@@ -146,7 +146,7 @@ class TestExtraBodyViaFactory:
             api_key="sk-test",
             dimension=8,
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
         embedder.embed("hello")
 
         mock_client.embeddings.create.assert_called_once()

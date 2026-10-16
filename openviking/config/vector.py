@@ -13,10 +13,9 @@ from typing import Any
 from openviking.config.account_vector import AccountEmbeddingConfig, AccountVectorDBConfig
 from openviking.config.manager import AccountCandidateContext
 from openviking.config.validate import ConfigPatchError
-from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
-MODEL_SECTIONS = ("dense", "sparse", "hybrid")
 PROVIDER_BINDING = frozenset(
     {
         "credentials",
@@ -66,49 +65,12 @@ def resolve_effective_embedding(cluster: EmbeddingConfig, account: Any) -> Embed
         account = AccountEmbeddingConfig.model_validate(account)
     override = _account_values(account)
     base = cluster.model_dump(exclude_unset=True)
-    # The default local section is synthesized by the model validator.
-    account_modes = {
-        mode for mode in MODEL_SECTIONS if isinstance(override.get(mode), dict)
-    }
-    if account_modes:
-        # A declared Account mode replaces the Cluster mode set. Keeping an
-        # unrelated Cluster mode would make valid hybrid/sparse overrides fail
-        # the mutually-exclusive mode validation below.
-        for mode in MODEL_SECTIONS:
-            if mode not in account_modes:
-                base.pop(mode, None)
-    for mode in MODEL_SECTIONS:
-        section = getattr(cluster, mode)
-        if section is not None and (not account_modes or mode in account_modes):
-            base[mode] = section.model_dump(exclude_unset=True)
-        supplied = override.get(mode)
-        if not isinstance(supplied, dict):
-            continue
-        if PROVIDER_BINDING.intersection(supplied):
-            # Drop both the provider binding and provider-specific fields that
-            # would otherwise carry Cluster routing/model identity into the
-            # Account request. Cluster-maintained runtime switches remain.
-            dropped = PROVIDER_BINDING | PROVIDER_SPECIFIC_ISOLATED
-            base[mode] = {
-                key: value
-                for key, value in (base.get(mode) or {}).items()
-                if key not in dropped
-            }
-            for index, credential in enumerate(supplied.get("credentials") or []):
-                if not isinstance(credential, dict) or not credential.get("provider"):
-                    raise ValueError(f"embedding.{mode}.credentials[{index}].provider is required")
-                # Validate without any outer connection/auth fallback. Only model
-                # identity and vector-contract fields are intentionally shared.
-                contract = _overlay(
-                    base[mode],
-                    {key: value for key, value in supplied.items() if key not in dropped},
-                )
-                independent = _overlay(contract, credential)
-                independent.pop("id", None)
-                independent["model"] = credential.get("model") or supplied.get(
-                    "model", independent.get("model")
-                )
-                EmbeddingModelConfig.model_validate(independent)
+    if override.get("credentials"):
+        # An Account owns its complete provider binding. Never inherit Cluster
+        # credentials, routing, or local model paths into that binding.
+        dropped = PROVIDER_BINDING | PROVIDER_SPECIFIC_ISOLATED
+        base = {key: value for key, value in base.items() if key not in dropped}
+        override["output"] = account.output
     return EmbeddingConfig.model_validate(_overlay(base, override))
 
 
@@ -140,32 +102,15 @@ def validate_vector_settings(
         )
     if not vectordb.name or not vectordb.index_name:
         raise ValueError("vectordb collection name and index_name must not be empty")
-    if embedding.hybrid and (embedding.dense or embedding.sparse):
-        raise ValueError("embedding.hybrid cannot be combined with dense or sparse sections")
-    sparse = embedding.hybrid is not None or embedding.sparse is not None
+    sparse = embedding.output == "dense_sparse"
     if vectordb.sparse_weight < 0 or (vectordb.sparse_weight > 0 and not sparse):
-        raise ValueError("vectordb.sparse_weight requires a sparse or hybrid embedding")
+        raise ValueError("vectordb.sparse_weight requires embedding.output=dense_sparse")
     if vectordb.backend in {"local", "cuvs", "http", "volcengine", "vikingdb"}:
         if vectordb.distance_metric not in {"cosine", "l2", "ip"}:
             raise ValueError("vectordb.distance_metric must be cosine, l2 or ip")
     if sparse and vectordb.backend == "cuvs" and vectordb.cuvs:
         if not vectordb.cuvs.fallback_to_native:
-            raise ValueError("sparse/hybrid embedding requires cuvs.fallback_to_native")
-    for mode in MODEL_SECTIONS:
-        model = getattr(embedding, mode)
-        if model is None:
-            continue
-        if model.input not in {"text", "multimodal"}:
-            raise ValueError(f"embedding.{mode}.input must be text or multimodal")
-        providers = (
-            [credential.provider or model.provider for credential in model.credentials]
-            if model.credentials
-            else [model.provider]
-        )
-        if mode != "dense" and any(
-            provider not in {"volcengine", "vikingdb"} for provider in providers
-        ):
-            raise ValueError(f"embedding.{mode} requires a provider supporting {mode} output")
+            raise ValueError("dense_sparse output requires cuvs.fallback_to_native")
     return vectordb.model_copy(update={"dimension": dimension})
 
 
@@ -200,31 +145,28 @@ def resolve_account_vector_settings(account: Any, cluster: Any) -> VectorRuntime
     if account.vectordb is None:
         vectordb = validate_vector_settings(cluster.embedding, vectordb)
     vectordb = validate_vector_settings(embedding, vectordb)
-    identity = {}
-    for mode in MODEL_SECTIONS:
-        section = getattr(embedding, mode)
-        if section is not None:
-            identity[mode] = {
-                "provider": section._effective_provider(),
-                "model": section.model,
-                "credentials": [
-                    {
-                        "provider": credential.provider or section.provider,
-                        "model": credential.model or section.model,
-                    }
-                    for credential in section.credentials
-                ],
-                "dimension": section.get_effective_dimension(),
-                "input": section.input,
-                "query_param": section.query_param,
-                "document_param": section.document_param,
-                "version": section.version,
-                "extra_body": section.extra_body,
-                "model_path": section.model_path,
-                "enable_fusion": section.enable_fusion,
-                "res_level": section.res_level,
-                "max_video_frames": section.max_video_frames,
+    identity = {
+        "output": embedding.output,
+        "provider": embedding._effective_provider(),
+        "model": embedding.model,
+        "credentials": [
+            {
+                "provider": credential.provider or embedding.provider,
+                "model": credential.model or embedding.model,
             }
+            for credential in embedding.credentials
+        ],
+        "dimension": embedding.get_effective_dimension(),
+        "input": embedding.input,
+        "query_param": embedding.query_param,
+        "document_param": embedding.document_param,
+        "version": embedding.version,
+        "extra_body": embedding.extra_body,
+        "model_path": embedding.model_path,
+        "enable_fusion": embedding.enable_fusion,
+        "res_level": embedding.res_level,
+        "max_video_frames": embedding.max_video_frames,
+    }
     profile = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return VectorRuntimeSettings(embedding, vectordb, profile, account.vectordb is not None)
 
@@ -241,8 +183,7 @@ def validate_account_vector_candidate(context: AccountCandidateContext) -> None:
     if context.changed_sections is not None and "embedding" not in context.changed_sections:
         return
     before = vector_settings_from_view(context.old_view).embedding
-    for mode in MODEL_SECTIONS:
-        if (getattr(before, mode) is None) != (getattr(after, mode) is None):
-            raise ConfigPatchError("embedding mode is create-only", path=("embedding", mode))
+    if before.output != after.output:
+        raise ConfigPatchError("embedding output is create-only", path=("embedding", "output"))
     if before.dimension != after.dimension:
         raise ConfigPatchError("embedding dimension is create-only", path=("embedding",))

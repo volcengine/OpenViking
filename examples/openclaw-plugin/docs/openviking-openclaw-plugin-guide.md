@@ -452,13 +452,11 @@ OpenViking 服务端配置与 OpenClaw 插件配置是两层配置，位置不�
     "output": "stdout"
   },
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "$ARK_API_KEY",
-      "model": "doubao-embedding-vision-250615",
-      "dimension": 2048
-    },
+    "provider": "volcengine",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "$ARK_API_KEY",
+    "model": "doubao-embedding-vision-250615",
+    "dimension": 2048,
     "max_concurrent": 10
   },
   "vlm": {
@@ -479,13 +477,11 @@ OpenViking 服务端配置与 OpenClaw 插件配置是两层配置，位置不�
     "workspace": "/Users/bytedance/.openviking/data"
   },
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_base": "https://api.openai.com/v1",
-      "api_key": "$OPENAI_API_KEY",
-      "model": "text-embedding-3-large",
-      "dimension": 1536
-    }
+    "provider": "openai",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "$OPENAI_API_KEY",
+    "model": "text-embedding-3-large",
+    "dimension": 1536
   },
   "vlm": {
     "provider": "openai",

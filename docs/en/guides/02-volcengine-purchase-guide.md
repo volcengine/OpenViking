@@ -101,14 +101,12 @@ This template shows the configuration structure; replace all string placeholders
     "max_retries": 3
   },
   "embedding": {
-    "dense": {
-      "provider": "<provider-type>",
-      "api_key": "<your-api-key>",
-      "model": "<model-id>",
-      "api_base": "<api-endpoint>",
-      "dimension": 1024,
-      "input": "<input-type>"
-    }
+    "provider": "<provider-type>",
+    "api_key": "<your-api-key>",
+    "model": "<model-id>",
+    "api_base": "<api-endpoint>",
+    "dimension": 1024,
+    "input": "<input-type>"
   }
 }
 ```
@@ -152,14 +150,12 @@ Add these model sections to `~/.openviking/ov.conf`, preserving existing unrelat
     "max_retries": 3
   },
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-ark-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "api_key": "your-ark-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "dimension": 1024,
+    "input": "multimodal"
   }
 }
 ```

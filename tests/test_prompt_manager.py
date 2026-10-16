@@ -50,11 +50,9 @@ def _write_config(config_path: Path, templates_dir: Path) -> None:
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "text-embedding-3-small",
-                        "api_key": "test-key",
-                    }
+                    "provider": "openai",
+                    "model": "text-embedding-3-small",
+                    "api_key": "test-key",
                 },
                 "prompts": {
                     "templates_dir": str(templates_dir),

@@ -35,13 +35,11 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
     }
   },
   "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",
-      "api_key"  : "<your-api-key>",
-      "provider" : "<provider-type>",
-      "dimension": 1024,
-      "model"    : "<model-name>"
-    }
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "dimension": 1024,
+    "model"    : "<model-name>"
   },
   "vlm": {
     "api_base" : "<api-endpoint>",
@@ -60,7 +58,7 @@ when set and inherit this value when omitted.
 
 ### Ordered credentials in ov.conf
 
-`vlm` and `query_planner` support an ordered `credentials` array. Embedding supports the same array inside each configured `dense`, `sparse`, or `hybrid` section. Index 0 has the highest priority; later entries provide failover credentials. The model sections remain JSON objects, and existing single-credential configurations remain supported.
+`vlm` and `query_planner` support an ordered `credentials` array. Embedding uses the same array at `embedding.credentials`. Index 0 has the highest priority; later entries provide failover credentials. The model sections remain JSON objects, and existing single-credential configurations remain supported.
 
 Merge the following fields into your `ov.conf`; set `PRIMARY_API_KEY` and `BACKUP_API_KEY` before starting the server:
 
@@ -74,14 +72,12 @@ Merge the following fields into your `ov.conf`; set `PRIMARY_API_KEY` and `BACKU
     ]
   },
   "embedding": {
-    "dense": {
-      "model": "text-embedding-3-small",
-      "dimension": 1536,
-      "credentials": [
-        {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
-        {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
-      ]
-    }
+    "model": "text-embedding-3-small",
+    "dimension": 1536,
+    "credentials": [
+      {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+      {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+    ]
   }
 }
 ```
@@ -183,15 +179,13 @@ See [Admin configuration API](../api/08-admin.md#runtime-configuration) for perm
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215",
-      "input": "multimodal",
-      "batch_size": 32
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215",
+    "input": "multimodal",
+    "batch_size": 32
   },
   "vlm": {
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
@@ -210,13 +204,11 @@ See [Admin configuration API](../api/08-admin.md#runtime-configuration) for perm
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://api.openai.com/v1",
-      "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
-      "dimension": 1536,
-      "model"    : "text-embedding-3-small"
-    }
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "dimension": 1536,
+    "model"    : "text-embedding-3-small"
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
@@ -237,13 +229,11 @@ Use `openviking-server init` to complete the Codex login/import step, then run `
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "openai-codex",
@@ -264,13 +254,11 @@ OpenAI [retired `gpt-5.4` from Codex with ChatGPT sign-in](https://learn.chatgpt
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "kimi",
@@ -291,13 +279,11 @@ OpenAI [retired `gpt-5.4` from Codex with ChatGPT sign-in](https://learn.chatgpt
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "glm",
@@ -316,7 +302,7 @@ Use a vision-capable GLM model such as `glm-4.6v` or `glm-5v-turbo` when OpenVik
 
 ### embedding
 
-Embedding model configuration for vector search, supporting dense, sparse, and hybrid modes.
+Vector search uses one embedding model. `output` selects `dense` (default) or `dense_sparse`; the latter returns both vectors from the same model in one request. New model fields live directly under `embedding`. Existing `embedding.dense` configurations remain supported and normalize to the single-model config with `output: "dense"` by default. Multimodal input, environment references, and outer execution policies retain their meaning. Reading does not rewrite the file; editing Embedding through the Web form or CLI saves the flat structure. The old `sparse` and `hybrid` sections are rejected, and nested `dense` cannot be mixed with top-level model fields.
 
 #### Dense Embedding
 
@@ -327,13 +313,11 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "api_key": "your-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "dimension": 1024,
+    "input": "multimodal"
   }
 }
 ```
@@ -351,6 +335,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
 | `input` | str | Input type: `"text"` or `"multimodal"` |
+| `output` | str | `"dense"` (default) or `"dense_sparse"`; both include a dense vector. `dense_sparse` requires `input: "text"`. |
 | `batch_size` | int | Batch size for embedding requests |
 | `encoding_format` | str | (OpenAI / Azure only) Wire format for embedding values: `"float"` or `"base64"`. Leave unset to use the OpenAI Python SDK default. Set to `"float"` when the upstream gateway cannot deserialize base64 embedding payloads correctly. |
 | `extra_body` | object | (OpenAI / Azure only) Extra JSON body fields merged into every embeddings request. Useful for OpenAI-compatible gateways that accept vendor-specific fields, e.g. OpenRouter provider routing `{"provider": {"sort": "latency"}}`. Explicit `query_param`/`document_param` keys take precedence on conflict. |
@@ -408,14 +393,12 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-api-key",
-      "api_base": "https://your-openai-compatible-endpoint/v1",
-      "model": "text-embedding-3-large",
-      "dimension": 3072,
-      "encoding_format": "float"
-    }
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "api_base": "https://your-openai-compatible-endpoint/v1",
+    "model": "text-embedding-3-large",
+    "dimension": 3072,
+    "encoding_format": "float"
   }
 }
 ```
@@ -427,16 +410,14 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-openrouter-api-key",
-      "api_base": "https://openrouter.ai/api/v1",
-      "model": "qwen/qwen3-embedding-8b",
-      "dimension": 4096,
-      "extra_body": {
-        "provider": {
-          "sort": "latency"
-        }
+    "provider": "openai",
+    "api_key": "your-openrouter-api-key",
+    "api_base": "https://openrouter.ai/api/v1",
+    "model": "qwen/qwen3-embedding-8b",
+    "dimension": 4096,
+    "extra_body": {
+      "provider": {
+        "sort": "latency"
       }
     }
   }
@@ -450,15 +431,13 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "azure",
-      "api_key": "your-azure-api-key",
-      "api_base": "https://your-resource-name.openai.azure.com",
-      "api_version": "2025-01-01-preview",
-      "model": "your-embedding-deployment-name",
-      "dimension": 3072,
-      "encoding_format": "float"
-    }
+    "provider": "azure",
+    "api_key": "your-azure-api-key",
+    "api_base": "https://your-resource-name.openai.azure.com",
+    "api_version": "2025-01-01-preview",
+    "model": "your-embedding-deployment-name",
+    "dimension": 3072,
+    "encoding_format": "float"
   }
 }
 ```
@@ -470,16 +449,14 @@ For Azure OpenAI, `model` must be the embedding deployment name configured in Az
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "minimax",
-      "api_key": "your-minimax-api-key",
-      "model": "embo-01",
-      "dimension": 1536,
-      "query_param": "query",
-      "document_param": "db",
-      "extra_headers": {
-        "GroupId": "your-group-id"
-      }
+    "provider": "minimax",
+    "api_key": "your-minimax-api-key",
+    "model": "embo-01",
+    "dimension": 1536,
+    "query_param": "query",
+    "document_param": "db",
+    "extra_headers": {
+      "GroupId": "your-group-id"
     }
   }
 }
@@ -490,14 +467,12 @@ For Azure OpenAI, `model` must be the embedding deployment name configured in Az
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "vikingdb",
-      "model": "bge_large_zh",
-      "ak": "your-access-key",
-      "sk": "your-secret-key",
-      "region": "cn-beijing",
-      "dimension": 1024
-    }
+    "provider": "vikingdb",
+    "model": "bge_large_zh",
+    "ak": "your-access-key",
+    "sk": "your-secret-key",
+    "region": "cn-beijing",
+    "dimension": 1024
   }
 }
 ```
@@ -507,12 +482,10 @@ For Azure OpenAI, `model` must be the embedding deployment name configured in Az
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "jina",
-      "api_key": "jina_xxx",
-      "model": "jina-embeddings-v5-text-small",
-      "dimension": 1024
-    }
+    "provider": "jina",
+    "api_key": "jina_xxx",
+    "model": "jina-embeddings-v5-text-small",
+    "dimension": 1024
   }
 }
 ```
@@ -528,13 +501,11 @@ Get your API key at https://jina.ai
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "voyage",
-      "api_key": "pa-xxx",
-      "api_base": "https://api.voyageai.com/v1",
-      "model": "voyage-4-lite",
-      "dimension": 1024
-    }
+    "provider": "voyage",
+    "api_key": "pa-xxx",
+    "api_base": "https://api.voyageai.com/v1",
+    "model": "voyage-4-lite",
+    "dimension": 1024
   }
 }
 ```
@@ -548,13 +519,11 @@ If `dimension` is omitted, OpenViking uses its built-in model table (`voyage-3`,
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "jina",
-      "api_key": "local",
-      "api_base": "http://localhost:8080/v1",
-      "model": "jina-embeddings-v5-text-nano",
-      "dimension": 768
-    }
+    "provider": "jina",
+    "api_key": "local",
+    "api_base": "http://localhost:8080/v1",
+    "model": "jina-embeddings-v5-text-nano",
+    "dimension": 768
   }
 }
 ```
@@ -568,12 +537,10 @@ Version 1.39.0 is the minimum SDK version with the client context managers and c
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "gemini",
-      "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
-      "dimension": 3072
-    }
+    "provider": "gemini",
+    "api_key": "your-google-api-key",
+    "model": "gemini-embedding-2-preview",
+    "dimension": 3072
   }
 }
 ```
@@ -592,13 +559,11 @@ Get your API key at https://aistudio.google.com/apikey
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "dashscope",
-      "api_key": "${DASHSCOPE_API_KEY}",
-      "model": "text-embedding-v4",
-      "dimension": 1024,
-      "input": "text"
-    }
+    "provider": "dashscope",
+    "api_key": "${DASHSCOPE_API_KEY}",
+    "model": "text-embedding-v4",
+    "dimension": 1024,
+    "input": "text"
   }
 }
 ```
@@ -643,14 +608,12 @@ Get your API key at https://dashscope.console.aliyun.com/api-key
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "gemini",
-      "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
-      "dimension": 3072,
-      "query_param": "RETRIEVAL_QUERY",
-      "document_param": "RETRIEVAL_DOCUMENT"
-    }
+    "provider": "gemini",
+    "api_key": "your-google-api-key",
+    "model": "gemini-embedding-2-preview",
+    "dimension": 3072,
+    "query_param": "RETRIEVAL_QUERY",
+    "document_param": "RETRIEVAL_DOCUMENT"
   }
 }
 ```
@@ -659,7 +622,7 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 
 #### Local provider (`local`)
 
-When no `dense`, `sparse`, or `hybrid` embedding is configured (including when `embedding` is omitted), OpenViking selects `dense: {"provider": "local", "model": "bge-small-zh-v1.5-f16"}`. This GGUF model produces 512-dimensional vectors and requires no API key.
+When no embedding model is configured (including when `embedding` is omitted), OpenViking selects `{"provider": "local", "model": "bge-small-zh-v1.5-f16", "output": "dense"}`. This GGUF model produces 512-dimensional vectors and requires no API key.
 
 Install the local inference dependency:
 
@@ -667,77 +630,42 @@ Install the local inference dependency:
 pip install "openviking[local-embed]"
 ```
 
-On first use, OpenViking downloads the model to `~/.cache/openviking/models` unless the file is already cached. Set `embedding.dense.cache_dir` to change the cache directory, or `embedding.dense.model_path` to use an existing GGUF file without downloading it. A missing explicit `model_path` is an error; it does not trigger a download. This model's dimension is fixed at 512.
+On first use, OpenViking downloads the model to `~/.cache/openviking/models` unless the file is already cached. Set `embedding.cache_dir` to change the cache directory, or `embedding.model_path` to use an existing GGUF file without downloading it. A missing explicit `model_path` is an error; it does not trigger a download. This model's dimension is fixed at 512.
 
-#### Sparse Embedding
+#### Dense and sparse output
 
-> This example uses `doubao-embedding-vision-251215`. Check sparse text-output support for your selected model in the Ark [embedding documentation](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1).
+Changing `output` requires rebuilding the index. `allow_metadata_override` cannot bypass the output-contract check.
+Existing nonempty indexes without recorded `output` metadata also require rebuilding. Empty indexes can be initialized directly.
 
-```json
-{
-  "embedding": {
-    "sparse": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215"
-    }
-  }
-}
-```
+`output: "dense_sparse"` accepts only the following provider/model/version combinations. Unsupported models, including backup credentials, fail configuration validation.
 
-Sparse output is a provider capability, not an endpoint inferred from
-`storage.vectordb.sparse_weight`. OpenViking currently implements `sparse` and
-`hybrid` embedding providers for `volcengine` and `vikingdb`. The
-OpenAI-compatible, Ollama, and built-in `local` providers are dense-only; a
-self-hosted `/v1/embeddings` endpoint is therefore not treated as a sparse
-endpoint, and OpenViking does not probe a separate
-`/v1/embeddings/sparse` route.
+| Provider | Model | `version` |
+|---|---|---|
+| `volcengine` | `doubao-embedding-vision-250615`, `doubao-embedding-vision-251215` | Omit; the model name includes the version |
+| `vikingdb` | `bge-m3` | Omit or use `"default"` |
 
-There is no automatic BM25 or other sparse-vector fallback when the configured
-embedder returns only dense vectors. To use hybrid retrieval, configure a
-supported sparse/hybrid provider and set `storage.vectordb.sparse_weight > 0`.
-Model memory requirements are provider/model-specific and are not controlled by
-OpenViking; size self-hosted models against their provider documentation before
-enabling them in production.
-
-#### Hybrid Embedding
-
-Two approaches are supported:
-
-**Option 1: Single hybrid model**
+Both providers request both vectors from the same model in one call. VikingDB dense-only models remain available with `output: "dense"`.
+Sources: [Ark vectorization](https://docs.volcengine.com/docs/ark/vectorization?lang=zh), [VikingDB Embedding API](https://docs.byteplus.com/en/docs/VikingDB/Embedding_Calculation_V2).
 
 ```json
 {
   "embedding": {
-    "hybrid": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024
-    }
+    "provider": "volcengine",
+    "api_key": "your-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "dimension": 1024,
+    "input": "text",
+    "output": "dense_sparse"
+  },
+  "storage": {
+    "vectordb": {"sparse_weight": 0.5}
   }
 }
 ```
 
-**Option 2: Combine dense + sparse**
+`dense_sparse` requires explicit `input: "text"`. Use `dense` for direct multimodal embedding. Images are not silently removed to satisfy a sparse request. `storage.vectordb.sparse_weight` controls retrieval weighting only; it does not select embedding output.
 
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024
-    },
-    "sparse": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215"
-    }
-  }
-}
-```
+For `ep-*` deployments, declare the supported model identity in the outer `model` field and place the endpoint ID in `credentials[].model`. Every backup must support the same output contract; OpenViking does not probe the model behind an endpoint. Standalone sparse models and combining separate dense/sparse models are no longer supported.
 
 ### vlm
 
@@ -2311,14 +2239,12 @@ This illustrates the main sections, not a complete runnable configuration or JSO
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "string",
-      "model": "string",
-      "dimension": 1024,
-      "input": "multimodal",
-      "encoding_format": "float|base64"
-    }
+    "provider": "volcengine",
+    "api_key": "string",
+    "model": "string",
+    "dimension": 1024,
+    "input": "multimodal",
+    "encoding_format": "float|base64"
   },
   "vlm": {
     "provider": "string",

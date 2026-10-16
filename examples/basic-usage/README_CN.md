@@ -216,12 +216,10 @@ memories = client.find(
     "workspace": "~/.openviking/data"
   },
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-api-key",
-      "model": "text-embedding-3-large",
-      "dimension": 3072
-    }
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "model": "text-embedding-3-large",
+    "dimension": 3072
   },
   "vlm": {
     "provider": "openai",

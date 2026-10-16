@@ -10,7 +10,10 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from openviking_cli.utils.config.embedding_config import EmbeddingCredential
+from openviking_cli.utils.config.embedding_config import (
+    EmbeddingCredential,
+    normalize_embedding_config,
+)
 from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
@@ -115,32 +118,24 @@ def _model_view(content: str, config: OpenVikingConfig) -> dict:
         model = getattr(config, kind)
         value = model.model_dump(exclude_none=True)
         original = raw.get(kind) or {}
+        if kind == "embedding":
+            original = normalize_embedding_config(original)
         value = _merge(value, original)
         if kind == "vlm":
             # VLM normalization synthesizes provider maps from parent fields.
             # Return only the explicit map to preserve legacy form bindings.
             value["providers"] = original.get("providers") or {}
-        sections = [(value, original, model)]
+        bindings = model.credentials
+        if kind == "embedding" and not bindings:
+            bindings = [model]
+        value["credentials"] = [
+            _binding_values(binding, model, kind == "embedding", original, index)
+            for index, binding in enumerate(bindings)
+        ]
         if kind == "embedding":
-            sections = [
-                (value[mode], original.get(mode) or {}, getattr(model, mode))
-                for mode in ("dense", "sparse", "hybrid")
-                if getattr(model, mode) is not None
-            ]
-        for section, original_section, section_model in sections:
-            bindings = section_model.credentials
-            if kind == "embedding" and not bindings:
-                bindings = [section_model]
-            section["credentials"] = [
-                _binding_values(
-                    binding, section_model, kind == "embedding", original_section, index
-                )
-                for index, binding in enumerate(bindings)
-            ]
-            if kind == "embedding":
-                for index, binding in enumerate(section["credentials"]):
-                    if not binding.get("id"):
-                        binding["id"] = f"credential-{index}"
+            for index, binding in enumerate(value["credentials"]):
+                if not binding.get("id"):
+                    binding["id"] = f"credential-{index}"
         models[kind] = {"config": value}
     return models
 
@@ -238,17 +233,6 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     return result
 
 
-def _merge_model(old: dict, changes: dict, kind: str) -> dict:
-    if kind == "vlm":
-        return _merge_credentials(old, changes, False)
-    result = _merge(old, changes)
-    if kind == "embedding":
-        for mode in ("dense", "sparse", "hybrid"):
-            if isinstance(changes.get(mode), dict):
-                result[mode] = _merge_credentials(old.get(mode) or {}, changes[mode], True)
-    return result
-
-
 def _atomic_write(path: Path, data: bytes, mode: int) -> None:
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -277,7 +261,10 @@ def _apply_model_changes(raw: dict, settings: dict) -> None:
         raise ValueError("Only model sections can be edited through the form")
     for kind, value in settings.items():
         if isinstance(value, dict):
-            raw[kind] = _merge_model(raw.get(kind) or {}, value, kind)
+            original = raw.get(kind) or {}
+            if kind == "embedding":
+                original = normalize_embedding_config(original)
+            raw[kind] = _merge_credentials(original, value, kind == "embedding")
         else:
             raise ValueError("Model configuration must be an object")
 

@@ -178,7 +178,7 @@ async def test_vectorize_file_uses_summary_first(monkeypatch, text_source, summa
     from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
     cfg = EmbeddingConfig(
-        dense={
+        **{
             "provider": "openai",
             "model": "text-embedding-3-small",
             "api_base": "http://localhost:8080/v1",

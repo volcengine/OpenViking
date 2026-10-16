@@ -41,12 +41,12 @@ helm install openviking ./openviking -f my-values.yaml
 # GCP 部署
 helm install openviking ./openviking \
   --set cloudProvider=gcp \
-  --set openviking.config.embedding.dense.api_key=YOUR_API_KEY
+  --set openviking.config.embedding.api_key=YOUR_API_KEY
 
 # AWS 部署
 helm install openviking ./openviking \
   --set cloudProvider=aws \
-  --set openviking.config.embedding.dense.api_key=YOUR_API_KEY
+  --set openviking.config.embedding.api_key=YOUR_API_KEY
 ```
 
 ## 配置
@@ -72,7 +72,7 @@ helm install openviking ./openviking \
 | `service.type` | Kubernetes 服务类型 | `LoadBalancer` |
 | `service.port` | 服务端口 | `1933` |
 | `openviking.config.server.api_key` | 认证 API Key | `null` |
-| `openviking.config.embedding.dense.api_key` | 火山引擎 API Key | `null` |
+| `openviking.config.embedding.api_key` | 火山引擎 API Key | `null` |
 
 ### OpenViking 配置
 
@@ -86,10 +86,9 @@ Embedding 服务需要火山引擎 API Key：
 openviking:
   config:
     embedding:
-      dense:
-        api_key: "your-api-key-here"
-        api_base: "https://ark.cn-beijing.volces.com/api/v3"
-        model: "doubao-embedding-vision-251215"
+      api_key: "your-api-key-here"
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      model: "doubao-embedding-vision-251215"
 ```
 
 ### VLM 配置

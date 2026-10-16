@@ -23,12 +23,10 @@ def _configure_test_env(monkeypatch, tmp_path):
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test-embedder",
-                        "api_base": "http://127.0.0.1:11434/v1",
-                        "dimension": 1024,
-                    }
+                    "provider": "openai",
+                    "model": "test-embedder",
+                    "api_base": "http://127.0.0.1:11434/v1",
+                    "dimension": 1024,
                 },
                 "encryption": {"enabled": False},
             }
@@ -80,9 +78,7 @@ async def test_add_locations_resource_server_default_and_precedence(
     app.state.config.user_config_defaults = UserConfig(
         add_targets=AddTargetsConfig(resource_uri="viking://user/resources")
     )
-    assert (
-        app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
-    )
+    assert app.state.config.user_config_defaults.add_targets.resource_uri == "viking://~/resources"
 
     root_uri = await _add_resource(client, sample_markdown_file.name)
     assert root_uri.startswith("viking://user/default/resources/")

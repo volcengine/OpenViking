@@ -1063,9 +1063,9 @@ def test_embedding_validation():
     print("\n1. Test no embedder config...")
     try:
         config = EmbeddingConfig()
-        assert config.dense is not None
+        assert config.output == "dense"
         print(
-            f"   Pass (default provider={config.dense.provider}, model={config.dense.model}, dim={config.dimension})"
+            f"   Pass (default provider={config.provider}, model={config.model}, dim={config.dimension})"
         )
     except ValueError as e:
         print(f"   Fail: {e}")
@@ -1073,9 +1073,7 @@ def test_embedding_validation():
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")
     try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(provider="openai", model="text-embedding-3-small")
-        )
+        _ = EmbeddingConfig(provider="openai", model="text-embedding-3-small")
         print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
@@ -1084,12 +1082,10 @@ def test_embedding_validation():
     print("\n3. Test OpenAI provider complete config...")
     try:
         _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="openai",
-                model="text-embedding-3-small",
-                api_key="fake-api-key-for-testing",
-                dimension=1536,
-            )
+            provider="openai",
+            model="text-embedding-3-small",
+            api_key="fake-api-key-for-testing",
+            dimension=1536,
         )
         print("   Pass")
     except ValueError as e:
@@ -1122,13 +1118,7 @@ def test_embedding_validation():
     # Test 5: Ollama provider (no API key required)
     print("\n5. Test Ollama provider (no API key required)...")
     try:
-        _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="ollama",
-                model="nomic-embed-text",
-                dimension=768,
-            )
-        )
+        _ = EmbeddingConfig(provider="ollama", model="nomic-embed-text", dimension=768)
         print("   Pass (Ollama does not require API key)")
     except ValueError as e:
         print(f"   Fail: {e}")
@@ -1137,12 +1127,10 @@ def test_embedding_validation():
     print("\n6. Test Ollama provider with custom api_base...")
     try:
         _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="ollama",
-                model="nomic-embed-text",
-                api_base="http://localhost:11434/v1",
-                dimension=768,
-            )
+            provider="ollama",
+            model="nomic-embed-text",
+            api_base="http://localhost:11434/v1",
+            dimension=768,
         )
         print("   Pass")
     except ValueError as e:
@@ -1152,12 +1140,10 @@ def test_embedding_validation():
     print("\n7. Test OpenAI provider with api_base but no api_key...")
     try:
         _ = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="openai",
-                model="text-embedding-3-small",
-                api_base="http://localhost:8080/v1",
-                dimension=1536,
-            )
+            provider="openai",
+            model="text-embedding-3-small",
+            api_base="http://localhost:8080/v1",
+            dimension=1536,
         )
         print("   Pass (OpenAI provider allows missing api_key when api_base is set)")
     except ValueError as e:

@@ -160,12 +160,10 @@ Only write or update `~/.openviking/ov.conf` after the user has confirmed all re
     "workspace": "..."
   },
   "embedding": {
-    "dense": {
-      "provider": "...",
-      "api_base": "...",
-      "api_key": "...",
-      "model": "..."
-    }
+    "provider": "...",
+    "api_base": "...",
+    "api_key": "...",
+    "model": "..."
   },
   "vlm": {
     "provider": "...",

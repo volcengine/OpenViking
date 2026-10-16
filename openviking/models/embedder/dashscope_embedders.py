@@ -12,7 +12,7 @@ import httpx
 import openai
 
 from openviking.models.embedder.base import (
-    DenseEmbedderBase,
+    EmbedderBase,
     EmbeddingInput,
     EmbedResult,
     truncate_and_normalize,
@@ -51,7 +51,7 @@ def get_dashscope_model_default_dimension(model_name: str) -> int:
     return 1024
 
 
-class DashScopeDenseEmbedder(DenseEmbedderBase):
+class DashScopeDenseEmbedder(EmbedderBase):
     """DashScope Dense Embedder — dual-mode (text / multimodal).
 
     Text mode uses the OpenAI-compatible endpoint; multimodal mode uses the

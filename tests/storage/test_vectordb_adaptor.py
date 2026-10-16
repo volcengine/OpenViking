@@ -32,12 +32,10 @@ class TestAdapterLoading(unittest.TestCase):
                 }
             },
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "text-embedding-3-small",
-                    "api_key": "mock-key",
-                    "dimension": 1536,
-                }
+                "provider": "openai",
+                "model": "text-embedding-3-small",
+                "api_key": "mock-key",
+                "dimension": 1536,
             },
         }
         with open(self.config_path, "w") as f:

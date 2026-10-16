@@ -14,27 +14,10 @@ it('sends only editable embedding fields and retains credential extensions suppo
       max_retries: 4,
       max_input_tokens: 1000,
       text_source: 'content_only',
-      dense: {
-        model: 'frozen',
-        dimension: 1024,
-        input: 'text',
-        api_key: 'parent-key',
-        failback_request_count: 7,
-        credentials: [
-          {
-            provider: 'azure',
-            api_key: 'key',
-            model: 'deployment',
-            api_version: 'v1',
-            extra_headers: { keep: 'yes' },
-            dimension: 2048,
-          },
-        ],
-      },
-    }),
-  ).toEqual({
-    max_retries: 4,
-    dense: {
+      model: 'frozen',
+      dimension: 1024,
+      input: 'text',
+      api_key: 'parent-key',
       failback_request_count: 7,
       credentials: [
         {
@@ -43,9 +26,22 @@ it('sends only editable embedding fields and retains credential extensions suppo
           model: 'deployment',
           api_version: 'v1',
           extra_headers: { keep: 'yes' },
+          dimension: 2048,
         },
       ],
-    },
+    }),
+  ).toEqual({
+    max_retries: 4,
+    failback_request_count: 7,
+    credentials: [
+      {
+        provider: 'azure',
+        api_key: 'key',
+        model: 'deployment',
+        api_version: 'v1',
+        extra_headers: { keep: 'yes' },
+      },
+    ],
   })
 })
 it('uses ROOT credentials to preview a full draft without saving, then saves one full revision', async () => {

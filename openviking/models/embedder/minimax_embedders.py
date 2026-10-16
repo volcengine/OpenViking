@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Optional
 import httpx
 import requests
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
-class MinimaxDenseEmbedder(DenseEmbedderBase):
+class MinimaxDenseEmbedder(EmbedderBase):
     """MiniMax Dense Embedder Implementation
 
     Supports MiniMax embedding models via official HTTP API.

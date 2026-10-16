@@ -54,8 +54,15 @@ def _make_config(
     query_planner_api_base=None,
 ):
     """Build a minimal config-like object for detect_ollama_in_config."""
-    dense = SimpleNamespace(provider=embedding_provider, api_base=embedding_api_base)
-    embedding = SimpleNamespace(dense=dense)
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    embedding = EmbeddingConfig(
+        provider=embedding_provider,
+        api_base=embedding_api_base,
+        api_key="test",
+        model="test",
+        dimension=8,
+    )
     vlm = SimpleNamespace(provider=vlm_provider, model=vlm_model, api_base=vlm_api_base)
     query_planner = None
     if query_planner_provider is not None or query_planner_model is not None:

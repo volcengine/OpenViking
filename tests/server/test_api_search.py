@@ -1335,12 +1335,12 @@ async def test_glob_forwards_tags_and_tag_projection_to_filesystem_service(monke
 async def test_find_image_query_uses_account_embedder_capability(
     client: httpx.AsyncClient, service, monkeypatch, multimodal: bool
 ):
-    from openviking.models.embedder.base import DenseEmbedderBase
+    from openviking.models.embedder.base import EmbedderBase
     from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
     seen = []
 
-    class ImageEmbedder(DenseEmbedderBase):
+    class ImageEmbedder(EmbedderBase):
         def __init__(self, dimension: int):
             super().__init__(model_name="test-image-embedder")
             self._dimension = dimension

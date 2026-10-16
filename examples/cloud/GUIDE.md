@@ -82,7 +82,7 @@ AK/SK 同时用于 TOS 和 VikingDB 的鉴权。
 4. 确认以下模型已开通（在 **模型广场** 中申请）：
    - `doubao-embedding-vision-251215`（多模态 Embedding）
    - `doubao-seed-2-0-lite-260428`（VLM 推理）
-5. 将 API Key 填入配置文件的 `embedding.dense.api_key` 和 `vlm.api_key`
+5. 将 API Key 填入配置文件的 `embedding.api_key` 和 `vlm.api_key`
 
 ---
 
@@ -140,9 +140,7 @@ cp examples/cloud/ov.conf.example examples/cloud/ov.conf
     }
   },
   "embedding": {
-    "dense": {
-      "api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    }
+    "api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   },
   "vlm": {
     "api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -333,13 +331,12 @@ openviking:
           use_ssl: true
           use_path_style: false
     embedding:
-      dense:
-        model: "doubao-embedding-vision-251215"
-        api_key: "your-ark-api-key"
-        api_base: "https://ark.cn-beijing.volces.com/api/v3"
-        dimension: 1024
-        provider: volcengine
-        input: multimodal
+      model: "doubao-embedding-vision-251215"
+      api_key: "your-ark-api-key"
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      dimension: 1024
+      provider: volcengine
+      input: multimodal
     vlm:
       model: "doubao-seed-2-0-lite-260428"
       api_key: "your-ark-api-key"
@@ -367,7 +364,7 @@ helm install openviking ./examples/k8s-helm -f my-values.yaml
 ```bash
 helm install openviking ./examples/k8s-helm \
   --set openviking.config.server.root_api_key="my-strong-secret-key-2024" \
-  --set openviking.config.embedding.dense.api_key="YOUR_ARK_API_KEY" \
+  --set openviking.config.embedding.api_key="YOUR_ARK_API_KEY" \
   --set openviking.config.vlm.api_key="YOUR_ARK_API_KEY" \
   --set openviking.config.storage.vectordb.backend="volcengine" \
   --set openviking.config.storage.vectordb.volcengine.ak="YOUR_AK" \
@@ -606,7 +603,7 @@ sudo systemctl start docker
 ### Embedding 模型调用失败
 
 - **模型未开通**：在方舟控制台 **模型广场** 中确认 `doubao-embedding-vision-251215` 已申请并通过
-- **API Key 错误**：确认 `embedding.dense.api_key` 填写正确
+- **API Key 错误**：确认 `embedding.api_key` 填写正确
 - **API Base 错误**：确认为 `https://ark.cn-beijing.volces.com/api/v3`
 
 ### helm: command not found

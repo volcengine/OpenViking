@@ -116,13 +116,12 @@ config:
     cors_origins:
       - "*"
   embedding:
-    dense:
-      api_base: "https://ark.cn-beijing.volces.com/api/v3"
-      api_key: ""
-      provider: "volcengine"
-      dimension: 1024
-      model: "doubao-embedding-vision-251215"
-      input: "multimodal"
+    api_base: "https://ark.cn-beijing.volces.com/api/v3"
+    api_key: ""
+    provider: "volcengine"
+    dimension: 1024
+    model: "doubao-embedding-vision-251215"
+    input: "multimodal"
     max_concurrent: 10
   vlm:
     api_base: "https://ark.cn-beijing.volces.com/api/v3"

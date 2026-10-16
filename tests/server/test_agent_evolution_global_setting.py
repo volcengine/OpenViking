@@ -118,12 +118,10 @@ async def settings_http(fake_viking_fs, monkeypatch):
     OpenVikingConfigSingleton.initialize(
         config_dict={
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "test-embedder",
-                    "api_key": "test-key",
-                    "dimension": 1024,
-                }
+                "provider": "openai",
+                "model": "test-embedder",
+                "api_key": "test-key",
+                "dimension": 1024,
             },
         }
     )

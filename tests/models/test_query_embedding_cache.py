@@ -146,7 +146,7 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
     clients = []
 
     def create(config):
-        client = CountingEmbedder(config.dense.model)
+        client = CountingEmbedder(config.model)
         clients.append(client)
         return client
 
@@ -154,12 +154,10 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
     base = OpenVikingConfig.from_dict(
         {
             "embedding": {
-                "dense": {
-                    "model": "shared-name",
-                    "dimension": 1,
-                    "provider": "openai",
-                    "api_key": "cluster-key",
-                }
+                "model": "shared-name",
+                "dimension": 1,
+                "provider": "openai",
+                "api_key": "cluster-key",
             }
         }
     )
@@ -172,11 +170,9 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
             "a",
             {
                 "embedding": {
-                    "dense": {
-                        "model": "shared-name",
-                        "dimension": 1,
-                        "credentials": [{"provider": "openai", "api_key": "a-key"}],
-                    }
+                    "model": "shared-name",
+                    "dimension": 1,
+                    "credentials": [{"provider": "openai", "api_key": "a-key"}],
                 }
             },
             creating=True,
@@ -193,11 +189,7 @@ async def test_account_query_cache_isolated_by_account_and_config(monkeypatch):
 
             await manager.patch_account(
                 "a",
-                {
-                    "embedding": {
-                        "dense": {"credentials": [{"provider": "openai", "api_key": "rotated-key"}]}
-                    }
-                },
+                {"embedding": {"credentials": [{"provider": "openai", "api_key": "rotated-key"}]}},
             )
             await embed_compat(first, "same-text", is_query=True)
             await embed_compat(second, "same-text", is_query=True)

@@ -41,12 +41,12 @@ helm install openviking ./openviking -f my-values.yaml
 # GCP deployment
 helm install openviking ./openviking \
   --set cloudProvider=gcp \
-  --set openviking.config.embedding.dense.api_key=YOUR_API_KEY
+  --set openviking.config.embedding.api_key=YOUR_API_KEY
 
 # AWS deployment
 helm install openviking ./openviking \
   --set cloudProvider=aws \
-  --set openviking.config.embedding.dense.api_key=YOUR_API_KEY
+  --set openviking.config.embedding.api_key=YOUR_API_KEY
 ```
 
 ## Configuration
@@ -72,7 +72,7 @@ The chart supports automatic LoadBalancer annotation configuration for major clo
 | `service.type` | Kubernetes service type | `LoadBalancer` |
 | `service.port` | Service port | `1933` |
 | `openviking.config.server.api_key` | API key for authentication | `null` |
-| `openviking.config.embedding.dense.api_key` | Volcengine API key | `null` |
+| `openviking.config.embedding.api_key` | Volcengine API key | `null` |
 
 ### OpenViking Configuration
 
@@ -86,10 +86,9 @@ The embedding service requires a Volcengine API key:
 openviking:
   config:
     embedding:
-      dense:
-        api_key: "your-api-key-here"
-        api_base: "https://ark.cn-beijing.volces.com/api/v3"
-        model: "doubao-embedding-vision-251215"
+      api_key: "your-api-key-here"
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      model: "doubao-embedding-vision-251215"
 ```
 
 ### VLM Configuration

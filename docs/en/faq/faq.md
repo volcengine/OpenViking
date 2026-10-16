@@ -99,13 +99,11 @@ Create `~/.openviking/ov.conf` under your home directory. Replace the example mo
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "api_key": "your-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",

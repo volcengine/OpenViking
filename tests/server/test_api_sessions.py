@@ -63,12 +63,10 @@ def _configure_test_env(monkeypatch, tmp_path):
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test-embedder",
-                        "api_base": "http://127.0.0.1:11434/v1",
-                        "dimension": 1024,
-                    }
+                    "provider": "openai",
+                    "model": "test-embedder",
+                    "api_base": "http://127.0.0.1:11434/v1",
+                    "dimension": 1024,
                 },
                 "encryption": {"enabled": False},
             }
@@ -718,8 +716,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert session_resp.status_code == 200
     assert (
-        session_resp.json()["result"]["auto_commit_policy"]
-        == AutoCommitPolicy.default().to_dict()
+        session_resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
     )
 
 

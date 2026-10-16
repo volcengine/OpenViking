@@ -979,9 +979,7 @@ def _build_ollama_config(
     """Build ov.conf dict for Ollama-based setup."""
     return {
         "storage": {"workspace": workspace},
-        "embedding": {
-            "dense": _ollama_dense_config(embedding),
-        },
+        "embedding": _ollama_dense_config(embedding),
         "vlm": _ollama_vlm_config(vlm),
     }
 
@@ -1820,7 +1818,7 @@ def _wizard_two_step() -> tuple[dict[str, Any] | None | object, bool | None]:
 
         config: dict[str, Any] = {
             "storage": {"workspace": _workspace_path()},
-            "embedding": {"dense": dense},
+            "embedding": dense,
         }
         if vlm_config is not _SKIP_VLM:
             config["vlm"] = vlm_config
@@ -2118,7 +2116,9 @@ def _update_existing_config(config_path: Path, section: str) -> int:
         old_summary, new_summary = _summarize_model(current_vlm), _summarize_model(vlm_config)
         data["vlm"] = vlm_config
     elif section == "embedding":
-        old_dense = _config_section(data, "embedding", "dense")
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        old_dense = _config_section(data, "embedding")
         old_dim = old_dense.get("dimension")
         print(f"\n  Current embedding: {_summarize_model(old_dense)}")
         dense, _ = _prompt_embedding_flow(current=old_dense)
@@ -2127,9 +2127,11 @@ def _update_existing_config(config_path: Path, section: str) -> int:
         if dense is None:
             print("\n  Setup cancelled.\n")
             return 0
-        if old_dim and dense.get("dimension") != old_dim:
+        dimension_changed = old_dim is not None and dense.get("dimension") != old_dim
+        output_changed = old_dense.get("output", "dense") != dense.get("output", "dense")
+        if dimension_changed or output_changed:
             print(
-                f"\n  {_yellow('Embedding dimension changes from ' + str(old_dim) + ' to ' + str(dense.get('dimension')) + '.')}"
+                f"\n  {_yellow('Embedding dimensions or vector output will change.')}"
             )
             print(
                 f"  {_yellow('Existing vector indexes become unusable — data must be re-ingested.')}"
@@ -2138,7 +2140,14 @@ def _update_existing_config(config_path: Path, section: str) -> int:
                 print("\n  Setup cancelled.\n")
                 return 0
         old_summary, new_summary = _summarize_model(old_dense), _summarize_model(dense)
-        data.setdefault("embedding", {})["dense"] = dense
+        data["embedding"] = {
+            **{
+                key: value
+                for key, value in old_dense.items()
+                if key not in EmbeddingModelConfig.model_fields
+            },
+            **dense,
+        }
     elif section == "gateway":
         current_gateway = _config_section(data, "gateway")
         gateway = _wizard_gateway(_config_section(data, "server"), current_gateway)
@@ -2251,6 +2260,10 @@ def _config_section(data: dict[str, Any], *keys: str) -> dict[str, Any]:
         if not isinstance(node, dict):
             return {}
         node = node.get(key)
+    if isinstance(node, dict) and keys == ("embedding",):
+        from openviking_cli.utils.config.embedding_config import normalize_embedding_config
+
+        return normalize_embedding_config(node)
     return node if isinstance(node, dict) else {}
 
 
@@ -2266,7 +2279,7 @@ def _load_config_data(config_path: Path) -> dict[str, Any] | None:
 def _print_current_config(data: dict[str, Any]) -> None:
     """Show the non-secret parts of the existing configuration."""
     print(f"\n  {_bold('Current configuration')}")
-    print(f"    Embedding:     {_summarize_model(_config_section(data, 'embedding', 'dense'))}")
+    print(f"    Embedding:     {_summarize_model(_config_section(data, 'embedding'))}")
     print(f"    VLM:           {_summarize_model(_config_section(data, 'vlm'))}")
     print(f"    Query planner: {_summarize_model(_config_section(data, 'query_planner'))}")
     print(f"    Server:        {_summarize_server(_config_section(data, 'server'))}")
@@ -2290,7 +2303,7 @@ def run_init() -> int:
         if data is not None:
             _print_current_config(data)
             vlm_now = f"(now: {_summarize_model(_config_section(data, 'vlm'))})"
-            emb_now = f"(now: {_summarize_model(_config_section(data, 'embedding', 'dense'))})"
+            emb_now = f"(now: {_summarize_model(_config_section(data, 'embedding'))})"
             server_now = f"(now: {_summarize_server(_config_section(data, 'server'))})"
             gateway_now = f"(now: {_summarize_gateway(_config_section(data, 'gateway'))})"
         action = _prompt_choice(
@@ -2361,7 +2374,7 @@ def run_init() -> int:
     config_dict["gateway"] = _wizard_gateway(server_dict)
 
     # Summary — providers/models/dimensions are shown, secrets never are.
-    emb = config_dict.get("embedding", {}).get("dense", {})
+    emb = config_dict.get("embedding", {})
     vlm = config_dict.get("vlm", {})
 
     _rule("Summary")

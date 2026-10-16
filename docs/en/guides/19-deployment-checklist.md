@@ -78,12 +78,12 @@ The HDFS model directory (default `/home/vikingdb_data`) must be writable by the
 
 ## Model integration checks
 
-- Embedding must return fixed-size dense vectors. Align actual output, `embedding.dense.dimension`, and vector database dimensions.
+- Embedding must return fixed-size dense vectors. Align actual output, `embedding.dimension`, and vector database dimensions.
 - Confirm whether the API base includes `/v1` or `/api/v3`. Text and multimodal embedding may use different paths and request bodies; “OpenAI compatible” alone is insufficient.
 - VLM / LLM supports understanding, summaries, and memory extraction. Validate image input for image tasks and tool calls for agents that use tools.
 - Test authentication, DNS, certificates, and timeouts from the Pod network. Connectivity from a laptop does not establish Pod connectivity.
 - Changing embedding models can change vector semantics even when dimensions match. Plan index rebuilding before switching an existing dataset.
 
-In private delivery, `OpenVikingWorkspace.spec.vectordb.dimension` overrides the template's storage dimension, but does not change `embedding.dense.dimension`. Check both.
+In private delivery, `OpenVikingWorkspace.spec.vectordb.dimension` overrides the template's storage dimension, but does not change `embedding.dimension`. Check both.
 
 Continue to [Enterprise Deployment](20-private-deployment.md) and [upgrades and troubleshooting](21-private-operations.md).

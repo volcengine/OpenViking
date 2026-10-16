@@ -90,7 +90,7 @@ class TestExtraHeadersViaFactory:
             api_key="sk-test",
             extra_headers=headers,
         )
-        EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
@@ -106,7 +106,7 @@ class TestExtraHeadersViaFactory:
             model="text-embedding-3-small",
             api_key="sk-test",
         )
-        EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
@@ -123,9 +123,9 @@ class TestExtraHeadersViaFactory:
             api_key="sk-test",
             dimension=8,
         )
-        embedder = EmbeddingConfig(dense=cfg, max_retries=0)._create_embedder(
-            "openai", "dense", cfg
-        )
+        embedder = EmbeddingConfig(
+            **cfg.model_dump(exclude_unset=True), max_retries=0
+        )._create_embedder(cfg)
 
         assert embedder.max_retries == 0
 
@@ -154,7 +154,7 @@ class TestExtraHeadersViaFactory:
             api_base="http://localhost:11434/v1",
             dimension=8,
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         with (
             patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,

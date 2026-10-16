@@ -53,7 +53,7 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda _: _Embedder())
     settings = VectorRuntimeSettings(
         embedding=EmbeddingConfig(
-            dense={"provider": "openai", "model": "test", "api_key": "key", "dimension": 1}
+            **{"provider": "openai", "model": "test", "api_key": "key", "dimension": 1}
         ),
         vectordb=VectorDBBackendConfig(dimension=1),
         embedding_profile="test",
@@ -68,6 +68,8 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
     service._runtime_config_manager = None
     service._vlm_resolver = SimpleNamespace(close=lambda: events.append("resolver"))
     service._resource_service = _ResourceService()
+    service._expiry_runtime = None
+    service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = _QueueManager()

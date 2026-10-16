@@ -26,12 +26,10 @@ def isolated_config(tmp_path, monkeypatch):
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test",
-                        "api_key": "test-key",
-                        "dimension": 2048,
-                    }
+                    "provider": "openai",
+                    "model": "test",
+                    "api_key": "test-key",
+                    "dimension": 2048,
                 },
             }
         )

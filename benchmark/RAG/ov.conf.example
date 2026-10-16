@@ -9,15 +9,13 @@
     "output": "stdout"
   },
   "embedding": {
-    "dense": {
-        "model": "doubao-embedding-vision-251215",
-        "api_key": "your_api_key_here",
-        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-        "dimension": 1024,
-        "provider": "volcengine",
-        "input": "multimodal",
-        "batch_size": 8
-    },
+    "model": "doubao-embedding-vision-251215",
+    "api_key": "your_api_key_here",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "dimension": 1024,
+    "provider": "volcengine",
+    "input": "multimodal",
+    "batch_size": 8,
     "max_concurrent": 10
   },
   "vlm": {

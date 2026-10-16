@@ -8,11 +8,9 @@ import httpx
 import openai
 
 from openviking.models.embedder.base import (
-    DenseEmbedderBase,
+    EmbedderBase,
     EmbeddingInput,
     EmbedResult,
-    HybridEmbedderBase,
-    SparseEmbedderBase,
 )
 from openviking.models.model_error import model_error_boundary
 from openviking.models.network import (
@@ -28,7 +26,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
-class OpenAIDenseEmbedder(DenseEmbedderBase):
+class OpenAIDenseEmbedder(EmbedderBase):
     """OpenAI-Compatible Dense Embedder Implementation
 
     Supports OpenAI embedding models (e.g., text-embedding-3-small, text-embedding-3-large)
@@ -321,7 +319,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def supports_multimodal(self) -> bool:
         return self._supports_multimodal
 
-    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+    def _prepare_embedding_input(
+        self, text: EmbeddingInput | List[str]
+    ) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
             if self.max_input_tokens is None:
                 return text
@@ -407,7 +407,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
     @model_error_boundary
-    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, text: EmbeddingInput | List[str], is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 
@@ -441,46 +443,3 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """Close the sync client and all event-loop-scoped async clients."""
         self.client.close()
         self._async_client_cache.close_all_with_close()
-
-
-class OpenAISparseEmbedder(SparseEmbedderBase):
-    """OpenAI does not support sparse embedding
-
-    This class is a placeholder for error messaging. For sparse embedding, use Volcengine or other providers.
-    """
-
-    def __init__(self, *args, **kwargs):
-        model_name = kwargs.get("model_name")
-        if model_name is None and args:
-            model_name = str(args[0])
-        super().__init__(model_name=model_name or "openai-sparse-unsupported")
-        raise NotImplementedError(
-            "OpenAI does not support sparse embeddings. "
-            "Consider using VolcengineSparseEmbedder or other providers."
-        )
-
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        raise NotImplementedError()
-
-
-class OpenAIHybridEmbedder(HybridEmbedderBase):
-    """OpenAI does not support hybrid embedding
-
-    This class is a placeholder for error messaging. For hybrid embedding, use Volcengine or other providers.
-    """
-
-    def __init__(self, *args, **kwargs):
-        model_name = kwargs.get("model_name")
-        if model_name is None and args:
-            model_name = str(args[0])
-        super().__init__(model_name=model_name or "openai-hybrid-unsupported")
-        raise NotImplementedError(
-            "OpenAI does not support hybrid embeddings. "
-            "Consider using VolcengineHybridEmbedder or other providers."
-        )
-
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        raise NotImplementedError()
-
-    def get_dimension(self) -> int:
-        raise NotImplementedError()

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import litellm
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
@@ -19,7 +19,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
-class LiteLLMDenseEmbedder(DenseEmbedderBase):
+class LiteLLMDenseEmbedder(EmbedderBase):
     """LiteLLM Dense Embedder Implementation
 
     Routes embedding requests through litellm, supporting dozens of providers

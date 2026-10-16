@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import openai
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.models.model_error import model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
@@ -46,7 +46,7 @@ def get_voyage_model_default_dimension(model_name: Optional[str]) -> int:
     return VOYAGE_MODEL_DIMENSIONS.get(model_name.lower(), 1024)
 
 
-class VoyageDenseEmbedder(DenseEmbedderBase):
+class VoyageDenseEmbedder(EmbedderBase):
     """Voyage AI dense embedder.
 
     Voyage uses an OpenAI-compatible embeddings endpoint, but dimension

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
+from openviking.models.embedder.base import EmbedderBase, EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
 from openviking.observability.context import (
     bind_operation_observability_context,
@@ -140,7 +140,7 @@ async def test_embed_compat_binds_query_stage_for_embedding_tokens():
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
     query = " ".join(f"token-{idx}" for idx in range(200))
 
-    class _TelemetryAwareAsyncEmbedder(DenseEmbedderBase):
+    class _TelemetryAwareAsyncEmbedder(EmbedderBase):
         def __init__(self):
             super().__init__("telemetry-test", config={"max_input_tokens": 20})
 
@@ -866,7 +866,8 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
     handler = TextEmbeddingHandler(
-        _DummyVikingDB(), embedding_provider=provider,
+        _DummyVikingDB(),
+        embedding_provider=provider,
     )
     payload = {
         "data": json.dumps(

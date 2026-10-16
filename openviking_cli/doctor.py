@@ -26,6 +26,7 @@ from openviking.server.config import (
 )
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.embedding_config import normalize_embedding_config
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -66,8 +67,11 @@ def _load_config_json(config_path: Path) -> Optional[dict]:
     try:
         raw = config_path.read_text(encoding="utf-8-sig")
         raw = os.path.expandvars(raw)
-        return json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(raw)
+        if "embedding" in data:
+            data["embedding"] = normalize_embedding_config(data["embedding"])
+        return data
+    except (OSError, ValueError):
         return None
 
 
@@ -184,9 +188,9 @@ def check_agfs() -> tuple[bool, str, Optional[str]]:
         )
 
 
-def _embedding_probe_label(provider: str, model: str, dense: dict[str, Any]) -> str:
-    api_base = dense.get("api_base")
-    dimension = dense.get("dimension")
+def _embedding_probe_label(provider: str, model: str, embedding: dict[str, Any]) -> str:
+    api_base = embedding.get("api_base")
+    dimension = embedding.get("dimension")
     parts = [f"{provider}/{model}"]
     if api_base:
         parts.append(f"api_base={api_base}")
@@ -197,35 +201,24 @@ def _embedding_probe_label(provider: str, model: str, dense: dict[str, Any]) -> 
 
 def _probe_embedding_provider(
     embedding: dict[str, Any],
-    dense: dict[str, Any],
 ) -> tuple[bool, str, Optional[str]]:
     """Create the configured embedder, make one request, and validate vector shape."""
     from openviking.models.embedder.base import embed_compat
-    from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
-    provider = dense.get("provider", "local")
-    model = dense.get("model", "bge-small-zh-v1.5-f16")
-    label = _embedding_probe_label(provider, model, dense)
+    provider = embedding.get("provider", "local")
+    model = embedding.get("model", "bge-small-zh-v1.5-f16")
+    label = _embedding_probe_label(provider, model, embedding)
 
     try:
-        model_config = EmbeddingModelConfig(**dense)
-        config_kwargs = {
-            key: embedding[key]
-            for key in ("max_concurrent", "max_retries", "text_source", "max_input_tokens")
-            if key in embedding
-        }
-        embedding_config = EmbeddingConfig(dense=model_config, **config_kwargs)
+        embedding_config = EmbeddingConfig(**embedding)
         embedder = embedding_config.get_embedder()
-        expected_dimension = (
-            model_config.dimension
-            if model_config.dimension is not None
-            else embedder.get_dimension()
-        )
+        expected_dimension = embedding_config.dimension
     except Exception as exc:
         return (
             False,
             f"{label} (invalid embedding config: {exc})",
-            "Fix embedding.dense provider/model/api_base/dimension in ov.conf",
+            "Fix embedding provider/model/api_base/dimension in ov.conf",
         )
 
     async def _run_probe():
@@ -240,7 +233,7 @@ def _probe_embedding_provider(
         return (
             False,
             f"{label} (probe timed out)",
-            "Check embedding.dense.api_base and make sure the embedding provider is reachable",
+            "Check embedding.api_base and make sure the embedding provider is reachable",
         )
     except Exception as exc:
         return (
@@ -254,7 +247,7 @@ def _probe_embedding_provider(
         return (
             False,
             f"{label} (probe returned no dense vector)",
-            "Use a dense embedding model or configure embedding.dense correctly",
+            "Use a dense embedding model or configure embedding correctly",
         )
 
     actual_dimension = len(vector)
@@ -262,7 +255,7 @@ def _probe_embedding_provider(
         return (
             False,
             f"{label} (dimension mismatch: expected {expected_dimension}, got {actual_dimension})",
-            "Set embedding.dense.dimension to match the provider output, or use a matching model/index",
+            "Set embedding.dimension to match the provider output, or use a matching model/index",
         )
 
     return True, f"{label} probe ok (dimension={actual_dimension})", None
@@ -279,9 +272,8 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
         return False, "Cannot check (config unreadable)", None
 
     embedding = data.get("embedding", {}) or {}
-    dense = embedding.get("dense", {}) or {}
-    provider = dense.get("provider", "local")
-    model = dense.get("model", "bge-small-zh-v1.5-f16")
+    provider = embedding.get("provider", "local")
+    model = embedding.get("model", "bge-small-zh-v1.5-f16")
 
     if provider == "local":
         from openviking.models.embedder.local_embedders import (
@@ -307,14 +299,14 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
                 'pip install "openviking[local-embed]"',
             )
 
-        model_path = dense.get("model_path", "")
-        cache_dir = Path(dense.get("cache_dir", "~/.cache/openviking/models")).expanduser()
+        model_path = embedding.get("model_path", "")
+        cache_dir = Path(embedding.get("cache_dir", "~/.cache/openviking/models")).expanduser()
         if model_path:
             if not Path(model_path).expanduser().exists():
                 return (
                     False,
                     f"{provider}/{model} (model_path missing)",
-                    f"Download the GGUF model to {Path(model_path).expanduser()} or update embedding.dense.model_path",
+                    f"Download the GGUF model to {Path(model_path).expanduser()} or update embedding.model_path",
                 )
             return True, f"{provider}/{model} ({Path(model_path).expanduser()})", None
 
@@ -327,16 +319,16 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
             None,
         )
 
-    api_key = dense.get("api_key", "")
-    api_base = dense.get("api_base", "")
+    api_key = embedding.get("api_key", "")
+    api_base = embedding.get("api_base", "")
     if provider != "ollama" and not api_base and (not api_key or api_key.startswith("{")):
         return (
             False,
             f"{provider}/{model} (no API key)",
-            "Set embedding.dense.api_key in ov.conf",
+            "Set embedding.api_key in ov.conf",
         )
 
-    return _probe_embedding_provider(embedding, dense)
+    return _probe_embedding_provider(embedding)
 
 
 def check_vlm() -> tuple[bool, str, Optional[str]]:
@@ -415,10 +407,10 @@ def check_ollama() -> tuple[bool, str, Optional[str]]:
         return True, "not configured", None
 
     # Detect whether config uses Ollama
-    dense = data.get("embedding", {}).get("dense", {})
+    embedding = data.get("embedding", {})
     vlm = data.get("vlm", {})
     query_planner = data.get("query_planner") or {}
-    uses_embedding = dense.get("provider") == "ollama"
+    uses_embedding = embedding.get("provider") == "ollama"
     uses_vlm = vlm.get("provider") == "litellm" and (vlm.get("model", "")).startswith("ollama/")
     uses_query_planner = query_planner.get("provider") == "litellm" and (
         query_planner.get("model", "")
@@ -431,7 +423,7 @@ def check_ollama() -> tuple[bool, str, Optional[str]]:
 
     # Determine host/port from config (embedding -> vlm -> query_planner)
     if uses_embedding:
-        host, port = parse_ollama_url(dense.get("api_base"))
+        host, port = parse_ollama_url(embedding.get("api_base"))
     elif uses_vlm:
         host, port = parse_ollama_url(vlm.get("api_base"))
     else:

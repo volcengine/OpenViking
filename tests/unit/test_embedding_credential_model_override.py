@@ -36,11 +36,11 @@ def test_per_credential_model_overrides_parent_model():
             ),
         ],
     )
-    cfg = EmbeddingConfig(dense=parent)
+    cfg = EmbeddingConfig(**parent.model_dump(exclude_unset=True))
 
     captured_models: list[str | None] = []
 
-    def fake_create_embedder(_self, _provider, _embedder_type, config):
+    def fake_create_embedder(_self, config):
         captured_models.append(config.model)
         return object()
 
@@ -53,7 +53,7 @@ def test_per_credential_model_overrides_parent_model():
             lambda **kwargs: kwargs,
         ),
     ):
-        cfg._create_failover_embedder("dense", parent)
+        cfg.get_embedder()
 
     assert captured_models == ["endpoint-a", "parent-model"]
 
@@ -62,7 +62,7 @@ def test_credential_inherits_api_key_api_base_api_version_from_parent():
     """Regression: when a credential omits api_key/api_base/api_version, the
     merged config used to build that credential's embedder must fall back to
     the parent EmbeddingModelConfig fields. Validation already accepts this
-    inheritance (cred.api_key or self.api_key); _create_failover_embedder
+    inheritance (cred.api_key or self.api_key); get_embedder
     must use the same fallback so EmbeddingModelConfig re-validation does not
     fail with 'OpenAI provider requires api_key to be set'.
     """
@@ -84,7 +84,7 @@ def test_credential_inherits_api_key_api_base_api_version_from_parent():
 
     captured_configs: list[EmbeddingModelConfig] = []
 
-    def fake_create_embedder(_self, _provider, _embedder_type, config):
+    def fake_create_embedder(_self, config):
         captured_configs.append(config)
         return object()
 
@@ -98,7 +98,7 @@ def test_credential_inherits_api_key_api_base_api_version_from_parent():
         # This call previously raised:
         #   ValueError: OpenAI provider requires 'api_key' to be set
         # because merged_config received api_key=None for credential 'a'.
-        EmbeddingConfig(dense=parent)._create_failover_embedder("dense", parent)
+        EmbeddingConfig(**parent.model_dump(exclude_unset=True)).get_embedder()
 
     assert len(captured_configs) == 2
 
@@ -125,11 +125,11 @@ def test_credential_without_inheritance_does_not_raise_at_get_embedder():
         api_key="parent-key",
         credentials=[EmbeddingCredential(id="a")],
     )
-    cfg = EmbeddingConfig(dense=parent)
+    cfg = EmbeddingConfig(**parent.model_dump(exclude_unset=True))
 
     captured: list[EmbeddingModelConfig] = []
 
-    def fake_create_embedder(_self, _provider, _embedder_type, config):
+    def fake_create_embedder(_self, config):
         captured.append(config)
         return object()
 
@@ -140,7 +140,7 @@ def test_credential_without_inheritance_does_not_raise_at_get_embedder():
             lambda **kwargs: kwargs,
         ),
     ):
-        cfg._create_failover_embedder("dense", parent)
+        cfg.get_embedder()
 
     # Must not raise; merged config must carry inherited api_key.
     assert len(captured) == 1

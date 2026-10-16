@@ -8,11 +8,9 @@ import pytest
 from openviking.concurrency import AsyncSemaphore
 from openviking.config.embedding import _bind_account_state
 from openviking.models.embedder.base import (
-    CompositeHybridEmbedder,
-    DenseEmbedderBase,
+    EmbedderBase,
     EmbedResult,
     FailoverEmbedder,
-    SparseEmbedderBase,
 )
 from openviking.models.embedder.retry_embedder import RetryEmbedder
 from openviking.models.model_error import ModelError, ModelErrorKind
@@ -21,7 +19,6 @@ from openviking.utils.model_retry import model_retry_scope
 from openviking_cli.utils.config.embedding_config import (
     EmbeddingConfig,
     EmbeddingCredential,
-    EmbeddingModelConfig,
 )
 
 
@@ -35,7 +32,7 @@ class ProviderError(ModelError):
         super().__init__(kinds[status_code], f"HTTP {status_code}", status_code=status_code)
 
 
-class FakeDenseEmbedder(DenseEmbedderBase):
+class FakeDenseEmbedder(EmbedderBase):
     def __init__(self, outcomes, *, max_retries: int = 2):
         super().__init__(
             "fake-dense",
@@ -76,27 +73,6 @@ class FakeDenseEmbedder(DenseEmbedderBase):
         self.closed = True
 
 
-class FakeSparseEmbedder(SparseEmbedderBase):
-    def __init__(self, outcomes, *, max_retries: int = 2):
-        super().__init__("fake-sparse", {"provider": "fake", "max_retries": max_retries})
-        self.provider = "fake"
-        self.outcomes = list(outcomes)
-        self.calls = 0
-
-    def _next(self):
-        self.calls += 1
-        outcome = self.outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return EmbedResult(sparse_vector=outcome)
-
-    def embed(self, content, is_query=False, **kwargs):
-        return self._next()
-
-    async def embed_async(self, content, is_query=False, **kwargs):
-        return self._next()
-
-
 @pytest.fixture(autouse=True)
 def no_retry_sleep(monkeypatch):
     monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
@@ -112,9 +88,6 @@ def test_retry_embedder_retries_transient_and_preserves_capabilities():
     assert inner.calls == 2
     assert embedder.provider == "fake"
     assert embedder.get_dimension() == 2
-    assert embedder.is_dense is True
-    assert embedder.is_sparse is False
-    assert embedder.is_hybrid is False
     assert embedder.supports_multimodal is True
 
 
@@ -144,14 +117,6 @@ def test_unknown_api_error_exhausts_retry_budget_without_credential_failover():
     assert raised.value is errors[-1]
     assert primary.calls == 3
     assert backup.calls == 0
-
-
-def test_retry_embedder_sparse_dimension_remains_unsupported():
-    embedder = RetryEmbedder(FakeSparseEmbedder([{"term": 1.0}]))
-
-    assert embedder.is_sparse is True
-    with pytest.raises(AttributeError, match="no get_dimension"):
-        embedder.get_dimension()
 
 
 @pytest.mark.asyncio
@@ -208,24 +173,6 @@ async def test_cancelled_attempt_releases_semaphore():
     assert semaphore._value == 1
 
 
-@pytest.mark.asyncio
-async def test_composite_retries_only_failed_branch(monkeypatch):
-    async def no_sleep(_delay):
-        return None
-
-    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_sleep)
-    dense = FakeDenseEmbedder([[0.1, 0.2]])
-    sparse = FakeSparseEmbedder([ProviderError(503), {"term": 1.0}], max_retries=1)
-    composite = CompositeHybridEmbedder(RetryEmbedder(dense), RetryEmbedder(sparse))
-
-    result = await composite.embed_async("query")
-
-    assert result.dense_vector == [0.1, 0.2]
-    assert result.sparse_vector == {"term": 1.0}
-    assert dense.calls == 1
-    assert sparse.calls == 2
-
-
 def test_failover_runs_after_current_credential_retry_exhaustion():
     primary = FakeDenseEmbedder([ProviderError(503), ProviderError(503)], max_retries=1)
     backup = FakeDenseEmbedder([[0.3, 0.4]], max_retries=1)
@@ -260,12 +207,7 @@ def test_account_state_reaches_retry_inner_and_close_is_delegated_once():
 def test_factory_wraps_single_remote_provider(monkeypatch):
     monkeypatch.setattr("openai.OpenAI", lambda **_kwargs: object())
     config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            api_key="key",
-            dimension=2,
-        )
+        provider="openai", model="text-embedding-3-small", api_key="key", dimension=2
     )
 
     embedder = config.get_embedder()
@@ -277,42 +219,16 @@ def test_factory_wraps_single_remote_provider(monkeypatch):
 def test_factory_places_retry_inside_failover(monkeypatch):
     monkeypatch.setattr("openai.OpenAI", lambda **_kwargs: object())
     config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            dimension=2,
-            credentials=[
-                EmbeddingCredential(id="primary", api_key="key-a"),
-                EmbeddingCredential(id="backup", api_key="key-b"),
-            ],
-        )
+        provider="openai",
+        model="text-embedding-3-small",
+        dimension=2,
+        credentials=[
+            EmbeddingCredential(id="primary", api_key="key-a"),
+            EmbeddingCredential(id="backup", api_key="key-b"),
+        ],
     )
 
     embedder = config.get_embedder()
 
     assert isinstance(embedder, FailoverEmbedder)
     assert all(isinstance(child, RetryEmbedder) for child in embedder._embedders)
-
-
-def test_factory_places_retry_inside_composite(monkeypatch):
-    monkeypatch.setattr("openai.OpenAI", lambda **_kwargs: object())
-    monkeypatch.setattr("volcenginesdkarkruntime.Ark", lambda **_kwargs: object())
-    config = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            api_key="openai-key",
-            dimension=2,
-        ),
-        sparse=EmbeddingModelConfig(
-            provider="volcengine",
-            model="doubao-embedding",
-            api_key="ark-key",
-        ),
-    )
-
-    embedder = config.get_embedder()
-
-    assert isinstance(embedder, CompositeHybridEmbedder)
-    assert isinstance(embedder.dense_embedder, RetryEmbedder)
-    assert isinstance(embedder.sparse_embedder, RetryEmbedder)

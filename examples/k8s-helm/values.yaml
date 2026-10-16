@@ -24,12 +24,11 @@ server:
 openviking:
   config:
     embedding:
-      dense:
-        model: "doubao-embedding-vision-251215"
-        api_key: null
-        api_base: "https://ark.cn-beijing.volces.com/api/v3"
-        dimension: "1024"
-        backend: "volcengine"
+      model: "doubao-embedding-vision-251215"
+      api_key: null
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      dimension: "1024"
+      backend: "volcengine"
     vlm:
       model: "doubao-seed-2-0-lite-260428"
       api_key: null

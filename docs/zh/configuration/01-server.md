@@ -88,14 +88,12 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "<your-ark-api-key>",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",
@@ -132,17 +130,18 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 | `api_version` | Embedding、VLM、Query Planner | Azure 等服务的 API 版本 |
 | `extra_headers` | Embedding、VLM、Query Planner、Rerank | 附加请求头 |
 | `extra_request_body` | VLM、Query Planner | 附加的 Completion 请求参数 |
-| `extra_body` | `embedding.dense` / `sparse` / `hybrid` | 附加的 Embedding 请求参数 |
+| `extra_body` | `embedding` | 附加的 Embedding 请求参数 |
 | `timeout` | VLM、Query Planner、Rerank | 单次请求超时，单位为秒 |
 | `embedding.max_retries`、`vlm.max_retries`、`query_planner.max_retries` | Embedding、VLM、Query Planner | 请求失败重试次数；Rerank 没有 `max_retries` 字段 |
 
-### `embedding.dense`
+### `embedding`
 
 | 字段 | 类型 / 可选值 | 作用 |
 |---|---|---|
-| `provider` | `openai`、`volcengine`、`azure`、`ollama`、`local` 等 | Dense Embedding 服务 |
+| `provider` | `openai`、`volcengine`、`azure`、`ollama`、`local` 等 | Embedding 服务 |
 | `dimension` | integer，`> 0` | 向量维度，必须与模型输出及已有集合一致 |
 | `input` | `"text"` / `"multimodal"` | 输入类型 |
+| `output` | `"dense"` / `"dense_sparse"` | 单模型输出类型；默认 `dense`，`dense_sparse` 要求受支持的模型与 `input: "text"` |
 | `encoding_format` | `"float"` / `"base64"` | OpenAI 兼容接口的向量编码格式 |
 
 更换模型或 `dimension` 可能与已有向量集合不兼容，需要迁移或重建索引。
@@ -450,14 +449,12 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key": "<your-ark-api-key>",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<your-ark-api-key>",
+    "dimension": 1024,
+    "input": "multimodal"
   },
   "vlm": {
     "provider": "volcengine",

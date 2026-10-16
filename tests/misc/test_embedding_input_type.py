@@ -82,13 +82,11 @@ class TestEmbeddingConfigContextualEmbedders:
         """get_embedder should pass query_param and document_param to OpenAIDenseEmbedder."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="text-embedding-3-small",
-                provider="openai",
-                api_key="sk-test",
-                query_param="search_query",
-                document_param="search_document",
-            )
+            model="text-embedding-3-small",
+            provider="openai",
+            api_key="sk-test",
+            query_param="search_query",
+            document_param="search_document",
         )
 
         config.get_embedder()
@@ -103,13 +101,11 @@ class TestEmbeddingConfigContextualEmbedders:
         """get_embedder should pass query_param and document_param to JinaDenseEmbedder."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="jina-embeddings-v5-text-small",
-                provider="jina",
-                api_key="jina-test",
-                query_param="retrieval.query",
-                document_param="retrieval.passage",
-            )
+            model="jina-embeddings-v5-text-small",
+            provider="jina",
+            api_key="jina-test",
+            query_param="retrieval.query",
+            document_param="retrieval.passage",
         )
 
         config.get_embedder()
@@ -124,11 +120,7 @@ class TestEmbeddingConfigContextualEmbedders:
         """get_embedder should not pass query_param and document_param when not set."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="text-embedding-3-small",
-                provider="openai",
-                api_key="sk-test",
-            )
+            model="text-embedding-3-small", provider="openai", api_key="sk-test"
         )
 
         config.get_embedder()
@@ -140,18 +132,14 @@ class TestEmbeddingConfigContextualEmbedders:
         assert "input_type" not in call_kwargs
 
     @patch("openviking.models.embedder.OpenAIDenseEmbedder")
-    def test_get_embedder_openai_passes_explicit_multimodal_input(
-        self, mock_embedder_class
-    ):
+    def test_get_embedder_openai_passes_explicit_multimodal_input(self, mock_embedder_class):
         """Explicit input=multimodal should opt OpenAI-compatible embedders into multimodal."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="custom-multimodal-embedding",
-                provider="openai",
-                api_key="sk-test",
-                input="multimodal",
-            )
+            model="custom-multimodal-embedding",
+            provider="openai",
+            api_key="sk-test",
+            input="multimodal",
         )
 
         config.get_embedder()
@@ -165,14 +153,12 @@ class TestEmbeddingConfigContextualEmbedders:
         """Failover merging must not turn the default input value into explicit opt-in."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="text-embedding-3-small",
-                provider="openai",
-                credentials=[
-                    {"id": "primary", "api_key": "sk-primary"},
-                    {"id": "backup", "api_key": "sk-backup"},
-                ],
-            )
+            model="text-embedding-3-small",
+            provider="openai",
+            credentials=[
+                {"id": "primary", "api_key": "sk-primary"},
+                {"id": "backup", "api_key": "sk-backup"},
+            ],
         )
 
         config.get_embedder()
@@ -188,16 +174,14 @@ class TestEmbeddingConfigContextualEmbedders:
         """Failover credentials should inherit explicit input=multimodal from parent config."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="custom-multimodal-embedding",
-                provider="openai",
-                input="multimodal",
-                dimension=1536,
-                credentials=[
-                    {"id": "primary", "api_key": "sk-primary"},
-                    {"id": "backup", "api_key": "sk-backup"},
-                ],
-            )
+            model="custom-multimodal-embedding",
+            provider="openai",
+            input="multimodal",
+            dimension=1536,
+            credentials=[
+                {"id": "primary", "api_key": "sk-primary"},
+                {"id": "backup", "api_key": "sk-backup"},
+            ],
         )
 
         config.get_embedder()
@@ -211,11 +195,7 @@ class TestEmbeddingConfigContextualEmbedders:
         """get_embedder should not pass query_param and document_param when not set."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="jina-embeddings-v5-text-small",
-                provider="jina",
-                api_key="jina-test",
-            )
+            model="jina-embeddings-v5-text-small", provider="jina", api_key="jina-test"
         )
 
         config.get_embedder()

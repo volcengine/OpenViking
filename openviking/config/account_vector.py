@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking_cli.utils.config.runtime_field import RuntimeField
 
@@ -27,51 +27,6 @@ class AccountEmbeddingCredential(BaseModel):
     extra_headers: Optional[Dict[str, str]] = RuntimeField(default=None)
 
 
-class AccountEmbeddingModelConfig(BaseModel):
-    """Account-selectable embedding deployment and immutable vector contract."""
-
-    # True model identity and vector-space fields are fixed at Account creation.
-    model: str = RuntimeField(dynamic=False, min_length=1)
-    dimension: int = RuntimeField(dynamic=False, gt=0)
-    input: Optional[Literal["text", "multimodal"]] = RuntimeField(
-        default=None,
-        dynamic=False,
-    )
-    query_param: Optional[str] = RuntimeField(default=None, dynamic=False)
-    document_param: Optional[str] = RuntimeField(default=None, dynamic=False)
-    version: Optional[str] = RuntimeField(default=None, dynamic=False)
-
-    # Provider bindings may rotate without changing the declared vector space.
-    credentials: List[AccountEmbeddingCredential] = RuntimeField(min_length=1)
-    failback_timeout_seconds: Optional[float] = RuntimeField(default=None, gt=0)
-    failback_request_count: Optional[int] = RuntimeField(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def validate_credentials(self) -> "AccountEmbeddingModelConfig":
-        """Validate each Account-owned provider binding without Cluster fallback."""
-        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
-
-        for credential in self.credentials:
-            values = {
-                "model": credential.model or self.model,
-                "dimension": self.dimension,
-                "provider": credential.provider,
-                "api_key": credential.api_key,
-                "api_base": credential.api_base,
-                "api_version": credential.api_version,
-                "ak": credential.ak,
-                "sk": credential.sk,
-                "region": credential.region,
-                "host": credential.host,
-            }
-            for field_name in ("input", "query_param", "document_param", "version"):
-                value = getattr(self, field_name)
-                if value is not None:
-                    values[field_name] = value
-            EmbeddingModelConfig.model_validate(values)
-        return self
-
-
 class AccountEmbeddingCircuitBreakerConfig(BaseModel):
     failure_threshold: Optional[int] = RuntimeField(default=None, ge=1)
     reset_timeout: Optional[float] = RuntimeField(default=None, gt=0)
@@ -85,32 +40,50 @@ class AccountEmbeddingCircuitBreakerConfig(BaseModel):
 
 
 class AccountEmbeddingConfig(BaseModel):
-    """Embedding settings an Account may own.
+    """Account-owned model contract and independently rotatable credentials."""
 
-    A section may contain only Account runtime policy, but every declared model
-    mode is a complete Account-owned binding. Cluster binding is used only when
-    no Account-owned model mode is declared.
-    """
+    model_config = ConfigDict(extra="forbid")
 
-    dense: Optional[AccountEmbeddingModelConfig] = RuntimeField(default=None)
-    sparse: Optional[AccountEmbeddingModelConfig] = RuntimeField(default=None)
-    hybrid: Optional[AccountEmbeddingModelConfig] = RuntimeField(default=None)
+    model: Optional[str] = RuntimeField(default=None, dynamic=False, min_length=1)
+    dimension: Optional[int] = RuntimeField(default=None, dynamic=False, gt=0)
+    output: Literal["dense", "dense_sparse"] = RuntimeField(default="dense", dynamic=False)
+    input: Optional[Literal["text", "multimodal"]] = RuntimeField(default=None, dynamic=False)
+    query_param: Optional[str] = RuntimeField(default=None, dynamic=False)
+    document_param: Optional[str] = RuntimeField(default=None, dynamic=False)
+    version: Optional[str] = RuntimeField(default=None, dynamic=False)
+    credentials: Optional[List[AccountEmbeddingCredential]] = RuntimeField(
+        default=None, min_length=1
+    )
+    failback_timeout_seconds: Optional[float] = RuntimeField(default=None, gt=0)
+    failback_request_count: Optional[int] = RuntimeField(default=None, ge=1)
     max_concurrent: Optional[int] = RuntimeField(default=None, ge=1)
     max_retries: Optional[int] = RuntimeField(default=None, ge=0)
-    circuit_breaker: Optional[AccountEmbeddingCircuitBreakerConfig] = RuntimeField(
-        default=None
-    )
+    circuit_breaker: Optional[AccountEmbeddingCircuitBreakerConfig] = RuntimeField(default=None)
     text_source: Optional[Literal["content_only", "summary_first"]] = RuntimeField(
-        default=None,
-        dynamic=False,
+        default=None, dynamic=False
     )
     max_input_tokens: Optional[int] = RuntimeField(default=None, dynamic=False, ge=100)
 
     @model_validator(mode="after")
-    def validate_section(self) -> "AccountEmbeddingConfig":
-        """Validate mode combinations; an empty section is an explicit no-op override."""
-        if self.hybrid is not None and (self.dense is not None or self.sparse is not None):
-            raise ValueError("embedding.hybrid cannot be combined with dense or sparse")
+    def validate_model(self) -> "AccountEmbeddingConfig":
+        from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+
+        contract_fields = {
+            "model",
+            "dimension",
+            "output",
+            "input",
+            "query_param",
+            "document_param",
+            "version",
+            "credentials",
+        }
+        if not self.model_fields_set.intersection(contract_fields):
+            return self
+        if not self.model or self.dimension is None or not self.credentials:
+            raise ValueError("Account embedding requires model, dimension and credentials together")
+        values = self.model_dump(include=contract_fields, exclude_none=True)
+        EmbeddingModelConfig.model_validate(values)
         return self
 
 

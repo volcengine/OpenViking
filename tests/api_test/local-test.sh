@@ -53,14 +53,12 @@ cat > ~/.openviking/ov.conf << EOF
     "max_retries": 3
   },
   "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "dummy-embedding-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "dimension": 1024,
-      "input": "multimodal"
-    }
+    "provider": "volcengine",
+    "api_key": "dummy-embedding-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "dimension": 1024,
+    "input": "multimodal"
   }
 }
 EOF

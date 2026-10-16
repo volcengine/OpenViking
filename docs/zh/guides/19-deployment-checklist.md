@@ -78,12 +78,12 @@ HDFS 模型目录（默认 `/home/vikingdb_data`）要让 VikingDB 的运行身�
 
 ## 模型接入检查
 
-- Embedding 必须返回固定维度的 dense vector。核对模型实际输出、`embedding.dense.dimension` 和向量库维度一致。
+- Embedding 必须返回固定维度的 dense vector。核对模型实际输出、`embedding.dimension` 和向量库维度一致。
 - 确认 API Base 是否包含 `/v1` 或 `/api/v3`。文本与多模态 Embedding 的接口、请求体可能不同，不能仅凭“OpenAI 兼容”判断可用。
 - VLM / LLM 用于理解、摘要和记忆抽取。图片任务需验证图片输入，启用工具调用的 Agent 需验证 tool calls。
 - 从实际 Pod 网络测试鉴权、DNS、证书和超时；本机能访问不代表 Pod 能访问。
 - 已有数据更换 Embedding 模型时，即使维度相同，也要评估向量语义变化和重建索引方案。
 
-私有交付中，`OpenVikingWorkspace.spec.vectordb.dimension` 会覆盖模板中的存储维度，但不会同步修改 `embedding.dense.dimension`。两处必须分别核对。
+私有交付中，`OpenVikingWorkspace.spec.vectordb.dimension` 会覆盖模板中的存储维度，但不会同步修改 `embedding.dimension`。两处必须分别核对。
 
 准备完成后进入[企业私有化部署](20-private-deployment.md)。日常维护见[升级与排障](21-private-operations.md)。

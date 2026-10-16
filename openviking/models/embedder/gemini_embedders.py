@@ -16,7 +16,7 @@ except ImportError:
     _HTTP_RETRY_AVAILABLE = False
 
 from openviking.models.embedder.base import (
-    DenseEmbedderBase,
+    EmbedderBase,
     EmbedResult,
     truncate_and_normalize,
 )
@@ -70,7 +70,7 @@ def _raise_api_error(e: APIError, model: str) -> None:
     raise RuntimeError(msg) from e
 
 
-class GeminiDenseEmbedder(DenseEmbedderBase):
+class GeminiDenseEmbedder(EmbedderBase):
     """Dense embedder backed by Google's Gemini Embedding models.
 
     REST endpoint: /v1beta/models/{model}:embedContent (SDK handles Parts format internally).

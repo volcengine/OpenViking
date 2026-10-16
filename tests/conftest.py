@@ -10,7 +10,7 @@ from typing import AsyncGenerator, Generator
 import pytest
 import pytest_asyncio
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import set_task_tracker
@@ -137,7 +137,7 @@ async def service(
 
     previous_viking_fs = viking_fs_module._instance
 
-    class FakeEmbedder(DenseEmbedderBase):
+    class FakeEmbedder(EmbedderBase):
         def __init__(self):
             super().__init__(model_name="test-fake-embedder")
 
@@ -162,12 +162,10 @@ async def service(
                 "vectordb": {"backend": "local"},
             },
             "embedding": {
-                "dense": {
-                    "provider": "openai",
-                    "model": "test-embedder",
-                    "api_key": "test-key",
-                    "dimension": 1024,
-                }
+                "provider": "openai",
+                "model": "test-embedder",
+                "api_key": "test-key",
+                "dimension": 1024,
             },
         }
     )

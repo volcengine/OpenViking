@@ -133,38 +133,32 @@
         "file_vectorization_concurrency": 8
     },
     "embedding": {
-        "dense": {
-            "model": "doubao-embedding-vision-251215",
-            "api_key": "{your-api-key}",
-            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-            "dimension": 1024,
-            "provider": "volcengine",
-            "input": "multimodal",
-        },
-        "text_source": "content_only",
-        "max_input_tokens": 4096,
-        "circuit_breaker": {"failure_threshold": 5, "reset_timeout": 60, "max_reset_timeout": 600},
+      "model": "doubao-embedding-vision-251215",
+      "api_key": "{your-api-key}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "dimension": 1024,
+      "provider": "volcengine",
+      "input": "multimodal",
+      "text_source": "content_only",
+      "max_input_tokens": 4096,
+      "circuit_breaker": {"failure_threshold": 5, "reset_timeout": 60, "max_reset_timeout": 600}
     },
     "embedding_ollama_example": {
-        "_comment": "For local deployment with Ollama (no API key required):",
-        "dense": {
-            "provider": "ollama",
-            "model": "nomic-embed-text",
-            "api_base": "http://localhost:11434/v1",
-            "dimension": 768,
-            "input": "text",
-        },
+      "_comment": "For local deployment with Ollama (no API key required):",
+      "provider": "ollama",
+      "model": "nomic-embed-text",
+      "api_base": "http://localhost:11434/v1",
+      "dimension": 768,
+      "input": "text"
     },
     "embedding_volcengine_plan_example": {
-        "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model skylark-embedding-vision.",
-        "dense": {
-            "model": "doubao-embedding-vision",
-            "api_key": "{your-api-key}",
-            "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
-            "dimension": 1024,
-            "provider": "volcengine",
-            "input": "multimodal",
-        },
+      "_comment": "For VolcEngine subscription plans instead of pay-as-you-go: Agent Plan uses api_base https://ark.cn-beijing.volces.com/api/plan/v3, Coding Plan uses https://ark.cn-beijing.volces.com/api/coding/v3. On BytePlus, the ModelArk Coding Plan uses https://ark.ap-southeast.bytepluses.com/api/coding/v3 with model skylark-embedding-vision.",
+      "model": "doubao-embedding-vision",
+      "api_key": "{your-api-key}",
+      "api_base": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "dimension": 1024,
+      "provider": "volcengine",
+      "input": "multimodal"
     },
     "vlm": {
         "model": "doubao-seed-2-0-lite-260428",

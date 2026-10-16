@@ -1,18 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""VikingDB Embedder Implementation via HTTP API"""
+"""VikingDB embedding client using one model for all requested vector output."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
-from openviking.models.embedder.base import (
-    DenseEmbedderBase,
-    EmbedResult,
-    HybridEmbedderBase,
-    SparseEmbedderBase,
-)
-from openviking.models.model_error import model_error_boundary, model_error_from_status
+from openviking.models.embedder.base import EmbedderBase, EmbeddingInput, EmbedResult
+from openviking.models.model_error import model_error_boundary
 from openviking.storage.vectordb.collection.volcengine_clients import (
     DEFAULT_TIMEOUT,
     ClientForDataApi,
@@ -21,136 +16,8 @@ from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
-class VikingDBClientMixin:
-    """Mixin to handle VikingDB Client initialization and API calls."""
-
-    def _init_vikingdb_client(
-        self,
-        ak: Optional[str] = None,
-        sk: Optional[str] = None,
-        region: Optional[str] = None,
-        host: Optional[str] = None,
-    ):
-        self.ak = ak
-        self.sk = sk
-        self.region = region or "cn-beijing"
-        self.host = host
-
-        if not self.ak or not self.sk:
-            raise ValueError("AK and SK are required for VikingDB Embedder")
-
-        self.client = ClientForDataApi(self.ak, self.sk, self.region, self.host)
-        self._async_client_cache = LoopScopedAsyncClientCache()
-
-    def _call_api(
-        self,
-        texts: List[str],
-        dense_model: Dict[str, Any] = None,
-        sparse_model: Optional[Dict[str, Any]] = None,
-        input_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Call VikingDB Embedding API"""
-        path = "/api/vikingdb/embedding"
-
-        data_items = [{"text": text} for text in texts]
-        if input_type is not None:
-            for item in data_items:
-                item["input_type"] = input_type
-
-        req_body = {"data": data_items}
-        if dense_model:
-            req_body["dense_model"] = dense_model
-        if sparse_model:
-            req_body["sparse_model"] = sparse_model
-
-        try:
-            response = self.client.do_req("POST", path, req_body=req_body)
-            if response.status_code != 200:
-                raise model_error_from_status(
-                    response.status_code,
-                    f"VikingDB API returned bad code: {response.status_code}, "
-                    f"message: {response.text}",
-                    provider="vikingdb",
-                )
-
-            result = response.json()
-            return result.get("result", {}).get("data", [])
-
-        except Exception as e:
-            logger.error(f"Failed to get embeddings: {e}")
-            raise e
-
-    async def _call_api_async(
-        self,
-        texts: List[str],
-        dense_model: Dict[str, Any] = None,
-        sparse_model: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        path = "/api/vikingdb/embedding"
-        data_items = [{"text": text} for text in texts]
-
-        req_body = {"data": data_items}
-        if dense_model:
-            req_body["dense_model"] = dense_model
-        if sparse_model:
-            req_body["sparse_model"] = sparse_model
-
-        req = self.client.prepare_request(method="POST", path=path, data=req_body)
-        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=DEFAULT_TIMEOUT))
-
-        response = await client.request(
-            method=req.method,
-            url=f"https://{self.host}{req.path}",
-            headers=req.headers,
-            content=req.body,
-        )
-        if response.status_code != 200:
-            raise model_error_from_status(
-                response.status_code,
-                f"VikingDB API returned bad code: {response.status_code}, message: {response.text}",
-                provider="vikingdb",
-            )
-
-        result = response.json()
-        return result.get("result", {}).get("data", [])
-
-    def _truncate_and_normalize(
-        self, embedding: List[float], dimension: Optional[int]
-    ) -> List[float]:
-        """Truncate and L2 normalize embedding"""
-        if not dimension or len(embedding) <= dimension:
-            return embedding
-
-        import math
-
-        embedding = embedding[:dimension]
-        norm = math.sqrt(sum(x**2 for x in embedding))
-        if norm > 0:
-            embedding = [x / norm for x in embedding]
-        return embedding
-
-    def _process_sparse_embedding(self, sparse_data: Any) -> Dict[str, float]:
-        """Process sparse embedding data"""
-        if not sparse_data:
-            return {}
-
-        result = {}
-        if isinstance(sparse_data, dict):
-            return {str(k): float(v) for k, v in sparse_data.items()}
-
-        if isinstance(sparse_data, list):
-            for item in sparse_data:
-                if isinstance(item, dict):
-                    # Handle common formats
-                    key = item.get("key") or item.get("index") or item.get("token")
-                    val = item.get("value") or item.get("weight") or item.get("score")
-                    if key is not None and val is not None:
-                        result[str(key)] = float(val)
-        return result
-
-
-class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
-    """VikingDB Dense Embedder"""
+class VikingDBEmbedder(EmbedderBase):
+    """Generate dense or dense+sparse vectors in a single VikingDB request."""
 
     def __init__(
         self,
@@ -161,288 +28,93 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         region: Optional[str] = None,
         host: Optional[str] = None,
         dimension: Optional[int] = None,
-        embedding_type: str = "text",
+        output: str = "dense",
         config: Optional[Dict[str, Any]] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
     ):
-        DenseEmbedderBase.__init__(self, model_name, config)
+        super().__init__(model_name, config, output=output)
         self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
+        self.client = ClientForDataApi(ak, sk, region or "cn-beijing", host)
+        self._async_client_cache = LoopScopedAsyncClientCache()
         self.model_version = model_version
         self.dimension = dimension
-        self.embedding_type = embedding_type
-        self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
         self.query_param = query_param
         self.document_param = document_param
 
-    def _resolve_input_type(self, is_query: bool) -> Optional[str]:
-        """Return the input_type value for query or document side, or None for symmetric mode."""
-        if is_query and self.query_param is not None:
-            return self.query_param
-        if not is_query and self.document_param is not None:
-            return self.document_param
-        return None
+    def _request_body(self, content: EmbeddingInput, is_query: bool) -> dict:
+        text = self.prepare_embedding_input(content)
+        data = {"text": text}
+        input_type = self.query_param if is_query else self.document_param
+        if input_type is not None:
+            data["input_type"] = input_type
+        model = {"name": self.model_name}
+        if self.model_version is not None:
+            model["version"] = self.model_version
+        dense_model = dict(model)
+        if self.dimension is not None:
+            dense_model["dim"] = self.dimension
+        body = {"data": [data], "dense_model": dense_model}
+        if self.output == "dense_sparse":
+            body["sparse_model"] = model
+        return body
+
+    def _parse_response(self, response) -> EmbedResult:
+        response.raise_for_status()
+        payload = response.json()
+        if payload["code"] != "Success":
+            raise RuntimeError(
+                f"VikingDB embedding failed: {payload['code']}: {payload['message']}"
+            )
+        result = payload["result"]
+        item = result["data"][0]
+        usage = result["token_usage"]
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider=self.provider,
+            prompt_tokens=sum(item["prompt_tokens"] for item in usage.values()),
+            completion_tokens=sum(item["completion_tokens"] for item in usage.values()),
+        )
+        return EmbedResult(
+            dense_vector=item["dense"],
+            sparse_vector=item["sparse"] if self.output == "dense_sparse" else None,
+        )
 
     @model_error_boundary
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        input_type = self._resolve_input_type(is_query)
-
-        def _call() -> EmbedResult:
-            results = self._call_api([text], dense_model=self.dense_model, input_type=input_type)
-            if not results:
-                return EmbedResult(dense_vector=[])
-
-            item = results[0]
-            dense_vector = []
-            if "dense_embedding" in item:
-                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
-
-            return EmbedResult(dense_vector=dense_vector)
-
-        result = self._run_once(
-            _call,
+    def embed(self, content: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        body = self._request_body(content, is_query)
+        return self._run_once(
+            lambda: self._parse_response(
+                self.client.do_req("POST", "/api/vikingdb/embedding", req_body=body)
+            ),
             logger=logger,
             operation_name="VikingDB embedding",
         )
-        # Estimate token usage
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return result
 
     @model_error_boundary
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-        async def _call() -> EmbedResult:
-            results = await self._call_api_async([text], dense_model=self.dense_model)
-            if not results:
-                return EmbedResult(dense_vector=[])
-
-            item = results[0]
-            dense_vector = []
-            if "dense_embedding" in item:
-                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
-            return EmbedResult(dense_vector=dense_vector)
-
-        result = await self._run_once_async(
-            _call,
-            logger=logger,
-            operation_name="VikingDB async embedding",
+    async def embed_async(self, content: EmbeddingInput, is_query: bool = False) -> EmbedResult:
+        body = self._request_body(content, is_query)
+        request = self.client.prepare_request(
+            method="POST", path="/api/vikingdb/embedding", data=body
         )
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
+        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=DEFAULT_TIMEOUT))
+
+        async def call() -> EmbedResult:
+            response = await client.request(
+                method=request.method,
+                url=f"https://{self.client.host}{request.path}",
+                headers=request.headers,
+                content=request.body,
+            )
+            return self._parse_response(response)
+
+        return await self._run_once_async(
+            call, logger=logger, operation_name="VikingDB async embedding"
         )
-        return result
 
     def get_dimension(self) -> int:
-        return self.dimension if self.dimension else 2048
-
-
-class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
-    """VikingDB Sparse Embedder"""
-
-    def __init__(
-        self,
-        model_name: str,
-        model_version: Optional[str] = None,
-        ak: Optional[str] = None,
-        sk: Optional[str] = None,
-        region: Optional[str] = None,
-        host: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
-    ):
-        SparseEmbedderBase.__init__(self, model_name, config)
-        self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
-        self.model_version = model_version
-        self.sparse_model = {
-            "name": model_name,
-            "version": model_version,
-        }
-
-    @model_error_boundary
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        def _call() -> EmbedResult:
-            results = self._call_api([text], sparse_model=self.sparse_model)
-            if not results:
-                return EmbedResult(sparse_vector={})
-
-            item = results[0]
-            sparse_vector = {}
-            if "sparse" in item:
-                sparse_vector = item["sparse"]
-
-            return EmbedResult(sparse_vector=sparse_vector)
-
-        result = self._run_once(
-            _call,
-            logger=logger,
-            operation_name="VikingDB sparse embedding",
-        )
-        # Estimate token usage
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return result
-
-    @model_error_boundary
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-        async def _call() -> EmbedResult:
-            results = await self._call_api_async([text], sparse_model=self.sparse_model)
-            if not results:
-                return EmbedResult(sparse_vector={})
-
-            item = results[0]
-            sparse_vector = {}
-            if "sparse" in item:
-                sparse_vector = item["sparse"]
-            elif "sparse_embedding" in item:
-                sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
-            return EmbedResult(sparse_vector=sparse_vector)
-
-        result = await self._run_once_async(
-            _call,
-            logger=logger,
-            operation_name="VikingDB async sparse embedding",
-        )
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return result
-
-
-class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
-    """VikingDB Hybrid Embedder"""
-
-    def __init__(
-        self,
-        model_name: str,
-        model_version: Optional[str] = None,
-        ak: Optional[str] = None,
-        sk: Optional[str] = None,
-        region: Optional[str] = None,
-        host: Optional[str] = None,
-        dimension: Optional[int] = None,
-        embedding_type: str = "text",
-        config: Optional[Dict[str, Any]] = None,
-        query_param: Optional[str] = None,
-        document_param: Optional[str] = None,
-    ):
-        HybridEmbedderBase.__init__(self, model_name, config)
-        self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
-        self.model_version = model_version
-        self.dimension = dimension
-        self.embedding_type = embedding_type
-        self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
-        self.sparse_model = {
-            "name": model_name,
-            "version": model_version,
-        }
-        self.query_param = query_param
-        self.document_param = document_param
-
-    def _resolve_input_type(self, is_query: bool) -> Optional[str]:
-        """Return the input_type value for query or document side, or None for symmetric mode."""
-        if is_query and self.query_param is not None:
-            return self.query_param
-        if not is_query and self.document_param is not None:
-            return self.document_param
-        return None
-
-    @model_error_boundary
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        input_type = self._resolve_input_type(is_query)
-
-        def _call() -> EmbedResult:
-            results = self._call_api(
-                [text],
-                dense_model=self.dense_model,
-                sparse_model=self.sparse_model,
-                input_type=input_type,
-            )
-            if not results:
-                return EmbedResult(dense_vector=[], sparse_vector={})
-
-            item = results[0]
-            dense_vector = []
-            sparse_vector = {}
-            if "dense" in item:
-                dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
-            if "sparse" in item:
-                sparse_vector = item["sparse"]
-
-            return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
-
-        result = self._run_once(
-            _call,
-            logger=logger,
-            operation_name="VikingDB hybrid embedding",
-        )
-        # Estimate token usage
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return result
-
-    @model_error_boundary
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-        async def _call() -> EmbedResult:
-            results = await self._call_api_async(
-                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
-            )
-            if not results:
-                return EmbedResult(dense_vector=[], sparse_vector={})
-
-            item = results[0]
-            dense_vector = []
-            sparse_vector = {}
-            if "dense" in item:
-                dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
-            elif "dense_embedding" in item:
-                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
-            if "sparse" in item:
-                sparse_vector = item["sparse"]
-            elif "sparse_embedding" in item:
-                sparse_vector = self._process_sparse_embedding(item["sparse_embedding"])
-            return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
-
-        result = await self._run_once_async(
-            _call,
-            logger=logger,
-            operation_name="VikingDB async hybrid embedding",
-        )
-        estimated_tokens = self._estimate_tokens(text)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="volcengine",
-            prompt_tokens=estimated_tokens,
-            completion_tokens=0,
-        )
-        return result
-
-    def get_dimension(self) -> int:
-        return self.dimension if self.dimension else 2048
+        return self.dimension if self.dimension is not None else 2048
 
     def close(self):
+        self.client._session.close()
         self._async_client_cache.close_all_with_aclose()

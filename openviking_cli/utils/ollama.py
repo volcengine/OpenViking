@@ -224,7 +224,7 @@ def detect_ollama_in_config(config) -> tuple[bool, str, int]:
     avoid circular deps).
 
     Detection rules:
-    - ``embedding.dense.provider == "ollama"``
+    - ``embedding.provider == "ollama"``
     - ``vlm.provider == "litellm"`` **and** ``vlm.model`` starts with ``"ollama/"``
     - ``query_planner.provider == "litellm"`` **and** ``query_planner.model``
       starts with ``"ollama/"``
@@ -236,10 +236,14 @@ def detect_ollama_in_config(config) -> tuple[bool, str, int]:
     uses_ollama = False
 
     # Check embedding
-    dense = getattr(config.embedding, "dense", None)
-    if dense is not None and getattr(dense, "provider", None) == "ollama":
+    embedding = config.embedding
+    if embedding._effective_provider() == "ollama":
         uses_ollama = True
-        api_base = getattr(dense, "api_base", None)
+        api_base = (
+            (embedding.credentials[0].api_base or embedding.api_base)
+            if embedding.credentials
+            else embedding.api_base
+        )
         host, port = parse_ollama_url(api_base)
 
     # Check VLM

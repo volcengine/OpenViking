@@ -35,13 +35,11 @@ openviking-server doctor
     }
   },
   "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",
-      "api_key"  : "<your-api-key>",
-      "provider" : "<provider-type>",
-      "dimension": 1024,
-      "model"    : "<model-name>"
-    }
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "dimension": 1024,
+    "model"    : "<model-name>"
   },
   "vlm": {
     "api_base" : "<api-endpoint>",
@@ -60,7 +58,7 @@ Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省�
 
 ### ov.conf 的有序凭据数组
 
-`vlm` 和 `query_planner` 支持有序的 `credentials` 数组；Embedding 在已配置的 `dense`、`sparse` 或 `hybrid` 节内支持同样的数组。索引 0 优先级最高，后续元素提供故障切换凭据。模型配置节仍是 JSON 对象，原有单凭据配置继续兼容。
+`vlm` 和 `query_planner` 支持有序的 `credentials` 数组；Embedding 在 `embedding.credentials` 中配置同样的数组。索引 0 优先级最高，后续元素提供故障切换凭据。模型配置节仍是 JSON 对象，原有单凭据配置继续兼容。
 
 将以下字段合并到你的 `ov.conf`，并在启动服务前设置 `PRIMARY_API_KEY` 和 `BACKUP_API_KEY`：
 
@@ -74,14 +72,12 @@ Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省�
     ]
   },
   "embedding": {
-    "dense": {
-      "model": "text-embedding-3-small",
-      "dimension": 1536,
-      "credentials": [
-        {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
-        {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
-      ]
-    }
+    "model": "text-embedding-3-small",
+    "dimension": 1536,
+    "credentials": [
+      {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+      {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+    ]
   }
 }
 ```
@@ -180,14 +176,12 @@ Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215",
-      "input": "multimodal"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215",
+    "input": "multimodal"
   },
   "vlm": {
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
@@ -206,13 +200,11 @@ Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://api.openai.com/v1",
-      "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
-      "dimension": 1536,
-      "model"    : "text-embedding-3-small"
-    }
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "dimension": 1536,
+    "model"    : "text-embedding-3-small"
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
@@ -233,13 +225,11 @@ Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "openai-codex",
@@ -260,13 +250,11 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "kimi",
@@ -287,13 +275,11 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-251215"
-    }
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "dimension": 1024,
+    "model"    : "doubao-embedding-vision-251215"
   },
   "vlm": {
     "provider" : "glm",
@@ -312,7 +298,7 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 
 ### embedding
 
-用于向量搜索的 Embedding 模型配置，支持 dense、sparse 和 hybrid 三种模式。
+向量搜索使用一个 Embedding 模型。`output` 可选 `dense`（默认）或 `dense_sparse`；后者由同一模型在一次请求中返回两种向量。新配置字段直接放在 `embedding` 下。旧的 `embedding.dense` 配置仍可使用，加载时转换为单模型配置，默认 `output: "dense"`；`input: "multimodal"`、环境变量和外层执行策略保持原意。读取不会改写文件，通过 Web 表单或 CLI 更新 Embedding 配置时保存为新结构。旧 `sparse`、`hybrid` 配置不再接受，`dense` 嵌套配置不能与顶层模型字段混写。
 
 #### Dense Embedding
 
@@ -323,14 +309,12 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024,
-      "input": "multimodal",
-      "batch_size": 32
-    }
+    "provider": "volcengine",
+    "api_key": "your-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "dimension": 1024,
+    "input": "multimodal",
+    "batch_size": 32
   }
 }
 ```
@@ -347,7 +331,8 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度；Voyage 对应 `output_dimension` |
-| `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
+| `input` | str | 输入类型：`"text"` 或 `"multimodal"`；`dense_sparse` 必须显式设为 `"text"` |
+| `output` | str | `"dense"`（默认）或 `"dense_sparse"`；两种输出都包含稠密向量 |
 | `batch_size` | int | 批量请求大小 |
 | `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
 | `extra_body` | object | （仅 OpenAI / Azure）合并进每次 embedding 请求体的额外 JSON 字段。适用于接受厂商专有字段的 OpenAI 兼容网关，例如 OpenRouter 的 provider 路由 `{"provider": {"sort": "latency"}}`。发生冲突时，显式设置的 `query_param`/`document_param` 键优先。 |
@@ -405,14 +390,12 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-api-key",
-      "api_base": "https://your-openai-compatible-endpoint/v1",
-      "model": "text-embedding-3-large",
-      "dimension": 3072,
-      "encoding_format": "float"
-    }
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "api_base": "https://your-openai-compatible-endpoint/v1",
+    "model": "text-embedding-3-large",
+    "dimension": 3072,
+    "encoding_format": "float"
   }
 }
 ```
@@ -424,16 +407,14 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-openrouter-api-key",
-      "api_base": "https://openrouter.ai/api/v1",
-      "model": "qwen/qwen3-embedding-8b",
-      "dimension": 4096,
-      "extra_body": {
-        "provider": {
-          "sort": "latency"
-        }
+    "provider": "openai",
+    "api_key": "your-openrouter-api-key",
+    "api_base": "https://openrouter.ai/api/v1",
+    "model": "qwen/qwen3-embedding-8b",
+    "dimension": 4096,
+    "extra_body": {
+      "provider": {
+        "sort": "latency"
       }
     }
   }
@@ -447,15 +428,13 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "azure",
-      "api_key": "your-azure-api-key",
-      "api_base": "https://your-resource-name.openai.azure.com",
-      "api_version": "2025-01-01-preview",
-      "model": "your-embedding-deployment-name",
-      "dimension": 3072,
-      "encoding_format": "float"
-    }
+    "provider": "azure",
+    "api_key": "your-azure-api-key",
+    "api_base": "https://your-resource-name.openai.azure.com",
+    "api_version": "2025-01-01-preview",
+    "model": "your-embedding-deployment-name",
+    "dimension": 3072,
+    "encoding_format": "float"
   }
 }
 ```
@@ -467,16 +446,14 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "minimax",
-      "api_key": "your-minimax-api-key",
-      "model": "embo-01",
-      "dimension": 1536,
-      "query_param": "query",
-      "document_param": "db",
-      "extra_headers": {
-        "GroupId": "your-group-id"
-      }
+    "provider": "minimax",
+    "api_key": "your-minimax-api-key",
+    "model": "embo-01",
+    "dimension": 1536,
+    "query_param": "query",
+    "document_param": "db",
+    "extra_headers": {
+      "GroupId": "your-group-id"
     }
   }
 }
@@ -487,14 +464,12 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "vikingdb",
-      "model": "bge_large_zh",
-      "ak": "your-access-key",
-      "sk": "your-secret-key",
-      "region": "cn-beijing",
-      "dimension": 1024
-    }
+    "provider": "vikingdb",
+    "model": "bge_large_zh",
+    "ak": "your-access-key",
+    "sk": "your-secret-key",
+    "region": "cn-beijing",
+    "dimension": 1024
   }
 }
 ```
@@ -504,12 +479,10 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "jina",
-      "api_key": "jina_xxx",
-      "model": "jina-embeddings-v5-text-small",
-      "dimension": 1024
-    }
+    "provider": "jina",
+    "api_key": "jina_xxx",
+    "model": "jina-embeddings-v5-text-small",
+    "dimension": 1024
   }
 }
 ```
@@ -523,13 +496,11 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "voyage",
-      "api_key": "pa-xxx",
-      "api_base": "https://api.voyageai.com/v1",
-      "model": "voyage-4-lite",
-      "dimension": 1024
-    }
+    "provider": "voyage",
+    "api_key": "pa-xxx",
+    "api_base": "https://api.voyageai.com/v1",
+    "model": "voyage-4-lite",
+    "dimension": 1024
   }
 }
 ```
@@ -543,13 +514,11 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "jina",
-      "api_key": "local",
-      "api_base": "http://localhost:8080/v1",
-      "model": "jina-embeddings-v5-text-nano",
-      "dimension": 768
-    }
+    "provider": "jina",
+    "api_key": "local",
+    "api_base": "http://localhost:8080/v1",
+    "model": "jina-embeddings-v5-text-nano",
+    "dimension": 768
   }
 }
 ```
@@ -565,12 +534,10 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "gemini",
-      "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
-      "dimension": 3072
-    }
+    "provider": "gemini",
+    "api_key": "your-google-api-key",
+    "model": "gemini-embedding-2-preview",
+    "dimension": 3072
   }
 }
 ```
@@ -589,13 +556,11 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "dashscope",
-      "api_key": "${DASHSCOPE_API_KEY}",
-      "model": "text-embedding-v4",
-      "dimension": 1024,
-      "input": "text"
-    }
+    "provider": "dashscope",
+    "api_key": "${DASHSCOPE_API_KEY}",
+    "model": "text-embedding-v4",
+    "dimension": 1024,
+    "input": "text"
   }
 }
 ```
@@ -640,14 +605,12 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 ```json
 {
   "embedding": {
-    "dense": {
-      "provider": "gemini",
-      "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
-      "dimension": 3072,
-      "query_param": "RETRIEVAL_QUERY",
-      "document_param": "RETRIEVAL_DOCUMENT"
-    }
+    "provider": "gemini",
+    "api_key": "your-google-api-key",
+    "model": "gemini-embedding-2-preview",
+    "dimension": 3072,
+    "query_param": "RETRIEVAL_QUERY",
+    "document_param": "RETRIEVAL_DOCUMENT"
   }
 }
 ```
@@ -656,7 +619,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 
 #### 本地 provider（`local`）
 
-未配置 `dense`、`sparse` 或 `hybrid` embedding 时（包括省略 `embedding`），OpenViking 默认选择 `dense: {"provider": "local", "model": "bge-small-zh-v1.5-f16"}`。该 GGUF 模型输出 512 维向量，无需 API Key。
+未配置 Embedding 模型时（包括省略 `embedding`），OpenViking 默认选择 `{"provider": "local", "model": "bge-small-zh-v1.5-f16", "output": "dense"}`。该 GGUF 模型输出 512 维向量，无需 API Key。
 
 安装本地推理依赖：
 
@@ -664,75 +627,42 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 pip install "openviking[local-embed]"
 ```
 
-首次使用时，OpenViking 将模型下载到 `~/.cache/openviking/models`；已有缓存则复用。通过 `embedding.dense.cache_dir` 修改缓存目录，或用 `embedding.dense.model_path` 指定已有 GGUF 文件以跳过下载。显式指定的文件不存在时会报错，不会转为下载。该模型的维度固定为 512。
+首次使用时，OpenViking 将模型下载到 `~/.cache/openviking/models`；已有缓存则复用。通过 `embedding.cache_dir` 修改缓存目录，或用 `embedding.model_path` 指定已有 GGUF 文件以跳过下载。显式指定的文件不存在时会报错，不会转为下载。该模型的维度固定为 512。
 
-#### Sparse Embedding
+#### 同时生成 dense 和 sparse
 
-> 以下示例使用 `doubao-embedding-vision-251215`。所选模型是否支持文本 sparse 输出，请核对方舟[向量化文档](https://docs.volcengine.com/docs/ark/vectorization?lang=zh&redirect=1)。
+切换 `output` 会改变已存储向量的契约，需要重建索引；`allow_metadata_override` 不能绕过输出类型检查。
+已有数据但没有记录 `output` 的旧索引也需要重建，空索引可直接初始化。
 
-```json
-{
-  "embedding": {
-    "sparse": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215"
-    }
-  }
-}
-```
+`output: "dense_sparse"` 只接受下表中的 provider、模型和版本组合；未知模型或不支持的备用凭据在配置加载时直接报错。
 
-Sparse 输出是 embedding provider 的能力，不会因为设置
-`storage.vectordb.sparse_weight` 就自动出现。OpenViking 当前只为
-`volcengine` 和 `vikingdb` 实现了 `sparse` / `hybrid` embedding provider；
-OpenAI 兼容接口、Ollama 和内置 `local` provider 目前都只支持 dense。
-因此，自托管的 `/v1/embeddings` 不会被自动当成 sparse 接口，OpenViking
-也不会额外探测 `/v1/embeddings/sparse` 路由。
+| Provider | 模型 | `version` |
+|---|---|---|
+| `volcengine` | `doubao-embedding-vision-250615`、`doubao-embedding-vision-251215` | 不设置，版本已包含在模型名中 |
+| `vikingdb` | `bge-m3` | 不设置或 `"default"` |
 
-当 provider 只返回 dense vector 时，OpenViking 不会自动补充 BM25 或其他
-sparse-vector 兜底。若要启用混合检索，需要配置受支持的 sparse/hybrid
-provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的内存需求
-取决于具体 provider 和模型，不由 OpenViking 控制；生产启用前请按模型文档
-评估资源占用。
-
-#### Hybrid Embedding
-
-支持两种方式：
-
-**方式一：使用单一混合模型**
+两种 provider 都使用同一个模型、一次请求生成两种向量。VikingDB 的 dense-only 模型仍可使用 `output: "dense"`。
+能力依据：[方舟向量化](https://docs.volcengine.com/docs/ark/vectorization?lang=zh)、[VikingDB Embedding API](https://docs.byteplus.com/en/docs/VikingDB/Embedding_Calculation_V2)。
 
 ```json
 {
   "embedding": {
-    "hybrid": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024
-    }
+    "provider": "volcengine",
+    "api_key": "your-api-key",
+    "model": "doubao-embedding-vision-251215",
+    "dimension": 1024,
+    "input": "text",
+    "output": "dense_sparse"
+  },
+  "storage": {
+    "vectordb": {"sparse_weight": 0.5}
   }
 }
 ```
 
-**方式二：组合 dense + sparse**
+`dense_sparse` 只接受文本输入，图文直接向量化使用 `dense`。不会自动丢弃图片来满足 sparse 请求。`storage.vectordb.sparse_weight` 只决定检索时 sparse 的权重，不决定模型生成什么向量。
 
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215",
-      "dimension": 1024
-    },
-    "sparse": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-251215"
-    }
-  }
-}
-```
+使用 `ep-*` 接入点时，外层 `model` 必须填写支持列表中的真实模型身份，接入点放在 `credentials[].model` 中。每个备用凭据也必须支持相同输出；OpenViking 不探测接入点背后的模型。独立 sparse 模型和两个模型分别生成后合并的配置已删除。
 
 ### vlm
 
@@ -2283,14 +2213,12 @@ Task 记录文件位于所属账号的系统目录：
     "max_retries": 3,
     "text_source": "content_only",
     "max_input_tokens": 4096,
-    "dense": {
-      "provider": "volcengine",
-      "api_key": "string",
-      "model": "string",
-      "dimension": 1024,
-      "input": "multimodal",
-      "encoding_format": "float|base64"
-    }
+    "provider": "volcengine",
+    "api_key": "string",
+    "model": "string",
+    "dimension": 1024,
+    "input": "multimodal",
+    "encoding_format": "float|base64"
   },
   "vlm": {
     "provider": "string",

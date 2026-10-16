@@ -13,7 +13,9 @@ describe('enableGatewayContent', () => {
     const content = `{
   "server": { "host": "0.0.0.0", "port": 1933, "root_api_key": "root" },
   "embedding": {
-    "dense": { "provider": "openai", "model": "text-embedding-3-small", "dimension": 1536 }
+    "provider": "openai",
+    "model": "text-embedding-3-small",
+    "dimension": 1536
   },
   "gateway": {
     "enabled": false,
@@ -55,9 +57,9 @@ describe('enableGatewayContent', () => {
 
   it('keeps unquoted environment references and replaces a duplicate gateway in place', () => {
     const content =
-      '{"embedding": {"dense": {"dimension": $DIM, "api_key": "${OPENAI_KEY}"}}, "gateway": {"enabled": false}, "gateway": {"storage_path": "/data", "enabled": false}}'
+      '{"embedding": {"dimension": $DIM, "api_key": "${OPENAI_KEY}"}, "gateway": {"enabled": false}, "gateway": {"storage_path": "/data", "enabled": false}}'
     expect(enableGatewayContent(content)).toBe(
-      '{"embedding": {"dense": {"dimension": $DIM, "api_key": "${OPENAI_KEY}"}}, "gateway": {"enabled": false}, "gateway": {"storage_path": "/data", "enabled": true}}',
+      '{"embedding": {"dimension": $DIM, "api_key": "${OPENAI_KEY}"}, "gateway": {"enabled": false}, "gateway": {"storage_path": "/data", "enabled": true}}',
     )
   })
 

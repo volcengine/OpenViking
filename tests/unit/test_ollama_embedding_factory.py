@@ -11,6 +11,8 @@ Regression tests for two bugs fixed in the ollama factory lambda:
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -33,54 +35,19 @@ def _make_ollama_cfg(**kwargs) -> EmbeddingModelConfig:
 
 @patch("openai.OpenAI")
 class TestOllamaFactoryMaxTokens:
-    """max_tokens must be forwarded from config to OpenAIDenseEmbedder."""
-
-    def test_custom_max_tokens_is_forwarded(self, mock_openai_class):
-        """When max_tokens=512, the created embedder should report max_tokens=512."""
-        mock_client = MagicMock()
-        mock_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 8)], usage=None
+    @pytest.mark.parametrize("provider", ["ollama", "openai"])
+    def test_custom_max_tokens_is_forwarded(self, mock_openai_class, provider):
+        config = EmbeddingConfig(
+            provider=provider,
+            model="custom",
+            api_base="http://localhost:11434/v1",
+            dimension=8,
+            max_input_tokens=100,
         )
-        mock_openai_class.return_value = mock_client
-
-        cfg = _make_ollama_cfg(max_tokens=512)
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
-
-        assert embedder.max_tokens == 512
-
-    def test_none_max_tokens_uses_default(self, mock_openai_class):
-        """When max_tokens is not set (None), the embedder should use its default (8000)."""
-        mock_client = MagicMock()
-        mock_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 8)], usage=None
-        )
-        mock_openai_class.return_value = mock_client
-
-        cfg = _make_ollama_cfg()  # max_tokens not set -> None
-        assert cfg.max_tokens is None
-
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
-
-        assert embedder.max_tokens == 8000  # class-level default
-
-    def test_openai_factory_max_tokens_also_forwarded(self, mock_openai_class):
-        """Sanity: the openai factory also forwards max_tokens (parity check)."""
-        mock_client = MagicMock()
-        mock_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 8)], usage=None
-        )
-        mock_openai_class.return_value = mock_client
-
-        cfg = EmbeddingModelConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            api_key="sk-test",
-            dimension=1536,
-            max_tokens=4096,
-        )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
-
-        assert embedder.max_tokens == 4096
+        embedder = config.get_embedder()
+        prepared = embedder.prepare_embedding_input("a" * 1000)
+        assert prepared.startswith("a" * 400)
+        assert "a" * 401 not in prepared
 
 
 @patch("openai.OpenAI")
@@ -96,7 +63,7 @@ class TestOllamaFactoryApiKeyPlaceholder:
         mock_openai_class.return_value = mock_client
 
         cfg = _make_ollama_cfg()  # no api_key
-        EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
@@ -114,7 +81,7 @@ class TestOllamaFactoryApiKeyPlaceholder:
         mock_openai_class.return_value = mock_client
 
         cfg = _make_ollama_cfg(api_key="my-custom-key")
-        EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
@@ -134,7 +101,7 @@ class TestOllamaFactoryApiKeyPlaceholder:
             api_base="http://localhost:8080/v1",
             dimension=1536,
         )
-        EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         call_kwargs = mock_openai_class.call_args[1]
         assert call_kwargs["api_key"] == "no-key"
@@ -153,7 +120,7 @@ class TestOllamaFactoryApiBase:
         mock_openai_class.return_value = mock_client
 
         cfg = _make_ollama_cfg()  # no api_base
-        EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         call_kwargs = mock_openai_class.call_args[1]
         assert call_kwargs["base_url"] == "http://localhost:11434/v1"
@@ -167,7 +134,7 @@ class TestOllamaFactoryApiBase:
         mock_openai_class.return_value = mock_client
 
         cfg = _make_ollama_cfg(api_base="http://gpu-server:11434/v1")
-        EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
+        EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
 
         call_kwargs = mock_openai_class.call_args[1]
         assert call_kwargs["base_url"] == "http://gpu-server:11434/v1"

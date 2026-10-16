@@ -17,7 +17,7 @@ class RetryEmbedder(EmbedderBase):
     def __init__(self, inner: EmbedderBase):
         if isinstance(inner, RetryEmbedder):
             raise ValueError("Embedder is already wrapped with RetryEmbedder")
-        super().__init__(inner.model_name, inner.config)
+        super().__init__(inner.model_name, inner.config, output=inner.output)
         self.inner = inner
         self.provider = inner.provider
 
@@ -64,26 +64,8 @@ class RetryEmbedder(EmbedderBase):
     def supports_multimodal(self) -> bool:
         return self.inner.supports_multimodal
 
-    @property
-    def is_dense(self) -> bool:
-        return self.inner.is_dense
-
-    @property
-    def is_sparse(self) -> bool:
-        return self.inner.is_sparse
-
-    @property
-    def is_hybrid(self) -> bool:
-        return self.inner.is_hybrid
-
     def get_dimension(self) -> int:
-        dimension_getter = getattr(self.inner, "get_dimension", None)
-        if dimension_getter is None:
-            raise AttributeError(
-                f"{type(self.inner).__name__} has no get_dimension "
-                "(sparse embedders have no fixed dimension)"
-            )
-        return dimension_getter()
+        return self.inner.get_dimension()
 
     def close(self) -> None:
         self.inner.close()

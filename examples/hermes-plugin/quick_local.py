@@ -189,12 +189,10 @@ def build_server_config(
         },
         "storage": {"workspace": str(paths.workspace)},
         "embedding": {
-            "dense": {
-                "provider": "local",
-                "model": EMBEDDING_MODEL,
-                "dimension": EMBEDDING_DIMENSION,
-                "cache_dir": str(paths.model_cache),
-            }
+            "provider": "local",
+            "model": EMBEDDING_MODEL,
+            "dimension": EMBEDDING_DIMENSION,
+            "cache_dir": str(paths.model_cache),
         },
         "vlm": dict(vlm),
     }
@@ -262,8 +260,14 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         from agent.anthropic_credentials import anthropic_route_is_oauth
 
         oauth_route = anthropic_route_is_oauth(api_base, raw_api_key, provider=provider)
-    if oauth_route or not isinstance(raw_api_key, str) or not (
-        local_runtime or declared_key or _has_copyable_static_credentials(provider, source, api_key)
+    if (
+        oauth_route
+        or not isinstance(raw_api_key, str)
+        or not (
+            local_runtime
+            or declared_key
+            or _has_copyable_static_credentials(provider, source, api_key)
+        )
     ):
         raise QuickLocalSetupError(
             "Hermes is using refreshed OAuth, cloud-native, or external-process "
@@ -273,9 +277,11 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
         )
     # These static-key API endpoints also provide Chat Completions. OAuth
     # Responses routes and third-party Responses-only endpoints stay excluded.
-    if api_mode == "codex_responses" and urlparse(api_base).hostname in {
-        "api.openai.com", "api.x.ai"
-    } and provider in {"openai-api", "xai", "custom"}:
+    if (
+        api_mode == "codex_responses"
+        and urlparse(api_base).hostname in {"api.openai.com", "api.x.ai"}
+        and provider in {"openai-api", "xai", "custom"}
+    ):
         api_mode = "chat_completions"
     if api_mode not in {"chat_completions", "anthropic_messages"}:
         raise QuickLocalSetupError(
@@ -311,7 +317,9 @@ def resolve_hermes_vlm_config() -> dict[str, Any]:
             vlm["extra_headers"] = _attribution_headers()
     else:
         base = urlparse(api_base)
-        if base.hostname == "generativelanguage.googleapis.com" and not base.path.rstrip("/").endswith("/openai"):
+        if base.hostname == "generativelanguage.googleapis.com" and not base.path.rstrip(
+            "/"
+        ).endswith("/openai"):
             # Hermes uses Google's native client despite chat_completions in
             # its runtime record. OV needs Google's documented OpenAI route.
             api_base = base._replace(path="/v1beta/openai/").geturl()
@@ -719,9 +727,14 @@ for attempt in (1, 2):
                 failure = {}
             raise _vlm_check_failure(paths, failure)
     except subprocess.TimeoutExpired as exc:
-        raise _vlm_check_failure(paths, {
-            "error": "TimeoutExpired", "timeout": True, "attempts": 0,
-        }) from exc
+        raise _vlm_check_failure(
+            paths,
+            {
+                "error": "TimeoutExpired",
+                "timeout": True,
+                "attempts": 0,
+            },
+        ) from exc
 
 
 def _vlm_check_failure(paths: QuickLocalPaths, failure: Any) -> QuickLocalSetupError:

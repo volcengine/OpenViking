@@ -494,7 +494,9 @@ authentication fields even when the backend type is unchanged; only remote
 backends `http`, `volcengine` and `vikingdb` are accepted.
 
 ```json
-{"settings":{"embedding":{"dense":{"credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]}}}}
+{"settings":{"embedding":{
+  "credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]
+}}}
 ```
 
 Queries, indexing, reindexing and OVPack use the target Account, including ROOT
@@ -690,15 +692,13 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5,
-        "dense": {
-          "credentials": [{
-            "id": "primary",
-            "provider": "openai",
-            "model": "embed-deployment-v2",
-            "api_key": "<new-api-key>",
-            "api_base": "https://embedding.example/v1"
-          }]
-        }
+        "credentials": [{
+          "id": "primary",
+          "provider": "openai",
+          "model": "embed-deployment-v2",
+          "api_key": "<new-api-key>",
+          "api_base": "https://embedding.example/v1"
+        }]
       }
     }
   }'
@@ -712,17 +712,15 @@ curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
     "settings": {
       "embedding": {
         "max_retries": 5,
-        "dense": {
-          "model": "text-embedding-3-large",
-          "dimension": 3072,
-          "credentials": [{
-            "id": "primary",
-            "provider": "openai",
-            "model": "embed-deployment-v2",
-            "api_key": "<new-api-key>",
-            "api_base": "https://embedding.example/v1"
-          }]
-        }
+        "model": "text-embedding-3-large",
+        "dimension": 3072,
+        "credentials": [{
+          "id": "primary",
+          "provider": "openai",
+          "model": "embed-deployment-v2",
+          "api_key": "<new-api-key>",
+          "api_base": "https://embedding.example/v1"
+        }]
       }
     }
   }
@@ -773,13 +771,13 @@ OpenViking VLM APIs return complete responses only.
 **Account Embedding Fields**
 
 Unset values are not persisted on the Account. At runtime, the vector resolver
-uses the corresponding Cluster value. If Account creation declares `dense`,
-`sparse`, or `hybrid`, that mode must be a complete Account binding. `hybrid`
-cannot be combined with `dense` or `sparse`.
+uses the corresponding Cluster value. A declared model requires `model`,
+`dimension`, and complete `credentials` together. `output` selects `dense` or
+`dense_sparse`; the latter requires a supported model and `input: "text"`.
 
 | Path | Lifecycle | Type and constraints | Meaning |
 | --- | --- | --- | --- |
-| `embedding.dense` / `sparse` / `hybrid` | Mode existence is create-only | Object/null | Three model output modes; cannot be added, removed, or switched after creation |
+| `embedding.output` | Create-only | `dense` / `dense_sparse` | Single-model output contract; cannot change after creation |
 | `embedding.max_concurrent` | Dynamic | Integer, `>= 1` | Provider-call concurrency limit for this Account |
 | `embedding.max_retries` | Dynamic | Integer, `>= 0` | Retry count for transient provider failures |
 | `embedding.circuit_breaker.failure_threshold` | Dynamic | Integer, `>= 1` | Consecutive failures before opening the circuit |
@@ -787,16 +785,16 @@ cannot be combined with `dense` or `sparse`.
 | `embedding.circuit_breaker.max_reset_timeout` | Dynamic | Number, `> 0` | Maximum circuit recovery wait in seconds |
 | `embedding.text_source` | Create-only | `content_only` / `summary_first` | Text source used when writing vectors |
 | `embedding.max_input_tokens` | Create-only | Integer, `>= 100` | Input token limit for one embedding call |
-| `embedding.*.model` | Create-only | Non-empty string, required when first declaring a mode | Model identity |
-| `embedding.*.dimension` | Create-only | Integer, `> 0`, required when first declaring a mode | Vector dimension; must match the effective VectorDB |
-| `embedding.*.input` | Create-only | `text` / `multimodal`, optional | Input mode |
-| `embedding.*.query_param` / `document_param` | Create-only | String, optional | Query/document parameters for asymmetric retrieval |
-| `embedding.*.version` | Create-only | String, optional | Model version |
-| `embedding.*.credentials` | Dynamic | Non-empty array; replaces as a whole | Account provider/failover binding |
-| `embedding.*.failback_timeout_seconds` | Dynamic | Number, `> 0` | Wait before trying to fail back to the primary credential |
-| `embedding.*.failback_request_count` | Dynamic | Integer, `>= 1` | Backup requests before attempting failback |
+| `embedding.model` | Create-only | Non-empty string, required when first declaring a model | Model identity |
+| `embedding.dimension` | Create-only | Integer, `> 0`, required when first declaring a model | Vector dimension; must match the effective VectorDB |
+| `embedding.input` | Create-only | `text` / `multimodal`, optional | Input mode |
+| `embedding.query_param` / `document_param` | Create-only | String, optional | Query/document parameters for asymmetric retrieval |
+| `embedding.version` | Create-only | String, optional | Model version |
+| `embedding.credentials` | Dynamic | Non-empty array; replaces as a whole | Account provider/failover binding |
+| `embedding.failback_timeout_seconds` | Dynamic | Number, `> 0` | Wait before trying to fail back to the primary credential |
+| `embedding.failback_request_count` | Dynamic | Integer, `>= 1` | Backup requests before attempting failback |
 
-`embedding.*.credentials` is an ordered array. Its first item has priority;
+`embedding.credentials` is an ordered array. Its first item has priority;
 later credentials are attempted in array order after a failure. Each item has
 this schema:
 
@@ -804,7 +802,7 @@ this schema:
 | --- | --- | --- |
 | `id` | String, optional | Stable credential identifier; when omitted, runtime identifies it from its array index |
 | `provider` | String, required | Lowercase provider name: `openai`, `azure`, `volcengine`, `vikingdb`, `jina`, `ollama`, `gemini`, `voyage`, `dashscope`, `minimax`, `cohere`, `litellm`, or `local` |
-| `model` | Non-empty string, optional | Overrides the outer model for the mode; when absent, uses the outer model and is commonly an endpoint/deployment ID |
+| `model` | Non-empty string, optional | Overrides the outer model; when absent, uses the outer model and is commonly an endpoint/deployment ID |
 | `api_key` | String, optional | API key. Provider-specific requirements appear below |
 | `api_base` | String, optional | OpenAI-compatible or Azure endpoint |
 | `api_version` | String, optional | API version for Azure and similar APIs |
@@ -995,14 +993,12 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
     "admin_user_id": "alice",
     "settings": {
       "embedding": {
-        "dense": {
-          "model": "text-embedding-3-large",
-          "dimension": 3072,
-          "credentials": [{
-            "provider": "openai",
-            "api_key": "<embedding-api-key>"
-          }]
-        }
+        "model": "text-embedding-3-large",
+        "dimension": 3072,
+        "credentials": [{
+          "provider": "openai",
+          "api_key": "<embedding-api-key>"
+        }]
       },
       "vectordb": {
         "backend": "vikingdb",

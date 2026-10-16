@@ -172,9 +172,7 @@ class TestVikingFSEncryptionWithAccounts:
             "workspace": str(test_data_dir / "workspace"),
             "vectordb": {"name": "test", "backend": "local", "project": "default"},
         }
-        config_dict["embedding"] = {
-            "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
-        }
+        config_dict["embedding"] = {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
         config_dict["vlm"] = {
             "provider": "openai",
             "api_key": "fake",
@@ -552,12 +550,8 @@ This is a test skill for verifying encryption functionality.
 
         # 2. Verify list-accounts operation
         print("[2] Verify list-accounts operation")
-        account_ids = {
-            account["account_id"] for account in await api_key_manager.list_accounts()
-        }
-        assert test_account_id in account_ids, (
-            f"Account {test_account_id} not in account list"
-        )
+        account_ids = {account["account_id"] for account in await api_key_manager.list_accounts()}
+        assert test_account_id in account_ids, f"Account {test_account_id} not in account list"
         print(f"  ✓ Account {test_account_id} exists in account list")
 
         # 3. Register new user in test account
@@ -570,9 +564,9 @@ This is a test skill for verifying encryption functionality.
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
         users = await api_key_manager.list_users_page(test_account_id)
-        assert test_user_id in {
-            user["user_id"] for user in users["users"]
-        }, f"User {test_user_id} not in user list"
+        assert test_user_id in {user["user_id"] for user in users["users"]}, (
+            f"User {test_user_id} not in user list"
+        )
         print(f"  ✓ User {test_user_id} exists in user list")
 
         # 5. Check all files in account directory are encrypted (recursive check)
@@ -1123,7 +1117,9 @@ class TestAddResourceWithSemanticProcessing:
             "vectordb": {"name": "test", "backend": "local", "project": "default"},
         }
         config_dict["embedding"] = {
-            "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
+            "provider": "openai",
+            "api_key": "fake",
+            "model": "text-embedding-3-small",
         }
         config_dict["vlm"] = {
             "provider": "openai",

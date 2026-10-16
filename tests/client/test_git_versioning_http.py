@@ -23,7 +23,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
@@ -47,7 +47,7 @@ HTTP_TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_client_git_http"
 def _install_fake_embedder(monkeypatch):
     dimension = 1024
 
-    class FakeEmbedder(DenseEmbedderBase):
+    class FakeEmbedder(EmbedderBase):
         def __init__(self):
             super().__init__(model_name="test-fake-embedder")
 

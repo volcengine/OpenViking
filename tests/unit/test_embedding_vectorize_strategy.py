@@ -4,17 +4,15 @@
 
 import pytest
 
-from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
 
 def _cfg(**kwargs):
     return EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            provider="openai",
-            model="text-embedding-3-small",
-            api_base="http://localhost:8080/v1",
-            dimension=1536,
-        ),
+        provider="openai",
+        model="text-embedding-3-small",
+        api_base="http://localhost:8080/v1",
+        dimension=1536,
         **kwargs,
     )
 

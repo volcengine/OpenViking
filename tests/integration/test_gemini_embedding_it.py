@@ -67,17 +67,15 @@ def test_all_task_types_accepted(task_type):
 
 def test_config_nonsymmetric_routing():
     """Single embedder uses is_query to route query_param/document_param task types."""
-    from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
     cfg = EmbeddingConfig(
-        dense=EmbeddingModelConfig(
-            model="gemini-embedding-2-preview",
-            provider="gemini",
-            api_key=GOOGLE_API_KEY,
-            dimension=768,
-            query_param="RETRIEVAL_QUERY",
-            document_param="RETRIEVAL_DOCUMENT",
-        )
+        model="gemini-embedding-2-preview",
+        provider="gemini",
+        api_key=GOOGLE_API_KEY,
+        dimension=768,
+        query_param="RETRIEVAL_QUERY",
+        document_param="RETRIEVAL_DOCUMENT",
     )
     embedder = cfg.get_embedder()
     q_result = embedder.embed("search query", is_query=True)

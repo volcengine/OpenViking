@@ -55,7 +55,7 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
-_EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
+_EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity", "output")
 
 
 @dataclass
@@ -177,19 +177,8 @@ class CollectionSchemas:
         }
 
 
-def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
-    embedding_cfg = config.embedding
-    if embedding_cfg.hybrid is not None:
-        return embedding_cfg.hybrid
-    if embedding_cfg.dense is not None:
-        return embedding_cfg.dense
-    if embedding_cfg.sparse is not None:
-        return embedding_cfg.sparse
-    raise ValueError("No active embedding model configuration found")
-
-
 def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
-    model_cfg = _get_active_embedding_model_config(config)
+    model_cfg = config.embedding
     # When credentials are configured, the first credential drives the actual
     # provider/model used at request time (see EmbeddingConfig._effective_*),
     # so the metadata signature must reflect the credential rather than the
@@ -227,6 +216,7 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         "model": model,
         "dimension": dimension,
         "model_identity": model_identity,
+        "output": model_cfg.output,
     }
 
 
@@ -384,33 +374,6 @@ async def init_context_collection(storage) -> bool:
         return False
 
     existing_count = await storage.count() if hasattr(storage, "count") else 0
-    if existing_embedding_meta is None and existing_count == 0:
-        if hasattr(storage, "update_collection_description"):
-            await storage.update_collection_description(
-                _encode_collection_description(
-                    base_description or "Unified context collection",
-                    embedding_meta,
-                )
-            )
-            await _update_local_schema()
-            return False
-
-    if existing_embedding_meta is None:
-        logger.warning(
-            "Existing collection has %d vector(s) but no embedding metadata "
-            "(created by an older version). Backfilling with current config and continuing.",
-            existing_count,
-        )
-        if hasattr(storage, "update_collection_description"):
-            await storage.update_collection_description(
-                _encode_collection_description(
-                    base_description or "Unified context collection",
-                    embedding_meta,
-                )
-            )
-        await _update_local_schema()
-        return False
-
     if existing_count == 0 and hasattr(storage, "update_collection_description"):
         await storage.update_collection_description(
             _encode_collection_description(
@@ -438,10 +401,12 @@ async def init_context_collection(storage) -> bool:
     if (
         allow_override
         and not dimension_changed
+        and existing_embedding_meta is not None
+        and existing_embedding_meta.get("output") == embedding_meta["output"]
         and hasattr(storage, "update_collection_description")
     ):
         logger.warning(
-            "Embedding metadata changed (provider/model) but dimension is "
+            "Embedding metadata changed (provider/model) but dimension and output are "
             "unchanged; embedding.allow_metadata_override=true, so the existing "
             "collection metadata will be rewritten and existing vectors kept. "
             "old=%s new=%s",
@@ -468,7 +433,7 @@ async def init_context_collection(storage) -> bool:
         "Existing collection embedding metadata does not match current configuration. "
         "Rebuild is required before using the current embedding model, or set "
         "embedding.allow_metadata_override=true to keep existing vectors when "
-        "only provider/model changed (dimension must remain the same)."
+        "only provider/model changed (dimension and output must remain the same)."
     )
 
 

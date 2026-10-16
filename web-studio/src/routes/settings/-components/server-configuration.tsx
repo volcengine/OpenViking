@@ -53,9 +53,7 @@ import {
 import { ModelFields, bindingFields, providers } from './model-fields'
 import {
   createConfigFileApi,
-  embeddingModes,
   credentials,
-  object,
   isConfigFileObject,
   waitForServerRestart,
 } from '../-lib/config-file-api'
@@ -289,7 +287,6 @@ function ModelList({
 }
 type Editor = {
   kind: EditableModelKind
-  mode?: string
   index?: number
   value: ModelConfig
   readonly: boolean
@@ -350,7 +347,6 @@ export function ServerConfigurationEditor() {
   const [editor, setEditor] = React.useState<Editor | null>(null)
   const [confirm, setConfirm] = React.useState<{
     kind: EditableModelKind
-    mode?: string
     index: number
   } | null>(null)
   const [saved, setSaved] = React.useState(false)
@@ -436,29 +432,14 @@ export function ServerConfigurationEditor() {
     setSaved(false)
     preview.mutate({ content: document.content, changes: { [kind]: value } })
   }
-  function bindings(kind: EditableModelKind, mode?: string) {
-    const config = current(kind)
-    return credentials(mode ? object(config[mode]) : config)
+  function bindings(kind: EditableModelKind) {
+    return credentials(current(kind))
   }
-  function reorder(
-    kind: EditableModelKind,
-    mode: string | undefined,
-    values: ModelConfig[],
-  ) {
-    const config = current(kind)
-    change(
-      kind,
-      mode
-        ? {
-            ...config,
-            [mode]: { ...object(config[mode]), credentials: values },
-          }
-        : { ...config, credentials: values },
-    )
+  function reorder(kind: EditableModelKind, values: ModelConfig[]) {
+    change(kind, { ...current(kind), credentials: values })
   }
   function open(
     kind: EditableModelKind,
-    mode?: string,
     index?: number,
     readonly = false,
     settings = false,
@@ -473,10 +454,9 @@ export function ServerConfigurationEditor() {
             provider: providers[kind][0],
             id: createRandomUuid(),
           }
-        : bindings(kind, mode)[index]
+        : bindings(kind)[index]
     setEditor({
       kind,
-      mode,
       index,
       readonly,
       settings,
@@ -492,10 +472,10 @@ export function ServerConfigurationEditor() {
   }
   function applyEditor() {
     if (!editor || editor.readonly || pending) return
-    const { kind, mode, index, value, settings } = editor
+    const { kind, index, value, settings } = editor
     if (settings) change(kind, value)
     else {
-      const values = [...bindings(kind, mode)]
+      const values = [...bindings(kind)]
       const next = Object.fromEntries(
         Object.entries(value).map(([key, item]) => [
           key,
@@ -505,13 +485,13 @@ export function ServerConfigurationEditor() {
       if (index === undefined) values.push(next)
       else values[index] = next
       const config = current(kind)
-      if (!mode && !config.model)
+      if (!config.model)
         change(kind, {
           ...config,
           model: String(next.model || ''),
           credentials: values,
         })
-      else reorder(kind, mode, values)
+      else reorder(kind, values)
     }
   }
   function dismissConfirmation() {
@@ -526,10 +506,7 @@ export function ServerConfigurationEditor() {
     if (!confirm || pending) return
     reorder(
       confirm.kind,
-      confirm.mode,
-      bindings(confirm.kind, confirm.mode).filter(
-        (_, index) => index !== confirm.index,
-      ),
+      bindings(confirm.kind).filter((_, index) => index !== confirm.index),
     )
   }
   if (isConnectionRoleLoading || (allowed && query.isPending))
@@ -782,12 +759,6 @@ export function ServerConfigurationEditor() {
                   </section>
                 )
               const config = current(kind)
-              const groups =
-                kind === 'embedding'
-                  ? embeddingModes
-                      .filter((mode) => config[mode])
-                      .map((mode) => ({ mode, config: object(config[mode]) }))
-                  : [{ mode: undefined, config }]
               return (
                 <section
                   key={kind}
@@ -807,99 +778,39 @@ export function ServerConfigurationEditor() {
                       <Action
                         label={t('models.parameters')}
                         disabled={pending}
-                        onClick={() =>
-                          open(kind, undefined, undefined, false, true)
-                        }
+                        onClick={() => open(kind, undefined, false, true)}
                       >
                         <Settings2Icon />
                       </Action>
-                      {kind === 'embedding' && groups.length > 1 ? (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={t('models.addModel')}
-                                title={t('models.addModel')}
-                                disabled={pending}
-                              />
-                            }
-                          >
-                            <PlusIcon />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {groups.map((group) => (
-                              <DropdownMenuItem
-                                key={group.mode}
-                                onClick={() => open(kind, group.mode)}
-                              >
-                                {t(`models.${group.mode}`)}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      ) : (
-                        <Action
-                          label={t('models.addModel')}
-                          disabled={
-                            pending || (kind === 'embedding' && !groups.length)
-                          }
-                          onClick={() =>
-                            open(
-                              kind,
-                              kind === 'embedding'
-                                ? groups[0]?.mode
-                                : undefined,
-                            )
-                          }
-                        >
-                          <PlusIcon />
-                        </Action>
-                      )}
+                      <Action
+                        label={t('models.addModel')}
+                        disabled={pending}
+                        onClick={() => open(kind)}
+                      >
+                        <PlusIcon />
+                      </Action>
                     </div>
                   </div>
-                  {groups.map((group) => (
-                    <div key={group.mode || kind} className="min-w-0">
-                      {group.mode && (
-                        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                          <Badge variant="outline">
-                            {t(`models.${group.mode}`)}
-                          </Badge>
-                          <span>
-                            {t('models.dimension')}:{' '}
-                            {String(group.config.dimension)}
-                          </span>
-                          {credentials(group.config).some(
-                            (binding) =>
-                              binding.model &&
-                              binding.model !== group.config.model,
-                          ) && (
-                            <span className="break-all">
-                              {t('models.model')}: {String(group.config.model)}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <ModelList
-                        group={`${kind}-${group.mode || ''}`}
-                        values={credentials(group.config)}
-                        fallback={group.config}
-                        disabled={pending}
-                        onOrder={(values) => reorder(kind, group.mode, values)}
-                        onOpen={(index, readonly) =>
-                          open(kind, group.mode, index, readonly)
-                        }
-                        onDelete={(index) => {
-                          setBaseline(
-                            (previous) => previous ?? query.data ?? null,
-                          )
-                          setConfirm({ kind, mode: group.mode, index })
-                        }}
-                      />
+                  {kind === 'embedding' && (
+                    <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                      <Badge variant="outline">{String(config.output)}</Badge>
+                      <span>
+                        {t('models.dimension')}: {String(config.dimension)}
+                      </span>
                     </div>
-                  ))}
+                  )}
+                  <ModelList
+                    group={kind}
+                    values={credentials(config)}
+                    fallback={config}
+                    disabled={pending}
+                    onOrder={(values) => reorder(kind, values)}
+                    onOpen={(index, readonly) => open(kind, index, readonly)}
+                    onDelete={(index) => {
+                      setBaseline((previous) => previous ?? query.data ?? null)
+                      setConfirm({ kind, index })
+                    }}
+                  />
                 </section>
               )
             })}
@@ -1003,16 +914,11 @@ export function ServerConfigurationEditor() {
                   </p>
                 )}
                 <ModelFields
-                  key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
+                  key={`${editor.kind}-${editor.index}-${editor.settings}`}
                   fields={fields}
                   value={editor.value}
                   inheritedModel={
-                    editor.settings
-                      ? undefined
-                      : (editor.mode
-                          ? object(current(editor.kind)[editor.mode])
-                          : current(editor.kind)
-                        ).model
+                    editor.settings ? undefined : current(editor.kind).model
                   }
                   readOnly={editor.readonly || pending}
                   onChange={(value) => {
@@ -1050,56 +956,41 @@ export function ServerConfigurationEditor() {
                       onChange={() => {}}
                       prefix="embedding-contract"
                     />
-                    {embeddingModes
-                      .filter((mode) => editor.value[mode])
-                      .map((mode) => (
-                        <fieldset
-                          key={mode}
-                          className="grid gap-4 border-t pt-4"
-                        >
-                          <legend className="text-sm">
-                            {t(`models.${mode}`)}
-                          </legend>
-                          <ModelFields
-                            prefix={`${mode}-contract`}
-                            fields={[
-                              { key: 'model' },
-                              { key: 'dimension', type: 'number' },
-                              { key: 'input' },
-                              { key: 'query_param' },
-                              { key: 'document_param' },
-                              { key: 'version' },
-                            ]}
-                            value={object(editor.value[mode])}
-                            readOnly
-                            onChange={() => {}}
-                          />
-                          <ModelFields
-                            prefix={mode}
-                            fields={[
-                              {
-                                key: 'failback_timeout_seconds',
-                                type: 'number',
-                                min: 0.001,
-                              },
-                              {
-                                key: 'failback_request_count',
-                                type: 'number',
-                                min: 1,
-                              },
-                            ]}
-                            value={object(editor.value[mode])}
-                            readOnly={pending}
-                            onChange={(value) => {
-                              if (pending) return
-                              setEditor({
-                                ...editor,
-                                value: { ...editor.value, [mode]: value },
-                              })
-                            }}
-                          />
-                        </fieldset>
-                      ))}
+                    <ModelFields
+                      prefix="embedding-model"
+                      fields={[
+                        { key: 'model' },
+                        { key: 'dimension', type: 'number' },
+                        { key: 'input' },
+                        { key: 'output' },
+                        { key: 'query_param' },
+                        { key: 'document_param' },
+                        { key: 'version' },
+                      ]}
+                      value={editor.value}
+                      readOnly
+                      onChange={() => {}}
+                    />
+                    <ModelFields
+                      prefix="embedding-failback"
+                      fields={[
+                        {
+                          key: 'failback_timeout_seconds',
+                          type: 'number',
+                          min: 0.001,
+                        },
+                        {
+                          key: 'failback_request_count',
+                          type: 'number',
+                          min: 1,
+                        },
+                      ]}
+                      value={editor.value}
+                      readOnly={pending}
+                      onChange={(value) => {
+                        if (!pending) setEditor({ ...editor, value })
+                      }}
+                    />
                   </>
                 )}
                 {!editor.settings && editor.kind === 'embedding' && (

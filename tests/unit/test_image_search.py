@@ -3,7 +3,7 @@ import io
 
 from PIL import Image
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.utils.image_search import (
     build_multimodal_embedding_input,
     image_bytes_to_data_uri,
@@ -13,7 +13,7 @@ from openviking.utils.image_search import (
 from openviking_cli.utils.config.parser_config import ImageConfig
 
 
-class TextOnlyEmbedder(DenseEmbedderBase):
+class TextOnlyEmbedder(EmbedderBase):
     def embed(self, content, is_query=False):
         return EmbedResult(dense_vector=[1.0])
 

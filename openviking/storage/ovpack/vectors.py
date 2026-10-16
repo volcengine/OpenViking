@@ -52,7 +52,7 @@ async def dense_snapshot_unsupported_reason(
     if vector_config_resolver is None:
         raise RuntimeError("OVPack requires a vector config resolver")
     settings = await vector_config_resolver.resolve(ctx.account_id)
-    if settings.embedding.sparse or settings.embedding.hybrid or settings.vectordb.sparse_weight:
+    if settings.embedding.output == "dense_sparse" or settings.vectordb.sparse_weight:
         return "current vector index type is hybrid"
     backend = await vector_store.get_account_backend(ctx.account_id)
     meta = await backend.get_collection_meta()
@@ -80,7 +80,7 @@ async def ensure_dense_snapshot_supported(
 
 def embedding_snapshot_metadata(dimensions: int | None, embedding_cfg) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    model_cfg = embedding_cfg.hybrid or embedding_cfg.dense
+    model_cfg = embedding_cfg
     if model_cfg:
         metadata = {
             "provider": model_cfg._effective_provider(),

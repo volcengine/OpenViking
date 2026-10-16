@@ -301,12 +301,10 @@ class TestVikingFSEncryptionWithVault:
             "vectordb": {"name": "test", "backend": "local", "project": "default"},
         }
         config_dict["embedding"] = {
-            "dense": {
                 "provider": "openai",
                 "api_key": "fake",
                 "model": "text-embedding-3-small",
             }
-        }
         config_dict["server"] = {"root_api_key": self.ROOT_KEY}
 
         # Initialize config singleton

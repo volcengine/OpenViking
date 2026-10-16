@@ -108,7 +108,7 @@ class TestEncodingFormatFactory:
             api_key="sk-test",
             encoding_format="float",
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
         assert isinstance(embedder, RetryEmbedder)
         assert isinstance(embedder.inner, OpenAIDenseEmbedder)
         assert embedder.inner.encoding_format == "float"
@@ -125,7 +125,7 @@ class TestEncodingFormatFactory:
             api_version="2024-12-01-preview",
             encoding_format="float",
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("azure", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
         assert isinstance(embedder, RetryEmbedder)
         assert isinstance(embedder.inner, OpenAIDenseEmbedder)
         assert embedder.inner.encoding_format == "float"
@@ -139,7 +139,7 @@ class TestEncodingFormatFactory:
             model="text-embedding-3-small",
             api_key="sk-test",
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        embedder = EmbeddingConfig(**cfg.model_dump(exclude_unset=True))._create_embedder(cfg)
         assert isinstance(embedder, RetryEmbedder)
         assert isinstance(embedder.inner, OpenAIDenseEmbedder)
         assert embedder.inner.encoding_format is None

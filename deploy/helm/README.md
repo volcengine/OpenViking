@@ -15,7 +15,7 @@ Deploy OpenViking on Kubernetes using Helm.
 ```bash
 helm install openviking ./deploy/helm/openviking \
   --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
-  --set-string config.embedding.dense.api_key="YOUR_VOLCENGINE_API_KEY" \
+  --set-string config.embedding.api_key="YOUR_VOLCENGINE_API_KEY" \
   --set-string config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
 ```
 
@@ -67,13 +67,12 @@ config:
     workers: 1
     root_api_key: "your-secret-key"
   embedding:
-    dense:
-      api_base: "https://ark.cn-beijing.volces.com/api/v3"
-      api_key: "your-volcengine-api-key"
-      provider: "volcengine"
-      dimension: 1024
-      model: "doubao-embedding-vision-251215"
-      input: "multimodal"
+    api_base: "https://ark.cn-beijing.volces.com/api/v3"
+    api_key: "your-volcengine-api-key"
+    provider: "volcengine"
+    dimension: 1024
+    model: "doubao-embedding-vision-251215"
+    input: "multimodal"
     max_concurrent: 10
   vlm:
     api_base: "https://ark.cn-beijing.volces.com/api/v3"
@@ -112,8 +111,7 @@ config:
   server:
     root_api_key: "${OPENVIKING_ROOT_API_KEY}"
   embedding:
-    dense:
-      api_key: "${OPENVIKING_EMBEDDING_API_KEY}"
+    api_key: "${OPENVIKING_EMBEDDING_API_KEY}"
   vlm:
     api_key: "${OPENVIKING_VLM_API_KEY}"
 

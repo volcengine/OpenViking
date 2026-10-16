@@ -58,7 +58,6 @@ export async function waitForServerRestart(
   }
   throw new Error('Restart timed out')
 }
-export const embeddingModes = ['dense', 'sparse', 'hybrid'] as const
 export const embeddingCredentialFields = [
   'id',
   'provider',
@@ -105,23 +104,17 @@ export function embeddingPatch(config: ModelConfig): ModelConfig {
   for (const key of ['max_retries', 'max_concurrent', 'circuit_breaker']) {
     if (config[key] !== undefined) patch[key] = config[key]
   }
-  for (const mode of embeddingModes) {
-    if (!config[mode]) continue
-    const section = object(config[mode])
-    patch[mode] = {
-      credentials: credentials(section).map((credential) =>
-        Object.fromEntries(
-          Object.entries(credential).filter(([key]) =>
-            embeddingCredentialFields.includes(key),
-          ),
+  if (config.credentials !== undefined) {
+    patch.credentials = credentials(config).map((credential) =>
+      Object.fromEntries(
+        Object.entries(credential).filter(([key]) =>
+          embeddingCredentialFields.includes(key),
         ),
       ),
-      ...Object.fromEntries(
-        ['failback_timeout_seconds', 'failback_request_count']
-          .filter((key) => section[key] !== undefined)
-          .map((key) => [key, section[key]]),
-      ),
-    }
+    )
+  }
+  for (const key of ['failback_timeout_seconds', 'failback_request_count']) {
+    if (config[key] !== undefined) patch[key] = config[key]
   }
   return patch
 }

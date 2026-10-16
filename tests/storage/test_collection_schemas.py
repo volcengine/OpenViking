@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 import requests
 
-from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.embedder.base import EmbedderBase, EmbedResult
 from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
@@ -72,7 +72,7 @@ class TextEmbeddingHandler(ProductionTextEmbeddingHandler):
 
         config = get_openviking_config()
         embedding = EmbeddingConfig(
-            dense={"provider": "openai", "model": "test", "api_key": "test", "dimension": 2},
+            **{"provider": "openai", "model": "test", "api_key": "test", "dimension": 2},
             max_input_tokens=max(100, config.embedding.max_input_tokens),
             circuit_breaker=vars(config.embedding.circuit_breaker),
         )
@@ -142,13 +142,10 @@ class _DummyConfig:
         self.embedding = SimpleNamespace(
             dimension=2,
             get_embedder=lambda: embedder,
-            dense=SimpleNamespace(
-                provider="local",
-                model="bge-small-zh-v1.5-f16",
-                model_path=None,
-            ),
-            sparse=None,
-            hybrid=None,
+            provider="local",
+            model="bge-small-zh-v1.5-f16",
+            model_path=None,
+            output="dense",
             max_input_tokens=max_input_tokens,
             circuit_breaker=SimpleNamespace(
                 failure_threshold=5,
@@ -731,39 +728,38 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
-    """When embedding dimension mismatches for a non-empty collection, vectors are
-    incompatible and the function requires a rebuild.
-    """
+@pytest.mark.parametrize(
+    "changed_field", ["dimension", "output", "missing_output", "missing_metadata"]
+)
+async def test_init_context_collection_rejects_mismatched_nonempty_collection(
+    monkeypatch, changed_field
+):
+    config = _DummyConfig(_DummyEmbedder())
+    config.embedding.allow_metadata_override = True
+    metadata = _build_embedding_metadata(config)
+    if changed_field == "missing_output":
+        metadata.pop("output")
+    elif changed_field != "missing_metadata":
+        metadata[changed_field] = 1024 if changed_field == "dimension" else "dense_sparse"
+    description = "Unified context collection"
+    if changed_field != "missing_metadata":
+        description += "\n\n[openviking.embedding]\n" + json.dumps(metadata)
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
-            del name, schema
             return False
 
         async def get_collection_meta(self):
-            return {
-                "Description": (
-                    "Unified context collection\n\n[openviking.embedding]\n"
-                    '{"dimension": 1024, "model": "text-embedding-3-small", '
-                    '"model_identity": "text-embedding-3-small", "provider": "openai"}'
-                )
-            }
+            return {"Description": description}
 
         async def count(self):
             return 3
 
-        async def update_collection_description(self, description):  # pragma: no cover
-            del description
-            raise AssertionError("should not update mismatched non-empty collection")
+        async def update_collection_description(self, description):
+            raise AssertionError("must not override a changed vector output contract")
 
-    config = _DummyConfig(_DummyEmbedder())
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: config,
-    )
-
-    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding dimension"):
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: config)
+    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding"):
         await init_context_collection(_FakeStorage())
 
 
@@ -771,7 +767,7 @@ def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):
     model_path = tmp_path / ".." / tmp_path.name / "model.gguf"
     expected = str(model_path.expanduser().resolve())
     config = _DummyConfig(_DummyEmbedder())
-    config.embedding.dense.model_path = str(model_path)
+    config.embedding.model_path = str(model_path)
 
     payload = _build_embedding_metadata(config)
 
@@ -1152,7 +1148,7 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
         async def upsert(self, _data, *, ctx, options=UpsertOptions()):
             return "rec-1"
 
-    class _CapturingEmbedder(DenseEmbedderBase):
+    class _CapturingEmbedder(EmbedderBase):
         def __init__(self):
             super().__init__("capturing-test", config={"max_input_tokens": 10})
             self.text = None
