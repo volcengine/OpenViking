@@ -417,6 +417,8 @@ async def gather_candidates(
         if bucket == "skills":
             candidates = _dedupe_candidates(candidates)
         candidates.sort(key=_rank_key, reverse=True)
+        if bucket == "resources":
+            candidates = _drop_nested(candidates)
         return candidates
 
     async def gather_flat() -> List[Candidate]:
@@ -478,6 +480,7 @@ async def gather_candidates(
                 service, reranker, rerank_query, [candidates[:width]], score_threshold
             )
             rerank_stats["capped"] = capped
+        candidates = _drop_nested(candidates)
         return candidates[: max(0, limit)]
 
     if quotas is None:
@@ -640,6 +643,40 @@ async def _rerank_groups(
 def _rank_key(candidate: Candidate) -> Tuple[float, int]:
     origin_rank = {origin: index for index, origin in enumerate(ORIGIN_ORDER)}
     return (candidate.ranked_score, -origin_rank.get(candidate.origin, len(origin_rank)))
+
+
+def _drop_nested(ranked: Sequence[Candidate]) -> List[Candidate]:
+    """One resource tree, one slot, showing the most specific hit.
+
+    A single-file resource is a directory holding that file, and every level carries
+    its own vector, so one document otherwise fills several slots with the same text.
+    A slot covers the subtree of the highest hit seen; a hit inside its directory hit
+    takes over the slot, since a directory abstract only summarises what the file or
+    section says.
+    """
+    kept: List[Candidate] = []
+    roots: Dict[int, str] = {}  # slot index -> top of the tree it covers
+    for candidate in ranked:
+        uri = candidate.base_uri
+        slot = None
+        if candidate.category == "resources":
+            slot = next(
+                (i for i, root in roots.items() if _is_under(uri, root) or _is_under(root, uri)),
+                None,
+            )
+        if slot is None:
+            if candidate.category == "resources":
+                roots[len(kept)] = uri
+            kept.append(candidate)
+        elif _is_under(roots[slot], uri):
+            roots[slot] = uri
+        elif (
+            kept[slot].is_directory
+            and uri != kept[slot].base_uri
+            and _is_under(uri, kept[slot].base_uri)
+        ):
+            kept[slot] = candidate
+    return kept
 
 
 def _dedupe_candidates(candidates: Sequence[Candidate]) -> List[Candidate]:
