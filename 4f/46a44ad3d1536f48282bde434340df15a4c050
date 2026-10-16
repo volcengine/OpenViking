@@ -1,0 +1,16 @@
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 314-318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4f46a44ad3d1536f48282bde434340df15a4c050",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
