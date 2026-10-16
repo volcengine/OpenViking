@@ -774,6 +774,21 @@ class ResourceService:
             internal_kwargs: Dict[str, Any] = {"parser_backend": parser_backend}
             if "resolved_extension" in queued_args:
                 internal_kwargs["resolved_extension"] = queued_args.pop("resolved_extension")
+
+            from openviking.service.task_tracker import get_task_tracker
+
+            async def abort_if_cancelled() -> None:
+                """Cooperative stop for cancelled tasks (issue: cancelled jobs kept writing)."""
+                try:
+                    tracker = get_task_tracker()
+                except RuntimeError:
+                    return  # No tracker installed: no cancellation can be requested.
+                if await tracker.is_cancelled(
+                    msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                ):
+                    raise asyncio.CancelledError()
+
+            await abort_if_cancelled()
             normalized_args = await self._normalize_add_resource_args(
                 queued_args,
                 ctx=ctx,
@@ -797,8 +812,6 @@ class ResourceService:
             if msg.source_name is not None:
                 internal_kwargs["source_name"] = msg.source_name
             if feishu_prepared:
-                from openviking.service.task_tracker import get_task_tracker
-
                 tracker = get_task_tracker()
                 task = await tracker.get(msg.task_id, ctx.account_id, ctx.user.user_id)
                 saved = dict(task.meta.get("feishu_responses", {})) if task else {}
@@ -812,11 +825,13 @@ class ResourceService:
                 internal_kwargs["_feishu_checkpoint"] = (saved, save_response)
             prepared_resource = None
             if msg.staged_source is not None:
+                await abort_if_cancelled()
                 with get_current_telemetry().measure("resource.source_prepare"):
                     prepared_resource = await materialize_source(
                         StagedSource.from_dict(msg.staged_source),
                         viking_fs=self._viking_fs,
                         ctx=ctx,
+                        abort=abort_if_cancelled,
                     )
             elif msg.shared_source is not None:
                 from openviking.resource.shared_source import (

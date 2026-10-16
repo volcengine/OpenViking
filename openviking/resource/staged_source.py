@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.server.identity import RequestContext
@@ -16,6 +16,9 @@ from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative
 from openviking_cli.exceptions import InvalidArgumentError
 
 _COPY_CONCURRENCY = 8
+# Cooperative cancellation is checked every _ABORT_CHECK_INTERVAL entries so a
+# cancelled task stops writing without a store round-trip per entry.
+_ABORT_CHECK_INTERVAL = 32
 _IDENTITY_META_FIELDS = frozenset(
     {
         "extension",
@@ -113,8 +116,13 @@ async def materialize_source(
     *,
     viking_fs: Any,
     ctx: RequestContext,
+    abort: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> LocalResource:
-    """Restore a staged source into worker-local temporary storage."""
+    """Restore a staged source into worker-local temporary storage.
+
+    ``abort`` is awaited every ``_ABORT_CHECK_INTERVAL`` entries and must raise
+    when the owning task should stop writing (cooperative cancellation).
+    """
     local_root = Path(tempfile.mkdtemp(prefix="ov_staged_source_"))
     bundle_uri = f"{staged.temp_uri}/source"
     source_relpath = staged.source_uri.removeprefix(f"{bundle_uri}/")
@@ -127,7 +135,9 @@ async def materialize_source(
             level_limit=None,
             ctx=ctx,
         )
-        for entry in entries:
+        for offset, entry in enumerate(entries):
+            if abort is not None and offset % _ABORT_CHECK_INTERVAL == 0:
+                await abort()
             target = _local_target(local_root, entry.get("rel_path"))
             if entry.get("isDir", False):
                 target.mkdir(parents=True, exist_ok=True)

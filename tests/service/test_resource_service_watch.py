@@ -95,6 +95,9 @@ class NoopTaskTracker:
     async def complete(self, *_args, **_kwargs):
         pass
 
+    async def is_cancelled(self, *_args, **_kwargs):
+        return False
+
     async def wait(self, *_args, **_kwargs):
         return SimpleNamespace(status=TaskStatus.COMPLETED, result={})
 
@@ -1025,6 +1028,7 @@ async def test_add_resource_processor_records_paused_watch_result(
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
+        is_cancelled=AsyncMock(return_value=False),
         wait_for_task_work=AsyncMock(),
         build_queue_status=Mock(return_value={}),
         get_context_count=Mock(return_value=0),

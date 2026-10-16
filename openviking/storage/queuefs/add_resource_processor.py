@@ -222,6 +222,13 @@ class AddResourceProcessor(DequeueHandlerBase):
         async def _set_stage(stage: str) -> None:
             nonlocal current_stage
             current_stage = stage
+            # Stage boundaries are the cooperative cancellation checkpoints for
+            # the ingestion pipeline: a cancelled task must stop before the
+            # next stage writes more of the resource tree.
+            if await tracker.is_cancelled(
+                msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            ):
+                raise asyncio.CancelledError()
             await tracker.update_stage(
                 msg.task_id,
                 stage,

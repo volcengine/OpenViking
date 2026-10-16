@@ -411,6 +411,38 @@ class TaskTracker:
                 TaskStatus.CANCELLED,
             )
 
+    async def is_cancelled(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Cooperative cancellation checkpoint for long-running workers.
+
+        Queue consumers run on dedicated worker threads, often in a different
+        process from the API that records a cancellation, so the process-local
+        :meth:`is_cancellation_requested` alone cannot observe one. When the
+        cached record is still active, refresh it from the durable store once
+        (bounded by the shared store I/O budget) before answering.
+        """
+        if self.is_cancellation_requested(task_id):
+            return True
+        cached = self._cached_task(task_id)
+        if cached is None or cached.status not in _ACTIVE_STATUSES:
+            return False
+        account_id = account_id if account_id is not None else cached.account_id
+        user_id = user_id if user_id is not None else cached.user_id
+        if account_id is None:
+            return False
+        loaded = await self._load_from_store(task_id, account_id, user_id)
+        if loaded is not None:
+            self._merge_loaded_tasks([loaded])
+        refreshed = self._cached_task(task_id)
+        return refreshed is not None and refreshed.status in (
+            TaskStatus.CANCELLING,
+            TaskStatus.CANCELLED,
+        )
+
     def start_cleanup_loop(self) -> None:
         """Start the background TTL cleanup coroutine.
 

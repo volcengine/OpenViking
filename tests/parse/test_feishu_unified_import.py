@@ -501,6 +501,7 @@ async def test_background_collection_restores_auth_and_child_checkpoint(monkeypa
     tracker = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(meta={"feishu_responses": {"entry": "old"}})),
         record_feishu_response=AsyncMock(),
+        is_cancelled=AsyncMock(return_value=False),
     )
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     service = ResourceService()

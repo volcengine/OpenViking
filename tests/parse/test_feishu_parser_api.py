@@ -108,6 +108,7 @@ async def _interrupt_staged_add_resource(monkeypatch, task_status):
         update_stage=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         get=AsyncMock(return_value=SimpleNamespace(status=task_status)),
+        is_cancelled=AsyncMock(return_value=False),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
@@ -589,6 +590,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         update_stage=AsyncMock(),
         complete=AsyncMock(),
         fail=AsyncMock(),
+        is_cancelled=AsyncMock(return_value=False),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
     feishu_config = FeishuConfig(app_id="account-app", app_secret="account-secret")
@@ -813,6 +815,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
         update_stage=AsyncMock(),
         fail=AsyncMock(),
+        is_cancelled=AsyncMock(return_value=False),
     )
     queue_manager = SimpleNamespace(enqueue=enqueue)
     lock_lease = {"lease_ref": "lock-1"}
@@ -1084,6 +1087,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
+        is_cancelled=AsyncMock(return_value=False),
         wait_for_task_work=AsyncMock(),
         build_queue_status=Mock(
             return_value={
@@ -1230,6 +1234,7 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
         complete=AsyncMock(),
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
+        is_cancelled=AsyncMock(return_value=False),
         wait_for_task_work=AsyncMock(),
         build_queue_status=Mock(return_value={}),
         get_context_count=Mock(return_value=context_count),
