@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from openviking.models.model_error import ModelError
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -105,7 +106,7 @@ _HTTP_STATUS_PATTERNS = (
 )
 
 
-def _iter_exception_chain(exc: Exception) -> Iterator[BaseException]:
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
     seen: set[int] = set()
     pending: list[BaseException] = [exc]
     while pending:
@@ -296,6 +297,15 @@ def _extract_vlm_info(exc: Exception | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _extract_remediation(exc: BaseException | None) -> str | None:
+    if exc is None:
+        return None
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, ModelError) and item.remediation:
+            return item.remediation.strip()
+    return None
+
+
 def _build_upstream_error(
     *,
     code: str,
@@ -321,6 +331,11 @@ def _build_upstream_error(
     if detail_message:
         display = f"{display}: {detail_message}"
     details: dict[str, Any] = {"upstream_message": detail_message}
+    remediation = _extract_remediation(vlm_context) or _extract_remediation(source)
+    if remediation:
+        details["remediation"] = remediation
+        if remediation not in display:
+            display = f"{display}. {remediation}"
     if status is not None:
         details["upstream_status_code"] = status
     if source is not None:
