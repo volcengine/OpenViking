@@ -311,6 +311,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.agents.timeout` | 继承 `vlm.timeout` | 单次模型请求超时 |
 | `bot.agents.max_tool_iterations` | `50` | 单轮最大工具迭代数 |
 | `bot.agents.memory_window` | `50` | 本地历史窗口和会话提交消息阈值 |
+| `bot.agents.message_max_concurrency` | `4` | 跨会话同时处理的 Agent 轮次上限 |
 | `bot.agents.subagent_enabled` | `true` | 是否提供 `spawn` 工具 |
 | `bot.agents.subagent_max_concurrency` | `4` | 同时运行的后台子 Agent 数量上限 |
 | `bot.gateway.host` | `127.0.0.1` | Gateway 监听地址 |
