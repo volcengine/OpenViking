@@ -12,6 +12,7 @@ import pytest
 from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.pyagfs.exceptions import AGFSIoError
+from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker, get_task_tracker
 from openviking.session import working_memory as wm
@@ -23,8 +24,8 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
 from openviking.session.session import Session, _ArchiveSummaryResult
+from openviking.storage.queuefs.queue_middleware import EnqueueContext
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import UnavailableError
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -334,7 +335,7 @@ async def test_phase2_defers_live_predecessor_and_skips_missing_queue_work(
     )
     tracker = get_task_tracker()
     live_work = {"task-1", "task-2"}
-    monkeypatch.setattr(tracker, "has_work", live_work.__contains__)
+    monkeypatch.setattr(tracker, "has_work", AsyncMock(side_effect=live_work.__contains__))
 
     assert not await session._can_run_archive(3)
 
@@ -1808,7 +1809,9 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
     assert [message["parts"][0]["text"] for message in context["messages"]] == ["retained tail"]
 
 
-async def test_phase1_publishes_and_unlocks_before_task_registration(tmp_path, monkeypatch):
+async def test_task_registration_failure_keeps_live_messages_without_holding_lock(
+    tmp_path, monkeypatch
+):
     fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
     tracker = TaskTracker(PersistentTaskStore(fs.agfs))
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
@@ -1816,10 +1819,6 @@ async def test_phase1_publishes_and_unlocks_before_task_registration(tmp_path, m
     session = Session(viking_fs=fs, session_id="phase1_publish_order_test")
     await session.ensure_exists()
     await session.add_message_async("user", [TextPart("archive me")])
-
-    async def enqueue(_queue_name, data):
-        assert len(await session._read_live_messages_strict()) == 1
-        assert (await session._read_phase1_meta(data["archive_uri"]))["status"] == "preparing"
 
     async def create_task(task, *, reject_if_active=False):
         lease = await fs._async_agfs.pathlock_acquire_tree(
@@ -1829,16 +1828,95 @@ async def test_phase1_publishes_and_unlocks_before_task_registration(tmp_path, m
         raise AGFSIoError("task store unavailable")
 
     monkeypatch.setattr(tracker._store, "create", create_task)
+    enqueue = AsyncMock()
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager", lambda: SimpleNamespace(enqueue=enqueue)
     )
-    with pytest.raises(UnavailableError, match="task store unavailable") as error:
+    with pytest.raises(AGFSIoError, match="task store unavailable"):
         await session.commit_async()
-    archive_uri = error.value.details["archive_uri"]
-    assert error.value.details["archived"] is True
-    assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
+    enqueue.assert_not_awaited()
+    assert [m.content for m in await session._read_live_messages_strict()] == ["archive me"]
+    assert not await fs.exists(f"{session.uri}/history/archive_001", ctx=session.ctx)
+
+
+@pytest.mark.parametrize(
+    "outcome", ["queued", "empty", "retained", "queue_failure", "lock_failure", "cancelled_enqueue"]
+)
+async def test_commit_enqueues_owned_work_through_task_middleware(tmp_path, monkeypatch, outcome):
+    fs = VikingFS(agfs=MockLocalAGFS(root_path=tmp_path))
+    tracker = TaskTracker(PersistentTaskStore(fs.agfs))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr("openviking.session.session._enabled_memory_types", lambda: set())
+    session = Session(viking_fs=fs, session_id="commit_task_middleware_test")
+    await session.ensure_exists()
+    if outcome != "empty":
+        await session.add_message_async("user", [TextPart("keep my queued archive")])
+    middleware = TaskWorkQueueMiddleware()
+    payloads = []
+
+    async def transport(ctx):
+        if outcome == "queue_failure":
+            raise RuntimeError("queue unavailable")
+        payloads.append(ctx.payload)
+        ctx.committed = True
+        if outcome == "cancelled_enqueue":
+            raise asyncio.CancelledError()
+        return "message-1"
+
+    async def enqueue(queue, payload):
+        return await middleware.enqueue(EnqueueContext(queue, payload), transport)
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager", lambda: SimpleNamespace(enqueue=enqueue)
+    )
+    if outcome == "cancelled_enqueue":
+        with pytest.raises(asyncio.CancelledError):
+            await session.commit_async()
+        payload = payloads[0]
+        task = await tracker.get(payload["task_id"])
+        assert task.status.value == "pending"
+        assert await tracker.has_work(task.task_id)
+        assert not await fs.exists(f"{payload['archive_uri']}/.failed.json", ctx=session.ctx)
+        return
+    if outcome in {"queue_failure", "lock_failure"}:
+        if outcome == "lock_failure":
+            monkeypatch.setattr(
+                fs._async_agfs,
+                "pathlock_acquire_exact",
+                AsyncMock(side_effect=RuntimeError("lock unavailable")),
+            )
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await session.commit_async()
+        tasks = await tracker.list_tasks(
+            account_id=session.ctx.account_id, user_id=session.ctx.user.user_id
+        )
+        assert len(tasks) == 1
+        assert tasks[0].status.value == "failed"
+        assert [m.content for m in await session._read_live_messages_strict()] == [
+            "keep my queued archive"
+        ]
+        assert payloads == []
+        return
+    if outcome in {"empty", "retained"}:
+        result = await session.commit_async(keep_recent_count=1)
+        assert result["status"] == "skipped"
+        assert result["task_id"] is None
+        tasks = await tracker.list_tasks(
+            account_id=session.ctx.account_id, user_id=session.ctx.user.user_id
+        )
+        assert len(tasks) == 1
+        assert tasks[0].status.value == "completed"
+        assert payloads == []
+        return
+    result = await session.commit_async()
+    assert result["status"] == "accepted"
+    payload = payloads[0]
+    assert payload["task_id"] == result["task_id"]
+    assert payload["_task_account_id"] == session.ctx.account_id
+    assert payload["_task_user_id"] == session.ctx.user.user_id
+    assert await tracker.has_work(result["task_id"])
+    assert (await session._read_phase1_meta(result["archive_uri"]))["status"] == "ready"
     assert await session._read_live_messages_strict() == []
-    assert not await fs.exists(f"{archive_uri}/.failed.json", ctx=session.ctx)
 
 
 async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
@@ -1867,7 +1945,11 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
         min_raw_tail_steps=1,
     )
     await session._write_to_agfs_async(messages=[original[1]])
-    monkeypatch.setattr(get_task_tracker(), "has_work", lambda task_id: task_id == "synthetic")
+    monkeypatch.setattr(
+        get_task_tracker(),
+        "has_work",
+        AsyncMock(side_effect=lambda task_id: task_id == "synthetic"),
+    )
 
     assert await session._ensure_phase1_ready(archive_uri)
     assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
