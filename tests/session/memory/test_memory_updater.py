@@ -2454,7 +2454,7 @@ class TestConsecutivePatchesSameURI:
         assert "user_ids" not in parsed
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_skips_failed_field_and_keeps_other_fields(self, monkeypatch):
+    async def test_apply_upsert_reports_failed_field_without_partial_write(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2517,17 +2517,12 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        await updater._apply_upsert(op, MagicMock())
-
-        parsed = parse_memory_file_with_fields(store[uri])
-        assert parsed["title"] == "Updated Title"
-        assert parsed["content"] == "Original body"
-        trace_info.assert_any_call(
-            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field=content, error=patch failed"
-        )
+        with pytest.raises(ConflictError, match="field=content"):
+            await updater._apply_upsert(op, MagicMock())
+        assert store == {}
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+    async def test_apply_upsert_preserves_file_on_patch_failure(self, monkeypatch):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2560,11 +2555,7 @@ class TestConsecutivePatchesSameURI:
         store[uri] = existing_content
 
         trace_info = MagicMock()
-        patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr(
-            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
-        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(
@@ -2578,17 +2569,9 @@ class TestConsecutivePatchesSameURI:
             uris=[uri],
         )
 
-        await updater._apply_upsert(op, MagicMock())
-
-        parsed = parse_memory_file_with_fields(store[uri])
-        assert parsed["content"] == "Original body"
-        patch_warning.assert_not_called()
-        assert any(
-            "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
-            and f"uri={uri}" in call.args[0]
-            and "field=content" in call.args[0]
-            for call in trace_info.call_args_list
-        )
+        with pytest.raises(ConflictError, match="field=content"):
+            await updater._apply_upsert(op, MagicMock())
+        assert store[uri] == existing_content
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("read_timeout", [False, True])

@@ -201,6 +201,8 @@ class StreamingMemoryUpdater:
         )
         self._last_result = result
         scoped_result = scope_memory_update_result_to_submitter(result, request)
+        if request.strict_extract_errors and scoped_result.apply_result.errors:
+            raise scoped_result.apply_result.errors[0][1]
         tracer.info(
             "StreamingMemoryUpdater submit finished "
             f"batch_id={result.metadata.get('batch_id')} "
