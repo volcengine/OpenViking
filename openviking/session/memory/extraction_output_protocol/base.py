@@ -94,6 +94,23 @@ class ExtractionOutputProtocol(ABC):
     def render_format_retry(self, error: str | None = None) -> str:
         """Render guidance after output parsing fails."""
 
+    def render_budget_retry(self, error: str | None = None) -> str:
+        """Render guidance after a response was cut off by the output-token budget.
+
+        The loop appends the truncated assistant response before this message, so
+        implementations may refer to it. The default wording stays protocol
+        neutral; implementations override it to name their own output shape.
+        """
+        del error
+        return (
+            "Your previous response reached the maximum output-token budget and was "
+            "cut off mid-program, so it could not be parsed. Your truncated response "
+            "is the assistant message above. Re-emit the COMPLETE program in one "
+            "message: output it directly without re-deriving your analysis, keep it "
+            "compact (merge related edits, drop optional comments and blank lines), "
+            "and make sure every string literal and bracket is closed."
+        )
+
     @abstractmethod
     def render_patch_repair(self, patch_errors: list[dict[str, Any]]) -> str:
         """Render guidance after a patch cannot be applied."""

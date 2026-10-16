@@ -323,6 +323,22 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             "were applied."
         )
 
+    def render_budget_retry(self, error: str | None = None) -> str:
+        detail = f" Parser error: {error}" if error else ""
+        return (
+            "Your previous response reached the maximum output-token budget and was "
+            "cut off mid-program, so it was not a complete restricted Python memory "
+            "SDK program."
+            f"{detail} Your truncated response is the assistant message above. "
+            "Re-emit the COMPLETE program in one message and output no explanation: "
+            "output the program directly without re-deriving your analysis, keep it "
+            "compact (merge related edits, drop optional comments and blank lines), "
+            "and make sure every string literal and bracket is closed. Put Markdown "
+            "memory content inside quoted SDK arguments, using triple-quoted strings "
+            '("""...""") for any multi-line or Markdown text. No changes from the '
+            "truncated program were applied."
+        )
+
     def keep_tools_enabled_after_parse_error(self, error: str | None) -> bool:
         # Set by parse() from the structured error flag, so this stays correct
         # even if the write-only read/search rejection wording changes.
