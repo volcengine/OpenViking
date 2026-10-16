@@ -20,7 +20,7 @@ from openviking.utils.git_auth import (
     is_git_https_url,
     parse_git_http_auth_config,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 
 _GENERIC_CODE_HOSTING_DOMAINS = [
     "github.com",
@@ -539,6 +539,30 @@ class TestGitAccessor:
             + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
         )
 
+    async def test_archive_permission_denial_does_not_fall_back_to_clone(
+        self,
+        accessor: GitAccessor,
+        tmp_path: Path,
+    ) -> None:
+        source = "https://github.com/org/private.git"
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
+                return_value=str(tmp_path),
+            ),
+            patch.object(
+                accessor,
+                "_github_zip_download",
+                new_callable=AsyncMock,
+                side_effect=PermissionDeniedError("blocked"),
+            ),
+            patch.object(accessor, "_git_clone", new_callable=AsyncMock) as git_clone,
+        ):
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                await accessor.access(source)
+
+        git_clone.assert_not_awaited()
+
     async def test_environment_github_token_does_not_replace_ssh_clone_auth(
         self,
         accessor: GitAccessor,
@@ -653,6 +677,21 @@ class TestGitAccessor:
         clone_args = run_git.await_args.args[0]
         assert "--no-recurse-submodules" in clone_args
         assert "--recursive" not in clone_args
+
+    async def test_git_clone_rejects_private_target_before_running_git(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        with (
+            patch(
+                "openviking.parse.accessors.git_accessor.ensure_public_remote_target",
+                side_effect=PermissionDeniedError("blocked"),
+            ),
+            patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git,
+        ):
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                await accessor._git_clone("https://evil.example/repo.git", str(tmp_path))
+
+        run_git.assert_not_awaited()
 
     async def test_git_clone_reuses_auth_env_for_clone_and_commit_fetches(
         self, accessor: GitAccessor, tmp_path: Path
@@ -777,16 +816,19 @@ class TestGitAccessor:
         self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
         with patch(
-            "openviking.parse.accessors.git_accessor.urllib.request.urlopen",
+            "openviking.parse.accessors.git_accessor.download_remote_file",
+            new_callable=AsyncMock,
             side_effect=OSError("stop before network"),
-        ) as urlopen:
+        ) as download:
             with pytest.raises(RuntimeError):
                 await accessor._github_zip_download(
                     "https://github.com/example/repo", "test#ssrf", str(tmp_path)
                 )
 
-        request = urlopen.call_args.args[0]
-        assert request.full_url == "https://github.com/example/repo/archive/test%23ssrf.zip"
+        download.assert_awaited_once()
+        assert (
+            download.await_args.args[0] == "https://github.com/example/repo/archive/test%23ssrf.zip"
+        )
 
     async def test_git_error_does_not_expose_remote_stderr(self, accessor: GitAccessor) -> None:
         process = SimpleNamespace(
