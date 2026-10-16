@@ -144,14 +144,17 @@ class MCPToolWrapper(Tool):
 
 async def connect_mcp_servers(
     mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
-) -> None:
-    """Connect to configured MCP servers and register their tools."""
+) -> set[str]:
+    """Connect to configured MCP servers and return names that can be retried."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
 
+    failed_servers: set[str] = set()
     for name, cfg in mcp_servers.items():
+        server_stack = AsyncExitStack()
+        await server_stack.__aenter__()
         try:
             transport_type = cfg.type
             if not transport_type:
@@ -170,7 +173,7 @@ async def connect_mcp_servers(
                 params = StdioServerParameters(
                     command=cfg.command, args=cfg.args, env=cfg.env or None
                 )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                read, write = await server_stack.enter_async_context(stdio_client(params))
             elif transport_type == "sse":
                 cfg_headers = cfg.headers or {}
 
@@ -192,27 +195,27 @@ async def connect_mcp_servers(
                         auth=auth,
                     )
 
-                read, write = await stack.enter_async_context(
+                read, write = await server_stack.enter_async_context(
                     sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
                 )
             elif transport_type == "streamableHttp":
                 # Always provide an explicit httpx client so MCP HTTP transport does not
                 # inherit httpx's default 5s timeout and preempt the higher-level tool timeout.
-                http_client = await stack.enter_async_context(
+                http_client = await server_stack.enter_async_context(
                     httpx.AsyncClient(
                         headers=cfg.headers or None,
                         follow_redirects=True,
                         timeout=None,
                     )
                 )
-                read, write, _ = await stack.enter_async_context(
+                read, write, _ = await server_stack.enter_async_context(
                     streamable_http_client(cfg.url, http_client=http_client)
                 )
             else:
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
                 continue
 
-            session = await stack.enter_async_context(ClientSession(read, write))
+            session = await server_stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
 
             tools = await session.list_tools()
@@ -257,6 +260,15 @@ async def connect_mcp_servers(
                         ", ".join(available_wrapped_names) or "(none)",
                     )
 
+            await stack.enter_async_context(server_stack.pop_all())
             logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
         except Exception as e:
             logger.error("MCP server '{}': failed to connect: {}", name, e)
+            failed_servers.add(name)
+        finally:
+            try:
+                await server_stack.aclose()
+            except Exception:
+                pass
+
+    return failed_servers
