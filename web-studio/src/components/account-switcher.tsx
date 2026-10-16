@@ -5,7 +5,6 @@ import {
   Building2Icon,
   CheckIcon,
   ChevronDownIcon,
-  CodeXmlIcon,
   LoaderCircleIcon,
   PlusIcon,
   SearchIcon,
@@ -73,9 +72,9 @@ function currentRuntimeIdentity(): string {
   ])
 }
 
-function ServiceIcon({ hosted }: { hosted: boolean }) {
+function HostedServiceIcon() {
   const { t } = useTranslation('accountSwitcher')
-  const label = t(`provider.${hosted ? 'hosted' : 'opensource'}`)
+  const label = t('provider.hosted')
   return (
     <span
       title={label}
@@ -83,46 +82,42 @@ function ServiceIcon({ hosted }: { hosted: boolean }) {
       aria-label={label}
       className="inline-flex size-4 shrink-0 items-center justify-center text-sidebar-foreground/70"
     >
-      {hosted ? (
-        <svg
-          viewBox="0 0 24 24"
-          className="size-3.5 opacity-60"
-          aria-hidden="true"
-        >
-          <g transform="translate(0.349 12.857)">
-            <path
-              d="M0 9.1584H6.34404L3.4718 0.221463C3.41951 0.0533704 3.23825 -0.0376799 3.07094 0.0148491C2.97333 0.0463665 2.89665 0.123409 2.86528 0.221463L0 9.1584Z"
-              fill="#00DCFF"
-            />
-          </g>
-          <g transform="translate(15.771 11.277)">
-            <path
-              d="M0 10.7483H7.36188L3.9842 0.221463C3.93191 0.0533704 3.75065 -0.03768 3.58334 0.0148491C3.48574 0.0463665 3.40905 0.123409 3.37768 0.221463L0 10.7483Z"
-              fill="#00DCFF"
-            />
-          </g>
-          <g transform="translate(7.012 1.716)">
-            <path
-              d="M0 20.3102H13.5804L7.09348 0.219641C7.03771 0.0515485 6.85993 -0.0395018 6.69262 0.0165291C6.59502 0.0480465 6.51833 0.125089 6.48696 0.219641L0 20.3102Z"
-              fill="#006AFF"
-            />
-          </g>
-          <g transform="translate(2.882 6.815)">
-            <path
-              d="M0.00348549 15.2114H10.2829L5.44472 0.219641C5.38895 0.0515482 5.21118 -0.0395018 5.04386 0.0165292C4.94626 0.0480466 4.86958 0.125089 4.83821 0.219641L0 15.2114H0.00348549Z"
-              fill="#006AFF"
-            />
-          </g>
-          <g transform="translate(5.736 9.355)">
-            <path
-              d="M0 12.6725H8.69343L4.64998 0.219641C4.5942 0.0515485 4.41643 -0.0395018 4.24912 0.0165291C4.15152 0.0480465 4.07832 0.125089 4.04694 0.219641L0.00348582 12.6725H0Z"
-              fill="#00DCFF"
-            />
-          </g>
-        </svg>
-      ) : (
-        <CodeXmlIcon className="size-4" strokeWidth={1.8} aria-hidden="true" />
-      )}
+      <svg
+        viewBox="0 0 24 24"
+        className="size-3.5 opacity-60"
+        aria-hidden="true"
+      >
+        <g transform="translate(0.349 12.857)">
+          <path
+            d="M0 9.1584H6.34404L3.4718 0.221463C3.41951 0.0533704 3.23825 -0.0376799 3.07094 0.0148491C2.97333 0.0463665 2.89665 0.123409 2.86528 0.221463L0 9.1584Z"
+            fill="#00DCFF"
+          />
+        </g>
+        <g transform="translate(15.771 11.277)">
+          <path
+            d="M0 10.7483H7.36188L3.9842 0.221463C3.93191 0.0533704 3.75065 -0.03768 3.58334 0.0148491C3.48574 0.0463665 3.40905 0.123409 3.37768 0.221463L0 10.7483Z"
+            fill="#00DCFF"
+          />
+        </g>
+        <g transform="translate(7.012 1.716)">
+          <path
+            d="M0 20.3102H13.5804L7.09348 0.219641C7.03771 0.0515485 6.85993 -0.0395018 6.69262 0.0165291C6.59502 0.0480465 6.51833 0.125089 6.48696 0.219641L0 20.3102Z"
+            fill="#006AFF"
+          />
+        </g>
+        <g transform="translate(2.882 6.815)">
+          <path
+            d="M0.00348549 15.2114H10.2829L5.44472 0.219641C5.38895 0.0515482 5.21118 -0.0395018 5.04386 0.0165292C4.94626 0.0480466 4.86958 0.125089 4.83821 0.219641L0 15.2114H0.00348549Z"
+            fill="#006AFF"
+          />
+        </g>
+        <g transform="translate(5.736 9.355)">
+          <path
+            d="M0 12.6725H8.69343L4.64998 0.219641C4.5942 0.0515485 4.41643 -0.0395018 4.24912 0.0165291C4.15152 0.0480465 4.07832 0.125089 4.04694 0.219641L0.00348582 12.6725H0Z"
+            fill="#00DCFF"
+          />
+        </g>
+      </svg>
     </span>
   )
 }
@@ -414,11 +409,9 @@ export function AccountSwitcher() {
                   <span className="min-w-0 truncate text-sm font-medium">
                     {profile.name}
                   </span>
-                  <ServiceIcon
-                    hosted={
-                      profile.connection.serviceSelection === 'volcengine'
-                    }
-                  />
+                  {profile.connection.serviceSelection === 'volcengine' ? (
+                    <HostedServiceIcon />
+                  ) : null}
                   {showProfileId ? (
                     <span
                       className="shrink-0 font-mono text-[10px] text-muted-foreground"
@@ -475,9 +468,7 @@ export function AccountSwitcher() {
                 connection.accountId ||
                 t('hosted.currentWorkspace')}
             </span>
-            {provider !== 'unknown' ? (
-              <ServiceIcon hosted={provider === 'volcengine'} />
-            ) : null}
+            {provider === 'volcengine' ? <HostedServiceIcon /> : null}
           </span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
         </PopoverTrigger>
@@ -507,7 +498,6 @@ export function AccountSwitcher() {
             <span className="min-w-0 truncate text-sm font-semibold">
               {accountLabel}
             </span>
-            {provider === 'opensource' ? <ServiceIcon hosted={false} /> : null}
           </span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
         </PopoverTrigger>
@@ -579,7 +569,6 @@ export function AccountSwitcher() {
                         <span className="min-w-0 truncate text-sm font-medium">
                           {account.accountId}
                         </span>
-                        <ServiceIcon hosted={false} />
                       </span>
                       <span className="block text-xs text-muted-foreground">
                         {t('memberCount', { count: account.userCount })}

@@ -250,7 +250,7 @@ it('lists saved open-source connections beside hosted connections without mergin
     screen
       .getByRole('button', { name: /Open-source shared URL/ })
       .querySelector('[role="img"][aria-label="provider.opensource"]'),
-  ).toBeTruthy()
+  ).toBeNull()
   expect(
     screen.getByRole('button', { name: /Development server/ }),
   ).toBeTruthy()
