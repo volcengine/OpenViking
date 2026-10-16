@@ -444,6 +444,14 @@ for idx_name in indexes:
     print(f"  - {idx_name}")
 ```
 
+#### 磁盘索引格式与 cosine 分数
+
+本地 `index_meta.json` 的 `VectorIndex` 保存的是引擎内部表示。用户设置 `"Distance": "cosine"` 时，磁盘上会写成 `"Distance": "ip"` 加 `"NormalizeVector": true`，表示归一化后的内积，即 **cosine**。只有 `"NormalizeVector": false` 的 IP 索引才是普通内积。离线检查、审计或备份工具必须同时读取这两个字段，不能仅凭 `"Distance": "ip"` 判断 cosine 分数变更不适用。
+
+`IndexMeta._get_user_meta()` 会反向转换；`collection.get_index_meta_data(index_name)` 返回用户可见的 `"Distance": "cosine"`。这个磁盘格式不记录引擎分数尺度：从 v0.4.22 起，local 的纯 dense cosine 分数使用 `clamp((cosine_similarity + 1) / 2, 0, 1)`，无需重建已有索引。普通 IP 分数不变，仍为内积。稀疏融合、时间衰减和 rerank 等处理后的分数不能直接套用此公式。
+
+运行时可通过 [`GET /api/v1/observer/vikingdb?format=json`](../../../docs/zh/api/18-observer.md#observer-vikingdb) 查询当前账户索引的实际 metric 和纯 dense 分数尺度。
+
 #### 3.2 更新索引
 
 ```python

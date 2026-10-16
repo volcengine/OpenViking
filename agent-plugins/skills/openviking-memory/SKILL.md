@@ -37,7 +37,12 @@ without memory.
    `limit` around 5-10. Use `search` when deeper intent analysis helps, or use
    `search` with `mode="context"` for a server-assembled, token-budgeted
    context block. In list mode, scope with `target_uri` when you know where to look, e.g.
-   `viking://~/memories/experiences` for prior task experience.
+   `viking://~/memories/experiences` for prior task experience. `viking://~` is
+   the home alias for your own user root; a server that predates the alias
+   rejects every `viking://~` URI with `INVALID_URI`. Against such a server use
+   the explicit `viking://user/<user_id>/...` root taken from a URI already
+   visible in this session, or drop `target_uri` and keep the hits whose URI
+   contains `/memories/experiences/`. Never guess a user ID.
 4. Judge results by task and environment fit, not title similarity. `read` the
    one to three exact file URIs likely to change how you execute. Ignore
    sidecar files such as `.abstract.md`, `.overview.md`, and
@@ -62,10 +67,11 @@ session:
   says "remember this", states a lasting preference or decision, or when a
   hard-won lesson (root cause, working procedure, environment quirk) emerges.
 - `add_resource` — to import external documents or URLs as searchable
-  resources.
-- When you need an exact document at a known location (curated notes under
-  `viking://~/` — your own user root — or shared reference material under
-  `viking://resources/`), the optional `write` / `edit` tools cover that — see
+  resources. Use it for any file, URL, or repo the user hands you; never copy
+  its text into a file with `write` instead.
+- When you need a note you author at a known location (under `viking://~/` —
+  your own user root — or `viking://resources/`), the optional `write` / `edit`
+  tools cover that — see
   [references/optional-tools.md](references/optional-tools.md). If they are
   not registered, fall back to `remember`.
 
@@ -73,6 +79,14 @@ What to persist: stable preferences and conventions, environment facts,
 decisions with their rationale, and reusable procedures or fixes. What not to
 persist: secrets and credentials, transient state, speculation, or bulk
 transcript dumps — store conclusions, not scrollback.
+
+### File resources deliberately
+
+Resource directory rules do not apply to Memory; use `remember` or session
+commit and let the extraction system organize it. Before `add_resource`, keep
+the existing Resource layout and account policy, choose shared versus
+identity-private scope, and avoid duplicate source roots. Use `parent` for a new
+source and exact `to` for refresh.
 
 ## Example
 

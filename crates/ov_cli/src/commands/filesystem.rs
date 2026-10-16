@@ -13,6 +13,7 @@ use unicode_width::UnicodeWidthStr;
 const ENTRY_TEXT_WIDTH: usize = 96;
 const ENTRY_MIN_TEXT_WIDTH: usize = 32;
 const ENTRY_MAX_ABSTRACT_LINES: usize = 2;
+const ENTRY_MAX_OVERVIEW_LINES: usize = 6;
 const ENTRY_INDENT: &str = "   ";
 const TREE_INDENT: &str = "  ";
 const TREE_NAME_COLUMN_WIDTH: usize = 38;
@@ -43,7 +44,9 @@ static ALL_FIELDS: &[FieldDef] = &[
     FieldDef { name: "locked", header: "LOCKED", alignment: FieldAlignment::Left },
     FieldDef { name: "id", header: "ID", alignment: FieldAlignment::Left },
     FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
+    FieldDef { name: "tags", header: "TAGS", alignment: FieldAlignment::Left },
     FieldDef { name: "abstract", header: "ABSTRACT", alignment: FieldAlignment::Left },
+    FieldDef { name: "overview", header: "OVERVIEW", alignment: FieldAlignment::Left },
 ];
 
 fn resolve_fields(fields: &[String], is_tree: bool) -> Vec<&'static FieldDef> {
@@ -133,9 +136,24 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
             .and_then(Value::as_u64)
             .map(|c| c.to_string())
             .unwrap_or_else(|| "-".to_string()),
+        "tags" => obj
+            .and_then(|o| o.get("tags"))
+            .and_then(Value::as_array)
+            .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .filter(|tags| !tags.is_empty())
+            .unwrap_or_else(|| "-".to_string()),
         "abstract" => entry_string(obj, "abstract")
             .map(|s| {
-                if is_directory_abstract_placeholder(s) {
+                if is_directory_summary_placeholder(s) {
+                    "-".to_string()
+                } else {
+                    s.chars().take(80).collect::<String>()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string()),
+        "overview" => entry_string(obj, "overview")
+            .map(|s| {
+                if is_directory_summary_placeholder(s) {
                     "-".to_string()
                 } else {
                     s.chars().take(80).collect::<String>()
@@ -162,11 +180,19 @@ pub async fn ls(
     recursive: bool,
     output: &str,
     abs_limit: i32,
+    include_abstract: Option<bool>,
+    include_overview: Option<bool>,
+    overview_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
+    sort_by: Option<&str>,
+    sort_order: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
     fields: Option<Vec<String>>,
+    tags: &[String],
 ) -> Result<()> {
     let extra = extra_fields_from(&fields);
     // When fields are requested we need entry objects (not URI strings) regardless of --simple.
@@ -178,9 +204,18 @@ pub async fn ls(
             recursive,
             output,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             show_all_hidden,
             node_limit,
+            offset,
+            limit,
+            sort_by,
+            sort_order,
             &extra,
+            tags,
+            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
         )
         .await?;
     output_filesystem_entries(&result, output_format, compact, false, simple, fields.as_deref());
@@ -192,13 +227,20 @@ pub async fn tree(
     uri: &str,
     output: &str,
     abs_limit: i32,
+    include_abstract: Option<bool>,
+    include_overview: Option<bool>,
+    overview_limit: i32,
     show_all_hidden: bool,
+    directories_only: bool,
     node_limit: i32,
     level_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
     output_format: OutputFormat,
     compact: bool,
     simple: bool,
     fields: Option<Vec<String>>,
+    tags: &[String],
 ) -> Result<()> {
     let extra = extra_fields_from(&fields);
     let result = client
@@ -206,10 +248,18 @@ pub async fn tree(
             uri,
             output,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             show_all_hidden,
+            directories_only,
             node_limit,
             level_limit,
+            offset,
+            limit,
             &extra,
+            tags,
+            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
         )
         .await?;
     output_filesystem_entries(&result, output_format, compact, true, simple, fields.as_deref());
@@ -258,7 +308,7 @@ fn output_filesystem_entries(
                 }
                 if simple {
                     if let Some(rendered) = render_simple_fields(result, &defs, is_tree) {
-                        println!("{rendered}");
+                        println!("{}", with_more_nodes_hint(rendered, result));
                     } else {
                         output_success(result, output_format, compact);
                     }
@@ -268,7 +318,7 @@ fn output_filesystem_entries(
             } else if let Some(rendered) =
                 render_filesystem_entries_for_table(result, output_format, is_tree, simple)
             {
-                println!("{rendered}");
+                println!("{}", with_more_nodes_hint(rendered, result));
             } else {
                 output_success(result, output_format, compact);
             }
@@ -329,6 +379,23 @@ fn render_simple_tree_paths(result: &Value) -> Option<String> {
     render_simple_fields(result, &[path], false)
 }
 
+fn render_simple_paths(result: &Value) -> Option<String> {
+    let entries = result
+        .get("result")
+        .and_then(Value::as_array)
+        .or_else(|| result.as_array())?;
+    if entries.iter().all(Value::is_string) {
+        return Some(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    render_simple_tree_paths(result)
+}
+
 fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     let (entries, profile) = match filesystem_entries(result) {
         Some(v) => v,
@@ -341,6 +408,7 @@ fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     if entries.is_empty() {
         lines.push(theme::muted("(empty)").to_string());
         append_profile_lines(profile, &mut lines);
+        append_more_nodes_hint(result, &mut lines);
         println!("{}", lines.join("\n"));
         return;
     }
@@ -407,7 +475,23 @@ fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     }
 
     append_profile_lines(profile, &mut lines);
+    append_more_nodes_hint(result, &mut lines);
     println!("{}", lines.join("\n"));
+}
+
+fn append_more_nodes_hint(result: &Value, lines: &mut Vec<String>) {
+    if result.get("has_more").and_then(Value::as_bool) == Some(true) {
+        lines.push(String::new());
+        lines.push(
+            theme::muted("More nodes available. Use --offset to view the next page.").to_string(),
+        );
+    }
+}
+
+fn with_more_nodes_hint(rendered: String, result: &Value) -> String {
+    let mut lines = vec![rendered];
+    append_more_nodes_hint(result, &mut lines);
+    lines.join("\n")
 }
 
 fn display_width(s: &str) -> usize {
@@ -458,12 +542,10 @@ fn render_filesystem_entries_for_table(
     if matches!(output_format, OutputFormat::Json) {
         return None;
     }
-    if is_tree {
-        if simple {
-            render_simple_tree_paths(value)
-        } else {
-            render_tree_entries_for_table(value)
-        }
+    if simple {
+        render_simple_paths(value)
+    } else if is_tree {
+        render_tree_entries_for_table(value)
     } else {
         render_ls_entries_for_table(value)
     }
@@ -561,7 +643,14 @@ fn render_ls_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Ve
         }
     }
 
-    append_entry_abstract(object, ENTRY_INDENT, text_width, lines);
+    append_entry_summary(
+        object,
+        "abstract",
+        ENTRY_INDENT,
+        text_width,
+        ENTRY_MAX_ABSTRACT_LINES,
+        lines,
+    );
 }
 
 fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Vec<String>) {
@@ -597,6 +686,23 @@ fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut 
         &metadata.join("  "),
         text_width,
     ));
+    let content_indent = format!("{indent}{TREE_INDENT}");
+    append_entry_summary(
+        object,
+        "abstract",
+        &content_indent,
+        text_width,
+        ENTRY_MAX_ABSTRACT_LINES,
+        lines,
+    );
+    append_entry_summary(
+        object,
+        "overview",
+        &content_indent,
+        text_width,
+        ENTRY_MAX_OVERVIEW_LINES,
+        lines,
+    );
 }
 
 fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String> {
@@ -626,20 +732,22 @@ fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String
     metadata
 }
 
-fn append_entry_abstract(
+fn append_entry_summary(
     object: Option<&serde_json::Map<String, Value>>,
+    field: &str,
     indent: &str,
     text_width: usize,
+    max_lines: usize,
     lines: &mut Vec<String>,
 ) {
-    let Some(abstract_text) = entry_string(object, "abstract") else {
+    let Some(text) = entry_string(object, field) else {
         return;
     };
-    if abstract_text.trim().is_empty() || is_directory_abstract_placeholder(abstract_text) {
+    if text.trim().is_empty() || is_directory_summary_placeholder(text) {
         return;
     }
 
-    for line in wrap_display_text(abstract_text, text_width, ENTRY_MAX_ABSTRACT_LINES) {
+    for line in wrap_display_text(text, text_width, max_lines) {
         lines.push(format!("{indent}{}", theme::body(line)));
     }
 }
@@ -740,9 +848,11 @@ fn format_mod_time_for_display(value: &str) -> String {
         .unwrap_or_else(|_| value.to_string())
 }
 
-fn is_directory_abstract_placeholder(value: &str) -> bool {
+fn is_directory_summary_placeholder(value: &str) -> bool {
     value.contains("[Directory abstract is not ready]")
         || value.contains("[.abstract.md is not ready]")
+        || value.contains("[Directory overview is not ready]")
+        || value.contains("[.overview.md is not ready]")
 }
 
 fn format_size(bytes: u64) -> String {
@@ -803,10 +913,11 @@ pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
     description: Option<&str>,
+    acl: Option<Value>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.mkdir(uri, description).await?;
+    let result = client.mkdir(uri, description, acl).await?;
     output_message_result(
         result,
         format!("Directory created: {}", uri),
@@ -821,11 +932,10 @@ pub async fn rm(
     uri: &str,
     recursive: bool,
     wait: bool,
-    timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.rm(uri, recursive, wait, timeout).await?;
+    let result = client.rm(uri, recursive, wait).await?;
 
     let message = if let Some(count) = result
         .get("estimated_deleted_count")
@@ -852,6 +962,24 @@ pub async fn mv(
     output_message_result(
         result,
         format!("Moved: {} -> {}", from_uri, to_uri),
+        output_format,
+        compact,
+    );
+    Ok(())
+}
+
+pub async fn cp(
+    client: &HttpClient,
+    from_uri: &str,
+    to_uri: &str,
+    recursive: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.cp(from_uri, to_uri, recursive).await?;
+    output_message_result(
+        result,
+        format!("Copied: {} -> {}", from_uri, to_uri),
         output_format,
         compact,
     );
@@ -915,7 +1043,7 @@ fn output_message_result(
 mod tests {
     use super::{
         render_filesystem_entries_for_table, render_ls_entries_for_table, render_simple_fields,
-        render_tree_entries_for_table,
+        render_tree_entries_for_table, with_more_nodes_hint,
     };
     use crate::output::render_profiled_scalar_result;
     use serde_json::json;
@@ -1051,7 +1179,8 @@ mod tests {
                 "isDir": true,
                 "modTime": "2026-05-25",
                 "rel_path": "program",
-                "abstract": ""
+                "abstract": "Program summaries",
+                "overview": "Detailed program overview"
             },
             {
                 "uri": "viking://user/haozhe/memories/entities/restricted",
@@ -1067,6 +1196,8 @@ mod tests {
         assert!(rendered.contains("  2026_fifa_world_cup.md"));
         assert!(rendered.contains("1.3 KB  2026-05-25"));
         assert!(rendered.contains("program/"));
+        assert!(rendered.contains("Program summaries"));
+        assert!(rendered.contains("Detailed program overview"));
         assert!(rendered.contains("restricted/"));
         assert!(rendered.contains("permission denied"));
         assert!(!rendered.contains("1. dir"));
@@ -1105,6 +1236,21 @@ mod tests {
     }
 
     #[test]
+    fn table_output_appends_more_nodes_hint() {
+        let result = json!({
+            "result": [{"uri": "viking://resources/a.md", "isDir": false}],
+            "has_more": true
+        });
+
+        let rendered = strip_ansi(&with_more_nodes_hint("a.md".to_string(), &result));
+
+        assert_eq!(
+            rendered,
+            "a.md\n\nMore nodes available. Use --offset to view the next page."
+        );
+    }
+
+    #[test]
     fn tree_simple_without_fields_renders_one_path_per_line() {
         let result = json!([
             {"rel_path": "docs", "isDir": true},
@@ -1119,6 +1265,29 @@ mod tests {
         );
 
         assert_eq!(rendered.as_deref(), Some("docs/\ndocs/readme.md"));
+    }
+
+    #[test]
+    fn ls_simple_with_pagination_metadata_renders_one_uri_per_line() {
+        let result = json!({
+            "result": [
+                "viking://resources/a.md",
+                "viking://resources/b.md"
+            ],
+            "has_more": true
+        });
+
+        let rendered = render_filesystem_entries_for_table(
+            &result,
+            crate::output::OutputFormat::Table,
+            false,
+            true,
+        );
+
+        assert_eq!(
+            rendered.as_deref(),
+            Some("viking://resources/a.md\nviking://resources/b.md")
+        );
     }
 
     #[test]
@@ -1159,10 +1328,14 @@ mod tests {
 
     #[test]
     fn resolve_fields_prepends_name_when_no_identifier_given_ls() {
-        let fields = vec!["size".to_string(), "mtime".to_string()];
+        let fields = vec![
+            "size".to_string(),
+            "mtime".to_string(),
+            "overview".to_string(),
+        ];
         let defs = super::resolve_fields(&fields, false);
         let names: Vec<&str> = defs.iter().map(|d| d.name).collect();
-        assert_eq!(names, vec!["name", "size", "mtime"]);
+        assert_eq!(names, vec!["name", "size", "mtime", "overview"]);
     }
 
     #[test]

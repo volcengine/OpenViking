@@ -28,21 +28,6 @@ class SessionLifecycleDataSource(EventMetricDataSource):
         )
 
     @staticmethod
-    def record_contexts_used(*, action: str, delta: int = 1) -> None:
-        """
-        Emit the number of additional contexts consumed by a session-level action.
-
-        Non-positive deltas are ignored so callers can pass computed increments without needing a
-        separate guard.
-        """
-        if delta <= 0:
-            return
-        EventMetricDataSource._emit(
-            "session.contexts_used",
-            {"action": str(action), "delta": int(delta)},
-        )
-
-    @staticmethod
     def record_archive(*, status: str) -> None:
         """Emit the normalized outcome of one session archive attempt."""
         EventMetricDataSource._emit(

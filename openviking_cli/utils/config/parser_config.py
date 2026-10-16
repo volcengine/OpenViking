@@ -14,8 +14,6 @@ from typing import Any, Dict, Optional, Union
 
 from openviking_cli.utils.logger import get_logger
 
-from .config_utils import raise_unknown_config_fields
-
 logger = get_logger(__name__)
 
 
@@ -57,15 +55,10 @@ class ParserConfig:
         Returns:
             ParserConfig instance
 
-        Raises:
-            ValueError: If the dictionary contains unknown fields (with suggestions)
-
         Examples:
             >>> config = ParserConfig.from_dict({"max_content_length": 50000})
         """
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
+        return cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
 
     @classmethod
     def from_yaml(cls, yaml_path: Union[str, Path]) -> "ParserConfig":
@@ -281,9 +274,7 @@ class CodeConfig(CodeHostingConfig):
                 "code summaries now always use the fixed skeleton route with LLM fallback"
             )
 
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
+        return super().from_dict(data)
 
     def validate(self) -> None:
         """
@@ -470,12 +461,6 @@ class AnydocConfig(ParserConfig):
 
     max_table_rows: int = 1000
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AnydocConfig":
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
-
     def validate(self) -> None:
         super().validate()
         if self.max_table_rows < 0:
@@ -569,6 +554,9 @@ class FeishuConfig(ParserConfig):
         30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
     )
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -578,16 +566,29 @@ class FeishuConfig(ParserConfig):
         """
         super().validate()
 
-        if not self.domain:
+        if not isinstance(self.domain, str) or not self.domain.strip():
             raise ValueError("domain cannot be empty")
+        self.domain = self.domain.strip()
 
-        if self.max_rows_per_sheet <= 0:
+        if (
+            isinstance(self.max_rows_per_sheet, bool)
+            or not isinstance(self.max_rows_per_sheet, int)
+            or self.max_rows_per_sheet <= 0
+        ):
             raise ValueError("max_rows_per_sheet must be positive")
 
-        if self.max_records_per_table <= 0:
+        if (
+            isinstance(self.max_records_per_table, bool)
+            or not isinstance(self.max_records_per_table, int)
+            or self.max_records_per_table <= 0
+        ):
             raise ValueError("max_records_per_table must be positive")
 
-        if self.request_timeout <= 0:
+        if (
+            isinstance(self.request_timeout, bool)
+            or not isinstance(self.request_timeout, (int, float))
+            or self.request_timeout <= 0
+        ):
             raise ValueError("request_timeout must be positive")
 
 
@@ -601,8 +602,8 @@ class DirectoryConfig(ParserConfig):
             adding directory resources. When True (default), files maintain their
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
-        max_files: Maximum number of selected files admitted by one Understanding
-            directory import.
+        max_files: Optional maximum number of selected files admitted by one
+            Understanding or Feishu directory import. None (default) means unlimited.
         max_depth: Maximum nested directory depth below an Understanding directory
             import root.
         max_concurrent: Maximum concurrent Understanding jobs shared by all
@@ -610,7 +611,7 @@ class DirectoryConfig(ParserConfig):
     """
 
     preserve_structure: bool = True
-    max_files: int = 1000
+    max_files: Optional[int] = None
     max_depth: int = 10
     max_concurrent: int = 4
 
@@ -624,6 +625,8 @@ class DirectoryConfig(ParserConfig):
             "max_concurrent",
         ):
             value = getattr(self, name)
+            if name == "max_files" and value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
 
@@ -807,12 +810,6 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]
     """
-    raise_unknown_config_fields(
-        data=config_dict,
-        valid_fields=set(PARSER_CONFIG_REGISTRY.keys()),
-        context_name="parsers",
-    )
-
     configs = {}
 
     for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():

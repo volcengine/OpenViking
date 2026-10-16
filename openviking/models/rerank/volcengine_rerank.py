@@ -219,6 +219,11 @@ class RerankClient(RerankBase):
 
             return OpenAIRerankClient.from_config(config)
 
+        if provider == "jev":
+            from openviking.models.rerank.jev_rerank import JevRerankClient
+
+            return JevRerankClient.from_config(config)
+
         return cls(
             ak=config.ak,
             sk=config.sk,

@@ -129,4 +129,4 @@ npm test -- <relevant-test-files>
 
 ## 相关文档
 
-- [OpenViking 贡献指南](../CONTRIBUTING_CN.md)：仓库通用的贡献流程和要求。
+- [OpenViking 贡献指南](../docs/repository/CONTRIBUTING_CN.md)：仓库通用的贡献流程和要求。

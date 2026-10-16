@@ -77,3 +77,55 @@ def test_queue_errors_make_in_progress_queue_unhealthy() -> None:
 
     assert observer.has_errors() is True
     assert observer.is_healthy() is False
+
+
+class _TreeStats:
+    total_nodes = 9
+    pending_nodes = 1
+    in_progress_nodes = 0
+    done_nodes = 8
+
+
+class _FakeSemanticHandler:
+    @staticmethod
+    def get_tree_stats():
+        return _TreeStats()
+
+
+class _FakeSemanticQueue:
+    _dequeue_handler = _FakeSemanticHandler()
+
+
+def test_status_json_summary_matches_table_totals() -> None:
+    queue_manager = _FakeQueueManager(
+        {
+            "Semantic": QueueStatus(
+                pending=0,
+                in_progress=0,
+                processed=2,
+                error_count=0,
+            )
+        }
+    )
+    queue_manager._queues = {queue_manager.SEMANTIC: _FakeSemanticQueue()}
+    observer = QueueObserver(queue_manager)
+
+    status = observer.get_status_json()
+
+    assert status["queues"][-1] == {
+        "queue": "Semantic-Nodes",
+        "pending": 1,
+        "in_progress": 0,
+        "processed": 8,
+        "requeued": 0,
+        "errors": 0,
+        "total": 9,
+    }
+    assert status["summary"] == {
+        "pending": 0,
+        "in_progress": 0,
+        "processed": 2,
+        "requeued": 0,
+        "errors": 0,
+        "total": 2,
+    }

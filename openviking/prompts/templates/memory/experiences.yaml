@@ -4,7 +4,7 @@ description: |
   Captures a transferable pattern: what situation triggers it, what approach works, and why.
 
 directory: "viking://user/{{ user_space }}/memories/experiences"
-filename_template: "{{ experience_name }}.md"
+filename_template: "{{ experience_name|lower }}.md"
 enabled: true
 operation_mode: "upsert"
 stage: agent

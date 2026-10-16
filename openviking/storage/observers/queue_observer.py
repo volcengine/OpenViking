@@ -29,17 +29,72 @@ class QueueObserver(BaseObserver):
 
     async def get_status_table_async(self) -> str:
         statuses = await self._queue_manager.check_status()
-        dag_stats = self._get_semantic_dag_stats()
-        return self._format_status_as_table(statuses, dag_stats)
+        tree_stats = self._get_semantic_tree_stats()
+        return self._format_status_as_table(statuses, tree_stats)
+
+    async def get_status_json_async(self) -> dict:
+        statuses = await self._queue_manager.check_status()
+        tree_stats = self._get_semantic_tree_stats()
+        queues = []
+        total_pending = 0
+        total_in_progress = 0
+        total_processed = 0
+        total_requeues = 0
+        total_errors = 0
+
+        for queue_name, status in statuses.items():
+            total = status.pending + status.in_progress + status.processed
+            queues.append(
+                {
+                    "queue": queue_name,
+                    "pending": status.pending,
+                    "in_progress": status.in_progress,
+                    "processed": status.processed,
+                    "requeued": status.requeue_count,
+                    "errors": status.error_count,
+                    "total": total,
+                }
+            )
+            total_pending += status.pending
+            total_in_progress += status.in_progress
+            total_processed += status.processed
+            total_requeues += status.requeue_count
+            total_errors += status.error_count
+
+        semantic = {
+            "queue": "Semantic-Nodes",
+            "pending": getattr(tree_stats, "pending_nodes", 0) if tree_stats else 0,
+            "in_progress": getattr(tree_stats, "in_progress_nodes", 0) if tree_stats else 0,
+            "processed": getattr(tree_stats, "done_nodes", 0) if tree_stats else 0,
+            "requeued": 0,
+            "errors": 0,
+            "total": getattr(tree_stats, "total_nodes", 0) if tree_stats else 0,
+        }
+        queues.append(semantic)
+
+        return {
+            "queues": queues,
+            "summary": {
+                "pending": total_pending,
+                "in_progress": total_in_progress,
+                "processed": total_processed,
+                "requeued": total_requeues,
+                "errors": total_errors,
+                "total": total_pending + total_in_progress + total_processed,
+            },
+        }
 
     def get_status_table(self) -> str:
         return run_async(self.get_status_table_async())
+
+    def get_status_json(self) -> dict:
+        return run_async(self.get_status_json_async())
 
     def __str__(self) -> str:
         return self.get_status_table()
 
     def _format_status_as_table(
-        self, statuses: Dict[str, QueueStatus], dag_stats: Optional[object]
+        self, statuses: Dict[str, QueueStatus], tree_stats: Optional[object]
     ) -> str:
         """
         Format queue statuses as a table using tabulate.
@@ -84,12 +139,12 @@ class QueueObserver(BaseObserver):
         data.append(
             {
                 "Queue": "Semantic-Nodes",
-                "Pending": getattr(dag_stats, "pending_nodes", 0) if dag_stats else 0,
-                "In Progress": getattr(dag_stats, "in_progress_nodes", 0) if dag_stats else 0,
-                "Processed": getattr(dag_stats, "done_nodes", 0) if dag_stats else 0,
+                "Pending": getattr(tree_stats, "pending_nodes", 0) if tree_stats else 0,
+                "In Progress": getattr(tree_stats, "in_progress_nodes", 0) if tree_stats else 0,
+                "Processed": getattr(tree_stats, "done_nodes", 0) if tree_stats else 0,
                 "Requeued": 0,
                 "Errors": 0,
-                "Total": getattr(dag_stats, "total_nodes", 0) if dag_stats else 0,
+                "Total": getattr(tree_stats, "total_nodes", 0) if tree_stats else 0,
             }
         )
 
@@ -109,13 +164,13 @@ class QueueObserver(BaseObserver):
 
         return tabulate(data, headers="keys", tablefmt="pretty")
 
-    def _get_semantic_dag_stats(self) -> Optional[object]:
+    def _get_semantic_tree_stats(self) -> Optional[object]:
         semantic_queue = self._queue_manager._queues.get(self._queue_manager.SEMANTIC)
         if not semantic_queue:
             return None
         handler = getattr(semantic_queue, "_dequeue_handler", None)
-        if handler and hasattr(handler, "get_dag_stats"):
-            return handler.get_dag_stats()
+        if handler and hasattr(handler, "get_tree_stats"):
+            return handler.get_tree_stats()
         return None
 
     def is_healthy(self) -> bool:
@@ -131,6 +186,5 @@ class QueueObserver(BaseObserver):
     @staticmethod
     def _has_active_errors(statuses: Dict[str, QueueStatus]) -> bool:
         return any(
-            status.error_count > 0 and not status.is_complete
-            for status in statuses.values()
+            status.error_count > 0 and not status.is_complete for status in statuses.values()
         )

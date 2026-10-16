@@ -91,7 +91,6 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
                     "session_id": _sid,
                     "archive_uri": archive_uri,
                     "memories_extracted": {},
-                    "active_count_updated": 0,
                 }
                 if result_overrides:
                     final_result.update(result_overrides)

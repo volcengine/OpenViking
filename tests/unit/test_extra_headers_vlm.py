@@ -3,15 +3,25 @@
 """Tests for VLM extra_headers support."""
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
+from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+from openai import AsyncOpenAI, OpenAI
+from volcenginesdkarkruntime import Ark, AsyncArk
+from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
+
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
 )
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class TestVLMExtraHeaders:
@@ -339,13 +349,35 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
 
+    @pytest.mark.parametrize(
+        ("status_code", "message", "expected_kind"),
+        [
+            (
+                400,
+                "Total tokens of multi-modal content and text exceed max message tokens.",
+                ModelErrorKind.INVALID_REQUEST,
+            ),
+            (400, "The parameter model is invalid.", ModelErrorKind.INVALID_REQUEST),
+            (401, "Unauthorized", ModelErrorKind.AUTHENTICATION_ERROR),
+            (503, "Service Unavailable", ModelErrorKind.TRANSIENT_SERVICE_ERROR),
+        ],
+    )
     @patch("volcenginesdkarkruntime.AsyncArk")
-    def test_volcengine_async_client_applies_timeout_and_disables_sdk_retries(
-        self,
-        mock_async_ark_class,
+    def test_volcengine_async_client_performs_single_request(
+        self, mock_async_ark_class, status_code, message, expected_kind
     ):
-        mock_async_ark_class.return_value = MagicMock()
-
+        error = ArkAPIStatusError(
+            f"Error code: {status_code} - {message}",
+            response=httpx.Response(
+                status_code,
+                request=httpx.Request("POST", "https://example.invalid/chat/completions"),
+            ),
+            body={"error": {"message": message}},
+            request_id="test-request",
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=error)
+        mock_async_ark_class.return_value = mock_client
         vlm = VolcEngineVLM(
             {
                 "api_key": "sk-test",
@@ -355,10 +387,13 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        _ = vlm._build_async_client()
+        with pytest.raises(ModelError) as raised:
+            asyncio.run(vlm.get_completion_async("hello"))
 
-        mock_async_ark_class.assert_called_once()
-        call_kwargs = mock_async_ark_class.call_args[1]
+        assert raised.value.kind == expected_kind
+        assert raised.value.__cause__ is error
+        assert mock_client.chat.completions.create.await_count == 1
+        call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
 
@@ -458,28 +493,68 @@ class TestVLMBaseExtraHeaders:
 class TestVLMExtraRequestBody:
     """Test provider-specific VLM request body passthrough."""
 
-    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
-    def test_openai_text_completion_passes_extra_request_body(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
-        mock_response.usage = None
-        mock_client.chat.completions.create.return_value = mock_response
-
-        vlm = OpenAIVLM(
-            {
-                "api_key": "sk-test",
-                "api_base": "https://api.openai.com/v1",
-                "model": "gpt-4o-mini",
-                "extra_request_body": {"think": False, "keep_alive": "5m"},
-            }
+    @pytest.mark.parametrize(
+        ("provider", "model", "sync_client_cls", "async_client_cls", "extra_body"),
+        [
+            (
+                "glm",
+                "glm-5.3-flash",
+                OpenAI,
+                AsyncOpenAI,
+                {"reasoning_effort": "high", "seed": 7},
+            ),
+            (
+                "volcengine",
+                "ep-test",
+                Ark,
+                AsyncArk,
+                {"service_tier": "flex", "thinking": {"type": "disabled"}},
+            ),
+        ],
+    )
+    async def test_completion_body_overrides_configured_defaults(
+        self, monkeypatch, provider, model, sync_client_cls, async_client_cls, extra_body
+    ):
+        send = MagicMock(
+            side_effect=lambda request: httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                },
+            )
         )
+        vlm = VLMConfig(
+            provider=provider,
+            model=model,
+            api_key="sk-test",
+            reasoning_effort="low",
+            thinking=True,
+            extra_request_body=extra_body,
+        ).get_vlm_instance()
 
-        vlm.get_completion("hello")
+        with sync_client_cls(
+            api_key="sk-test",
+            http_client=httpx.Client(transport=httpx.MockTransport(send)),
+        ) as client:
+            monkeypatch.setattr(vlm.inner, "get_client", lambda: client)
+            assert vlm.get_completion("hello") == "ok"
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["extra_body"] == {"think": False, "keep_alive": "5m"}
+        async with async_client_cls(
+            api_key="sk-test",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
+        ) as async_client:
+            monkeypatch.setattr(vlm.inner, "get_async_client", lambda: async_client)
+            assert await vlm.get_completion_async("hello") == "ok"
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+
+        bodies = [json.loads(call.args[0].content) for call in send.call_args_list]
+        assert len(bodies) == 4
+        for body in bodies:
+            assert {key: body[key] for key in extra_body} == extra_body
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_dashscope_thinking_merges_with_extra_request_body(self, mock_openai_class):
@@ -494,7 +569,8 @@ class TestVLMExtraRequestBody:
             {
                 "api_key": "sk-test",
                 "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "model": "qwen3.5-plus",
+                "model": "ZHIPU/GLM-5.3",
+                "reasoning_effort": "low",
                 "extra_request_body": {"seed": 7},
             }
         )
@@ -503,6 +579,105 @@ class TestVLMExtraRequestBody:
 
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["extra_body"] == {"seed": 7, "enable_thinking": True}
+        assert call_kwargs["reasoning_effort"] == "low"
+
+    @pytest.mark.parametrize(
+        "model", ["claude-opus-4-5", "anthropic/claude-opus-4-5", "openai/claude-opus-4-5"]
+    )
+    async def test_litellm_anthropic_extra_body_on_the_wire(self, monkeypatch, model):
+        bodies = []
+
+        def send(client, request, **kwargs):
+            bodies.append(json.loads(request.content))
+            if model.startswith("openai/"):
+                assert request.url.path.endswith("/chat/completions")
+                return httpx.Response(
+                    200,
+                    request=request,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"role": "assistant", "content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                )
+            assert request.url.path == "/v1/messages"
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-4-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        extra = {
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "output_config": {"effort": "low"},
+        }
+        vlm = LiteLLMVLMProvider(
+            {
+                "provider": "litellm",
+                "model": model,
+                "api_key": "sk-test",
+                "api_base": "http://localhost:9999",
+                "max_retries": 0,
+                "extra_request_body": extra,
+            }
+        )
+        assert vlm.get_completion("hello") == "ok"
+        assert await vlm.get_completion_async("hello") == "ok"
+        assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+        assert (
+            await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+        )
+        assert len(bodies) == 4
+        for body in bodies:
+            assert "extra_body" not in body
+            assert {key: body[key] for key in extra} == extra
+        assert vlm.extra_request_body == extra
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "api_key",
+            "api_base",
+            "custom_llm_provider",
+            "model",
+            "messages",
+            "stream",
+            "tools",
+            "tool_choice",
+            "timeout",
+            "extra_headers",
+            "mock_response",
+        ],
+    )
+    def test_anthropic_extra_body_cannot_change_call_controls(self, monkeypatch, key):
+        call = MagicMock()
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.completion", call)
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "claude-opus-4-5",
+                "provider": "litellm",
+                "extra_request_body": {key: "override"},
+            }
+        )
+        with pytest.raises(ValueError, match=key):
+            vlm.get_completion("hello")
+        call.assert_not_called()
 
     def test_litellm_build_kwargs_passes_extra_request_body(self):
         vlm = LiteLLMVLMProvider(
@@ -517,7 +692,10 @@ class TestVLMExtraRequestBody:
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
         # Ollama models also get a default num_ctx; the explicit think is kept.
-        assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
+        # num_ctx must be top-level so LiteLLM maps it into Ollama's `options`;
+        # inside extra_body it is forwarded verbatim and silently ignored.
+        assert kwargs["num_ctx"] == 16384
+        assert kwargs["extra_body"] == {"think": False}
 
     def test_ollama_defaults_num_ctx_and_think(self):
         """Ollama models get a larger context window and thinking disabled by default."""
@@ -531,7 +709,8 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False}
+        assert kwargs["num_ctx"] == 16384
+        assert kwargs["extra_body"] == {"think": False}
 
     def test_ollama_extra_request_body_overrides_num_ctx(self):
         """An explicit num_ctx in extra_request_body is not overridden by the default."""
@@ -546,7 +725,40 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 32768, "think": False}
+        assert kwargs["num_ctx"] == 32768
+        assert "num_ctx" not in kwargs["extra_body"]
+        assert kwargs["extra_body"] == {"think": False}
+
+    def test_ollama_num_ctx_lands_in_ollama_options_on_the_wire(self):
+        """The request LiteLLM actually sends must carry num_ctx under `options`.
+
+        Asserting the built kwargs only proves where OV puts the value; this
+        checks the field Ollama reads, which is what #5030 is about.
+        """
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "ollama/qwen3.5:4b",
+                "provider": "litellm",
+                "api_base": "http://127.0.0.1:11434",
+                "extra_request_body": {"num_ctx": 32768},
+            }
+        )
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        body = OllamaChatConfig().transform_request(
+            model="qwen3.5:4b",
+            messages=kwargs["messages"],
+            optional_params={
+                k: v
+                for k, v in kwargs.items()
+                if k not in ("model", "messages", "timeout", "api_key", "api_base")
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["options"]["num_ctx"] == 32768
+        assert "num_ctx" not in body
 
     def test_non_ollama_model_gets_no_num_ctx(self):
         """num_ctx is Ollama-specific and must not leak into other providers."""

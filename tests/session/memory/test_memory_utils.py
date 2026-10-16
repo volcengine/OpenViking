@@ -17,6 +17,7 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
     validate_uri_template,
 )
+from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
 
@@ -140,30 +141,22 @@ class TestUriGeneration:
         with pytest.raises(ValueError, match="has None value"):
             generate_uri(memory_type, {"topic": None})
 
-    def test_generate_uri_makes_windows_unsafe_directory_segment_collision_resistant(self):
-        """The exact #4308 shape is portable without changing the LLM field."""
+    def test_generate_uri_normalizes_dynamic_slash_without_new_hierarchy(self):
         memory_type = MemoryTypeSchema(
             memory_type="events",
-            description="Event memory",
             directory="viking://user/{{ user_space }}/memories/events",
             filename_template="2026/07/30/{{ event_name }}.md",
-            fields=[
-                MemoryField(
-                    name="event_name",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                )
-            ],
         )
-        fields = {"event_name": "Desktop /new report"}
+        fields = {"event_name": "alpha/beta"}
 
         uri = generate_uri(memory_type, fields, user_space="default")
 
-        assert uri == (
-            "viking://user/default/memories/events/2026/07/30/"
-            "Desktop~ov~02970756851a43cf/new report.md"
+        assert (
+            uri
+            == generate_uri(memory_type, {"event_name": "alpha_beta"}, user_space="default")
+            == "viking://user/default/memories/events/2026/07/30/alpha_beta.md"
         )
-        assert fields == {"event_name": "Desktop /new report"}
+        assert fields == {"event_name": "alpha/beta"}
 
     def test_generate_uri_keeps_colliding_windows_names_distinct(self):
         memory_type = MemoryTypeSchema(
@@ -387,6 +380,23 @@ Content"""
         assert parsed["topic"] == "code_style"
         assert parsed["version"] == 1
         assert parsed["content"] == "Prefers concise responses."
+
+    def test_field_value_containing_comment_terminator_round_trips(self):
+        memory_file = MemoryFile(
+            uri="viking://user/default/memories/events/2026/09/14/pipeline_switch.md",
+            memory_type="events",
+            content="Moved the ETL pipeline.",
+            extra_fields={"summary": "switched kafka --> flink", "ranges": "0-1"},
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+        read_back = MemoryFileUtils.read(written, uri=memory_file.uri)
+
+        assert read_back.extra_fields["summary"] == "switched kafka --> flink"
+        assert read_back.extra_fields["ranges"] == "0-1"
+        assert read_back.memory_type == "events"
+        assert read_back.content == "Moved the ETL pipeline."
+        assert visible_content(written, uri=memory_file.uri) == "Moved the ETL pipeline."
 
     def test_write_strips_user_identity_fields_from_memory_fields_comment(self):
         memory_file = MemoryFile(

@@ -26,7 +26,7 @@ def test_python_sdk_versioning_uses_sdk_only_at_sign_tags() -> None:
 
 
 def test_build_support_versioning_uses_main_release_tags_only(monkeypatch) -> None:
-    from build_support import versioning
+    from scripts.build_support import versioning
 
     captured_kwargs = {}
     fake_setuptools_scm = ModuleType("setuptools_scm")

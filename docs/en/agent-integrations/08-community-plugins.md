@@ -4,7 +4,7 @@ Community-maintained integrations for various agent runtimes. Each differs in ta
 
 ## ZCode memory integration
 
-Source: [examples/zcode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin)
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
 The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
 
@@ -20,15 +20,8 @@ ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. T
 Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
-  --harness zcode
-```
-
-Use the TOS mirror where GitHub is unavailable:
-
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
-  --harness zcode --dist tos
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
 The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
@@ -43,9 +36,44 @@ After restarting ZCode, verify that:
 | Hooks not firing | Hook configuration is disabled or stale | Re-run the installer and restart ZCode |
 | Recall returns nothing | OpenViking is unavailable or has not extracted memories yet | Check `curl http://127.0.0.1:1933/health` and wait for extraction |
 | MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
-| Duplicate captures | An older installation left duplicate hook entries | Run `install.sh --harness zcode --uninstall`, then reinstall |
+| Duplicate captures | An older installation left duplicate hook entries | Run `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness zcode`, then reinstall |
 
-Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/zcode-memory-plugin/DESIGN.md).
+Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
+
+## Kimi Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Kimi Code integration is a native managed plugin. It reuses the shared
+OpenViking hook runtime and adds only Kimi-specific event mapping, wire
+transcript decoding, output formatting, and commit policy:
+
+- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
+- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained runtime under
+`$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
+`~/.kimi-code/`), then updates only the `openviking-memory` entry in
+`plugins/installed.json`. Existing plugin records are preserved. Re-run the
+same command to upgrade. To remove only this plugin:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
+
+The verified host contract and version are recorded in
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
 
 ## AstrBot plugin
 
@@ -57,11 +85,13 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 
 **Install**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+The current plugin requires AstrBot 4.23.1+ and a compatible OpenViking server. Use a User key for `global`; `venue` needs an Admin key to create users. Check the linked plugin README before migrating an older configuration.
+
 **Key features**:
 
 - Auto-recall and auto-capture via hooks — the model doesn't need to invoke tools
-- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
-- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- `self_scope=global` shares one bot identity; `venue` creates a separate user per group/DM. People are represented as peers. Legacy `isolation_mode` values are mapped to these scopes.
+- Automatic commit by message count, token threshold, or idle timeout
 - Backfills platform message history on first venue encounter
 
 ## Open WebUI tool server

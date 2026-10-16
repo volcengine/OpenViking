@@ -1,8 +1,8 @@
 # Snapshots (Multi-Version Management)
 
-On top of VikingFS, OpenViking provides Git-based multi-version management, called **Snapshots**. It saves an account's entire resource tree as a series of immutable commits, letting you walk history, compare versions, and restore the workspace to any past state.
+Snapshots save immutable versions of a selected file tree. Use `commit` to save a version, `log` to browse history, `show` to read an older file, `diff` to compare a file between versions, and `restore` to recover saved content. Uncommitted or excluded files are outside the recovery scope; ACLs and vector indexes are not versioned.
 
-Snapshots are powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. This is fully transparent to callers — you never touch a `.ovgit` directory, the object store, or ref internals.
+Snapshots are powered by [gitoxide](https://github.com/Byron/gitoxide) embedded in the Rust RAGFS layer, maintaining one logical Git repository per `account_id`. Use the snapshot APIs to manage versions; direct edits to the underlying repository are not part of this workflow.
 
 The five core commands:
 
@@ -20,7 +20,7 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 
 - **Commit**: A snapshot is a commit, uniquely identified by a 40-hex SHA-1 `commit_oid`. Most commands also accept an abbreviated OID prefix or a branch name (e.g. `main`).
 - **Branch**: The default branch is `main`. Unless you pass one explicitly, every command operates on `main`.
-- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. HEAD always advances monotonically and history is never lost.
+- **Forward-commit restore**: `restore` does **not** rewind or rewrite history. It reads the content at `source_commit`, writes the diff back into the workspace, and creates a **new commit on top of the current HEAD**. The new commit's parent is therefore the HEAD that existed before the restore — **not** `source_commit`. The restore preserves prior commits; when the selected source tree matches HEAD, it returns `noop` without creating a commit. This comparison does not inspect uncommitted workspace changes.
 - **Scope**: `commit` can be limited to specific URIs via `paths`; `restore` can be limited to a subtree via `project_dir`, leaving files outside it untouched.
 
 ## ACL permissions
@@ -34,7 +34,7 @@ Snapshots use the current ACL at operation time. ACLs are not stored in snapshot
 | `restore` overwriting a file | `write` on the file |
 | `restore` creating a file | `write` on the parent directory |
 | `restore` deleting a file | `write` on the file |
-| Read/write/delete `.ovgitignore` | ADMIN |
+| Read/write/delete `.ovgitignore` | ADMIN or ROOT |
 
 USER and ADMIN callers must provide `paths` for `commit` and `log`, `project_dir` for `restore`, and `path` for `show`; account-wide commit metadata lookup without `path` is reserved for local ROOT mode. A user can operate on accessible shared resources and their own `viking://user/{user_id}/...` space, but not another user's space. Directory operations preflight the complete scope instead of silently skipping denied descendants. `restore` authorizes every planned write and deletion before it mutates the workspace.
 
@@ -44,7 +44,7 @@ Existing nodes keep their current ACL after restore. Newly restored nodes inheri
 
 - HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
 - SDK namespace: [client.py](https://github.com/volcengine/OpenViking/blob/main/sdk/python/openviking_sdk/client.py), exposed as `client.snapshot.*`.
-- Underlying semantics: `commit` / `restore` / `show` / `log` / `diff` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
+- Underlying semantics: `commit` / `restore` / `show` / `log` / `diff` in [_snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs/_snapshot.py).
 - CLI: the `SnapshotCmd` in [main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs).
 
 ## API Reference
@@ -52,6 +52,8 @@ Existing nodes keep their current ACL after restore. Newly restored nodes inheri
 ### commit()
 
 Save the current workspace state as a new snapshot.
+
+Partial commits preserve the previous snapshot outside the requested scope. After deleting a file or directory, include that URI or its parent in `paths` to record the deletion. A trailing `/` does not declare its type. Non-ROOT commits use Exact for existing files and Tree for existing directories; missing targets are unlocked with the filesystem lock provider and use Tree with the cache provider. Concurrent recreation of a missing target is not guaranteed to be fully captured; see [commit scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
 
 **Parameters**
 
@@ -63,7 +65,7 @@ Save the current workspace state as a new snapshot.
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 result = client.snapshot.commit(
@@ -148,7 +150,7 @@ Filtering happens before the result limit is applied, so `limit=10` with `paths=
 
 To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 history = client.snapshot.log(
@@ -238,7 +240,7 @@ View a commit's metadata; if `path` is given, return that file's content from th
 | target_ref | str | Yes | - | Commit OID (abbreviated prefix allowed), branch name, or tag |
 | path | str | No | null | `viking://` URI of a single file; omitting it returns commit metadata only in local ROOT mode |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 # View commit metadata (local ROOT mode only)
@@ -320,7 +322,7 @@ ov snapshot show 3f2a1b9c --path viking://resources/my_project/guide.md --out-fi
 
 Compare one UTF-8 file between two snapshot refs and return a unified diff. `to_ref` is required. When `from_ref` is omitted, the older side is treated as an empty file, which is useful for displaying the initial version.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 result = client.snapshot.diff(
@@ -401,16 +403,9 @@ This is a **forward-commit restore**: it computes the diff between `source_commi
 | author_name | str | No | null | Override the default author name |
 | author_email | str | No | null | Override the default author email |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
-result = client.snapshot.restore(
-    project_dir="viking://resources/my_project",
-    source_commit="3f2a1b9c",
-    message="restore to v1",
-)
-print(result["result"], result["new_commit_oid"])
-
 # Preview which files would change first
 plan = client.snapshot.restore(
     project_dir="viking://resources/my_project",
@@ -418,6 +413,18 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+```python
+# Apply after reviewing the plan
+result = client.snapshot.restore(
+    project_dir="viking://resources/my_project",
+    source_commit="3f2a1b9c",
+    message="restore to v1",
+)
+print(result["result"])
+if result["result"] == "applied":
+    print(result["new_commit_oid"])
 ```
 
 **TypeScript SDK**
@@ -450,10 +457,11 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 
 ```bash
 # Positional args are <source_commit> then <project_dir>
-ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o json
-
-# Dry run
+# Preview first
 ov snapshot restore 3f2a1b9c viking://resources/my_project --dry-run -o json
+
+# Apply after reviewing the plan
+ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o json
 ```
 
 **Response (applied)**
@@ -523,13 +531,13 @@ The `.ovgitignore` file at the account root is an account-level exclusion file. 
 
 The syntax is a common glob subset: blank lines are ignored, `#`-prefixed lines are comments, leading/trailing whitespace is trimmed; `!` negation and backslash escaping are **unsupported**; the file is capped at 64 KiB (validated on write). Matching uses account-relative Git tree paths (`/`-separated).
 
-Three methods are provided: `get_gitignore` (read, empty string when absent), `set_gitignore` (write), and `delete_gitignore` (delete, missing is success and idempotent). All three require ADMIN permission, use the account from the request context, and take no path argument.
+Three methods are provided: `get_gitignore` (read, empty string when absent), `set_gitignore` (write), and `delete_gitignore` (delete, missing is success and idempotent). All three require ADMIN or ROOT permission, use the account from the request context, and take no path argument.
 
 ### get_gitignore()
 
 Reads the account `.ovgitignore` content; returns an empty string when the file is absent.
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 content = client.snapshot.get_gitignore()
@@ -579,7 +587,7 @@ Writes the account `.ovgitignore` content (overwrites). The size limit (64 KiB) 
 |-----------|------|----------|---------|-------------|
 | content | str | Yes | - | The `.ovgitignore` content (UTF-8) |
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.snapshot.set_gitignore(content="*.log\n")
@@ -625,7 +633,7 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 Deletes the account `.ovgitignore`. Missing is success (idempotent).
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.snapshot.delete_gitignore()
@@ -680,7 +688,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 
@@ -689,7 +696,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
@@ -718,5 +724,5 @@ For more end-to-end examples, see the [examples/snapshot/](https://github.com/vo
 ## Related Documentation
 
 - [File System](03-filesystem.md): snapshots build on filesystem resources
-- [System](07-system.md): track the background vector rebuild triggered by restore via `GET /api/v1/tasks/{task_id}`
+- [Background Tasks](17-tasks.md): track the background vector rebuild triggered by restore via `GET /api/v1/tasks/{task_id}`
 - [API Overview](01-overview.md): full endpoint reference

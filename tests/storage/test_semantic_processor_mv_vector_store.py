@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -13,8 +13,21 @@ async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     fs = VikingFS.__new__(VikingFS)
     fs.acl_manager = None
     fs._async_agfs = AsyncMock()
-    fs._async_agfs.stat.return_value = {"isDir": False}
-    fs._async_agfs.pathlock_acquire_batch.return_value = {"lease_ref": "lease-1"}
+
+    async def stat(path):
+        if path.endswith("/peers/vaka/memories/profile.md"):
+            return {"isDir": False}
+        if path.endswith("/user/default/memories"):
+            return {"isDir": True}
+        raise FileNotFoundError(path)
+
+    fs._async_agfs.stat.side_effect = stat
+    fs._async_agfs.pathlock_acquire_batch.return_value = {
+        "lease_ref": "operation-ref",
+        "owner_id": "operation-owner",
+        "ownership_ref": "operation-ownership",
+        "owned": True,
+    }
     fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._update_vector_store_uris = AsyncMock()
@@ -26,42 +39,25 @@ async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     )
 
     fs._update_vector_store_uris.assert_awaited_once_with(
-        ["viking://user/default/peers/vaka/memories/profile.md"],
         "viking://user/default/peers/vaka/memories/profile.md",
         "viking://user/default/memories/profile.md",
+        recursive=False,
         ctx=ctx,
     )
 
 
 @pytest.mark.asyncio
-async def test_vector_uri_batch_rolls_back_completed_updates():
+async def test_update_vector_store_uris_propagates_update_failure():
     ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
     fs = VikingFS.__new__(VikingFS)
     fs.vector_store = AsyncMock()
-    fs.vector_store.update_uri_mapping.side_effect = [True, RuntimeError("failed"), True]
+    fs.vector_store.update_uri_mapping.side_effect = RuntimeError("vector unavailable")
 
-    with pytest.raises(RuntimeError, match="failed"):
+    with pytest.raises(RuntimeError, match="vector unavailable"):
         await fs._update_vector_store_uris(
-            ["viking://resources/old/a.md", "viking://resources/old/b.md"],
-            "viking://resources/old",
-            "viking://resources/new",
+            "viking://user/default/source.md",
+            "viking://user/default/target.md",
+            recursive=False,
             ctx=ctx,
         )
-
-    assert fs.vector_store.update_uri_mapping.await_args_list == [
-        call(
-            ctx=ctx,
-            uri="viking://resources/old/a.md",
-            new_uri="viking://resources/new/a.md",
-        ),
-        call(
-            ctx=ctx,
-            uri="viking://resources/old/b.md",
-            new_uri="viking://resources/new/b.md",
-        ),
-        call(
-            ctx=ctx,
-            uri="viking://resources/new/a.md",
-            new_uri="viking://resources/old/a.md",
-        ),
-    ]
+    fs.vector_store.update_uri_mapping.assert_awaited_once()

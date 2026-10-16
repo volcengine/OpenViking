@@ -129,11 +129,30 @@ describe("OpenClaw 5.2 manifest contracts", () => {
 });
 
 describe("OpenClaw 5.5 package runtime contract", () => {
+  it("publishes sender as the canonical peer role while accepting legacy person configs", () => {
+    const peerRoleSchema = manifest.configSchema?.properties?.peer_role as {
+      enum?: string[];
+      description?: string;
+    };
+    expect(peerRoleSchema.enum).toEqual([
+      "none",
+      "assistant",
+      "sender",
+      "person",
+    ]);
+    expect(peerRoleSchema.description).toContain(
+      "person is a legacy alias for sender",
+    );
+  });
+
   it("builds and publishes compiled runtime output for TypeScript entries", () => {
     expect(packageJson.scripts?.build).toContain("rmSync('dist'");
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");
-    expect(packageJson.scripts?.prepack).toBe("npm run build");
+    expect(packageJson.scripts?.prepack).toBe(
+      "node ../memory-plugin-shared/sync.mjs && npm run build",
+    );
     expect(packageJson.files).toContain("dist/");
+    expect(packageJson.files).toContain("shared/");
     expect(packageJson.files).toContain("install-manifest.json");
   });
 
@@ -149,6 +168,7 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "index.ts",
       "recall-trace.ts",
       "commands/setup.ts",
+      "shared/",
       "tsconfig.json",
       "tsconfig.build.json",
       "package.json",

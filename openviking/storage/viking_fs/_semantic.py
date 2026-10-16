@@ -3,21 +3,33 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import Dict, List, Optional, Union
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
+from openviking.core.retrieval_types import SearchType
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
+    _ensure_filter_present,
     _ensure_non_empty_search_query,
+    build_matched_context_from_record,
+    is_filter_only_query,
     logger,
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
-from openviking_cli.exceptions import NotFoundError
+from openviking.utils.time_decay import parse_duration_ms
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
 class _SemanticMixin:
@@ -39,15 +51,16 @@ class _SemanticMixin:
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            return f"# {uri} [Directory abstract is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri} [Directory abstract is not ready]"
 
     async def _read_abstract_for_known_dir(
         self,
@@ -170,16 +183,16 @@ class _SemanticMixin:
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory overview for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Fallback to default if .overview.md doesn't exist
-            return f"# {uri}\n\n[Directory overview is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def find(
         self,
@@ -191,6 +204,8 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
     ):
         """Semantic search.
 
@@ -204,7 +219,31 @@ class _SemanticMixin:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query, image_url)
+        # Validate before touching any state: callers rely on a bad request
+        # being rejected even when the instance has not been initialized yet.
+        #
+        # An empty query is allowed only when a metadata filter narrows the
+        # search: the result is then fully determined by that filter, so there
+        # is nothing to embed or rank. Callers that look records up by an exact
+        # tag (e.g. a legacy id carried on the record) would otherwise be forced
+        # to invent a meaningless query string whose similarity score is noise.
+        filter_only = is_filter_only_query(query, image_url)
+        if filter_only:
+            _ensure_filter_present(filter)
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError(
+                    "events_time_decay_protection requires a semantic query or image"
+                )
+        else:
+            _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
+
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import (
             HierarchicalRetriever,
@@ -216,25 +255,33 @@ class _SemanticMixin:
             TypedQuery,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
+        real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
+        if filter_only:
+            return await self._find_by_filter(
+                filter=filter,
+                ctx=real_ctx,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                level=level,
+            )
+
         for target_dir in retrieval_targets.target_directories:
-            await self._ensure_retrieval_scope(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
 
         storage = self._get_vector_store()
         if not storage:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
 
-        embedder = self._get_embedder()
-        if not embedder:
+        embedder = self._get_embedder(real_ctx)
+        if search_type == "semantic" and not embedder:
             raise RuntimeError("Embedder not configured.")
 
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
-            retrieval_config=self.retrieval_config,
         )
 
         typed_query = TypedQuery(
@@ -261,6 +308,9 @@ class _SemanticMixin:
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
+            events_time_decay_protection=events_time_decay_protection,
+            request_now=request_now,
+            search_type=search_type,
         )
 
         # Convert QueryResult to FindResult
@@ -281,6 +331,66 @@ class _SemanticMixin:
         telemetry.set("vector.returned", find_result.total)
         return find_result
 
+    async def _find_by_filter(
+        self,
+        filter: Optional[Dict],
+        ctx: Any,
+        target_directories: Any,
+        limit: int,
+        level: Optional[List[int]] = None,
+    ) -> Any:
+        """Resolve a query-less find purely from the metadata filter.
+
+        Scoping is delegated to filter_in_tenant, which builds the same scope
+        filter the vector path uses — tenant isolation and target-directory
+        limits therefore stay identical between the two. Hand-building the
+        filter here would be one refactor away from silently losing them.
+
+        Records come back in whatever order the store yields; there is no
+        similarity ranking, so ``score`` stays 0 rather than a fabricated value
+        callers might try to sort on.
+        """
+        from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+        from openviking_cli.retrieve import ContextType, FindResult
+
+        telemetry = get_current_telemetry()
+        store = self._get_vector_store()
+        if not store:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+
+        for target_dir in target_directories:
+            await self._ensure_retrieval_scope(target_dir, ctx)
+
+        proxy = VikingDBManagerProxy(store, ctx)
+        records = await proxy.filter_in_tenant(
+            target_directories=list(target_directories or []),
+            extra_filter=filter,
+            level=level,
+            limit=limit,
+        )
+
+        memories, resources, skills = [], [], []
+        # Deduplicate by URI, mirroring what the vector path does: tags live on
+        # per-level records, so a directory carrying one matches on both its L0
+        # and L1 record and would otherwise be returned twice — inflating the
+        # total and eating two of the caller's limit slots for one result.
+        seen_uris: set = set()
+        for record in records:
+            matched = build_matched_context_from_record(record)
+            if matched is None or matched.uri in seen_uris:
+                continue
+            seen_uris.add(matched.uri)
+            if matched.context_type == ContextType.MEMORY:
+                memories.append(matched)
+            elif matched.context_type == ContextType.RESOURCE:
+                resources.append(matched)
+            elif matched.context_type == ContextType.SKILL:
+                skills.append(matched)
+
+        find_result = FindResult(memories=memories, resources=resources, skills=skills)
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
+
     async def search(
         self,
         query: str,
@@ -292,6 +402,9 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
+        search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
     ):
         """Complex search with session context.
 
@@ -306,17 +419,23 @@ class _SemanticMixin:
             FindResult
         """
         _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             QueryPlan,
             TypedQuery,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
+        real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
         primary_target_uri = retrieval_targets.first_explicit_directory
 
@@ -327,20 +446,28 @@ class _SemanticMixin:
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
-            await self._ensure_retrieval_scope(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
         if primary_target_uri:
             try:
                 with telemetry.measure("search.target_abstract"):
-                    target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
+                    target_abstract = await self.abstract(primary_target_uri, ctx=real_ctx)
             except Exception:
                 target_abstract = ""
 
-        intent_enabled = (
-            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
-        )
+        retrieval_config = self.retrieval_config or RetrievalConfig()
+        # The raw query remains usable if optional intent analysis times out or fails.
+        typed_queries = [
+            TypedQuery(
+                query=query,
+                context_type=None,
+                intent="",
+                priority=1,
+                target_directories=retrieval_targets.target_directories,
+            )
+        ]
 
         # With session context: optional intent analysis
         if image_url:
@@ -355,43 +482,57 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif intent_enabled and (session_summary or current_messages):
-            analyzer = IntentAnalyzer(max_recent_messages=5)
-            with telemetry.measure("search.intent_analysis"):
-                query_plan = await analyzer.analyze(
-                    compression_summary=session_summary or "",
-                    messages=current_messages or [],
-                    current_message=query,
-                    target_abstract=target_abstract,
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
+            try:
+                if self._vlm_resolver is None:
+                    raise RuntimeError(
+                        "VikingFS requires a VLM resolver for account-owned intent analysis"
+                    )
+                analyzer = IntentAnalyzer(
+                    max_recent_messages=5,
+                    query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
                 )
-            typed_queries = query_plan.queries
-            for tq in typed_queries:
-                tq.target_directories = retrieval_targets.target_directories
-        else:
-            # No session context, or intent disabled: search with the raw query.
-            typed_queries = [
-                TypedQuery(
-                    query=query,
-                    context_type=None,
-                    intent="",
-                    priority=1,
-                    target_directories=retrieval_targets.target_directories,
+                with telemetry.measure("search.intent_analysis"):
+                    query_plan = await asyncio.wait_for(
+                        analyzer.analyze(
+                            compression_summary=session_summary or "",
+                            messages=current_messages or [],
+                            current_message=query,
+                            context_type=context_types[0]
+                            if context_types and len(context_types) == 1
+                            else None,
+                            target_abstract=target_abstract,
+                        ),
+                        timeout=retrieval_config.recall_intent_timeout_s,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Intent analysis failed (%s); using original query: %s",
+                    type(exc).__name__,
+                    exc,
                 )
-            ]
+            else:
+                typed_queries = query_plan.queries
+                for tq in typed_queries:
+                    tq.target_directories = retrieval_targets.target_directories
+                    # Caller scope is authoritative even when the planner ignores its prompt.
+                    if context_types and len(context_types) == 1:
+                        tq.context_type = context_types[0]
+                    elif context_types and tq.context_type not in context_types:
+                        # The existing scope filter searches only the caller's allowed types.
+                        tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
         storage = self._get_vector_store()
-        embedder = self._get_embedder()
+        embedder = self._get_embedder(real_ctx)
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
-            retrieval_config=self.retrieval_config,
         )
 
         async def _execute(tq: TypedQuery):
-            real_ctx = self._ctx_or_default(ctx)
             logger.debug(
                 "[VikingFS.search._execute] Calling retriever.retrieve with "
                 f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
@@ -403,6 +544,9 @@ class _SemanticMixin:
                 score_threshold=score_threshold,
                 scope_dsl=filter,
                 level=level,
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+                search_type=search_type,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
@@ -437,6 +581,8 @@ class _SemanticMixin:
         content_filename: str = "content.md",
         is_leaf: bool = False,
         ctx: Optional[RequestContext] = None,
+        *,
+        lease_ref: Any = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
@@ -444,16 +590,18 @@ class _SemanticMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
-            await self._ensure_parent_dirs(path, ctx=ctx)
+            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             try:
-                await self._async_agfs.mkdir(path)
+                # _pathlock_fs_ctx is supplied by VikingFS's _AccessMixin.
+                fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)  # type: ignore[attr-defined]
+                await self._async_agfs.mkdir(path, fs_ctx=fs_ctx)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
 
             if content:
                 content_uri = f"{uri}/{content_filename}"
-                await self.write_file(content_uri, content, ctx=ctx)
+                await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
 
             if abstract:
                 abstract_uri = f"{uri}/.abstract.md"
@@ -471,6 +619,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
             if overview:
@@ -489,6 +638,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
         except Exception as e:

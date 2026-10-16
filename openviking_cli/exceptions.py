@@ -155,13 +155,16 @@ class InternalError(OpenVikingError):
 class DeadlineExceededError(OpenVikingError):
     """Operation timed out."""
 
-    def __init__(self, operation: str = "operation", timeout: Optional[float] = None):
+    def __init__(
+        self,
+        operation: str = "operation",
+        timeout: Optional[float] = None,
+    ):
         message = f"{operation.capitalize()} timed out"
         if timeout:
             message += f" after {timeout}s"
-        super().__init__(
-            message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout}
-        )
+        details = {"operation": operation, "timeout": timeout}
+        super().__init__(message, code="DEADLINE_EXCEEDED", details=details)
 
 
 class UnimplementedError(OpenVikingError):

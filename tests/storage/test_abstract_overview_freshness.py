@@ -10,6 +10,7 @@ from openviking.storage.abstract_overview import (
     freshness_metadata,
     parse_abstract_overview,
     plan_abstract_overview_refresh,
+    read_abstract_overview_pending_snapshot,
     render_abstract_overview,
     write_abstract_overview,
 )
@@ -21,6 +22,7 @@ class _FakeFS:
         self.files = dict(files)
         self._async_agfs = self
         self._lock = asyncio.Lock()
+        self.lock_timeouts = []
 
     async def read_file(self, uri, ctx=None):
         if uri not in self.files:
@@ -33,7 +35,8 @@ class _FakeFS:
     def _uri_to_path(self, uri, ctx=None):
         return uri
 
-    async def pathlock_acquire_exact_batch(self, paths):
+    async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
+        self.lock_timeouts.append(timeout_secs)
         await self._lock.acquire()
         return {"paths": paths}
 
@@ -66,6 +69,7 @@ async def test_pending_increment_and_threshold_decision_share_one_snapshot():
         ctx=None,
         overview_sample_limit=32,
         refresh_ratio=0.10,
+        lock_timeout_secs=1.0,
     )
     second = await plan_abstract_overview_refresh(
         viking_fs=fs,
@@ -78,10 +82,9 @@ async def test_pending_increment_and_threshold_decision_share_one_snapshot():
 
     assert first.action is FreshnessAction.MARK_PENDING
     assert second.action is FreshnessAction.REFRESH_NOW
+    assert fs.lock_timeouts == [1.0, 0.0]
     for raw in fs.files.values():
-        assert parse_abstract_overview(raw).metadata["freshness"][
-            "pending_child_changes"
-        ] == 17
+        assert parse_abstract_overview(raw).metadata["freshness"]["pending_child_changes"] == 17
 
 
 @pytest.mark.asyncio
@@ -128,16 +131,14 @@ async def test_concurrent_pending_marks_do_not_overwrite_each_other():
     )
 
     for raw in fs.files.values():
-        assert parse_abstract_overview(raw).metadata["freshness"][
-            "pending_child_changes"
-        ] == 13
+        assert parse_abstract_overview(raw).metadata["freshness"]["pending_child_changes"] == 13
 
 
 @pytest.mark.asyncio
 async def test_partial_sidecar_baseline_refreshes_immediately():
     dir_uri = "viking://resources/wide"
     files = _files(dir_uri, pending=3)
-    files.pop(f"{dir_uri}/.abstract.md")
+    files[f"{dir_uri}/.abstract.md"] = "---\n"
     fs = _FakeFS(files)
 
     decision = await plan_abstract_overview_refresh(
@@ -151,3 +152,26 @@ async def test_partial_sidecar_baseline_refreshes_immediately():
 
     assert decision.action is FreshnessAction.REFRESH_NOW
     assert decision.pending_after == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_snapshot_of_missing_directory_does_not_lock():
+    """Locking sidecars of a deleted directory would recreate it; return 0 instead."""
+    fs = _FakeFS({})
+    assert (
+        await read_abstract_overview_pending_snapshot(
+            viking_fs=fs, dir_uri="viking://resources/gone", ctx=None
+        )
+        == 0
+    )
+    assert fs.lock_timeouts == []
+
+
+@pytest.mark.asyncio
+async def test_pending_snapshot_reads_existing_sidecars_under_lock():
+    dir_uri = "viking://resources/present"
+    fs = _FakeFS(_files(dir_uri, pending=3))
+    assert (
+        await read_abstract_overview_pending_snapshot(viking_fs=fs, dir_uri=dir_uri, ctx=None) == 3
+    )
+    assert fs.lock_timeouts == [0.0]

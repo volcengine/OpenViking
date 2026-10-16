@@ -8,6 +8,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
+from openviking.config.vlm import VLMResolver
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
@@ -22,7 +23,6 @@ from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -48,6 +48,7 @@ class ExperienceGradientEstimator:
 
     viking_fs: Any = None
     vlm: Any = None
+    vlm_resolver: VLMResolver | None = None
 
     @tracer(
         "train.gradient_estimator.experience.estimate",
@@ -97,17 +98,36 @@ class ExperienceGradientEstimator:
         trajectory: Trajectory,
         context: ExperienceGradientContext,
     ):
-        config = get_openviking_config()
-        vlm = self.vlm or config.vlm.get_vlm_instance()
+        vlm_config = None
+        if self.vlm is None:
+            if self.vlm_resolver is None:
+                raise RuntimeError(
+                    "ExperienceGradientEstimator requires a VLM resolver "
+                    "for account-owned work"
+                )
+            vlm_config = await self.vlm_resolver.get_vlm(
+                context.request_context.account_id
+            )
+            vlm = vlm_config
+        else:
+            vlm = self.vlm
         viking_fs = self.viking_fs or get_viking_fs()
         if viking_fs is None:
             raise RuntimeError("VikingFS is required for experience gradient estimation")
 
-        provider = AgentExperienceContextProvider(
-            messages=context.messages,
-            trajectory_summary=trajectory.content,
-            trajectory_uri=trajectory.uri,
-        )
+        if vlm_config is None:
+            provider = AgentExperienceContextProvider(
+                messages=context.messages,
+                trajectory_summary=trajectory.content,
+                trajectory_uri=trajectory.uri,
+            )
+        else:
+            provider = AgentExperienceContextProvider(
+                messages=context.messages,
+                trajectory_summary=trajectory.content,
+                trajectory_uri=trajectory.uri,
+                vlm_config=vlm_config,
+            )
         if hasattr(provider, "get_extract_context"):
             extract_context = provider.get_extract_context()
         else:

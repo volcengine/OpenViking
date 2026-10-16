@@ -148,10 +148,11 @@ async function main() {
   if (process.env.OPENVIKING_STATUSLINE === "off") return;
   if (!isPluginEnabled()) return;
 
-  const cfg = loadConfig();
   const stdin = await readStdin();
   const sessionId = stdin.session_id;
   const cwd = stdin.cwd;
+  // The workspace layer belongs to the session's directory, not this process's.
+  const cfg = loadConfig(cwd);
 
   // Bypass shortcut: don't even probe the server when the user has opted
   // this session out of OV. The context indicator stays — it describes the

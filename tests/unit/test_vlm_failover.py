@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.models.vlm.base import FailoverVLM, PrimaryBackupSwitcher
+from openviking.models.vlm.base import (
+    FailoverVLM,
+    PrimaryBackupSwitcher,
+)
+from openviking.models.vlm.token_usage import TokenUsageTracker
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -633,24 +637,84 @@ class TestFailoverVLM:
 class TestVLMConfigWithBackup:
     """Tests for VLMConfig with backup configuration integration."""
 
-    def test_config_without_backup_creates_single_instance(self, monkeypatch):
-        """Test that config without backup creates a single VLM instance."""
-        mock_factory = Mock()
-        mock_vlm = Mock()
-        mock_factory.create.return_value = mock_vlm
+    async def test_account_config_updates_preserve_inflight_calls_and_usage(self, monkeypatch):
+        import asyncio
 
-        monkeypatch.setattr("openviking.models.vlm.VLMFactory", mock_factory)
-
-        config = VLMConfig(
-            model="test-model",
-            api_key="test-key",
-            provider="volcengine",
+        from openviking.config.binding import manager_over_source
+        from openviking.config.source import MemoryConfigSource
+        from openviking.config.vlm import AccountVLMProvider
+        from openviking_cli.utils.config import set_openviking_config
+        from openviking_cli.utils.config.open_viking_config import (
+            OpenVikingConfig,
+            OpenVikingConfigSingleton,
         )
 
-        instance = config.get_vlm_instance()
+        started, release = asyncio.Event(), asyncio.Event()
+        clients = []
 
-        assert instance is mock_vlm
-        mock_factory.create.assert_called_once()
+        class Client:
+            def __init__(self, config):
+                self.model = config["model"]
+                self._token_tracker = TokenUsageTracker()
+                self.closed = 0
+                clients.append(self)
+
+            async def get_completion_async(self, prompt, max_tokens, **kwargs):
+                if prompt == "hold":
+                    started.set()
+                    await release.wait()
+                self._token_tracker.update(self.model, "openai", 100, 20)
+                return f"{self.model}:{max_tokens}"
+
+            def close(self):
+                self.closed += 1
+
+        monkeypatch.setattr("openviking.models.vlm.VLMFactory.create", Client)
+        base = OpenVikingConfig.from_dict(
+            {"vlm": {"model": "cluster", "provider": "openai", "api_key": "cluster-key"}}
+        )
+        set_openviking_config(base)
+        manager = manager_over_source(MemoryConfigSource(), base_config=base)
+        provider = AccountVLMProvider(manager)
+        pending = None
+        try:
+            await manager.initialize()
+            await manager.patch_account(
+                "a",
+                {
+                    "vlm": {
+                        "model": "a-v1",
+                        "credentials": [{"provider": "openai", "api_key": "a-key"}],
+                    }
+                },
+            )
+            account = await provider.get_vlm("a")
+            other = await provider.get_vlm("b")
+            assert await account.get_completion_async("first", max_tokens=64) == "a-v1:64"
+            assert provider.get_token_usage("a")["total_usage"]["total_tokens"] == 120
+            assert provider.get_token_usage("b")["total_usage"]["total_tokens"] == 0
+
+            pending = asyncio.create_task(account.get_completion_async("hold", max_tokens=64))
+            await started.wait()
+            await manager.patch_account("a", {"vlm": {"model": "a-v2"}})
+            assert clients[0].closed == 0
+            assert await other.get_completion_async("other", max_tokens=32) == "cluster:32"
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            assert clients[0].closed == 1
+            assert await account.get_completion_async("updated", max_tokens=16) == "a-v2:16"
+            assert provider.get_token_usage("a")["total_usage"]["total_tokens"] == 240
+            assert provider.get_token_usage("b")["total_usage"]["total_tokens"] == 120
+        finally:
+            release.set()
+            if pending is not None:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+            await provider.close()
+            OpenVikingConfigSingleton.reset_instance()
+        assert len(clients) == 3
+        assert all(client.closed == 1 for client in clients)
 
     def test_config_with_backup_creates_multicredential_instance(self, monkeypatch):
         """Test that config with backup creates a MultiCredentialVLM instance."""

@@ -172,12 +172,15 @@ class MetricCollector(ABC):
         """
         return self.__class__.__name__
 
-    def collect(self, registry) -> None:
+    def collect(self, registry) -> bool | None:
         """
         Perform pull-style collection and write samples into the registry.
 
         Args:
             registry: The in-process metric registry that receives the collector output.
+
+        Returns:
+            None or True after completion; False when skipped without refreshing data.
 
         This method is intentionally a no-op by default. Event-driven collectors do not need
         to implement pull behavior, while refresh-managed collectors override this method with

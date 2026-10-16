@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -127,6 +130,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if got := body["time_field"]; got != "created_at" {
 			t.Fatalf("time_field = %#v", got)
 		}
+		if got := body["events_time_decay_protection"]; got != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", got)
+		}
 		levels, ok := body["level"].([]any)
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
@@ -144,14 +150,15 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "resources/docs",
-		Limit:       5,
-		ContextType: []string{"resource"},
-		Since:       "2026-06-01",
-		Until:       "2026-06-18",
-		TimeField:   "created_at",
-		Level:       []int{0, 2},
-		Tags:        []string{"topic=docs", "kind=api"},
+		TargetURI:                 "resources/docs",
+		Limit:                     5,
+		ContextType:               []string{"resource"},
+		Since:                     "2026-06-01",
+		Until:                     "2026-06-18",
+		TimeField:                 "created_at",
+		Level:                     []int{0, 2},
+		Tags:                      []string{"topic=docs", "kind=api"},
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +177,7 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "search_type", "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -229,44 +236,165 @@ func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 	}
 }
 
-func TestListAndTreeSendQueryOptions(t *testing.T) {
-	wantTreeLimits := []string{"0", "3"}
+func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
+	entries := []any{map[string]any{"name": "docs"}}
+	listCalls := 0
+	treeCalls := 0
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/fs/ls":
-			if got := r.URL.Query().Get("node_limit"); got != "200" {
-				t.Fatalf("node_limit = %q", got)
+			if listCalls == 0 {
+				if got := r.URL.Query().Get("node_limit"); got != "200" {
+					t.Fatalf("node_limit = %q", got)
+				}
+				if got := r.URL.Query().Get("offset"); got != "4" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "5" {
+					t.Fatalf("limit = %q", got)
+				}
+				if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+					t.Fatalf("sort_by = %q", got)
+				}
+				if got := r.URL.Query().Get("sort_order"); got != "desc" {
+					t.Fatalf("sort_order = %q", got)
+				}
+				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod", "team=search"}) {
+					t.Fatalf("tags = %#v", got)
+				}
+				if got := r.URL.Query()["extra_fields"]; !reflect.DeepEqual(got, []string{"locked", "id"}) {
+					t.Fatalf("extra_fields = %#v", got)
+				}
+				if got := r.URL.Query().Get("include_abstract"); got != "false" {
+					t.Fatalf("include_abstract = %q", got)
+				}
+				if got := r.URL.Query().Get("include_overview"); got != "true" {
+					t.Fatalf("include_overview = %q", got)
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "512" {
+					t.Fatalf("overview_limit = %q", got)
+				}
+				if got := r.URL.Query().Get("abs_limit"); got != "128" {
+					t.Fatalf("abs_limit = %q", got)
+				}
+			} else {
+				if _, ok := r.URL.Query()["include_abstract"]; ok {
+					t.Fatal("default list request should omit include_abstract")
+				}
+				if _, ok := r.URL.Query()["include_overview"]; ok {
+					t.Fatal("default list request should omit include_overview")
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "4000" {
+					t.Fatalf("overview_limit = %q", got)
+				}
 			}
-			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
-				t.Fatalf("sort_by = %q", got)
-			}
-			if got := r.URL.Query().Get("sort_order"); got != "desc" {
-				t.Fatalf("sort_order = %q", got)
-			}
+			listCalls++
 		case "/api/v1/fs/tree":
-			if got := r.URL.Query().Get("level_limit"); got != wantTreeLimits[0] {
-				t.Fatalf("level_limit = %q, want %q", got, wantTreeLimits[0])
+			if treeCalls == 0 {
+				if got := r.URL.Query().Get("level_limit"); got != "0" {
+					t.Fatalf("level_limit = %q, want 0", got)
+				}
+				if got := r.URL.Query().Get("offset"); got != "6" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "7" {
+					t.Fatalf("limit = %q", got)
+				}
+				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
+					t.Fatalf("tags = %#v", got)
+				}
+				if got := r.URL.Query()["extra_fields"]; !reflect.DeepEqual(got, []string{"count"}) {
+					t.Fatalf("extra_fields = %#v", got)
+				}
+				if got := r.URL.Query().Get("include_abstract"); got != "false" {
+					t.Fatalf("include_abstract = %q", got)
+				}
+				if got := r.URL.Query().Get("include_overview"); got != "true" {
+					t.Fatalf("include_overview = %q", got)
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "512" {
+					t.Fatalf("overview_limit = %q", got)
+				}
+				if got := r.URL.Query().Get("directories_only"); got != "true" {
+					t.Fatalf("directories_only = %q", got)
+				}
+			} else {
+				if got := r.URL.Query().Get("level_limit"); got != "3" {
+					t.Fatalf("level_limit = %q, want 3", got)
+				}
+				if _, ok := r.URL.Query()["offset"]; ok {
+					t.Fatal("default tree request should omit offset")
+				}
+				if _, ok := r.URL.Query()["limit"]; ok {
+					t.Fatal("default tree request should omit limit")
+				}
+				if _, ok := r.URL.Query()["include_abstract"]; ok {
+					t.Fatal("default tree request should omit include_abstract")
+				}
+				if _, ok := r.URL.Query()["include_overview"]; ok {
+					t.Fatal("default tree request should omit include_overview")
+				}
+				if got := r.URL.Query().Get("overview_limit"); got != "4000" {
+					t.Fatalf("overview_limit = %q", got)
+				}
 			}
-			wantTreeLimits = wantTreeLimits[1:]
+			treeCalls++
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		writeOK(t, w, []any{})
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok", "result": entries, "has_more": r.URL.Path == "/api/v1/fs/ls",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer closeServer()
 
-	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
-		NodeLimit: 200,
-		SortBy:    "mtime",
-		SortOrder: "desc",
-	}); err != nil {
+	listPage, err := client.ListPage(context.Background(), "viking://session", &ListOptions{
+		NodeLimit:       200,
+		Offset:          4,
+		Limit:           5,
+		SortBy:          "mtime",
+		SortOrder:       "desc",
+		ExtraFields:     []string{"locked", "id"},
+		Tags:            []string{"env=prod", "team=search"},
+		AbsLimit:        128,
+		IncludeAbstract: Bool(false),
+		IncludeOverview: Bool(true),
+		OverviewLimit:   512,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0)}); err != nil {
+	if !listPage.HasMore || !reflect.DeepEqual(listPage.Result, entries) {
+		t.Fatalf("list page = %#v", listPage)
+	}
+	legacyList, err := client.List(context.Background(), "viking://session", nil)
+	if err != nil || !reflect.DeepEqual(legacyList, entries) {
+		t.Fatalf("list = %#v, err = %v", legacyList, err)
+	}
+	treePage, err := client.TreePage(context.Background(), "viking://resources/docs", &TreeOptions{
+		NodeLimit:       200,
+		LevelLimit:      Int(0),
+		Offset:          6,
+		Limit:           7,
+		ExtraFields:     []string{"count"},
+		Tags:            []string{"env=prod"},
+		IncludeAbstract: Bool(false),
+		IncludeOverview: Bool(true),
+		OverviewLimit:   512,
+		DirectoriesOnly: true,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
-		t.Fatal(err)
+	if treePage.HasMore || !reflect.DeepEqual(treePage.Result, []map[string]any{{"name": "docs"}}) {
+		t.Fatalf("tree page = %#v", treePage)
+	}
+	legacyTree, err := client.Tree(context.Background(), "viking://resources/docs", nil)
+	if err != nil || !reflect.DeepEqual(legacyTree, treePage.Result) {
+		t.Fatalf("tree = %#v, err = %v", legacyTree, err)
 	}
 }
 
@@ -299,7 +427,7 @@ func TestFindSendsImageQuery(t *testing.T) {
 	}
 }
 
-func TestReindexSendsDryRun(t *testing.T) {
+func TestReindexSendsForceAndRecursive(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/content/reindex" {
 			t.Fatalf("path = %s", r.URL.Path)
@@ -311,14 +439,14 @@ func TestReindexSendsDryRun(t *testing.T) {
 		if got := body["uri"]; got != "viking://resources/demo" {
 			t.Fatalf("uri = %#v", got)
 		}
-		if got := body["mode"]; got != "prune_orphans" {
+		if got := body["mode"]; got != "vectors_only" {
 			t.Fatalf("mode = %#v", got)
 		}
 		if got := body["wait"]; got != false {
 			t.Fatalf("wait = %#v", got)
 		}
-		if got := body["dry_run"]; got != true {
-			t.Fatalf("dry_run = %#v", got)
+		if got := body["force"]; got != true {
+			t.Fatalf("force = %#v", got)
 		}
 		if got := body["recursive"]; got != false {
 			t.Fatalf("recursive = %#v", got)
@@ -328,9 +456,9 @@ func TestReindexSendsDryRun(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
-		Mode:      "prune_orphans",
+		Mode:      "vectors_only",
 		Wait:      false,
-		DryRun:    true,
+		Force:     true,
 		Recursive: Bool(false),
 	}); err != nil {
 		t.Fatal(err)
@@ -354,6 +482,26 @@ func TestReindexSendsExplicitEmptyTags(t *testing.T) {
 	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
 		Tags:    []string{},
 		TagMode: "replace",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReindexSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -514,6 +662,9 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if got := body["session_id"]; got != "session-1" {
 			t.Fatalf("session_id = %#v", got)
 		}
+		if got := body["search_type"]; got != "keywords" {
+			t.Fatalf("search_type = %#v", got)
+		}
 		if got := body["target_uri"]; got != "viking://resources/docs" {
 			t.Fatalf("target_uri = %#v", got)
 		}
@@ -539,13 +690,14 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Search(context.Background(), "auth", &SearchOptions{
-		TargetURI: "resources/docs",
-		SessionID: "session-1",
-		Since:     "1d",
-		Until:     "2026-06-18",
-		TimeField: "updated_at",
-		Level:     []int{2},
-		Tags:      []string{"topic=docs"},
+		TargetURI:  "resources/docs",
+		SessionID:  "session-1",
+		SearchType: "keywords",
+		Since:      "1d",
+		Until:      "2026-06-18",
+		TimeField:  "updated_at",
+		Level:      []int{2},
+		Tags:       []string{"topic=docs"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -579,8 +731,14 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 		if body["session_id"] != "session-1" || body["purpose"] != "coding" {
 			t.Fatalf("context fields = %#v", body)
 		}
+		if body["search_type"] != "keywords" {
+			t.Fatalf("search_type = %#v", body["search_type"])
+		}
 		if body["max_tokens"] != float64(3000) || body["dedup_turns"] != float64(5) {
 			t.Fatalf("budget fields = %#v", body)
+		}
+		if body["events_time_decay_protection"] != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", body["events_time_decay_protection"])
 		}
 		writeOK(t, w, map[string]any{
 			"rendered": "<memory />",
@@ -591,10 +749,12 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.SearchContext(context.Background(), "continue refactor", &SearchContextOptions{
-		SessionID:  "session-1",
-		Purpose:    "coding",
-		MaxTokens:  Int(3000),
-		DedupTurns: Int(5),
+		SessionID:                 "session-1",
+		SearchType:                "keywords",
+		Purpose:                   "coding",
+		MaxTokens:                 Int(3000),
+		DedupTurns:                Int(5),
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -613,7 +773,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -622,8 +782,86 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
 		ProcessingMode: "vectors_only",
+		Tags:           []string{},
+		TagMode:        "replace",
 		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
+		TagMode: "clear",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFilesystemTagProjectionOptionsAreSent(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("list query = %s", r.URL.RawQuery)
+			}
+		case 2:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("tree query = %s", r.URL.RawQuery)
+			}
+		case 3:
+			body := readJSONBody(t, r)
+			if body["include_tags"] != true {
+				t.Fatalf("grep body = %#v", body)
+			}
+		case 4:
+			if _, ok := r.URL.Query()["include_tags"]; ok {
+				t.Fatalf("default list query unexpectedly includes tags projection: %s", r.URL.RawQuery)
+			}
+		case 5:
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["tags"], []any{"team=search", "env=prod"}) || body["include_tags"] != true {
+				t.Fatalf("glob body = %#v", body)
+			}
+		}
+		if requests == 3 || requests == 5 {
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.List(context.Background(), "resources", &ListOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "resources", &TreeOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Grep(context.Background(), "resources", "needle", &GrepOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.List(context.Background(), "resources", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Glob(context.Background(), "**/*.md", "resources", &GlobOptions{
+		Tags:        []string{"team=search", "env=prod"},
+		IncludeTags: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +872,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/content/batch-write":
 			body := readJSONBody(t, r)
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -643,9 +881,15 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			}
 			operation, ok := operations[0].(map[string]any)
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
-				"uri":     "viking://resources/project/a.txt",
-				"content": "hello",
-				"mode":    "upsert",
+				"uri":      "viking://resources/project/a.txt",
+				"content":  "hello",
+				"mode":     "upsert",
+				"tags":     []any{"team=search"},
+				"tag_mode": "append",
+				"acl": map[string]any{
+					"acl_mode": "restricted",
+					"entries":  []any{map[string]any{"principal": "group:engineering", "level": "write"}},
+				},
 			}) {
 				t.Fatalf("operation = %#v", operations[0])
 			}
@@ -666,8 +910,11 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
 			Mode:    "upsert",
+			Tags:    []string{"team=search"},
+			TagMode: "append",
+			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
-	}, &BatchWriteOptions{Extra: map[string]any{"future_flag": 0}}); err != nil {
+	}, &BatchWriteOptions{ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := client.DownloadBytes(context.Background(), "resources/project/a.txt")
@@ -1065,6 +1312,26 @@ func TestAddResourceSendsTagsAndTagMode(t *testing.T) {
 	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
 		Tags:    []string{"team=search"},
 		TagMode: "append",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddResourceSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/demo.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1569,26 +1836,58 @@ func TestSessionExistsHandlesNotFound(t *testing.T) {
 	}
 }
 
-func TestListTasksRequest(t *testing.T) {
+func TestCompileAndListTasksRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s", r.Method)
-		}
-		if r.URL.Path != "/api/v1/tasks" {
+		switch r.URL.Path {
+		case "/api/v1/compile":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %s", r.Method)
+			}
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["from"], []any{"viking://resources/source"}) ||
+				body["to"] != "viking://resources/output" ||
+				body["skill"] != "viking://agent/skills/wiki" ||
+				body["instruction"] != "Keep supporting evidence." ||
+				!reflect.DeepEqual(body["args"], map[string]any{"model_name": "endpoint-1"}) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		case "/api/v1/tasks":
+			if r.Method != http.MethodGet {
+				t.Fatalf("method = %s", r.Method)
+			}
+			query := r.URL.Query()
+			if query.Get("task_type") != "session_commit" ||
+				query.Get("status") != "running" ||
+				query.Get("resource_id") != "session-1" ||
+				query.Get("limit") != "20" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
+			}
+			writeOK(t, w, []map[string]any{
+				{"task_id": "task-1", "status": "running"},
+			})
+		default:
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		query := r.URL.Query()
-		if query.Get("task_type") != "session_commit" ||
-			query.Get("status") != "running" ||
-			query.Get("resource_id") != "session-1" ||
-			query.Get("limit") != "20" {
-			t.Fatalf("query = %s", r.URL.RawQuery)
-		}
-		writeOK(t, w, []map[string]any{
-			{"task_id": "task-1", "status": "running"},
-		})
 	}))
 	defer closeServer()
+
+	compiled, err := client.Compile(
+		context.Background(),
+		[]string{"viking://resources/source"},
+		"viking://resources/output",
+		"viking://agent/skills/wiki",
+		&CompileOptions{
+			Instruction: "Keep supporting evidence.",
+			Args:        map[string]any{"model_name": "endpoint-1"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled["task_id"] != "cmp_1" {
+		t.Fatalf("compiled = %#v", compiled)
+	}
 
 	tasks, err := client.ListTasks(context.Background(), &ListTasksOptions{
 		TaskType:   "session_commit",
@@ -1622,6 +1921,65 @@ func TestHealth(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected healthy")
+	}
+}
+
+func TestObserverStatusSupportsOptionalFormat(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Path != "/api/v1/observer/system" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"is_healthy": true})
+		case 2:
+			if r.URL.Path != "/api/v1/observer/queue" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "json" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "queue"})
+		case 3:
+			if r.URL.Path != "/api/v1/observer/models" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "table" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "models"})
+		default:
+			t.Fatalf("unexpected request %d: %s", requests, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	status, err := client.GetStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := client.QueueStatus(context.Background(), ObserverStatusOptions{Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := client.ModelsStatus(context.Background(), ObserverStatusOptions{Format: "table"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status["is_healthy"] != true {
+		t.Fatalf("status = %#v", status)
+	}
+	if queue["name"] != "queue" {
+		t.Fatalf("queue = %#v", queue)
+	}
+	if models["name"] != "models" {
+		t.Fatalf("models = %#v", models)
 	}
 }
 
@@ -1726,12 +2084,15 @@ func TestGrepForwardsLevelLimit(t *testing.T) {
 		if got, ok := body["level_limit"]; !ok || got != float64(3) {
 			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
 		}
+		if !reflect.DeepEqual(body["tags"], []any{"env=prod"}) {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		writeOK(t, w, map[string]any{"matches": []any{}})
 	}))
 	defer closeServer()
 
 	level := 3
-	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level, Tags: []string{"env=prod"}}); err != nil {
 		t.Fatal(err)
 	}
 }

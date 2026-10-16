@@ -208,7 +208,10 @@ export function AdditionalResourceOptions({
             onValueChange={(tagMode) =>
               onChange({
                 ...value,
-                tagMode: tagMode === 'append' ? 'append' : 'replace',
+                tagMode:
+                  tagMode === 'append' || tagMode === 'clear'
+                    ? tagMode
+                    : 'replace',
               })
             }
             disabled={disabled}
@@ -219,6 +222,7 @@ export function AdditionalResourceOptions({
             <SelectContent>
               <SelectItem value="replace">{t('tagMode.replace')}</SelectItem>
               <SelectItem value="append">{t('tagMode.append')}</SelectItem>
+              <SelectItem value="clear">{t('tagMode.clear')}</SelectItem>
             </SelectContent>
           </Select>
         </div>

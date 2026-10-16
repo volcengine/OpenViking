@@ -22,7 +22,7 @@ namespace vectordb {
 
 class IndexManagerImpl : public IndexManager {
  public:
-  IndexManagerImpl(const std::string& path_or_json);
+  IndexManagerImpl(const std::string& path_or_json, bool normalize_vector = false);
 
   ~IndexManagerImpl() {
     scalar_index_.reset();
@@ -51,6 +51,10 @@ class IndexManagerImpl : public IndexManager {
   int add_data(const std::vector<AddDataRequest>& data_list) override;
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list) override;
+
+  int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) override;
 
   int64_t dump(const std::string& dir) override;
 

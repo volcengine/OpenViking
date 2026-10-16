@@ -1,45 +1,44 @@
-# MCP 集成指南
+# MCP 工具与协议
 
-OpenViking 服务器内置 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 端点，任何兼容 MCP 的客户端都可以通过 HTTP 直接访问其记忆和资源能力，无需部署额外进程。
+OpenViking Server 内置 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 端点。支持 Streamable HTTP 的客户端可直接连接；只支持 stdio 的客户端可使用 [Agent Plugins 包](../agent-integrations/15-agent-plugins.md)提供的代理。
 
 > **快速接入？** 见 [MCP 客户端](../agent-integrations/06-mcp-clients.md) 获取各平台配置片段和注意事项。本页面覆盖完整的工具参考和高级配置。
 
 ## 前提条件
 
-1. 已安装 OpenViking（`pip install openviking` 或从源码安装）
-2. 有效的配置文件（参见[配置指南](01-configuration.md)）
-3. `openviking-server` 正在运行（参见[部署指南](03-deployment.md)）
+准备可访问的 OpenViking 服务地址和对应凭证。需要自行部署时，先完成[快速开始](../getting-started/02-quickstart.md)；使用托管服务或已有部署时，无需在本地安装服务端。
 
 MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口。
 
-## 已验证的接入平台
+## 客户端接入
 
-以下平台已成功接入并使用 OpenViking MCP：
+下表列出已有接入配置。连接后，用当前客户端版本确认能发现工具，并读取一项有权限的数据：
 
 | 平台 | 接入方式 |
 |------|----------|
 | **Claude Code** | `type: http` 接入 |
 | **Trae** | 标准 MCP 配置 |
 | **Cursor** | 标准 MCP 配置 |
-| **ChatGPT & Codex** | 标准 MCP 配置 |
+| **ChatGPT** | 通过自定义 App 接入 OAuth，见 [OAuth 指南](11-oauth.md) |
+| **Codex** | 使用 [Codex 集成](../agent-integrations/04-codex.md)中的 MCP 配置 |
 | **OpenCode** | OpenCode 原生 `mcp` 配置 |
 | **Manus** | 标准 MCP 配置 |
 | **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
 
 ## 鉴权方式
 
-MCP 端点的鉴权与 OpenViking REST API 完全一致，复用同一套 API-Key 认证系统。传入以下任一 header 即可：
+MCP 使用服务端认证配置。API Key 模式下，用 User/Admin key 传入以下任一 header：
 
 - `X-Api-Key: <your-key>`
 - `Authorization: Bearer <your-key>`
 
-本地开发模式（服务器绑定 localhost）下无需认证。
+只有 `dev` 模式无需认证，监听 localhost 本身不会关闭认证。OAuth 客户端使用下文授权流程，其他模式见[认证指南](04-authentication.md)。
 
 ## 客户端配置
 
 ### 通用 MCP 客户端
 
-大多数支持 MCP 的平台（如 Trae、Manus、Cursor 等）使用标准的 `mcpServers` 配置格式：
+支持 `mcpServers` 配置且允许自定义请求头的客户端，可参考以下示例。字段名和传输类型以客户端文档为准：
 
 ```json
 {
@@ -104,42 +103,45 @@ claude mcp add --transport http openviking \
 
 ### Claude.ai / Claude Desktop（OAuth）
 
-这些客户端只接受 OAuth 2.1，不接受 API Key。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 Studio consent 授权页），不再需要外部代理。
+通过 Claude.ai / Claude Desktop 的远程连接器界面接入时，使用下文 OAuth 流程。OpenViking 已经原生实现 OAuth 2.1（DCR + PKCE + opaque token，SQLite 后端，配合 Studio consent 授权页），不再需要外部代理。
 
-如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导完成 OAuth 授权流程。
+按 OAuth 指南在服务端启用 `oauth.enabled` 并配置 HTTPS，再让客户端连接 `https://your-server.com/mcp`，在浏览器中完成授权。
 
 **详见 [OAuth 2.1 接入指南](11-oauth.md)** 和 **[公网访问指南](12-public-access.md)**：
 
-- 端到端流程（device-flow 风格：authorize 页显示 6 字符码，用户在 console 确认）
+- Studio 授权确认流程，以及可选的 6 字符码跨设备授权
 - HTTP（本地）与 HTTPS（生产）两阶段部署，包含 Caddy / nginx 反代模板和 docker-compose 示例
 - Claude.ai / Claude Desktop 接入步骤
 - `OPENVIKING_PUBLIC_BASE_URL` 与 `oauth` 配置项
 - Token 模型（`ovat_` / `ovrt_` / `ovac_` 前缀）与撤销
 
-> 社区项目 [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker 代理仍可作为第三方备选方案，但现在更推荐原生流程：无需额外部署单元，也不会引入第三方对 API Key 的信任面。
-
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 15 个工具：
+以下列出内置 MCP 工具。实际可用工具以所连接服务的 `tools/list` 响应为准：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
-| `find` | 无 session 上下文的快速语义检索 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选) |
-| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具 | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选)，以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
-| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频 | `uris`（单个字符串或数组） |
+| `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
+| `search` | 深度语义检索；`mode="context"` 组装可直接注入的上下文，并替代原 `recall` 工具。`list` 模式下每个 skill 包也只出一条命中，URI 指向 `SKILL.md`、摘要取自包本身，但 `limit` 在合并之前生效，所以一个包在多个文件上命中时会占掉多个名额，返回条数少于 `limit` | `query`, `mode`（`list` 或 `context`）, `target_uri`（仅 list 模式）, `session_id`(可选), `limit`, `min_score`, `level`（list 模式）, `context_type`(可选), `events_time_decay_protection`（两种模式均可选），以及 context 模式的 `quotas`, `purpose`, `max_tokens`, `detail` 或 `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, 标量 `other_peer_penalty` 或按类别设置的 `other_peer_penalties`, `rewrite`（`off` 或 `auto`） |
+| `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频 | `uris`（单个字符串或数组）, `offset`, `limit`（文本行数） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
-| `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个文件的摘要) |
-| `remember` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
-| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — 已存在则失败), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
-| `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变 | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成), `timeout`(可选) |
-| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`) |
+| `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述) |
+| `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
+| `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — `replace` 的兼容别名), `wait`(可选,阻塞直到重建索引完成), `acl`(可选) |
+| `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成) |
+| `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `parent`(可选,目标父目录，缺失时自动创建), `tags` / `tag_mode`(可选,检索标签), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
+| `add_skill` | 新建、安装或替换 agent skill。新 skill 直接传完整 SKILL.md 文本；Git 与 GitHub tree URL 默认安装源里的全部 skill，可用 `skills` 挑选；本地 SKILL.md、目录或 zip 会和 `add_resource` 一样返回签名上传 URL | `data`（SKILL.md 文本）或 `path`（Git URL 或本地路径）, `skills`(可选), `target_uri`(可选；`viking://agent/skills` 表示账户共享), `list_only`(可选) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive`, `node_limit` |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
-| `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
+| `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`（可选） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+| `list_users` | 查询当前 account 的用户 ID；默认不返回凭证，管理员也一样 | `query`(可选，ID 子串), `limit`(默认 100), `page`(默认 1), `include_credentials`(默认 false，仅 ADMIN/ROOT 可设为 true) |
+| `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
+| `get_acl` | 查看共享资源的直接、继承和有效 ACL；要求该节点的 manage 或账号 ADMIN | `uri` |
+| `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此
@@ -157,14 +159,49 @@ claude mcp add --transport http openviking \
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
 
+### 资源权限与授权对象
+
+`list_users`、`list_groups` 对当前 account 的普通用户开放，不接受跨 account 查询参数。
+`list_users` 默认仅返回 `user_id` 和匹配总数，`list_groups` 仅返回 `group_id`。
+管理员也必须显式传 `include_credentials=true` 才会返回可用的凭证字段；普通用户传该参数会得到
+`PERMISSION_DENIED`，即使查询结果为空也一样。trusted 鉴权模式禁止返回凭证。
+组成员管理和成员名单查询仍使用管理员接口。
+
+完整 ACL 的查询和修改都要求资源的 `manage` 权限；普通用户即使是资源 manager，也不会因此获得
+读取账号凭证的权限。`write` 和 `add_resource` 接受可选的 `acl` 参数，复用内核的权限校验：
+已有目标要求自身 manage，新目标要求从父目录继承 manage。不传 ACL 时，已有目标保留原权限，新目标继承父目录。
+`add_resource` 的远程导入、临时文件导入、本地文件上传后自动导入均保留这个参数。
+
+例如，将已有共享资料只授权给 Bob 读取：
+
+```json
+{
+  "uri": "viking://resources/project-a",
+  "acl": {
+    "acl_mode": "restricted",
+    "entries": [{"principal": "user:bob", "level": "read"}]
+  }
+}
+```
+
+以上为 `set_acl` 的参数。`entries` 完整替换直接授权，省略则保留；`acl_mode=inherit` 合并父级授权，
+`restricted` 只使用直接授权。重置为继承使用 `{"acl_mode":"inherit","entries":[]}`。
+受限 ACL 可能移除操作者自身的访问权限；账号 ADMIN 始终保留治理权限。
+
+工具执行失败会标记 MCP `isError=true`，业务错误文本保留 `PERMISSION_DENIED` 等错误码；
+支持结构化输出的工具还返回 `error.code/message/details`，同时保留原有 `result` 文本。
+批量读取或搜索部分失败时保留成功结果，并在失败项中显示原因。
+
 ### 添加本地文件资源(单步上传)
 
 `add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
 
 - **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
-- **本地文件路径**:返回**上传指令**(纯文本)。agent 把文件以 `multipart/form-data`(字段名 `file`)POST 到响应里给出的 `temp_upload` URL。该 URL 内嵌一次性 token(默认 10 分钟过期)作为鉴权凭证,无需 API Key。Server 随后在**同一次请求内自动入库**并返回最终结果,agent **无需**再次调用 `add_resource`。
+- **本地文件路径**:返回**上传指令**(纯文本)。agent 把文件以 `multipart/form-data`(字段名 `file`)POST 到响应里给出的 `temp_upload` URL。该 URL 内嵌一次性 token(默认 10 分钟过期)作为鉴权凭证,无需 API Key。Server 随后自动提交导入并返回受理结果，后台处理可以继续进行；agent **无需**再次调用 `add_resource`。
 
-这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。token 上传复用认证版的 `temp_upload` 路由(API Key 优先,否则走一次性 `?token=`)及其 `TempUploadStore` 持久化,所以 `local` / `shared` 上传模式行为一致。注意:一次性 token 保存在进程内,因此多 worker 部署下 `add_resource` 调用与后续的上传 POST 必须落到同一个 worker(或以单 worker 运行),token 才能被解析。
+在 `api_key` 鉴权模式下，token 保留发起 MCP 调用时的角色，API Key 和 OAuth 调用均适用。上传时会检查用户是否仍存在、是否正在删除，以及角色是否已降级；不满足条件时拒绝上传。角色后来被提升也不会扩大旧 token 的权限。trusted 模式的 token 仍按 USER 身份处理。
+
+客户端只要能读取源文件并发出 multipart HTTP 请求，就能上传，无需预装 `ov` CLI。沙箱也需要提供这两项能力，仅传入无法读取的本地路径不能完成文件传输。token 上传复用认证版的 `temp_upload` 路由(API Key 优先,否则走一次性 `?token=`)及其 `TempUploadStore` 持久化,所以 `local` / `shared` 上传模式行为一致。注意:一次性 token 保存在进程内,因此多 worker 部署下 `add_resource` 调用与后续的上传 POST 必须落到同一个 worker(或以单 worker 运行),token 才能被解析。
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 
@@ -187,6 +224,7 @@ claude mcp add --transport http openviking \
 ```yaml
 services:
   openviking:
+    # 推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
     image: ghcr.io/volcengine/openviking:latest
     environment:
       OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"
@@ -207,12 +245,14 @@ curl http://localhost:1933/health
 
 ### 认证错误
 
-**可能原因：** 客户端配置与服务器配置中的 API 密钥不匹配。
+**可能原因：** 客户端的 API Key 无效、已过期，或不适用于租户数据访问。
 
-**解决方案：** 确保 MCP 客户端配置中的 API 密钥与 OpenViking 服务器配置中的一致。参见[认证指南](04-authentication.md)。
+**解决方案：** 确认客户端使用目标 account 的有效 user/admin key；`api_key` 模式下，root key 只用于管理接口。参见[认证指南](04-authentication.md)。
 
 ## 参考
 
 - [MCP 规范](https://modelcontextprotocol.io/)
 - [OpenViking 配置](01-configuration.md)
 - [OpenViking 部署](03-deployment.md)
+
+客户端配置参考：[Claude Code MCP](https://code.claude.com/docs/en/mcp)、[OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/)。

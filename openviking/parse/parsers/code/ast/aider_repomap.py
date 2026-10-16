@@ -130,7 +130,14 @@ def _query_captures(rel_name: str, content: str):
     parser = get_parser(query_lang)
     language = get_language(query_lang)
     tree = parser.parse(content.encode("utf-8"))
-    query = language.query(query_scm)
+    if hasattr(language, "query"):
+        # tree-sitter <= 0.24
+        query = language.query(query_scm)
+    else:
+        # tree-sitter >= 0.25 moved query construction to Query.
+        from tree_sitter import Query
+
+        query = Query(language, query_scm)
     if hasattr(query, "captures"):
         captures = query.captures(tree.root_node)
     else:

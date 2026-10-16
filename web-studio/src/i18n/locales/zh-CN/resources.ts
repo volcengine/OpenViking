@@ -7,8 +7,8 @@ const resources = {
   requestLogs: {
     accessRequired: {
       description:
-        '当前连接没有管理员或 Root 权限，无法显示请求日志。请在“连接设置”中配置具备控制台用量和审计权限的 API 密钥。',
-      title: '需要管理员权限',
+        '当前连接身份尚未确认。请在“连接设置”中检查服务地址、身份和认证配置。',
+      title: '需要确认连接身份',
     },
     clear: '清空',
     description:
@@ -35,7 +35,7 @@ const resources = {
       description: '无法从服务端加载审计请求日志。',
       title: '请求失败',
     },
-    eyebrow: '工作台请求记录',
+    eyebrow: '服务端 API 请求记录',
     filters: {
       all: '所有日志',
       apiTypePlaceholder: 'API 类型',
@@ -60,9 +60,8 @@ const resources = {
     reset: '重置',
     searchPlaceholder: '筛选方法、路径或状态码',
     scope: {
-      currentIdentity: '当前范围：当前 API 密钥对应的身份',
-      currentIdentityWithName:
-        '当前范围：当前 API 密钥对应的身份（{{identity}}）',
+      currentIdentity: '当前范围：当前连接身份',
+      currentIdentityWithName: '当前范围：当前连接身份（{{identity}}）',
     },
     status: {
       error: '错误',
@@ -126,6 +125,10 @@ const resources = {
     tooManyFiles: '仅保留前 {{count}} 个文件，其余已忽略。',
     error: '请求失败',
     dirPicker: {
+      scope: '资源范围',
+      mine: '我的资源',
+      shared: '公共资源',
+
       title: '选择目录',
       select: '选择',
       cancel: '取消',
@@ -293,6 +296,7 @@ const resources = {
     tagMode: '标签写入方式',
     'tagMode.replace': '替换',
     'tagMode.append': '追加',
+    'tagMode.clear': '清空',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',
@@ -395,6 +399,14 @@ const resources = {
       },
     },
     filePreview: {
+      editFailed: '无法读取完整文件用于编辑。',
+      saveFailed: '文件保存失败。',
+      directoryLevels: {
+        abstractLabel: '摘要',
+        overviewLabel: '概览',
+        abstractDescription: '简短的语义摘要',
+        overviewDescription: '目录内容概览',
+      },
       cancel: '取消',
       edit: '编辑',
       emptyFile: '(空文件)',
@@ -409,6 +421,14 @@ const resources = {
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',
       markdownSource: '源码',
+      mermaid: {
+        diagramLabel: 'Mermaid 图表',
+        errorDetails: '错误详情',
+        loading: '正在渲染 Mermaid 图表...',
+        renderFailed: '无法渲染 Mermaid 图表。',
+        showSource: '查看 Mermaid 源码',
+        unknownError: '未知的 Mermaid 渲染错误。',
+      },
       noDirectoryContext: '这个目录暂无摘要或概览。',
       save: '保存',
       selectDirectoryContext: '选择一个标签查看目录上下文。',
@@ -439,6 +459,12 @@ const resources = {
     },
   },
   retrieval: {
+    modeDescriptions: {
+      find: '按语义查找相关上下文，适合单次问题。',
+      search: '按语义检索，可结合会话上下文查找相关内容。',
+      grep: '按文本或正则表达式匹配文件内容。',
+      glob: '按路径通配符查找文件，例如 **/*.md。',
+    },
     title: '检索',
     searchPlaceholder: '输入检索内容',
     placeholders: {
@@ -508,7 +534,7 @@ const resources = {
     detail: {
       score: '相关度',
       level: '层级',
-      openPlayground: '在工作台中打开',
+      openFilesystem: '在文件系统中打开',
       uri: 'URI',
       summary: '摘要',
       noSummary: '暂无可展示的摘要',

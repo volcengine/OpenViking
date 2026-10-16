@@ -156,7 +156,7 @@ describe("context-engine lifecycle service seam", () => {
       tokenBudget: 4096,
       runtimeContext: { senderId: "telegram:123", agentId: "runtime-agent" },
       isMainAssemble: true,
-      cfg: { autoRecall: false },
+      cfg: { autoRecall: false, contextManagementMode: "openviking" },
       getClient: vi.fn().mockResolvedValue(client),
       logger,
       resolveAgentId: vi.fn().mockReturnValue("agent_main"),
@@ -222,6 +222,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      resetContext: true,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-1"));
@@ -261,6 +262,7 @@ describe("context-engine lifecycle service seam", () => {
       commitSession: vi.fn().mockResolvedValue({
         status: "completed",
         archived: true,
+        effective_enable_working_memory: true,
         archive_uri: "ov://archive/archive-9",
         memories_extracted: { core: 4 },
         task_id: "task-9",
@@ -270,6 +272,7 @@ describe("context-engine lifecycle service seam", () => {
     const diag = vi.fn();
 
     const result = await compactOpenVikingSession({
+      contextManagementMode: "openviking",
       sessionId: "plain-session",
       sessionKey: "agent:main:main",
       tokenBudget: 4096,
@@ -289,6 +292,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      enableWorkingMemory: true,
     });
     expect(result).toEqual({
       ok: true,
@@ -303,6 +307,7 @@ describe("context-engine lifecycle service seam", () => {
           commit: {
             status: "completed",
             archived: true,
+        effective_enable_working_memory: true,
             archive_uri: "ov://archive/archive-9",
             memories_extracted: { core: 4 },
             task_id: "task-9",

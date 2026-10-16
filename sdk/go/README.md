@@ -60,13 +60,22 @@ This SDK does not implement legacy `agent_id` compatibility.
 
 ## Common Operations
 
+Imports return a `task_id` by default. Query `client.GetTask(ctx, taskID)` to check progress.
+
 ```go
 // Add a local file or remote URL. Local files/directories are uploaded first.
 resource, err := client.AddResource(ctx, "./docs/readme.md", &openviking.AddResourceOptions{
-	To:   "viking://resources/docs",
-	Wait: true,
+	To: "viking://resources/docs",
 })
+if err != nil {
+	return err
+}
+fmt.Println(resource["task_id"])
+```
 
+After the import task reaches `completed`, read or search the imported content:
+
+```go
 // Read and update content.
 content, err := client.Read(ctx, "viking://resources/docs/readme.md", 0, -1)
 updated, err := client.Write(ctx, "viking://resources/docs/readme.md", content+"\n\nUpdated.", &openviking.WriteOptions{
@@ -132,6 +141,23 @@ _ = session
 _ = commit
 ```
 
+## Pagination Metadata
+
+`List` and `Tree` preserve their existing return types for compatibility. Use
+`ListPage` or `TreePage` when the caller needs to know whether the server
+truncated the result because of `limit` or `node_limit`.
+
+```go
+page, err := client.TreePage(ctx, "viking://resources/", &openviking.TreeOptions{
+        NodeLimit: 1000,
+})
+if err != nil {
+        return err
+}
+fmt.Println("nodes:", len(page.Result))
+fmt.Println("has more:", page.HasMore)
+```
+
 ## API Coverage
 
 The Go SDK v1 intentionally follows the Python HTTP client surface.
@@ -143,7 +169,7 @@ Implemented:
 | Resource and skill import | `AddResource`, `AddSkill`, `WaitProcessed` |
 | Skill management | `ListSkills`, `FindSkills`, `ValidateSkill`, `GetSkill`, `UpdateSkill`, `DeleteSkill` |
 | Watch management | `ListWatches`, `GetWatch`, `UpdateWatch`, `DeleteWatch`, `TriggerWatch` |
-| Filesystem and content | `List`, `Tree`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `Reindex` |
+| Filesystem and content | `List`, `ListPage`, `Tree`, `TreePage`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `Reindex` |
 | Retrieval | `Find`, `Search`, `Grep`, `Glob` |
 | Sessions and tasks | `CreateSession`, `ListSessions`, `GetSession`, `UpdateSessionConfig`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | Packs | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
@@ -195,10 +221,16 @@ uploads are zipped by the SDK, symlinks are skipped, and the resulting archive
 is uploaded to `/api/v1/resources/temp_upload` before the final API call.
 
 ```go
-_, err := client.AddSkill(ctx, "./skills/search-web", &openviking.AddSkillOptions{
-	Wait: true,
-})
+skill, err := client.AddSkill(ctx, "./skills/search-web", nil)
+if err != nil {
+	return err
+}
+fmt.Println(skill["task_id"])
+```
 
+After the skill task reaches `completed`:
+
+```go
 skills, err := client.ListSkills(ctx, nil)
 found, err := client.FindSkills(ctx, "search the web", &openviking.FindSkillsOptions{
 	Limit: 5,

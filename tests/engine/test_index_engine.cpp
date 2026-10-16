@@ -54,7 +54,7 @@ void test_basic_workflow() {
             "ElementCount": 0,
             "MaxElementCount": 2,
             "Dimension": 4,
-            "Distance": "l2",
+            "Distance": "ip",
             "Quant": "float"
         },
         "ScalarIndex": [
@@ -65,7 +65,7 @@ void test_basic_workflow() {
         ]
     })";
 
-  IndexEngine engine(config);
+  IndexEngine engine(config, true);
   if (!engine.is_valid()) {
     SPDLOG_ERROR("Engine initialization failed");
     exit(1);
@@ -76,14 +76,14 @@ void test_basic_workflow() {
 
   AddDataRequest req1;
   req1.label = 1001;
-  req1.vector = {0.1, 0.1, 0.1, 0.1};
+  req1.vector = {1.0, 0.0, 0.0, 0.0};
   req1.fields_str =
       R"({"title": "apple", "count": 10, "price": 5.5, "uri": "/docs/one"})";
   add_reqs.push_back(req1);
 
   AddDataRequest req2;
   req2.label = 1002;
-  req2.vector = {0.2, 0.2, 0.2, 0.2};
+  req2.vector = {-1.0, 0.0, 0.0, 0.0};
   req2.fields_str =
       R"({"title": "banana", "count": 20, "price": 3.0, "uri": "/other/two"})";
   add_reqs.push_back(req2);
@@ -96,7 +96,7 @@ void test_basic_workflow() {
 
   // 3. Search (Vector only)
   SearchRequest search_req;
-  search_req.query = {0.1, 0.1, 0.1, 0.1};
+  search_req.query = {1.0, 0.0, 0.0, 0.0};
   search_req.topk = 5;
 
   SearchResult res = engine.search(search_req);
@@ -108,6 +108,26 @@ void test_basic_workflow() {
     SPDLOG_ERROR("Search failed: expected label 1001, got {}", res.labels[0]);
     exit(1);
   }
+
+  if (res.result_num != 2 || !is_close(res.scores[0], 1.0f) ||
+      !is_close(res.scores[1], 0.0f)) {
+    SPDLOG_ERROR("Cosine endpoints were not mapped to [0, 1]");
+    exit(1);
+  }
+  search_req.query = {0.0, 1.0, 0.0, 0.0};
+  res = engine.search(search_req);
+  if (!is_close(res.scores[0], 0.5f) || !is_close(res.scores[1], 0.5f)) {
+    SPDLOG_ERROR("Orthogonal cosine scores were not mapped to 0.5");
+    exit(1);
+  }
+  search_req.query = {-0.6, 0.8, 0.0, 0.0};
+  res = engine.search(search_req);
+  if (res.labels != std::vector<uint64_t>{1002, 1001} ||
+      !is_close(res.scores[0], 0.8f) || !is_close(res.scores[1], 0.2f)) {
+    SPDLOG_ERROR("Cosine mapping changed the scores or ranking");
+    exit(1);
+  }
+  search_req.query = {1.0, 0.0, 0.0, 0.0};
 
   // Native scalar filters can be projected into any external row order. This
   // is the bridge used by external dense indexes such as cuVS.
@@ -168,7 +188,8 @@ void test_basic_workflow() {
   auto token_search_res = engine.search_with_filter_token(
       search_req, cached_filter_res.native_filter_token);
   if (!token_search_res || token_search_res->result_num != 1 ||
-      token_search_res->labels[0] != 1001) {
+      token_search_res->labels[0] != 1001 ||
+      !is_close(token_search_res->scores[0], 1.0f)) {
     SPDLOG_ERROR("Search with native filter token failed");
     exit(1);
   }
@@ -209,6 +230,17 @@ void test_basic_workflow() {
   if (ts <= 0) {
     SPDLOG_ERROR("Dump failed");
     exit(1);
+  }
+
+  // The same snapshot is readable as raw IP or cosine without rebuilding.
+  for (bool normalize_vector : {false, true}) {
+    IndexEngine reloaded(db_path, normalize_vector);
+    res = reloaded.search(search_req);
+    if (res.result_num != 1 || res.labels[0] != 1002 ||
+        !is_close(res.scores[0], normalize_vector ? 0.0f : -1.0f)) {
+      SPDLOG_ERROR("Reload did not apply the caller's cosine configuration");
+      exit(1);
+    }
   }
 
   std::filesystem::remove_all(db_path);

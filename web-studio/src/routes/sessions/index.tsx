@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { CompassIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useCreateSession } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
@@ -22,6 +23,7 @@ export const Route = createFileRoute('/sessions/')({
 
 function SessionsPage() {
   const { t } = useTranslation('sessions')
+  const { provider } = useStudioService()
   const { s: activeSessionId } = Route.useSearch()
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
@@ -36,6 +38,7 @@ function SessionsPage() {
 
   // Cmd+N to create new session
   useEffect(() => {
+    if (provider !== 'opensource') return
     const handler = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.key === 'n') {
@@ -45,7 +48,7 @@ function SessionsPage() {
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [handleNewSession])
+  }, [handleNewSession, provider])
 
   return (
     <div className="-mx-4 -my-6 flex h-[calc(100svh-3rem)] min-w-0 overflow-hidden md:-mx-6">
@@ -63,6 +66,7 @@ function SessionsPage() {
 
 function SessionsEmpty() {
   const { t } = useTranslation('sessions')
+  const { provider } = useStudioService()
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6">
@@ -74,18 +78,22 @@ function SessionsEmpty() {
           {t('empty.title')}
         </h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          {t('empty.description')}
+          {provider === 'opensource'
+            ? t('empty.description')
+            : t('studio:selectSessionRecord')}
         </p>
       </div>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-          {COMMAND_KEY_LABEL}
-        </kbd>
-        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-          {NEW_SESSION_KEY_LABEL}
-        </kbd>
-        <span>{t('threadList.newSession')}</span>
-      </div>
+      {provider === 'opensource' ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+            {COMMAND_KEY_LABEL}
+          </kbd>
+          <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+            {NEW_SESSION_KEY_LABEL}
+          </kbd>
+          <span>{t('threadList.newSession')}</span>
+        </div>
+      ) : null}
     </div>
   )
 }

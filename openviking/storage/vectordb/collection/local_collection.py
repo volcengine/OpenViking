@@ -475,15 +475,19 @@ class LocalCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ) -> None:
-        with self._index_mutation_barrier.mutation() as mutation:
+        with self._index_mutation_barrier.exclusive_mutation():
             index = self.indexes.get(index_name)
             if not index:
                 return
-            index.update(scalar_index, description)
-            mutation.mark_changed()
+            if scalar_index is not None:
+                if not self.store_mgr:
+                    raise RuntimeError("Store manager is not initialized")
+                index.rebuild_scalar_index(scalar_index, self.store_mgr.iter_all_cands_fields())
+            if description is not None:
+                index.update(None, description)
 
     def get_index_meta_data(self, index_name: str) -> Optional[Dict[str, Any]]:
         index = self.indexes.get(index_name)
@@ -503,7 +507,14 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
+        time_decay = (advance or {}).get("time_decay")
+        if advance is not None and (
+            set(advance) != {"time_decay"} or not isinstance(time_decay, dict)
+        ):
+            raise NotImplementedError("Local advanced ranking supports time_decay only")
         search_result = SearchResult()
         index = self.indexes.get(index_name)
         if not index:
@@ -517,9 +528,20 @@ class LocalCollection(ICollection):
 
         # Request more results to handle offset
         actual_limit = limit + offset
-        label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
-        )
+        details = {}
+        if time_decay is not None:
+            label_list, scores_list, details = index.search_with_time_decay(
+                dense_vector or [],
+                actual_limit,
+                filters,
+                sparse_raw_terms,
+                sparse_values,
+                time_decay,
+            )
+        else:
+            label_list, scores_list = index.search(
+                dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
+            )
 
         # Apply offset by slicing the results
         if offset > 0:
@@ -531,6 +553,7 @@ class LocalCollection(ICollection):
             label_list = label_list[:limit]
             scores_list = scores_list[:limit]
 
+        score_details = [details.get(str(label), {}) for label in label_list]
         pk_list = label_list
         fields_list = []
         projected_fields = (
@@ -566,6 +589,7 @@ class LocalCollection(ICollection):
                     cands_vectors = [cands_vectors[i] for i in valid_indices]
                 pk_list = [pk_list[i] for i in valid_indices]
                 scores_list = [scores_list[i] for i in valid_indices]
+                score_details = [score_details[i] for i in valid_indices]
 
             # Parse each candidate's fields defensively: a single corrupted JSON
             # string (e.g. truncated by the storage layer's uint16 length prefix)
@@ -593,6 +617,7 @@ class LocalCollection(ICollection):
                     cands_vectors = [cands_vectors[i] for i in json_valid_indices]
                 pk_list = [pk_list[i] for i in json_valid_indices]
                 scores_list = [scores_list[i] for i in json_valid_indices]
+                score_details = [score_details[i] for i in json_valid_indices]
 
             if self.meta.primary_key:
                 pk_list = [
@@ -607,8 +632,16 @@ class LocalCollection(ICollection):
                     fields_list[i][self.meta.vector_key] = vector
 
         search_result.data = [
-            SearchItemResult(id=pk, fields=fields, score=score)
-            for pk, score, fields in zip_longest(pk_list, scores_list, fields_list)
+            SearchItemResult(
+                id=pk,
+                fields=fields,
+                score=score,
+                origin_score=(detail or {}).get("origin_score"),
+                addition_score=(detail or {}).get("addition_score"),
+            )
+            for pk, score, fields, detail in zip_longest(
+                pk_list, scores_list, fields_list, score_details
+            )
         ]
         return search_result
 
@@ -691,6 +724,7 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         dense_vector = [random.uniform(-1, 1) for _ in range(self.meta.vector_dim)]
         return self.search_by_vector(
@@ -706,6 +740,8 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[List[str]] = None,
     ) -> SearchResult:
         """Local backend does not generate vectors from keywords.
 
@@ -748,9 +784,9 @@ class LocalCollection(ICollection):
             new_filters["filter"] = filters
 
         # Copy output_fields to avoid modifying the original list
-        if output_fields is None:
-            output_fields_copy = [field]
-            remove_field = True
+        if not output_fields:
+            output_fields_copy = None
+            remove_field = False
         else:
             output_fields_copy = list(output_fields)
             if field not in output_fields_copy:
@@ -1344,17 +1380,18 @@ class PersistCollection(LocalCollection):
             newest_version = index.get_newest_version()
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
-            delta_list = self.store_mgr.get_delta_data_after_ts(newest_version)
+            delta_records = self.store_mgr.get_delta_data_after_ts(newest_version)
             logger.info(
-                "Index '%s': replaying %d delta records to recover from last persistent snapshot",
+                "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
-                len(delta_list),
             )
             upsert_list: List[DeltaRecord] = []
             delete_list: List[DeltaRecord] = []
             _processed = 0
+            _seen = 0
             _last_log = 0.0
-            for data in delta_list:
+            for data in delta_records:
+                _seen += 1
                 if data.type == OpType.PUT.value:
                     if delete_list:
                         _processed += self._replay_recovery_records(
@@ -1376,11 +1413,11 @@ class PersistCollection(LocalCollection):
                         upsert_list = []
                     delete_list.append(data)
                 now = time.time()
-                if now - _last_log >= 5.0 and _processed > 0:
+                if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
                         "Delta replay progress: %d/%d records for index '%s'",
                         _processed,
-                        len(delta_list),
+                        _seen,
                         index_name,
                     )
                     _last_log = now
@@ -1477,6 +1514,13 @@ class PersistCollection(LocalCollection):
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error(f"Failed to prune delta records: {e}")
         return persisted_count
 
     def _new_index(

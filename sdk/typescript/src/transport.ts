@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 import { OpenVikingError } from "./errors.js";
 import type {
   ClientConfig,
@@ -58,6 +61,16 @@ export class OpenVikingTransport {
   ): Promise<T> {
     return this.consume(method, path, options, (response) =>
       this.parseResponse<T>(response),
+    );
+  }
+
+  requestEnvelope<T>(
+    method: string,
+    path: string,
+    options: TransportOptions = {},
+  ): Promise<ResponseEnvelope<T>> {
+    return this.consume(method, path, options, (response) =>
+      this.parseResponseEnvelope<T>(response),
     );
   }
 
@@ -129,6 +142,13 @@ export class OpenVikingTransport {
   }
 
   async parseResponse<T>(response: Response): Promise<T> {
+    const envelope = await this.parseResponseEnvelope<T>(response);
+    return envelope.result as T;
+  }
+
+  async parseResponseEnvelope<T>(
+    response: Response,
+  ): Promise<ResponseEnvelope<T>> {
     const text = await response.text();
     let envelope: ResponseEnvelope<T> = {};
     if (text) {
@@ -152,6 +172,6 @@ export class OpenVikingTransport {
         }) as { code?: string; details?: JsonObject; statusCode?: number },
       );
     }
-    return envelope.result as T;
+    return envelope;
   }
 }

@@ -1,0 +1,330 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  completeStudioSetup,
+  needsStudioSetup,
+  SETUP_STORAGE_KEY,
+  StudioSetupRequestError,
+  WORKSPACE_SESSION_KEY,
+  verifyStudioSetup,
+  studioSetupDestination,
+} from '#/lib/connection/onboarding'
+import { PROFILES_STORAGE_KEY } from '#/lib/connection/profiles'
+import { createClient } from '#/gen/ov-client/client'
+import { OvClientError } from '#/lib/ov-client'
+import type * as ClientModule from '#/gen/ov-client/client'
+
+const get = vi.hoisted(() => vi.fn())
+vi.mock('#/gen/ov-client/client', async (original) => {
+  const actual = await original<typeof ClientModule>()
+  return {
+    ...actual,
+    createClient: vi.fn(
+      (options?: Parameters<typeof actual.createClient>[0]) => ({
+        ...actual.createClient(options),
+        get,
+      }),
+    ),
+  }
+})
+const draft = {
+  serviceSelection: 'opensource' as const,
+  baseUrl: 'http://service.test',
+  apiKey: 'synthetic-key',
+  adminApiKey: '',
+  accountId: 'default',
+  userId: 'default',
+}
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
+  get.mockReset()
+  vi.mocked(createClient).mockClear()
+})
+afterEach(() => vi.unstubAllGlobals())
+describe('first-use detection', () => {
+  it('starts setup for a new tab and retains unfinished setup on reload', () => {
+    expect(needsStudioSetup()).toBe(true)
+    localStorage.setItem(SETUP_STORAGE_KEY, 'pending')
+    localStorage.setItem(
+      PROFILES_STORAGE_KEY,
+      JSON.stringify({ profiles: [{ connection: draft }] }),
+    )
+    expect(needsStudioSetup()).toBe(true)
+  })
+  it('restores a legacy connection even after the upgrade marked setup pending', () => {
+    localStorage.setItem(SETUP_STORAGE_KEY, 'pending')
+    localStorage.setItem('ov_console_connection', JSON.stringify(draft))
+    expect(needsStudioSetup()).toBe(false)
+  })
+  it('restores saved profiles in a new tab without a session marker', () => {
+    localStorage.setItem(
+      PROFILES_STORAGE_KEY,
+      JSON.stringify({
+        activeId: 'saved',
+        profiles: [{ id: 'saved', name: 'Saved', connection: draft }],
+      }),
+    )
+    expect(needsStudioSetup()).toBe(false)
+  })
+  it('does not treat an automatically persisted empty same-origin connection as configured', () => {
+    localStorage.setItem(
+      'ov_console_connection',
+      JSON.stringify({ ...draft, baseUrl: window.location.origin, apiKey: '' }),
+    )
+    expect(needsStudioSetup()).toBe(true)
+  })
+  it('completes a verified development connection without a key', () => {
+    completeStudioSetup(
+      { ...draft, baseUrl: window.location.origin, apiKey: '' },
+      'Development',
+    )
+    expect(needsStudioSetup()).toBe(false)
+    expect(sessionStorage.getItem(WORKSPACE_SESSION_KEY)).toBe('selected')
+    sessionStorage.clear()
+    expect(needsStudioSetup()).toBe(false)
+    localStorage.removeItem(PROFILES_STORAGE_KEY)
+    expect(needsStudioSetup()).toBe(false)
+    localStorage.removeItem('ov_console_connection')
+    expect(needsStudioSetup()).toBe(true)
+  })
+  it('completes setup when randomUUID is unavailable on an HTTP origin', () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues: (bytes: Uint8Array) => bytes.fill(7),
+    })
+    completeStudioSetup(draft, 'OpenViking')
+    const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
+    expect(saved.profiles).toHaveLength(1)
+    expect(saved.profiles[0].id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    expect(saved.activeId).toBe(saved.profiles[0].id)
+    expect(needsStudioSetup()).toBe(false)
+  })
+  it('retains other saved workspaces when selecting a new connection', () => {
+    localStorage.setItem(
+      PROFILES_STORAGE_KEY,
+      JSON.stringify({
+        activeId: 'one',
+        profiles: [{ id: 'one', name: 'Original', connection: draft }],
+      }),
+    )
+    completeStudioSetup(
+      {
+        ...draft,
+        serviceSelection: 'volcengine',
+        baseUrl: 'https://hosted.test',
+      },
+      'Volcengine',
+    )
+    const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
+    expect(saved.profiles).toHaveLength(2)
+    expect(saved.profiles[0].name).toBe('Original')
+    expect(saved.profiles[1].connection.serviceSelection).toBe('volcengine')
+  })
+  it('keeps the selected profile when saved profiles share an address', () => {
+    localStorage.setItem(
+      PROFILES_STORAGE_KEY,
+      JSON.stringify({
+        activeId: 'second',
+        profiles: [
+          { id: 'first', name: 'First', connection: draft },
+          { id: 'second', name: 'Second', connection: draft },
+        ],
+      }),
+    )
+    completeStudioSetup(
+      { ...draft, apiKey: 'updated-key' },
+      'OpenViking',
+      'second',
+    )
+    const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
+    expect(saved.activeId).toBe('second')
+    expect(saved.profiles[0].connection.apiKey).toBe('synthetic-key')
+    expect(saved.profiles[1].connection.apiKey).toBe('updated-key')
+  })
+  it('keeps both workspaces when a new connection uses an existing service address', () => {
+    const hosted = {
+      ...draft,
+      serviceSelection: 'volcengine' as const,
+      baseUrl: 'https://hosted.test',
+    }
+    completeStudioSetup({ ...hosted, apiKey: 'alice-key' }, 'Alice')
+    const first = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
+
+    completeStudioSetup({ ...hosted, apiKey: 'bob-key' }, 'Bob')
+    const saved = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY) || '{}')
+    expect(saved.profiles).toHaveLength(2)
+    expect(saved.profiles[0]).toEqual(first.profiles[0])
+    expect(saved.profiles[1]).toMatchObject({
+      name: 'Bob',
+      connection: { apiKey: 'bob-key' },
+    })
+    expect(saved.activeId).toBe(saved.profiles[1].id)
+    expect(saved.activeId).not.toBe(first.activeId)
+  })
+})
+describe('verification', () => {
+  it('identifies the failed verification stage and masks credentials', () => {
+    const error = new StudioSetupRequestError(
+      'health',
+      new OvClientError({
+        code: 'PaymentRequired',
+        message: 'Account check failed for synthetic-key',
+        statusCode: 402,
+      }),
+      draft,
+    )
+    expect(error.stage).toBe('health')
+    expect(error.statusCode).toBe(402)
+    expect(error.message).toContain('HTTP 402')
+    expect(error.message).not.toContain('synthetic-key')
+  })
+  it('uses hosted Bearer credentials and service-returned identity before checking private data', async () => {
+    get
+      .mockResolvedValueOnce({
+        data: {
+          status: 'ok',
+          version: 'cloud',
+          auth_mode: 'api_key',
+          account_id: 'tenant',
+          user_id: 'alice',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        data: { status: 'ok', result: [] },
+      })
+    const c = await verifyStudioSetup(
+      {
+        ...draft,
+        serviceSelection: 'volcengine',
+        adminApiKey: 'never-send-control',
+      },
+      new AbortController().signal,
+    )
+    expect(c.userId).toBe('alice')
+    expect(c.adminApiKey).toBe('')
+    expect(vi.mocked(createClient).mock.calls[0][0]?.headers).toEqual({
+      Authorization: 'Bearer synthetic-key',
+    })
+    expect(get.mock.calls[1][0].query.uri).toBe('viking://~/')
+  })
+  it('does not invent a hosted identity when health omits it', async () => {
+    get
+      .mockResolvedValueOnce({
+        data: { version: 'test', auth_mode: 'api_key' },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        data: { status: 'ok', result: [] },
+      })
+    const connection = await verifyStudioSetup(
+      { ...draft, serviceSelection: 'volcengine' },
+      new AbortController().signal,
+    )
+    expect(connection.accountId).toBe('')
+    expect(connection.userId).toBe('')
+  })
+  it('rejects HTML health responses instead of accepting the Studio URL', async () => {
+    get.mockResolvedValueOnce({ data: '<html></html>' })
+    await expect(
+      verifyStudioSetup(draft, new AbortController().signal),
+    ).rejects.toThrow('invalidService')
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+  it('does not accept a health-only response when data access fails', async () => {
+    get
+      .mockResolvedValueOnce({
+        data: { version: 'test', auth_mode: 'api_key' },
+      })
+      .mockRejectedValueOnce(new Error('Forbidden'))
+    await expect(
+      verifyStudioSetup(draft, new AbortController().signal),
+    ).rejects.toMatchObject({ stage: 'data', message: 'Forbidden' })
+    expect(localStorage.getItem(PROFILES_STORAGE_KEY)).toBeNull()
+  })
+  it('requires a key except in development mode', async () => {
+    get.mockResolvedValueOnce({
+      data: { version: 'test', auth_mode: 'api_key' },
+    })
+    await expect(
+      verifyStudioSetup({ ...draft, apiKey: '' }, new AbortController().signal),
+    ).rejects.toThrow('keyRequired')
+  })
+})
+
+describe('management bootstrap', () => {
+  it.each(['root', 'admin'])(
+    'verifies %s control access without calling tenant data APIs',
+    async (role) => {
+      get
+        .mockResolvedValueOnce({
+          data: {
+            version: 'test',
+            auth_mode: 'api_key',
+            role,
+            account_id: 'tenant',
+            user_id: 'admin',
+          },
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: {},
+          data: { status: 'ok', result: [] },
+        })
+      const connection = await verifyStudioSetup(
+        { ...draft, apiKey: '', adminApiKey: 'synthetic-control' },
+        new AbortController().signal,
+      )
+      expect(get.mock.calls[1][0].url).toBe(
+        role === 'root'
+          ? '/api/v1/admin/accounts'
+          : '/api/v1/admin/accounts/{account_id}/users',
+      )
+      expect(studioSetupDestination(connection)).toBe('/users')
+      expect(
+        get.mock.calls.some(([options]) => options.url === '/api/v1/fs/ls'),
+      ).toBe(false)
+    },
+  )
+  it('rejects denied management access and does not save it', async () => {
+    get
+      .mockResolvedValueOnce({
+        data: { version: 'test', auth_mode: 'api_key', role: 'root' },
+      })
+      .mockRejectedValueOnce(new Error('Forbidden'))
+    await expect(
+      verifyStudioSetup(
+        { ...draft, apiKey: '', adminApiKey: 'synthetic-control' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('Forbidden')
+    expect(localStorage.getItem(PROFILES_STORAGE_KEY)).toBeNull()
+  })
+  it('does not use a hosted control credential as a user credential', async () => {
+    get.mockResolvedValueOnce({
+      data: { version: 'test', auth_mode: 'api_key', role: 'root' },
+    })
+    await expect(
+      verifyStudioSetup(
+        {
+          ...draft,
+          serviceSelection: 'volcengine',
+          apiKey: '',
+          adminApiKey: 'synthetic-control',
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('keyRequired')
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+  it('keeps data connections on their normal landing page', () => {
+    expect(studioSetupDestination(draft)).toBe('/home')
+    expect(
+      studioSetupDestination({ ...draft, serviceSelection: 'volcengine' }),
+    ).toBe('/filesystem')
+  })
+})

@@ -213,6 +213,7 @@ class IOPlayback:
 
             os.environ[OPENVIKING_CONFIG_ENV] = self.config_file
 
+        from openviking.config.vlm import ClusterVLMResolver
         from openviking.storage.viking_fs import init_viking_fs
         from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
         from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
@@ -243,6 +244,7 @@ class IOPlayback:
             self._viking_fs = init_viking_fs(
                 agfs=agfs_client,
                 vector_store=vector_store,
+                vlm_resolver=ClusterVLMResolver(lambda: config),
             )
         self._vector_store = vector_store
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -22,6 +25,7 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
+	ACL                 *ACLSpec
 	To                  string
 	Parent              string
 	CreateParent        *bool
@@ -29,7 +33,6 @@ type AddResourceOptions struct {
 	Reason              string
 	Instruction         string
 	Wait                bool
-	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
 	Include             string
@@ -48,13 +51,19 @@ type AddResourceOptions struct {
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
 	Wait      bool
-	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
 	// TargetURI scopes the operation to a skills root such as
 	// "viking://agent/skills" (account-shared) or a per-user root. A nil
 	// value omits target_uri and lets the server use its default root.
 	TargetURI any
+}
+
+// CompileOptions controls Compile.
+type CompileOptions struct {
+	Instruction string
+	Args        map[string]any
+	Extra       map[string]any
 }
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
@@ -70,8 +79,8 @@ type AdminRegisterUserOptions struct {
 }
 
 // AdminListAccountsOptions controls AdminListAccountsWithOptions.
-// Name uses wildcard (* and ?) matching against account IDs. Pagination is
-// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// Name uses wildcard (* and ?) matching against account IDs. Results are in
+// creation order. Pagination is opt-in: set Limit to page the result; Page is
 // 1-based and only applies when Limit is set.
 type AdminListAccountsOptions struct {
 	Name  string
@@ -80,8 +89,8 @@ type AdminListAccountsOptions struct {
 }
 
 // AdminListUsersOptions controls AdminListUsersWithOptions.
-// Name uses wildcard (* and ?) matching against user IDs. Pagination is
-// opt-in: set Limit to page the (lexicographically ordered) result; Page is
+// Name uses wildcard (* and ?) matching against user IDs. Results are in
+// creation order. Pagination is opt-in: set Limit to page the result; Page is
 // 1-based and only applies when Limit is set.
 type AdminListUsersOptions struct {
 	Limit *int
@@ -130,7 +139,6 @@ type GetSkillOptions struct {
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
 	Wait           bool
-	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
 	TargetURI      any
@@ -142,9 +150,9 @@ type DeleteSkillOptions struct {
 	TargetURI any
 }
 
-// WaitProcessedOptions controls WaitProcessed.
-type WaitProcessedOptions struct {
-	Timeout *float64 `json:"timeout,omitempty"`
+// ObserverStatusOptions controls observer status formatting.
+type ObserverStatusOptions struct {
+	Format string
 }
 
 // ListWatchesOptions controls ListWatches.
@@ -171,56 +179,89 @@ type UpdateWatchOptions struct {
 
 // ListOptions controls List.
 type ListOptions struct {
-	Simple        bool
-	Recursive     bool
-	Output        string
-	AbsLimit      int
-	ShowAllHidden bool
-	NodeLimit     int
-	SortBy        string
-	SortOrder     string
+	Simple          bool
+	Recursive       bool
+	Output          string
+	AbsLimit        int
+	IncludeAbstract *bool
+	IncludeOverview *bool
+	OverviewLimit   int
+	ShowAllHidden   bool
+	NodeLimit       int
+	Offset          int
+	Limit           int
+	SortBy          string
+	SortOrder       string
+	ExtraFields     []string
+	Tags            []string
+	IncludeTags     bool
+}
+
+// ListPage contains a page of directory entries and pagination metadata.
+type ListPage struct {
+	Result  []any
+	HasMore bool
 }
 
 // TreeOptions controls Tree.
 type TreeOptions struct {
-	Output        string
-	AbsLimit      int
-	ShowAllHidden bool
-	NodeLimit     int
-	LevelLimit    *int
+	Output          string
+	AbsLimit        int
+	IncludeAbstract *bool
+	IncludeOverview *bool
+	OverviewLimit   int
+	ShowAllHidden   bool
+	DirectoriesOnly bool
+	NodeLimit       int
+	LevelLimit      *int
+	Offset          int
+	Limit           int
+	ExtraFields     []string
+	Tags            []string
+	IncludeTags     bool
+}
+
+// TreePage contains a page of tree nodes and pagination metadata.
+type TreePage struct {
+	Result  []map[string]any
+	HasMore bool
 }
 
 // RemoveOptions controls Remove.
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
-	Timeout   *float64
 }
 
 // WriteOptions controls Write.
 type WriteOptions struct {
+	ACL            *ACLSpec
 	Mode           string
 	Wait           bool
-	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	Tags           []string
+	TagMode        string
 	Extra          map[string]any
 }
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string  `json:"uri"`
-	Content       *string `json:"content,omitempty"`
-	ContentBase64 *string `json:"content_base64,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
+	URI           string   `json:"uri"`
+	Content       *string  `json:"content,omitempty"`
+	ContentBase64 *string  `json:"content_base64,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	TagMode       string   `json:"tag_mode,omitempty"`
+	ACL           *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait      *bool
-	Timeout   *float64
-	Telemetry any
-	Extra     map[string]any
+	Wait           *bool
+	Telemetry      any
+	ProcessingMode string
+	Extra          map[string]any
 }
 
 // SetTagsOptions controls SetTags.
@@ -237,7 +278,7 @@ type SetTagsOptions struct {
 type ReindexOptions struct {
 	Mode      string
 	Wait      bool
-	DryRun    bool
+	Force     bool
 	Recursive *bool
 	Tags      []string
 	TagMode   string
@@ -246,72 +287,77 @@ type ReindexOptions struct {
 
 // FindOptions controls Find.
 type FindOptions struct {
-	TargetURI         any
-	Image             string
-	Limit             int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	ReadContent       *bool
-	Telemetry         any
-	Since             string
-	Until             string
-	TimeField         string
-	Level             []int
-	Tags              []string
-	Extra             map[string]any
+	EventsTimeDecayProtection string
+	TargetURI                 any
+	Image                     string
+	Limit                     int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	ReadContent               *bool
+	Telemetry                 any
+	Since                     string
+	Until                     string
+	TimeField                 string
+	Level                     []int
+	Tags                      []string
+	Extra                     map[string]any
 }
 
 // SearchOptions controls Search.
 type SearchOptions struct {
-	TargetURI         any
-	Image             string
-	SessionID         string
-	Limit             int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	ReadContent       *bool
-	Telemetry         any
-	Since             string
-	Until             string
-	TimeField         string
-	Level             []int
-	Tags              []string
-	Extra             map[string]any
+	EventsTimeDecayProtection string
+	SearchType                string
+	TargetURI                 any
+	Image                     string
+	SessionID                 string
+	Limit                     int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	ReadContent               *bool
+	Telemetry                 any
+	Since                     string
+	Until                     string
+	TimeField                 string
+	Level                     []int
+	Tags                      []string
+	Extra                     map[string]any
 }
 
 // SearchContextOptions controls server-side context assembly.
 type SearchContextOptions struct {
-	Image             string
-	SessionID         string
-	Limit             *int
-	NodeLimit         *int
-	ScoreThreshold    *float64
-	Filter            map[string]any
-	ContextType       any
-	IncludeProvenance *bool
-	Tags              []string
-	Since             string
-	Until             string
-	TimeField         string
-	QueryExpansion    string
-	MaxTokens         *int
-	Quotas            map[string]int
-	Purpose           string
-	Detail            any
-	DedupTurns        *int
-	ExcludeURIs       []string
-	PeerScope         string
-	OtherPeerPenalty  any
-	Rewrite           any
-	RewriteMaxBullets *int
-	Telemetry         any
-	Extra             map[string]any
+	Image                     string
+	SessionID                 string
+	SearchType                string
+	Limit                     *int
+	NodeLimit                 *int
+	ScoreThreshold            *float64
+	Filter                    map[string]any
+	ContextType               any
+	IncludeProvenance         *bool
+	Tags                      []string
+	Since                     string
+	Until                     string
+	TimeField                 string
+	EventsTimeDecayProtection string
+	QueryExpansion            string
+	MaxTokens                 *int
+	Quotas                    map[string]int
+	Purpose                   string
+	Detail                    any
+	DedupTurns                *int
+	ExcludeURIs               []string
+	PeerScope                 string
+	OtherPeerPenalty          any
+	Rewrite                   any
+	RewriteMaxBullets         *int
+	Telemetry                 any
+	Extra                     map[string]any
 }
 
 // GrepOptions controls Grep.
@@ -320,11 +366,15 @@ type GrepOptions struct {
 	NodeLimit       *int
 	LevelLimit      *int
 	ExcludeURI      string
+	Tags            []string
+	IncludeTags     bool
 }
 
 // GlobOptions controls Glob.
 type GlobOptions struct {
-	NodeLimit *int
+	NodeLimit   *int
+	Tags        []string
+	IncludeTags bool
 }
 
 // CreateSessionOptions controls CreateSession.
@@ -494,6 +544,8 @@ type MatchedContext struct {
 	Content     string   `json:"content,omitempty"`
 	Overview    string   `json:"overview,omitempty"`
 	Category    string   `json:"category,omitempty"`
+	OriginScore *float64 `json:"origin_score,omitempty"`
+	TimeScore   *float64 `json:"time_score,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 	MatchReason string   `json:"match_reason,omitempty"`
 	Tags        []string `json:"tags,omitempty"`

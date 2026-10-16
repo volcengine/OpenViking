@@ -11,6 +11,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.session.compressor_v3 import SessionCompressorV3
 
 
@@ -18,6 +19,7 @@ def create_session_compressor(
     vikingdb: VikingDBManager,
     memory_version: Optional[str] = None,
     skill_processor=None,
+    vlm_resolver: Optional["VLMResolver"] = None,
 ) -> "SessionCompressorV3":
     """
     Create the session compressor.
@@ -37,7 +39,11 @@ def create_session_compressor(
     logger.info("Using v3 memory compressor (v2 + commit streaming train)")
     from openviking.session.compressor_v3 import SessionCompressorV3
 
-    return SessionCompressorV3(vikingdb=vikingdb, skill_processor=skill_processor)
+    return SessionCompressorV3(
+        vikingdb=vikingdb,
+        skill_processor=skill_processor,
+        vlm_resolver=vlm_resolver,
+    )
 
 
 __all__ = [

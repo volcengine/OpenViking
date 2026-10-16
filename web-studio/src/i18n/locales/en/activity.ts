@@ -23,11 +23,15 @@ const activity = {
       shortcut: '⌘ N to create a new session',
     },
     chat: {
+      emptyReadDescription: 'This session has no messages yet.',
+      historyLoadFailed: 'Could not load conversation history: {{error}}',
+      sendFailed: 'Could not send message: {{error}}',
       copy: 'Copy',
       emptyDescription: 'Explore your knowledge base and start a conversation.',
       placeholder: 'Type a message...',
       emptyState: 'Select or create a session to start chatting.',
       thinking: 'Thinking...',
+      generating: 'Generating',
       reasoning: 'Reasoning',
       iteration: 'Round {{count}}',
       toolCall: 'Tool call',
@@ -71,6 +75,7 @@ const activity = {
       loadFailed: 'Could not load memory changes',
       retry: 'Retry',
       empty: 'This session commit did not produce any memory changes.',
+      viewExperienceImpact: 'View impact for this experience',
     },
     empty: {
       description: 'Select a session from the list or create a new one.',
@@ -135,11 +140,11 @@ const activity = {
         'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
-  playground: {
+  filesystem: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     copyFailed: 'Copy failed',
-    resizeContext: 'Resize context tree width',
+    resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
     tabs: {
@@ -153,11 +158,11 @@ const activity = {
     addResource: {
       title: 'Add resource',
       description:
-        'After it finishes, the context tree on the left refreshes and the Terminal on the right can locate the new resource.',
+        'After it finishes, the filesystem on the left refreshes and the Terminal on the right can locate the new resource.',
       submitted: 'Resource add task submitted',
     },
     explorer: {
-      title: 'Context tree',
+      title: 'Filesystem',
       addResource: 'Add resource',
       abstractLevel: 'L0',
       collapseDirectory: 'Collapse {{name}}',
@@ -176,19 +181,19 @@ const activity = {
     agent: {
       history: 'Session history',
       newSession: 'New session',
-      creating: 'Creating Playground session...',
+      creating: 'Creating Filesystem session...',
       detectingBot: 'Detecting bot mode...',
       createFailed: 'Failed to create session: {{error}}',
       retry: 'Retry',
       botDisabledFooter: 'Enable bot mode to chat with the Agent',
       historyTitle: 'Agent session history',
       historyDescription:
-        'Only sessions used by the Agent panel are shown here; a new session opens a blank Agent context.',
+        'Conversations are shared with VikingBot, including legacy Agent sessions saved in this browser.',
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
-        'Creating the Playground session timed out. Check your connection settings and try again.',
-      newSessionTitle: 'New Playground session',
+        'Creating the Filesystem session timed out. Check your connection settings and try again.',
+      newSessionTitle: 'New Filesystem session',
       botPrompt: {
         title: 'Please enable bot mode',
         description:
@@ -213,7 +218,7 @@ const activity = {
       historyDescription: 'Review commands run in this browser.',
       clearHistory: 'Clear command history',
       noHistory: 'No command history',
-      welcomeTitle: 'Terminal connected to the context tree',
+      welcomeTitle: 'Terminal connected to the filesystem',
       welcomeBody:
         'Run /status, /ls, /search, /read, /add-resource. /search is global by default; add --scope . to use the current directory, or --scope viking://resources/... to limit it to a directory.',
       scopeLabel: 'cwd: {{uri}}',
@@ -238,7 +243,7 @@ const activity = {
         'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
       addResourceTitle: 'Add resource',
       sessionUsage:
-        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|extract|message|used|tool-results|tool-result|tool-search|delete] ...',
+        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: 'Usage: /session delete <session_id>',
       sessionMissing:
         'No active session. Open the Agent panel to create one, or pass a session_id.',
@@ -294,7 +299,7 @@ const activity = {
         sessionAction: {
           name: 'subcommand',
           description:
-            'current, list, create, switch, get, context, messages, archive, commit, extract, message, used, tool-results, tool-result, tool-search, delete.',
+            'current, list, create, switch, get, context, messages, archive, commit, message, tool-results, tool-result, tool-search, delete.',
         },
         sessionId: {
           name: 'session_id',
@@ -313,15 +318,6 @@ const activity = {
           name: 'content',
           description:
             'For the message subcommand. Text to append to the session.',
-        },
-        contexts: {
-          name: '--context uri',
-          description:
-            'Repeatable for the used subcommand. Records context actually used.',
-        },
-        skillJson: {
-          name: '--skill-json JSON',
-          description: 'For the used subcommand. Records skill usage details.',
         },
         keepRecent: {
           name: '--keep-recent count',
@@ -459,17 +455,9 @@ const activity = {
             code: '/session commit [session_id] --keep-recent 10',
             description: 'Archive and trigger memory extraction',
           },
-          extract: {
-            code: '/session extract [session_id]',
-            description: 'Extract memories from a session',
-          },
           message: {
             code: '/session message [session_id] user hello',
             description: 'Append a message to a session',
-          },
-          used: {
-            code: '/session used [session_id] --context viking://resources/...',
-            description: 'Record actually used context or skill',
           },
           toolResults: {
             code: '/session tool-results [session_id] --limit 20',

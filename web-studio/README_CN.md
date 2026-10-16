@@ -63,6 +63,10 @@ curl http://127.0.0.1:1933/bot/v1/health
 
 ### 2. 启动 Web Studio
 
+本地开发、构建和测试请使用 Node.js 22.x，与 Studio 构建流程保持一致。
+
+当前 Vitest/jsdom 组合在 Node.js 26 下可能出现 `localStorage` 测试错误。遇到该问题时，请切换到 Node.js 22.x，并在 `web-studio/` 目录运行 `npm ci && npm test`。
+
 ```bash
 cd web-studio
 npm install
@@ -82,6 +86,12 @@ VITE_OV_BASE_URL=http://127.0.0.1:1933 npm run dev
 ```
 
 连接弹窗仍可以在运行时覆盖 server URL、API key、account ID 和 user ID。
+
+### 文件系统页面
+
+打开 `/filesystem` 可浏览和预览上下文、运行终端命令或使用 Agent 面板。Studio 部署在 `/studio` 下时，页面地址为 `/studio/filesystem`。
+
+原 `/playground` 地址会重定向至 `/filesystem`，并保留选中的文件、目录、面板、会话和 URL 片段。浏览器中已有的布局和历史记录仍可使用。
 
 ## 连接与鉴权
 
@@ -341,6 +351,7 @@ server {
 官方 OpenViking 镜像可以作为 API server 依赖：
 
 ```bash
+# 推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \

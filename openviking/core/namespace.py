@@ -13,7 +13,7 @@ from openviking_cli.utils.uri import VikingURI
 
 _CONTENT_TYPES_BY_SCOPE = {
     "user": {"memories": "memory", "resources": "resource", "skills": "skill"},
-    "agent": {"memories": "memory", "resources": "resource", "skills": "skill"},
+    "agent": {"skills": "skill"},
 }
 _PEER_CONTENT_SEGMENTS = frozenset({"memories", "resources"})
 _USER_RELATIVE_ROOT_SEGMENTS = frozenset({"peers", "privacy", "sessions"})
@@ -54,10 +54,6 @@ class UriClassification:
     @property
     def is_user_namespace_root(self) -> bool:
         return _is_namespace_root_parts(self.parts, "user")
-
-    @property
-    def is_agent_namespace_root(self) -> bool:
-        return self.scope == "agent" and len(self.parts) == 2
 
     @property
     def is_memory_root(self) -> bool:
@@ -119,8 +115,6 @@ def _content_segment_index(parts: tuple[str, ...]) -> Optional[int]:
     """Return the content segment for a supported namespace shape."""
     if len(parts) >= 2 and parts[:2] == ("agent", "skills"):
         return 1
-    if len(parts) >= 3 and parts[0] == "agent" and parts[2] in _CONTENT_TYPES_BY_SCOPE["agent"]:
-        return 2
     if len(parts) < 2 or parts[0] != "user":
         return None
     if len(parts) >= 5 and parts[2] == "peers" and parts[4] in _PEER_CONTENT_SEGMENTS:
@@ -180,13 +174,13 @@ def is_session_uri(uri: str) -> bool:
     return len(parts) >= 3 and parts[0] == "user" and parts[2] == "sessions"
 
 
-AGENT_SHARED_ROOTS: tuple[str, ...] = ("viking://agent/skills",)
+AGENT_SKILLS_ROOT = "viking://agent/skills"
 
 
 def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
-        *AGENT_SHARED_ROOTS,
+        "viking://agent",
         canonical_user_root(ctx),
     ]
 
@@ -329,17 +323,12 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
     except NamespaceShapeError:
         return False
 
-    if target.scope in {"", "resources", "temp", "queue"}:
+    if target.scope in {"", "resources", "agent", "temp", "queue"}:
         return True
     if target.scope == "upload":
         return False
     if target.scope == "user":
         if target.owner_user_id and target.owner_user_id != ctx.user.user_id:
-            return False
-        return True
-    if target.scope == "agent":
-        parts = uri_parts(target.uri)
-        if ctx.actor_peer_id and len(parts) >= 2 and parts[1] != ctx.actor_peer_id:
             return False
         return True
     return True

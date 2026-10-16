@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Regression tests for subagent prompt skill loading."""
 
-import sys
+import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from vikingbot.agent.subagent import SubagentManager  # noqa: E402
-from vikingbot.bus.queue import MessageBus  # noqa: E402
+from vikingbot.agent.subagent import SubagentManager
+from vikingbot.agent.tools.spawn import WaitSubagentsTool
+from vikingbot.bus.queue import MessageBus
 
 
 def _write_skill(workspace: Path, name: str, content: str) -> None:
@@ -57,7 +56,6 @@ Read this only when needed.
     assert "# Active Skills" in prompt
     assert "### Skill: always-skill" in prompt
     assert "Always-loaded instruction." in prompt
-    assert "description: Always active instructions" not in prompt
     assert "# Skills" in prompt
     assert "<name>normal-skill</name>" in prompt
     assert "<description>Normal on-demand instructions</description>" in prompt
@@ -122,3 +120,106 @@ Session-loaded instruction.
     assert "### Skill: session-skill" in prompt
     assert "Session-loaded instruction." in prompt
     assert "Global-loaded instruction." not in prompt
+
+
+@pytest.mark.asyncio
+async def test_subagent_spawn_rejects_tasks_above_concurrency_limit(tmp_path, monkeypatch):
+    blocker = asyncio.Event()
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
+        workspace=tmp_path,
+        bus=MessageBus(),
+        config=SimpleNamespace(agents=SimpleNamespace(subagent_max_concurrency=1)),
+    )
+
+    async def blocked(*args, **kwargs):
+        await blocker.wait()
+
+    monkeypatch.setattr(manager, "_run_subagent", blocked)
+    session_key = SimpleNamespace()
+
+    first = await manager.spawn("first", session_key)
+    second = await manager.spawn("second", session_key)
+
+    assert "started" in first
+    assert second == "Error: Subagent concurrency limit reached (1)"
+    assert manager.get_running_count() == 1
+
+    tasks = list(manager._running_tasks.values())
+    blocker.set()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.sleep(0)
+
+    third = await manager.spawn("third", session_key)
+
+    assert "started" in third
+    await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_managed_subagent_queue_collects_failure_and_cancels_pending_work(tmp_path):
+    """Collection waits for outcomes, is cancellable, and preserves queued work until cleanup."""
+    started, release = asyncio.Queue(), asyncio.Event()
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "fake"),
+        workspace=tmp_path,
+        bus=MessageBus(),
+        config=SimpleNamespace(agents=SimpleNamespace(subagent_max_concurrency=1)),
+    )
+
+    async def run(task_id, task, session_key):
+        await started.put(task)
+        if task == "first":
+            await release.wait()
+            raise ValueError("source unreadable")
+        await asyncio.Event().wait()
+
+    manager.task_runner = run
+    collecting = None
+    try:
+        await manager.spawn("first", SimpleNamespace())
+        await manager.spawn("second", SimpleNamespace())
+        assert await asyncio.wait_for(started.get(), 2) == "first"
+        assert started.empty()
+        assert "queue is full" in await manager.spawn("third", SimpleNamespace())
+        assert manager.begin_submission().startswith("Error:")
+        report = json.loads(
+            await asyncio.wait_for(
+                WaitSubagentsTool(manager).execute(SimpleNamespace(), block=False), 2
+            )
+        )
+        assert report["results"] == []
+        assert len(report["running"]) == len(report["queued"]) == 1
+        assert report["max_concurrency"] == 1 and report["free_worker_slots"] == 0
+        assert report["queue_capacity"] == report["capacity"] == 0
+        collecting = asyncio.create_task(WaitSubagentsTool(manager).execute(SimpleNamespace()))
+        await asyncio.sleep(0)
+        assert not collecting.done()
+        collecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await collecting
+        assert manager.get_running_count() == 1
+        collecting = asyncio.create_task(WaitSubagentsTool(manager).execute(SimpleNamespace()))
+        release.set()
+        assert await asyncio.wait_for(started.get(), 2) == "second"
+        report = json.loads(await asyncio.wait_for(collecting, 2))
+        assert len(report["results"]) == 1 and report["capacity"] == 1
+        assert report["queue_capacity"] == 1 and report["free_worker_slots"] == 0
+        assert report["results"][0]["status"] == "failed"
+        assert report["results"][0]["error"] == "source unreadable"
+        assert not (await manager.wait(block=False))["results"]
+        assert "accepted" in await manager.spawn("third", SimpleNamespace())
+        await manager.cancel_all()
+        report = await manager.wait()
+        assert report["running"] == report["queued"] == []
+        assert report["free_worker_slots"] == 1
+        assert report["queue_capacity"] == report["capacity"] == 2
+        assert started.empty()
+        assert manager.get_running_count() == 0
+        assert "closed" in await manager.spawn("late", SimpleNamespace())
+        assert manager.bus.inbound.empty()
+    finally:
+        await manager.cancel_all()
+        if collecting is not None:
+            collecting.cancel()
+            await asyncio.gather(collecting, return_exceptions=True)

@@ -23,14 +23,20 @@ def _normalize_kimi_api_base(api_base: str | None) -> str:
     return f"{normalized}/v1"
 
 
+def normalize_kimi_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply Kimi defaults; the embedded gateway imports credentials through this too."""
+    normalized = dict(config)
+    model = str(normalized.get("model") or DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
+    normalized["provider"] = "kimi"
+    normalized["api_base"] = _normalize_kimi_api_base(normalized.get("api_base"))
+    normalized["model"] = KIMI_LEGACY_MODEL_ALIASES.get(model, model)
+    extra_headers = dict(normalized.get("extra_headers") or {})
+    if not any(key.lower() == "user-agent" for key in extra_headers):
+        extra_headers["User-Agent"] = DEFAULT_KIMI_USER_AGENT
+    normalized["extra_headers"] = extra_headers
+    return normalized
+
+
 class KimiVLM(OpenAIVLM):
     def __init__(self, config: Dict[str, Any]):
-        normalized = dict(config)
-        model = str(normalized.get("model") or DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
-        normalized["provider"] = "kimi"
-        normalized["api_base"] = _normalize_kimi_api_base(normalized.get("api_base"))
-        normalized["model"] = KIMI_LEGACY_MODEL_ALIASES.get(model, model)
-        extra_headers = dict(normalized.get("extra_headers") or {})
-        extra_headers.setdefault("User-Agent", DEFAULT_KIMI_USER_AGENT)
-        normalized["extra_headers"] = extra_headers
-        super().__init__(normalized)
+        super().__init__(normalize_kimi_config(config))

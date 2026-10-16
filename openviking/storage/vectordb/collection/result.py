@@ -35,11 +35,31 @@ class SearchItemResult:
     id: Any = None
     fields: Optional[Dict[str, Any]] = None
     score: Optional[float] = None
+    origin_score: Optional[float] = None
+    addition_score: Optional[float] = None
 
 
 @dataclass
 class SearchResult:
     data: List[SearchItemResult] = field(default_factory=list)
+
+
+def parse_remote_search_result(payload: Dict[str, Any]) -> SearchResult:
+    """Parse the common VikingDB search response, including score details."""
+    result = SearchResult()
+    if not isinstance(payload, dict) or "data" not in payload:
+        return result
+    result.data = [
+        SearchItemResult(
+            id=item.get("id"),
+            fields=item.get("fields"),
+            score=item.get("score"),
+            origin_score=item.get("origin_score"),
+            addition_score=item.get("addition_score"),
+        )
+        for item in payload.get("data", [])
+    ]
+    return result
 
 
 @dataclass

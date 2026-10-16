@@ -143,8 +143,6 @@ class EncryptionConfig(BaseModel):
         default_factory=dict, description="Additional encryption-specific parameters"
     )
 
-    model_config = {"extra": "forbid"}
-
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EncryptionConfig":
         """Create configuration from dictionary.

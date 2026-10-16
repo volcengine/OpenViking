@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Legacy API Key management (original implementation)."""
+"""File-backed account and API key store over the AGFS registry layout."""
 
 import asyncio
 import copy
@@ -8,21 +8,30 @@ import fnmatch
 import hashlib
 import hmac
 import json
-import secrets
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import VerificationError
+from typing_extensions import deprecated
 
+from openviking.core.identifiers import validate_identifier_length
 from openviking.pyagfs import AGFSAlreadyExistsError, AGFSNotFoundError, AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
+from openviking.server.account_stores.base import AccountStore
+from openviking.server.account_stores.models import (
+    AccountSummary,
+    DeletionRecord,
+    GroupSummary,
+    UsersPage,
+    UserSummary,
+)
 from openviking.server.api_keys.models import (
     AccountInfo,
     UserKeyEntry,
     validate_account_user_role,
 )
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import Role
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
@@ -30,7 +39,6 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
-    UnauthenticatedError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -44,6 +52,7 @@ logger = get_logger(__name__)
 ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
 GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
+_MAX_FILE_ACCOUNT_ID_BYTES = 255
 
 
 # Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
@@ -65,6 +74,14 @@ def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
     return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
+def validate_file_account_id(account_id: str) -> None:
+    """Reject new account IDs that cannot be used as file path components."""
+    if len(account_id.encode("utf-8")) > _MAX_FILE_ACCOUNT_ID_BYTES:
+        raise InvalidArgumentError(
+            f"account_id must not exceed {_MAX_FILE_ACCOUNT_ID_BYTES} UTF-8 bytes."
+        )
+
+
 def _paginate(items: list, limit: int | None, page: int) -> list:
     """Slice a list by 1-based ``page`` of ``limit`` items.
 
@@ -79,34 +96,61 @@ def _paginate(items: list, limit: int | None, page: int) -> list:
     return items[start : start + limit]
 
 
-class LegacyAPIKeyManager:
-    """Manages API keys for multi-tenant authentication (legacy implementation)."""
+class FileStore(AccountStore):
+    """File-backed account and API key store over the legacy AGFS layout."""
 
     def __init__(
         self,
-        root_key: str,
         viking_fs: VikingFS,
+        *,
+        params: dict[str, object] | None = None,
         api_key_hashing_enabled: bool = False,
+        watch_enabled: bool = False,
+        watch_interval_seconds: float = 30.0,
     ):
-        """Initialize APIKeyManager.
+        params = dict(params or {})
+        reserved = {
+            "viking_fs",
+            "api_key_hashing_enabled",
+        }
+        if overridden := reserved.intersection(params):
+            names = ", ".join(sorted(overridden))
+            raise InvalidArgumentError(
+                f"account_store.params cannot override framework parameters: {names}"
+            )
+        configured_watch_enabled = params.pop("watch_enabled", watch_enabled)
+        configured_watch_interval = params.pop(
+            "watch_interval_seconds", watch_interval_seconds
+        )
+        if not isinstance(configured_watch_enabled, bool):
+            raise InvalidArgumentError("watch_enabled must be a boolean")
+        if not isinstance(configured_watch_interval, (int, float)):
+            raise InvalidArgumentError("watch_interval_seconds must be a number")
+        if params:
+            raise InvalidArgumentError(
+                f"Unknown file account store parameters: {', '.join(sorted(params))}"
+            )
 
-        Args:
-            root_key: Global root API key for administrative access.
-            viking_fs: VikingFS client for persistent storage of user keys.
-            api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
-                Default: false - rely on file-level AES encryption for protection.
-        """
-        self._root_key = root_key
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._watch_enabled = configured_watch_enabled
+        self._watch_interval_seconds = (
+            float(configured_watch_interval)
+            if configured_watch_interval > 0
+            else 30.0
+        )
+        self._watch_task: Optional[asyncio.Task] = None
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
         self._user_group_ids: Dict[tuple[str, str], tuple[str, ...]] = {}
-        # Serializes reload() so overlapping refreshes can't interleave.
+        # Serializes internal refreshes so overlapping reloads can't interleave.
         self._reload_lock = asyncio.Lock()
-        self._user_deletion_lock = asyncio.Lock()
+        # Serializes all mutations made by the unified manager in this process.
+        # File locks remain responsible for inter-instance coordination.
+        self._mutation_lock = asyncio.Lock()
+        self._deletion_lock = asyncio.Lock()
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
@@ -135,38 +179,91 @@ class LegacyAPIKeyManager:
             if not self._prefix_index[key_prefix]:
                 del self._prefix_index[key_prefix]
 
-    async def _rollback_create_account(self, account_id: str) -> None:
+    async def _rollback_create_account(self, account_id: str, *, account_was_created: bool) -> None:
         """Best-effort rollback for partially persisted account creation."""
         self._discard_account_state(account_id)
+        if not account_was_created:
+            return
         try:
-            await self._save_accounts_json()
+            await self._save_accounts_json(delete_account_ids={account_id})
         except Exception:
             logger.exception("Failed to persist rollback for account %s", account_id)
 
     async def load(self) -> None:
         """Load keys into memory (writable startup path; migrates plaintext; see reload())."""
-        accounts_data = await self._read_json(ACCOUNTS_PATH)
-        if accounts_data is None:
-            # First run: create default account
-            now = datetime.now(timezone.utc).isoformat()
-            accounts_data = {"accounts": {"default": {"created_at": now}}}
-            await self._write_json(ACCOUNTS_PATH, accounts_data)
+        async with self._mutation_lock:
+            accounts_data = await self._read_json(ACCOUNTS_PATH)
+            if accounts_data is None:
+                # First run: create default account
+                now = datetime.now(timezone.utc).isoformat()
+                accounts_data = {"accounts": {"default": {"created_at": now}}}
+                await self._write_json(ACCOUNTS_PATH, accounts_data)
 
-        accounts, prefix_index, user_group_ids = await self._build_state(
-            accounts_data, allow_migration=True
-        )
-        self._accounts = accounts
-        self._prefix_index = prefix_index
-        self._user_group_ids = user_group_ids
+            accounts, prefix_index, user_group_ids = await self._build_state(
+                accounts_data, allow_migration=True
+            )
+            self._accounts = accounts
+            self._prefix_index = prefix_index
+            self._user_group_ids = user_group_ids
+            logger.info(
+                "FileStore loaded: %d accounts, %d user keys",
+                len(self._accounts),
+                sum(len(info.users) for info in self._accounts.values()),
+            )
+        self._start_watcher()
 
+    def _start_watcher(self) -> None:
+        if not self._watch_enabled or self._watch_task is not None:
+            return
+        self._watch_task = asyncio.create_task(self._watch_store())
         logger.info(
-            "LegacyAPIKeyManager loaded: %d accounts, %d user keys",
-            len(self._accounts),
-            sum(len(info.users) for info in self._accounts.values()),
+            "FileStore watcher started (interval=%.1fs)",
+            self._watch_interval_seconds,
         )
 
-    async def reload(self) -> None:
+    async def close(self) -> None:
+        if self._watch_task is None:
+            return
+        self._watch_task.cancel()
+        try:
+            await self._watch_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._watch_task = None
+
+    async def _watch_store(self) -> None:
+        try:
+            last_signature = await self._compute_store_signature()
+        except Exception:
+            logger.warning(
+                "Initial account store signature failed; watcher will retry", exc_info=True
+            )
+            last_signature = None
+
+        while True:
+            await asyncio.sleep(self._watch_interval_seconds)
+            try:
+                signature = await self._compute_store_signature()
+            except Exception:
+                logger.debug("Account store signature check failed", exc_info=True)
+                continue
+            if signature == last_signature:
+                continue
+            try:
+                await self._reload()
+                last_signature = signature
+                logger.info("Account store change detected; provider cache reloaded")
+            except Exception:
+                logger.warning("Account store reload failed; will retry", exc_info=True)
+
+    async def _reload(self) -> None:
         """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
+        async with self._mutation_lock:
+            await self._reload_unlocked()
+
+    async def _reload_unlocked(self) -> None:
+        """Reload while holding ``_mutation_lock``."""
         async with self._reload_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
@@ -180,12 +277,75 @@ class LegacyAPIKeyManager:
             self._accounts = accounts
             self._prefix_index = prefix_index
             self._user_group_ids = user_group_ids
-
             logger.debug(
-                "LegacyAPIKeyManager reloaded: %d accounts, %d user keys",
+                "FileStore reloaded: %d accounts, %d user keys",
                 len(self._accounts),
                 sum(len(info.users) for info in self._accounts.values()),
             )
+
+    async def _refresh_accounts_from_store_unlocked(self) -> None:
+        accounts_data = await self._read_json(ACCOUNTS_PATH)
+        if accounts_data is None:
+            return
+        persisted_accounts = accounts_data.get("accounts", {})
+
+        for account_id in set(self._accounts) - set(persisted_accounts):
+            self._discard_account_state(account_id)
+        for account_id, info in persisted_accounts.items():
+            created_at = info.get("created_at", "")
+            account = self._accounts.get(account_id)
+            if account is not None and account.created_at != created_at:
+                self._discard_account_state(account_id)
+                account = None
+            if account is None:
+                self._accounts[account_id] = AccountInfo(
+                    created_at=created_at,
+                    groups_loaded=False,
+                    deletion=info.get("deletion"),
+                )
+            else:
+                account.created_at = created_at
+                account.deletion = info.get("deletion")
+
+    async def _refresh_account_users_from_store_unlocked(self, account_id: str) -> None:
+        users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
+        users_data = await self._read_json(users_path)
+        account = self._accounts.get(account_id)
+        if users_data is None and account is None:
+            raise NotFoundError(account_id, "account")
+
+        users = users_data.get("users", {}) if users_data else {}
+        prefix_entries: list[tuple[str, UserKeyEntry]] = []
+        for user_id, user_info in users.items():
+            key_or_hash = user_info.get("key", "")
+            if not key_or_hash:
+                continue
+            key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
+            if key_prefix:
+                prefix_entries.append(
+                    (
+                        key_prefix,
+                        UserKeyEntry(
+                            account_id=account_id,
+                            user_id=user_id,
+                            role=Role(user_info.get("role", "user")),
+                            key_or_hash=key_or_hash,
+                            is_hashed=key_or_hash.startswith("$argon2"),
+                        ),
+                    )
+                )
+
+        if account is None:
+            account = AccountInfo(created_at="", groups_loaded=False)
+            self._accounts[account_id] = account
+
+        for user_id, user_info in account.users.items():
+            self._remove_key_index_entry(account_id, user_id, user_info)
+
+        account.users = users
+        for key_prefix, entry in prefix_entries:
+            self._prefix_index.setdefault(key_prefix, []).append(entry)
+        self._rebuild_account_group_index(account_id)
 
     async def _build_state(
         self, accounts_data: dict, *, allow_migration: bool
@@ -211,11 +371,14 @@ class LegacyAPIKeyManager:
                 created_at=info.get("created_at", ""),
                 users=users,
                 groups=groups,
+                deletion=info.get("deletion"),
             )
-            user_group_ids.update({
-                (account_id, user_id): group_ids
-                for user_id, group_ids in self._group_memberships(users, groups).items()
-            })
+            user_group_ids.update(
+                {
+                    (account_id, user_id): group_ids
+                    for user_id, group_ids in self._group_memberships(users, groups).items()
+                }
+            )
 
             for user_id, user_info in users.items():
                 key_or_hash = user_info.get("key", "")
@@ -234,7 +397,7 @@ class LegacyAPIKeyManager:
                     key_prefix = self._get_key_prefix(key_or_hash)
                     user_info["key"] = stored_key
                     user_info["key_prefix"] = key_prefix
-                    await self._save_users_json_for(account_id, accounts)
+                    await self._save_users_json(account_id, {user_id: user_info})
                     logger.info("Migrated API key for user %s in account %s", user_id, account_id)
                 else:
                     # Keep plaintext (hashing off or read-only refresh); prefix on the fly.
@@ -258,7 +421,7 @@ class LegacyAPIKeyManager:
 
         return accounts, prefix_index, user_group_ids
 
-    async def compute_store_signature(self) -> tuple:
+    async def _compute_store_signature(self) -> tuple:
         """Return a cheap (path, size, modTime) signature over accounts.json + all users.json."""
         signature: list[tuple] = []
 
@@ -293,195 +456,311 @@ class LegacyAPIKeyManager:
         mod_time = info.get("modTime", info.get("mod_time", info.get("mtime")))
         return (path, size, mod_time)
 
-    def resolve(self, api_key: str) -> ResolvedIdentity:
-        """Resolve an API key to identity. Sequential matching: root key first, then user key index."""
-        if not api_key:
-            raise UnauthenticatedError("Missing API Key")
-
-        if hmac.compare_digest(api_key, self._root_key):
-            return ResolvedIdentity(role=Role.ROOT)
-
-        # Use prefix index to quickly locate candidate keys
-        key_prefix = self._get_key_prefix(api_key)
-        candidates = self._prefix_index.get(key_prefix, [])
-
-        for entry in candidates:
-            if entry.is_hashed:
-                # Verify hashed key
-                if self._verify_api_key(api_key, entry.key_or_hash):
-                    return ResolvedIdentity(
-                        role=entry.role,
-                        account_id=entry.account_id,
-                        user_id=entry.user_id,
-                    )
-            else:
-                # Verify plaintext key
-                if hmac.compare_digest(api_key, entry.key_or_hash):
-                    return ResolvedIdentity(
-                        role=entry.role,
-                        account_id=entry.account_id,
-                        user_id=entry.user_id,
-                    )
-
-        raise UnauthenticatedError("Invalid API Key")
-
-    async def create_account(
+    async def _create_account_identity(
         self,
         account_id: str,
         admin_user_id: str,
-        seed: Optional[str] = None,
-    ) -> str:
-        """Create a new account (workspace) with its first admin user.
-
-        Returns the admin user's API key (legacy format).
-        """
-        # Validate account_id and user_id format
-        verr = validate_account_id(account_id)
-        if verr:
-            raise InvalidArgumentError(verr)
-        verr = validate_user_id(admin_user_id)
-        if verr:
-            raise InvalidArgumentError(verr)
-
+        api_key: str | None = None,
+    ) -> None:
+        """Create an account and its first admin, optionally with a credential."""
+        if error := validate_account_id(account_id):
+            raise InvalidArgumentError(error)
+        # Only new accounts: existing remote-backed identities remain readable.
+        validate_file_account_id(account_id)
+        if error := validate_user_id(admin_user_id):
+            raise InvalidArgumentError(error)
+        if error := validate_identifier_length(admin_user_id, "admin_user_id"):
+            raise InvalidArgumentError(error)
         if account_id in self._accounts:
             raise AlreadyExistsError(account_id, "account")
 
         now = datetime.now(timezone.utc).isoformat()
-        key = (
-            derive_seeded_api_key_secret(admin_user_id, seed)
-            if seed is not None
-            else self._generate_api_key()
-        )
-
-        if self._api_key_hashing_enabled:
-            stored_key = self._hash_api_key(key)
-            is_hashed = True
-            key_prefix = self._get_key_prefix(key)
-        else:
-            stored_key = key
-            is_hashed = False
-            key_prefix = self._get_key_prefix(key)
-
-        user_info = {
-            "role": "admin",
-            "key": stored_key,
-        }
-        if self._api_key_hashing_enabled:
-            user_info["key_prefix"] = key_prefix
-
+        user_info = {"role": "admin"}
+        if api_key is not None:
+            user_info["key"] = (
+                self._hash_api_key(api_key)
+                if self._api_key_hashing_enabled
+                else api_key
+            )
+            if self._api_key_hashing_enabled:
+                user_info["key_prefix"] = self._get_key_prefix(api_key)
         self._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
             groups={},
         )
-
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=admin_user_id,
-            role=Role.ADMIN,
-            key_or_hash=stored_key,
-            is_hashed=is_hashed,
-        )
-
-        # Add to prefix index
-        if key_prefix:
-            if key_prefix not in self._prefix_index:
-                self._prefix_index[key_prefix] = []
-            self._prefix_index[key_prefix].append(entry)
-
+        account_was_created = False
         try:
-            await self._save_accounts_json()
-            await self._save_users_json(account_id)
+            created = await self._save_accounts_json(
+                updated_account_ids={account_id},
+                reject_existing_account_ids={account_id},
+            )
+            account_was_created = account_id in created
+            await self._save_users_json(
+                account_id,
+                {admin_user_id: user_info},
+                replace_existing=account_was_created,
+            )
             await self._write_groups_json(account_id, {})
         except Exception:
-            await self._rollback_create_account(account_id)
+            await self._rollback_create_account(
+                account_id, account_was_created=account_was_created
+            )
             raise
-        return key
 
-    async def delete_account(self, account_id: str) -> None:
+    async def _delete_account_identity(self, account_id: str) -> None:
         """Delete an account and remove all its user keys from the index."""
         if account_id not in self._accounts:
             raise NotFoundError(account_id, "account")
 
+        await self._save_accounts_json(delete_account_ids={account_id})
         self._discard_account_state(account_id)
 
-        await self._save_accounts_json()
-
-    async def register_user(
+    async def _create_user_identity(
         self,
         account_id: str,
         user_id: str,
         role: str = "user",
-        seed: Optional[str] = None,
-    ) -> str:
-        """Register a new user in an account. Returns the user's API key (legacy format)."""
+        *,
+        api_key: str | None = None,
+    ) -> None:
+        """Create a user, optionally including its initial API key."""
         resolved_role = validate_account_user_role(role)
-        # Validate user_id format
-        verr = validate_user_id(user_id)
-        if verr:
-            raise InvalidArgumentError(verr)
-
+        if error := validate_user_id(user_id):
+            raise InvalidArgumentError(error)
+        if error := validate_identifier_length(user_id, "user_id"):
+            raise InvalidArgumentError(error)
+        self._ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
         if user_id in account.users:
             raise AlreadyExistsError(user_id, "user")
 
-        key = (
-            derive_seeded_api_key_secret(user_id, seed)
-            if seed is not None
-            else self._generate_api_key()
-        )
-
-        if self._api_key_hashing_enabled:
-            stored_key = self._hash_api_key(key)
-            is_hashed = True
-            key_prefix = self._get_key_prefix(key)
-        else:
-            stored_key = key
-            is_hashed = False
-            key_prefix = self._get_key_prefix(key)
-
-        user_info = {
-            "role": resolved_role,
-            "key": stored_key,
-        }
-        if self._api_key_hashing_enabled:
-            user_info["key_prefix"] = key_prefix
-
+        user_info = {"role": resolved_role}
+        if api_key is not None:
+            stored_key = (
+                self._hash_api_key(api_key)
+                if self._api_key_hashing_enabled
+                else api_key
+            )
+            user_info["key"] = stored_key
+            if self._api_key_hashing_enabled:
+                user_info["key_prefix"] = self._get_key_prefix(api_key)
         account.users[user_id] = user_info
+        try:
+            await self._save_users_json(
+                account_id,
+                {user_id: user_info},
+                reject_existing_user_ids={user_id},
+            )
+        except Exception:
+            account.users.pop(user_id, None)
+            raise
 
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=user_id,
-            role=resolved_role,
-            key_or_hash=stored_key,
-            is_hashed=is_hashed,
-        )
-
-        # Add to prefix index
-        if key_prefix:
-            if key_prefix not in self._prefix_index:
-                self._prefix_index[key_prefix] = []
-            self._prefix_index[key_prefix].append(entry)
-
-        await self._save_users_json(account_id)
-        return key
-
-    async def begin_user_deletion(
+    async def _set_user_key(
         self,
         account_id: str,
         user_id: str,
+        api_key: str,
+        *,
+        rotate: bool,
+    ) -> None:
+        """Persist one credential in the legacy user record."""
+        self._ensure_account_active(account_id)
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        user_info = account.users.get(user_id)
+        if user_info is None:
+            raise NotFoundError(user_id, "user")
+        if user_info.get("deletion"):
+            raise FailedPreconditionError("User deletion is in progress")
+        if user_info.get("key") and not rotate:
+            raise AlreadyExistsError(user_id, "API key")
+
+        material = (
+            self._hash_api_key(api_key)
+            if self._api_key_hashing_enabled
+            else api_key
+        )
+        old_user_info = copy.deepcopy(user_info)
+        self._remove_key_index_entry(account_id, user_id, old_user_info)
+        user_info["key"] = material
+        if material.startswith("$argon2"):
+            user_info["key_prefix"] = self._get_key_prefix(api_key)
+        else:
+            user_info.pop("key_prefix", None)
+        try:
+            await self._save_users_json(account_id, {user_id: user_info})
+        except Exception:
+            account.users[user_id] = old_user_info
+            self._rebuild_prefix_index()
+            raise
+
+    async def _revoke_user_keys(
+        self, account_id: str, user_id: str | None = None
+    ) -> None:
+        """Remove matching credentials from legacy user records."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            return
+        targets = [user_id] if user_id is not None else list(account.users)
+        updates = {}
+        originals = {}
+        for target in targets:
+            user_info = account.users.get(target)
+            if user_info is None or not user_info.get("key"):
+                continue
+            originals[target] = copy.deepcopy(user_info)
+            self._remove_key_index_entry(account_id, target, user_info)
+            user_info["key"] = ""
+            user_info.pop("key_prefix", None)
+            updates[target] = user_info
+        if updates:
+            try:
+                await self._save_users_json(account_id, updates)
+            except Exception:
+                account.users.update(originals)
+                self._rebuild_prefix_index()
+                raise
+
+    async def ensure_trusted_identities(self, identities: Dict[str, set[str]]) -> dict[str, int]:
+        """Merge trusted identities into the registry without creating API keys."""
+        async with self._mutation_lock:
+            return await self._ensure_trusted_identities_unlocked(identities)
+
+    async def _ensure_trusted_identities_unlocked(
+        self, identities: Dict[str, set[str]]
+    ) -> dict[str, int]:
+        normalized = {
+            account_id: set(user_ids)
+            for account_id, user_ids in identities.items()
+            if user_ids
+        }
+        if not normalized:
+            return {"created_accounts": 0, "created_users": 0}
+
+        for account_id, user_ids in normalized.items():
+            error = validate_account_id(account_id)
+            if error:
+                raise InvalidArgumentError(error)
+            for user_id in user_ids:
+                error = validate_user_id(user_id)
+                if error:
+                    raise InvalidArgumentError(error)
+                account = self._accounts.get(account_id)
+                if account is None or user_id not in account.users:
+                    error = validate_identifier_length(user_id, "user_id")
+                    if error:
+                        raise InvalidArgumentError(error)
+
+        created_accounts = 0
+        created_users = 0
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            accounts_lease = await self._async_agfs.pathlock_acquire_exact(
+                ACCOUNTS_PATH, timeout_secs=10.0
+            )
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                "Another account operation is in progress. Please retry.",
+                uri=ACCOUNTS_PATH,
+                conflict_type="account_registry_busy",
+            ) from exc
+        try:
+            accounts_data = await self._read_accounts_for_update()
+            persisted_accounts = accounts_data.setdefault("accounts", {})
+            normalized = {
+                account_id: user_ids
+                for account_id, user_ids in normalized.items()
+                if not (persisted_accounts.get(account_id) or {}).get("deletion")
+            }
+            for account_id in normalized:
+                if account_id not in persisted_accounts:
+                    validate_file_account_id(account_id)
+                    persisted_accounts[account_id] = {"created_at": now}
+                    created_accounts += 1
+            if created_accounts:
+                await self._write_json(ACCOUNTS_PATH, accounts_data, lease_ref=accounts_lease)
+        finally:
+            await self._async_agfs.pathlock_release(accounts_lease)
+
+        for account_id, user_ids in normalized.items():
+            path = USERS_PATH_TEMPLATE.format(account_id=account_id)
+            try:
+                users_lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "Another user operation is in progress for this account. Please retry.",
+                    uri=path,
+                    conflict_type="user_registry_busy",
+                ) from exc
+            try:
+                users_data = await self._read_json(path) or {"users": {}}
+                persisted_users = users_data.setdefault("users", {})
+                new_users = sorted(
+                    user_id for user_id in user_ids if user_id not in persisted_users
+                )
+                for user_id in new_users:
+                    persisted_users[user_id] = {"role": "user"}
+                if new_users:
+                    await self._write_json(path, users_data, lease_ref=users_lease)
+                    created_users += len(new_users)
+                    logger.info(
+                        "Persisted trusted identities for account %s: %s",
+                        account_id,
+                        new_users,
+                    )
+
+                account = self._accounts.get(account_id)
+                if account is None:
+                    account_info = persisted_accounts[account_id]
+                    account = AccountInfo(
+                        created_at=account_info.get("created_at", now),
+                        users={},
+                        groups={},
+                        groups_loaded=False,
+                        deletion=account_info.get("deletion"),
+                    )
+                    self._accounts[account_id] = account
+                for user_id, user_info in persisted_users.items():
+                    account.users.setdefault(user_id, dict(user_info))
+            finally:
+                await self._async_agfs.pathlock_release(users_lease)
+
+        return {"created_accounts": created_accounts, "created_users": created_users}
+
+    async def _begin_deletion(
+        self,
+        account_id: str,
+        user_id: str | None,
         *,
         task_id: str,
         owner_account_id: str,
         owner_user_id: str,
     ) -> tuple[dict, bool]:
-        """Revoke the user key and persist the deletion task fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+        """Revoke an account or user and persist its cleanup task fence."""
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 raise NotFoundError(account_id, "account")
+            if user_id is None:
+                if account.deletion is not None:
+                    return dict(account.deletion), False
+                account.deletion = {
+                    "task_id": task_id,
+                    "owner_account_id": owner_account_id,
+                    "owner_user_id": owner_user_id,
+                }
+                try:
+                    await self._save_accounts_json(updated_account_ids={account_id})
+                except BaseException:
+                    account.deletion = None
+                    raise
+                return dict(account.deletion), True
+            self._ensure_account_active(account_id)
             user_info = account.users.get(user_id)
             if user_info is None:
                 raise NotFoundError(user_id, "user")
@@ -508,17 +787,17 @@ class LegacyAPIKeyManager:
             user_info["key"] = ""
             user_info.pop("key_prefix", None)
             try:
-                await self._save_users_json(account_id)
+                await self._save_users_json(account_id, {user_id: user_info})
             except Exception:
                 account.users[user_id] = original
                 raise
             self._remove_key_index_entry(account_id, user_id, original)
             return dict(deletion), True
 
-    async def replace_user_deletion_task(
+    async def _replace_deletion_task(
         self,
         account_id: str,
-        user_id: str,
+        user_id: str | None,
         *,
         expected_task_id: str,
         task_id: str,
@@ -526,10 +805,26 @@ class LegacyAPIKeyManager:
         owner_user_id: str,
     ) -> dict:
         """Replace the task that owns an existing deletion fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 raise NotFoundError(account_id, "account")
+            if user_id is None:
+                current = account.deletion
+                if current is None or current["task_id"] != expected_task_id:
+                    return dict(current) if current else {}
+                account.deletion = {
+                    "task_id": task_id,
+                    "owner_account_id": owner_account_id,
+                    "owner_user_id": owner_user_id,
+                }
+                try:
+                    await self._save_accounts_json(updated_account_ids={account_id})
+                except BaseException:
+                    account.deletion = current
+                    raise
+                return dict(account.deletion)
+            self._ensure_account_active(account_id)
             user_info = account.users.get(user_id)
             if user_info is None:
                 raise NotFoundError(user_id, "user")
@@ -544,18 +839,25 @@ class LegacyAPIKeyManager:
             }
             user_info["deletion"] = replacement
             try:
-                await self._save_users_json(account_id)
+                await self._save_users_json(account_id, {user_id: user_info})
             except Exception:
                 user_info["deletion"] = current
                 raise
             return dict(replacement)
 
-    async def finish_user_deletion(self, account_id: str, user_id: str, task_id: str) -> bool:
-        """Remove the user only when this task still owns the deletion fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+    async def _finish_deletion(
+        self, account_id: str, user_id: str | None, task_id: str
+    ) -> bool:
+        """Remove the identity only when this task still owns its deletion fence."""
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 return False
+            if user_id is None:
+                if account.deletion is None or account.deletion["task_id"] != task_id:
+                    return False
+                await self._delete_account_identity(account_id)
+                return True
             user_info = account.users.get(user_id)
             if user_info is None:
                 return False
@@ -563,20 +865,23 @@ class LegacyAPIKeyManager:
             if not isinstance(deletion, dict) or deletion.get("task_id") != task_id:
                 return False
 
+            await self._load_account_groups_if_needed(account_id, account)
             old_groups = copy.deepcopy(account.groups)
             groups = copy.deepcopy(account.groups)
             for group in groups.values():
                 members = group.get("members", [])
                 if user_id in members:
                     group["members"] = [member for member in members if member != user_id]
+            self._remove_key_index_entry(account_id, user_id, user_info)
             account.users.pop(user_id)
             try:
-                await self._save_users_json(account_id)
+                await self._save_users_json(account_id, deleted_user_ids={user_id})
                 if groups != old_groups:
                     await self._write_groups_json(account_id, groups)
             except Exception:
                 account.users[user_id] = user_info
                 account.groups = old_groups
+                self._rebuild_prefix_index()
                 self._rebuild_account_group_index(account_id)
                 raise
             if groups != old_groups:
@@ -584,101 +889,34 @@ class LegacyAPIKeyManager:
                 self._rebuild_account_group_index(account_id)
             return True
 
-    def get_user_deletion(self, account_id: str, user_id: str) -> Optional[dict]:
+    def _get_deletion(
+        self, account_id: str, user_id: str | None = None
+    ) -> Optional[dict]:
         account = self._accounts.get(account_id)
         if account is None:
             return None
+        if user_id is None:
+            return dict(account.deletion) if account.deletion is not None else None
         user_info = account.users.get(user_id)
         deletion = user_info.get("deletion") if user_info else None
         return dict(deletion) if isinstance(deletion, dict) else None
 
-    def iter_user_deletions(self) -> list[tuple[str, str, dict]]:
+    def _iter_deletions(self) -> list[tuple[str, str | None, dict]]:
         return [
             (account_id, user_id, dict(deletion))
             for account_id, account in self._accounts.items()
             for user_id, user_info in account.users.items()
-            if isinstance((deletion := user_info.get("deletion")), dict)
-            and deletion.get("task_id")
+            if isinstance((deletion := user_info.get("deletion")), dict) and deletion.get("task_id")
+        ] + [
+            (account_id, None, dict(account.deletion))
+            for account_id, account in self._accounts.items()
+            if account.deletion is not None
         ]
 
-    def is_user_deleting(self, account_id: str, user_id: str) -> bool:
-        return self.get_user_deletion(account_id, user_id) is not None
-
-    async def regenerate_key(
-        self, account_id: str, user_id: str, seed: Optional[str] = None
-    ) -> str:
-        """Regenerate a user's API key. Old key is immediately invalidated."""
-        account = self._accounts.get(account_id)
-        if account is None:
-            raise NotFoundError(account_id, "account")
-        if user_id not in account.users:
-            raise NotFoundError(user_id, "user")
-        if account.users[user_id].get("deletion"):
-            raise FailedPreconditionError("User deletion is in progress")
-
-        old_user_info = account.users[user_id]
-        old_key_or_hash = old_user_info.get("key", "")
-
-        # Get old key_prefix - if not in user_info, compute from key
-        old_key_prefix = old_user_info.get("key_prefix", "")
-        if not old_key_prefix and old_key_or_hash:
-            old_key_prefix = self._get_key_prefix(old_key_or_hash)
-
-        # Remove old key from prefix index
-        if old_key_prefix in self._prefix_index:
-            self._prefix_index[old_key_prefix] = [
-                entry
-                for entry in self._prefix_index[old_key_prefix]
-                if not (entry.account_id == account_id and entry.user_id == user_id)
-            ]
-            if not self._prefix_index[old_key_prefix]:
-                del self._prefix_index[old_key_prefix]
-
-        # Generate new key
-        new_key = (
-            derive_seeded_api_key_secret(user_id, seed)
-            if seed is not None
-            else self._generate_api_key()
-        )
-
-        if self._api_key_hashing_enabled:
-            new_stored_key = self._hash_api_key(new_key)
-            new_is_hashed = True
-            new_key_prefix = self._get_key_prefix(new_key)
-        else:
-            new_stored_key = new_key
-            new_is_hashed = False
-            new_key_prefix = self._get_key_prefix(new_key)
-
-        # Update user info
-        account.users[user_id]["key"] = new_stored_key
-        if self._api_key_hashing_enabled:
-            account.users[user_id]["key_prefix"] = new_key_prefix
-        else:
-            # Remove key_prefix if API key hashing is disabled
-            if "key_prefix" in account.users[user_id]:
-                del account.users[user_id]["key_prefix"]
-
-        # Add new key to prefix index
-        entry = UserKeyEntry(
-            account_id=account_id,
-            user_id=user_id,
-            role=Role(account.users[user_id]["role"]),
-            key_or_hash=new_stored_key,
-            is_hashed=new_is_hashed,
-        )
-
-        if new_key_prefix:
-            if new_key_prefix not in self._prefix_index:
-                self._prefix_index[new_key_prefix] = []
-            self._prefix_index[new_key_prefix].append(entry)
-
-        await self._save_users_json(account_id)
-        return new_key
-
-    async def set_role(self, account_id: str, user_id: str, role: str) -> None:
+    async def _set_role(self, account_id: str, user_id: str, role: str) -> None:
         """Update a user's role."""
         resolved_role = validate_account_user_role(role)
+        self._ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -704,39 +942,45 @@ class LegacyAPIKeyManager:
                         entry.role = resolved_role
                         break
 
-        await self._save_users_json(account_id)
+        await self._save_users_json(account_id, {user_id: account.users[user_id]})
 
-    def get_accounts(
+    def _get_accounts(
         self,
         name_filter: str | None = None,
         limit: int | None = None,
         page: int = 1,
+        query_filter: str | None = None,
     ) -> list:
-        """List accounts in lexicographic order of account ID.
+        """List accounts in creation (insertion) order.
 
-        ``name_filter`` uses the same wildcard (``*`` and ``?``) matching as
-        ``get_users``. Pagination is opt-in: ``limit=None`` returns every
+        ``name_filter`` uses wildcard (``*`` and ``?``) matching. ``query_filter``
+        is a case-insensitive substring match on the account id, mirroring the
+        user listing search. Pagination is opt-in: ``limit=None`` returns every
         matching account so internal callers that rely on the full account set
         are unaffected; when ``limit`` is set, ``page`` (1-based) selects the
         slice.
         """
         result = []
-        for account_id in sorted(self._accounts):
+        query = (query_filter or "").strip().casefold()
+        for account_id, info in self._accounts.items():
             # Apply name filter if provided (fnmatch wildcard matching)
             if name_filter and not fnmatch.fnmatch(account_id, name_filter):
                 continue
+            if query and query not in account_id.casefold():
+                continue
 
-            info = self._accounts[account_id]
             result.append(
                 {
                     "account_id": account_id,
                     "created_at": info.created_at,
                     "user_count": len(info.users),
+                    "status": "deleting" if info.deletion else "active",
+                    **({"task_id": info.deletion["task_id"]} if info.deletion else {}),
                 }
             )
         return _paginate(result, limit, page)
 
-    def get_users(
+    def _get_users(
         self,
         account_id: str,
         limit: int | None = 100,
@@ -744,81 +988,96 @@ class LegacyAPIKeyManager:
         role_filter: str | None = None,
         expose_key: bool = True,
         page: int = 1,
+        query_filter: str | None = None,
     ) -> list:
-        """List users in an account, ordered lexicographically by user ID.
+        """List users in an account in creation (insertion) order.
 
         Pagination is opt-in via ``limit``/``page`` (1-based); ``limit=None``
         returns every matching user.
+        """
+        return self._get_users_page(
+            account_id,
+            limit=limit,
+            name_filter=name_filter,
+            role_filter=role_filter,
+            expose_key=expose_key,
+            page=page,
+            query_filter=query_filter,
+        )["users"]
+
+    def _get_users_page(
+        self,
+        account_id: str,
+        limit: int | None = 100,
+        name_filter: str | None = None,
+        role_filter: str | None = None,
+        expose_key: bool = True,
+        page: int = 1,
+        query_filter: str | None = None,
+    ) -> dict:
+        """Return one page, matching total, and unfiltered account statistics.
+
+        Only materialize credentials for the requested page. Deleting users are
+        excluded from both the results and statistics.
         """
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
 
         result = []
-        for user_id in sorted(account.users):
-            user_info = account.users[user_id]
+        total = account_total = manager_count = key_count = 0
+        start = (max(1, page) - 1) * limit if limit is not None else 0
+        query = (query_filter or "").strip().casefold()
+        for user_id, user_info in account.users.items():
             if user_info.get("deletion"):
                 continue
-
             user_role = user_info.get("role", "user")
+            key = user_info.get("key")
+            visible_key = bool(
+                expose_key
+                and key
+                and (not key.startswith("$argon2") or user_info.get("key_prefix"))
+            )
+            account_total += 1
+            manager_count += user_role in {"admin", "root"}
+            key_count += visible_key
 
-            # Apply name filter if provided
             if name_filter and not fnmatch.fnmatch(user_id, name_filter):
                 continue
-
-            # Apply role filter if provided
             if role_filter and user_role != role_filter:
                 continue
+            if query and query not in user_id.casefold():
+                continue
+            total += 1
+            if total <= start or (limit is not None and len(result) >= limit):
+                continue
 
-            user_data = {
-                "user_id": user_id,
-                "role": user_role,
-            }
-            if expose_key:
-                key = user_info.get("key")
-                if key:
-                    if key.startswith("$argon2"):
-                        # Hashed key - show key_prefix
-
-                        key_prefix = user_info.get("key_prefix")
-                        if key_prefix:
-                            user_data["key_prefix"] = key_prefix
-                    else:
-                        # Plaintext key - show full api_key
-                        user_data["api_key"] = key
+            user_data = {"user_id": user_id, "role": user_role}
+            if visible_key:
+                if key.startswith("$argon2"):
+                    user_data["key_prefix"] = user_info["key_prefix"]
+                else:
+                    user_data["api_key"] = key
             result.append(user_data)
-        return _paginate(result, limit, page)
+        return {
+            "users": result,
+            "total": total,
+            "account_total": account_total,
+            "manager_count": manager_count,
+            "key_count": key_count,
+        }
 
-    def has_user(self, account_id: str, user_id: str) -> bool:
-        """Return True when the account registry contains the given user."""
-        account = self._accounts.get(account_id)
-        if account is None:
-            return False
-        return user_id in account.users
-
-    def get_user_role(self, account_id: str, user_id: str) -> Role:
-        """Return the role of the given user in the given account.
-
-        Returns Role.USER if the account or user doesn't exist.
-        """
-        account = self._accounts.get(account_id)
-        if account is None:
-            return Role.USER
-        user = account.users.get(user_id)
-        if user is None:
-            return Role.USER
-        return Role(user.get("role", "user"))
-
-    def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
+    def _get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
         """Return the account-scoped groups currently containing the user."""
         return self._user_group_ids.get((account_id, user_id), ())
 
-    async def create_group(self, account_id: str, group_id: str) -> dict:
+    async def _create_group(self, account_id: str, group_id: str) -> dict:
         error = validate_identifier_part(group_id, "group_id")
         if error:
             raise InvalidArgumentError(error)
         async with self._reload_lock:
             account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
             if group_id in account.groups:
                 raise AlreadyExistsError(group_id, "group")
             groups = copy.deepcopy(account.groups)
@@ -826,20 +1085,23 @@ class LegacyAPIKeyManager:
             await self._replace_groups(account_id, account, groups)
             return self._group_result(group_id, groups[group_id])
 
-    def get_groups(self, account_id: str) -> list[dict]:
+    def _get_groups(self, account_id: str) -> list[dict]:
         account = self._require_account(account_id)
         return [
             self._group_result(group_id, group)
             for group_id, group in sorted(account.groups.items())
         ]
 
-    def get_group_members(self, account_id: str, group_id: str) -> list[str]:
+    def _get_group_members(self, account_id: str, group_id: str) -> list[str]:
         group = self._require_group(account_id, group_id)
         return sorted(set(group.get("members", [])))
 
-    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def _add_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
             if user_id not in account.users:
                 raise NotFoundError(user_id, "user")
             group = self._require_group(account_id, group_id)
@@ -851,9 +1113,12 @@ class LegacyAPIKeyManager:
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+    async def _remove_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> bool:
         async with self._reload_lock:
             account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
             group = self._require_group(account_id, group_id)
             if user_id not in group.get("members", []):
                 return False
@@ -864,9 +1129,10 @@ class LegacyAPIKeyManager:
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def delete_group(self, account_id: str, group_id: str) -> None:
+    async def _delete_group(self, account_id: str, group_id: str) -> None:
         async with self._reload_lock:
             account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
             group = self._require_group(account_id, group_id)
             if group.get("members"):
                 raise FailedPreconditionError("Group must be empty before deletion")
@@ -874,38 +1140,18 @@ class LegacyAPIKeyManager:
             del groups[group_id]
             await self._replace_groups(account_id, account, groups)
 
-    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
-        """Return SHA-256 hex digest of the user's stored API key value, or None.
-
-        The "stored value" is whatever is persisted in ``user_info["key"]``:
-        either the plaintext API key (when hashing is disabled) or its
-        Argon2id hash (when hashing is enabled). Both are stable per
-        key-generation — they are written once on create / regenerate and
-        never mutate in place — so the fingerprint is stable as long as the
-        key is unchanged, and changes the moment ``regenerate_key`` runs.
-
-        Used by OAuth to bind issued tokens to the API key that authorized
-        them: at OTP / authorize time we record this fingerprint; at every
-        OAuth bearer auth we recompute and compare. Mismatch (rotation) or
-        ``None`` (user removed) fails the request closed.
-
-        Returns None when the account or user does not exist, or when the
-        stored value is empty (no fingerprint to bind to).
-        """
-        account = self._accounts.get(account_id)
-        if account is None:
-            return None
-        user = account.users.get(user_id)
-        if user is None:
-            return None
-        stored = user.get("key", "")
-        if not stored:
-            return None
-        return hashlib.sha256(stored.encode("utf-8")).hexdigest()
-
     # ---- internal helpers ----
 
+    def _ensure_account_active(self, account_id: str) -> None:
+        deletion = self._get_deletion(account_id)
+        if deletion is not None:
+            raise FailedPreconditionError(
+                "Account deletion is in progress",
+                details={"task_id": deletion["task_id"]},
+            )
+
     def _require_account(self, account_id: str) -> AccountInfo:
+        self._ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -917,6 +1163,21 @@ class LegacyAPIKeyManager:
         if group is None:
             raise NotFoundError(group_id, "group")
         return group
+
+    async def _ensure_account_groups_loaded(self, account_id: str) -> None:
+        """Load one account's groups when its account metadata was discovered alone."""
+        async with self._reload_lock:
+            account = self._require_account(account_id)
+            await self._load_account_groups_if_needed(account_id, account)
+
+    async def _load_account_groups_if_needed(self, account_id: str, account: AccountInfo) -> None:
+        if account.groups_loaded:
+            return
+        groups_path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
+        groups_data = await self._read_json(groups_path)
+        account.groups = groups_data.get("groups", {}) if groups_data else {}
+        account.groups_loaded = True
+        self._rebuild_account_group_index(account_id)
 
     @staticmethod
     def _group_result(group_id: str, group: dict) -> dict:
@@ -934,12 +1195,14 @@ class LegacyAPIKeyManager:
         account = self._accounts.get(account_id)
         if account is None:
             return
-        self._user_group_ids.update({
-            (account_id, user_id): group_ids
-            for user_id, group_ids in self._group_memberships(
-                account.users, account.groups
-            ).items()
-        })
+        self._user_group_ids.update(
+            {
+                (account_id, user_id): group_ids
+                for user_id, group_ids in self._group_memberships(
+                    account.users, account.groups
+                ).items()
+            }
+        )
 
     @staticmethod
     def _group_memberships(
@@ -960,6 +1223,7 @@ class LegacyAPIKeyManager:
     ) -> None:
         await self._write_groups_json(account_id, groups)
         account.groups = groups
+        account.groups_loaded = True
         self._rebuild_account_group_index(account_id)
 
     def _remove_key_index_entry(self, account_id: str, user_id: str, user_info: dict) -> None:
@@ -977,10 +1241,6 @@ class LegacyAPIKeyManager:
         if not self._prefix_index[key_prefix]:
             del self._prefix_index[key_prefix]
 
-    def _generate_api_key(self) -> str:
-        """Generate new API Key (legacy format - hex)."""
-        return secrets.token_hex(32)
-
     def _get_key_prefix(self, api_key: str) -> str:
         """Extract API Key prefix for indexing."""
         if api_key:
@@ -997,15 +1257,6 @@ class LegacyAPIKeyManager:
             hash_len=ARGON2_HASH_LENGTH,
         )
         return ph.hash(api_key)
-
-    def _verify_api_key(self, api_key: str, hashed_key: str) -> bool:
-        """Verify if API Key matches the hash."""
-        ph = PasswordHasher()
-        try:
-            ph.verify(hashed_key, api_key)
-            return True
-        except VerifyMismatchError:
-            return False
 
     async def _read_json(self, path: str) -> Optional[dict]:
         """Read a JSON file from AGFS with encryption support. Returns None if not found."""
@@ -1057,8 +1308,43 @@ class LegacyAPIKeyManager:
         except AGFSAlreadyExistsError:
             return
 
-    async def _save_accounts_json(self) -> None:
-        """Persist the global accounts list."""
+    def _rebuild_prefix_index(self) -> None:
+        prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        for account_id, account in self._accounts.items():
+            for user_id, user_info in account.users.items():
+                key_or_hash = user_info.get("key", "")
+                if not key_or_hash:
+                    continue
+                key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
+                if not key_prefix:
+                    continue
+                prefix_index.setdefault(key_prefix, []).append(
+                    UserKeyEntry(
+                        account_id=account_id,
+                        user_id=user_id,
+                        role=Role(user_info.get("role", "user")),
+                        key_or_hash=key_or_hash,
+                        is_hashed=key_or_hash.startswith("$argon2"),
+                    )
+                )
+        self._prefix_index = prefix_index
+
+    async def _read_accounts_for_update(self) -> dict:
+        data = await self._read_json(ACCOUNTS_PATH)
+        if data is None:
+            raise FailedPreconditionError(
+                "Account registry is missing; refusing to overwrite it with account changes."
+            )
+        return data
+
+    async def _save_accounts_json(
+        self,
+        *,
+        updated_account_ids: set[str] | None = None,
+        delete_account_ids: set[str] | None = None,
+        reject_existing_account_ids: set[str] | None = None,
+    ) -> set[str]:
+        """Merge local account changes into the latest locked registry snapshot."""
         try:
             lease = await self._async_agfs.pathlock_acquire_exact(ACCOUNTS_PATH, timeout_secs=10.0)
         except LockAcquisitionError as exc:
@@ -1068,21 +1354,38 @@ class LegacyAPIKeyManager:
                 conflict_type="account_registry_busy",
             ) from exc
         try:
-            data = {
-                "accounts": {
-                    aid: {"created_at": info.created_at} for aid, info in self._accounts.items()
-                }
-            }
+            data = await self._read_accounts_for_update()
+            accounts = data.setdefault("accounts", {})
+            for account_id in reject_existing_account_ids or set():
+                if account_id in accounts:
+                    raise AlreadyExistsError(account_id, "account")
+            created_account_ids = set()
+            for account_id in updated_account_ids or set():
+                info = self._accounts.get(account_id)
+                if info is None:
+                    continue
+                if account_id not in accounts:
+                    created_account_ids.add(account_id)
+                accounts[account_id] = {"created_at": info.created_at}
+                if info.deletion is not None:
+                    accounts[account_id]["deletion"] = dict(info.deletion)
+            for account_id in delete_account_ids or set():
+                accounts.pop(account_id, None)
             await self._write_json(ACCOUNTS_PATH, data, lease_ref=lease)
+            return created_account_ids
         finally:
             await self._async_agfs.pathlock_release(lease)
 
-    async def _save_users_json(self, account_id: str) -> None:
-        """Persist a single account's user registry."""
-        await self._save_users_json_for(account_id, self._accounts)
-
-    async def _save_users_json_for(self, account_id: str, accounts: Dict[str, AccountInfo]) -> None:
-        """Persist one account's user registry from the given accounts map."""
+    async def _save_users_json(
+        self,
+        account_id: str,
+        updated_users: Dict[str, dict] | None = None,
+        *,
+        deleted_user_ids: set[str] | None = None,
+        reject_existing_user_ids: set[str] | None = None,
+        replace_existing: bool = False,
+    ) -> None:
+        """Merge targeted user mutations, or initialize a newly created account."""
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         try:
             lease = await self._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
@@ -1093,13 +1396,352 @@ class LegacyAPIKeyManager:
                 conflict_type="user_registry_busy",
             ) from exc
         try:
-            account = accounts.get(account_id)
-            if account is None:
-                return
-            await self._write_json(path, {"users": account.users}, lease_ref=lease)
+            if replace_existing:
+                users = copy.deepcopy(updated_users or {})
+                data = {"users": users}
+            else:
+                data = await self._read_json(path) or {"users": {}}
+                users = data.setdefault("users", {})
+            if updated_users is None:
+                account = self._accounts.get(account_id)
+                if account is None:
+                    return
+                users = copy.deepcopy(account.users)
+                data["users"] = users
+            elif not replace_existing:
+                for user_id, user_info in updated_users.items():
+                    if user_id in (reject_existing_user_ids or set()) and user_id in users:
+                        raise AlreadyExistsError(user_id, "user")
+                    users[user_id] = copy.deepcopy(user_info)
+            for user_id in deleted_user_ids or set():
+                users.pop(user_id, None)
+            await self._write_json(path, data, lease_ref=lease)
+
+            account = self._accounts.get(account_id)
+            if account is not None:
+                account.users = users
+                self._rebuild_prefix_index()
         finally:
             await self._async_agfs.pathlock_release(lease)
 
     async def _write_groups_json(self, account_id: str, groups: dict) -> None:
         path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
         await self._write_json(path, {"groups": groups})
+
+    def _watcher_running(self) -> bool:
+        return self._watch_task is not None and not self._watch_task.done()
+
+    async def _refresh_accounts_for_management_read(self) -> None:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+
+    async def _refresh_users_for_management_read(self, account_id: str) -> None:
+        async with self._mutation_lock:
+            await self._refresh_users_for_management_read_unlocked(account_id)
+
+    async def _refresh_accounts_for_management_read_unlocked(self) -> None:
+        """Refresh account state while the caller holds ``_mutation_lock``."""
+        if not self._watcher_running():
+            async with self._reload_lock:
+                await self._refresh_accounts_from_store_unlocked()
+
+    async def _refresh_users_for_management_read_unlocked(
+        self, account_id: str
+    ) -> None:
+        """Refresh user state while the caller holds ``_mutation_lock``."""
+        if not self._watcher_running():
+            async with self._reload_lock:
+                await self._refresh_account_users_from_store_unlocked(account_id)
+
+    async def get_account(self, account_id: str) -> AccountSummary | None:
+        await self._refresh_accounts_for_management_read()
+        return next(
+            (
+                account
+                for account in self._get_accounts()
+                if account["account_id"] == account_id
+            ),
+            None,
+        )
+
+    async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:
+        account = self._accounts.get(account_id)
+        if account is None:
+            return None
+        user = account.users.get(user_id)
+        return (
+            UserSummary(user_id=user_id, role=user.get("role", Role.USER))
+            if user
+            else None
+        )
+
+    @deprecated(
+        "get_user_for_management is a FileStore compatibility path and will be removed.",
+        category=None,
+    )
+    async def get_user_for_management(
+        self, account_id: str, user_id: str
+    ) -> UserSummary | None:
+        await self._refresh_users_for_management_read(account_id)
+        return await self.get_user(account_id, user_id)
+
+    async def create_account_with_api_key(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        api_key: str,
+    ) -> None:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._create_account_identity(
+                account_id,
+                admin_user_id,
+                api_key,
+            )
+
+    async def create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+    ) -> None:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._create_account_identity(account_id, admin_user_id)
+
+    async def create_user(self, account_id: str, user_id: str, role: str) -> None:
+        async with self._mutation_lock:
+            await self._create_user_identity(account_id, user_id, role)
+
+    async def create_user_with_api_key(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str,
+        api_key: str,
+    ) -> None:
+        async with self._mutation_lock:
+            await self._create_user_identity(
+                account_id,
+                user_id,
+                role,
+                api_key=api_key,
+            )
+
+    async def delete_account(self, account_id: str) -> None:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._delete_account_identity(account_id)
+
+    async def list_accounts(
+        self,
+        name_filter: str | None = None,
+        limit: int | None = None,
+        page: int = 1,
+        query_filter: str | None = None,
+    ) -> list[AccountSummary]:
+        await self._refresh_accounts_for_management_read()
+        return self._get_accounts(
+            name_filter=name_filter,
+            limit=limit,
+            page=page,
+            query_filter=query_filter,
+        )
+
+    async def list_users_page(
+        self,
+        account_id: str,
+        limit: int | None = 100,
+        name_filter: str | None = None,
+        role_filter: str | None = None,
+        page: int = 1,
+        query_filter: str | None = None,
+        fresh: bool = False,
+    ) -> UsersPage:
+        if fresh:
+            async with self._mutation_lock:
+                async with self._reload_lock:
+                    await self._refresh_account_users_from_store_unlocked(account_id)
+        else:
+            await self._refresh_users_for_management_read(account_id)
+        return self._get_users_page(
+            account_id,
+            limit=limit,
+            name_filter=name_filter,
+            role_filter=role_filter,
+            expose_key=True,
+            page=page,
+            query_filter=query_filter,
+        )
+
+    async def set_role(self, account_id: str, user_id: str, role: str) -> None:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._refresh_users_for_management_read_unlocked(account_id)
+            await self._set_role(account_id, user_id, role)
+
+    async def begin_deletion(
+        self,
+        account_id: str,
+        user_id: str | None,
+        *,
+        task_id: str,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> tuple[DeletionRecord, bool]:
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            if user_id is not None:
+                await self._refresh_users_for_management_read_unlocked(account_id)
+            return await self._begin_deletion(
+                account_id,
+                user_id,
+                task_id=task_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
+            )
+
+    async def replace_deletion_task(
+        self,
+        account_id: str,
+        user_id: str | None,
+        *,
+        expected_task_id: str,
+        task_id: str,
+        owner_account_id: str,
+        owner_user_id: str,
+    ) -> DeletionRecord:
+        async with self._mutation_lock:
+            return await self._replace_deletion_task(
+                account_id,
+                user_id,
+                expected_task_id=expected_task_id,
+                task_id=task_id,
+                owner_account_id=owner_account_id,
+                owner_user_id=owner_user_id,
+            )
+
+    async def finish_deletion(
+        self, account_id: str, user_id: str | None, task_id: str
+    ) -> bool:
+        async with self._mutation_lock:
+            return await self._finish_deletion(account_id, user_id, task_id)
+
+    async def get_deletion(
+        self, account_id: str, user_id: str | None = None
+    ) -> DeletionRecord | None:
+        return self._get_deletion(account_id) or (
+            self._get_deletion(account_id, user_id) if user_id is not None else None
+        )
+
+    async def iter_deletions(
+        self,
+    ) -> list[tuple[str, str | None, DeletionRecord]]:
+        return self._iter_deletions()
+
+    async def create_group(
+        self, account_id: str, group_id: str
+    ) -> GroupSummary:
+        await self._refresh_accounts_for_management_read()
+        return await self._create_group(account_id, group_id)
+
+    async def get_groups(self, account_id: str) -> list[GroupSummary]:
+        await self._refresh_accounts_for_management_read()
+        await self._ensure_account_groups_loaded(account_id)
+        return self._get_groups(account_id)
+
+    async def get_group_members(
+        self, account_id: str, group_id: str
+    ) -> list[str]:
+        await self._refresh_accounts_for_management_read()
+        await self._ensure_account_groups_loaded(account_id)
+        return self._get_group_members(account_id, group_id)
+
+    async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
+        account = self._accounts.get(account_id)
+        if account is None or user_id not in account.users:
+            return ()
+        await self._ensure_account_groups_loaded(account_id)
+        return self._get_user_group_ids(account_id, user_id)
+
+    async def add_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> bool:
+        await self._refresh_users_for_management_read(account_id)
+        return await self._add_group_member(account_id, group_id, user_id)
+
+    async def remove_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> bool:
+        await self._refresh_accounts_for_management_read()
+        return await self._remove_group_member(account_id, group_id, user_id)
+
+    async def delete_group(self, account_id: str, group_id: str) -> None:
+        await self._refresh_accounts_for_management_read()
+        await self._delete_group(account_id, group_id)
+
+    async def replace_active_user_api_key(
+        self, account_id: str, user_id: str, api_key: str
+    ) -> None:
+        async with self._mutation_lock:
+            await self._set_user_key(
+                account_id,
+                user_id,
+                api_key,
+                rotate=True,
+            )
+
+    async def verify_api_key(
+        self,
+        api_key: str,
+        *,
+        account_id_hint: str | None = None,
+        user_id_hint: str | None = None,
+    ) -> tuple[str, str] | None:
+        for entry in self._prefix_index.get(self._get_key_prefix(api_key), []):
+            if account_id_hint is not None and entry.account_id != account_id_hint:
+                continue
+            if user_id_hint is not None and entry.user_id != user_id_hint:
+                continue
+            account = self._accounts.get(entry.account_id)
+            if account is None or account.deletion is not None:
+                continue
+            user = account.users.get(entry.user_id)
+            if user is None or user.get("deletion"):
+                continue
+            if entry.is_hashed:
+                try:
+                    matched = await asyncio.to_thread(
+                        PasswordHasher(
+                            time_cost=ARGON2_TIME_COST,
+                            memory_cost=ARGON2_MEMORY_COST,
+                            parallelism=ARGON2_PARALLELISM,
+                            hash_len=ARGON2_HASH_LENGTH,
+                        ).verify,
+                        entry.key_or_hash,
+                        api_key,
+                    )
+                except VerificationError:
+                    matched = False
+            else:
+                matched = hmac.compare_digest(entry.key_or_hash, api_key)
+            if matched:
+                return entry.account_id, entry.user_id
+        return None
+
+    async def revoke_active_api_keys(
+        self, account_id: str, user_id: str | None = None
+    ) -> None:
+        async with self._mutation_lock:
+            await self._revoke_user_keys(account_id, user_id)
+
+    async def get_user_key_fingerprint(
+        self, account_id: str, user_id: str
+    ) -> str | None:
+        account = self._accounts.get(account_id)
+        if account is None or account.deletion is not None:
+            return None
+        user = account.users.get(user_id)
+        if user is None or user.get("deletion"):
+            return None
+        material = user.get("key", "")
+        return hashlib.sha256(material.encode()).hexdigest() if material else None

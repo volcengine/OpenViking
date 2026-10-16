@@ -27,5 +27,3 @@ class GrepConfig(BaseModel):
             "L2 record count threshold to switch to vikingdb; 0 means always use vikingdb."
         ),
     )
-
-    model_config = {"extra": "forbid"}

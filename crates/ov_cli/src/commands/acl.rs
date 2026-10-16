@@ -21,9 +21,15 @@ pub async fn set(
     client: &HttpClient,
     uri: &str,
     raw_entries: Vec<String>,
+    acl_mode: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    if raw_entries.is_empty() && acl_mode.is_none() {
+        return Err(Error::Client(
+            "Provide at least one --entry or --acl-mode inherit|restricted.".to_string(),
+        ));
+    }
     let mut entries = Vec::new();
     for raw in raw_entries {
         let Some((principal, level)) = raw.split_once('=') else {
@@ -33,7 +39,11 @@ pub async fn set(
         };
         entries.push(json!({"principal": principal, "level": level}));
     }
-    show(client.acl_set(uri, entries).await?, output_format, compact)
+    show(
+        client.acl_set(uri, entries, acl_mode).await?,
+        output_format,
+        compact,
+    )
 }
 
 pub async fn grant(

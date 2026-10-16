@@ -1,4 +1,4 @@
-# LangChain and LangGraph
+# LangChain / LangGraph
 
 Wire OpenViking into your LangChain or LangGraph agent as the context backend. The
 standalone integration package provides a retriever, chat history, context wrapper,
@@ -11,9 +11,11 @@ pip install langchain-openviking                 # LangChain adapters
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware support
 ```
 
-The integration is released independently from the OpenViking server. The full
-package keeps forwarding the legacy `openviking.integrations.langchain` import
-path to `langchain-openviking` for existing applications.
+The integration is released independently from the OpenViking server. Starting
+with the next server release after v0.5.0, the legacy
+`openviking.integrations.langchain` namespace is removed without a compatibility
+shim. v0.5.0 still provides it. Install the standalone package and import from
+`langchain_openviking` instead; see the [Unreleased migration notes](../about/02-changelog.md#unreleased).
 
 ## Connection
 
@@ -221,7 +223,7 @@ docs = retriever.invoke("What did the user decide about deployment?")
 ### Context backend
 
 ```python
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import with_openviking_context
 
@@ -230,7 +232,10 @@ with with_openviking_context(
     url="http://localhost:1933",
     api_key="...",
 ) as chain:
-    result = chain.invoke(...)
+    result = chain.invoke(
+        [HumanMessage(content="Remember that I prefer short answers")],
+        config={"configurable": {"session_id": "support-thread-1"}},
+    )
 ```
 
 ### Agent tools
@@ -308,17 +313,17 @@ finish an async lifecycle with `recorder.close()`.
 The repository includes runnable examples that work without model credentials using an in-memory test client:
 
 ```bash
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/rag/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/context-backend/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/message-history/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/agent/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/middleware/quick_app.py
 ```
 
-For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py).
+For a real OpenViking server and OpenAI-compatible model flow, see the [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/langgraph/agent/live_app.py).
 
 ## See also
 
 - [Capability Reference](./16-capability-reference.md)
-- [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — full source for all examples above
+- [integrations/frameworks/langchain/examples/](https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/langchain/examples) — full source for all examples above
 - [MCP Clients](./06-mcp-clients.md) — for non-SDK MCP integration

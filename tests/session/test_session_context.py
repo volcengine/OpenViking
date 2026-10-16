@@ -38,7 +38,9 @@ async def client(
     service: OpenVikingService,
     request_context: RequestContext,
     monkeypatch,
+    working_memory_policy,
 ):
+    service.sessions.set_default_user_memory_policy(working_memory_policy)
     _install_fake_vlm(monkeypatch)
     monkeypatch.setattr(get_openviking_config().memory, "extraction_enabled", False)
     client = partial(service.sessions.session, request_context)

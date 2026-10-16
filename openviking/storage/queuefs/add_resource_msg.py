@@ -22,18 +22,19 @@ class AddResourceMsg:
     user_id: str
     group_ids: list[str] = field(default_factory=list)
     role: str
+    _task_work_id: str = ""
     path: str = ""
     source_path: str = ""
     telemetry_id: Optional[str] = None
     prepared: Optional[Dict[str, Any]] = None
     staged_source: Optional[Dict[str, Any]] = None
+    shared_source: Optional[Dict[str, Any]] = None
     job_phase: AddResourcePhase | str | None = None
     lock_handoff: Optional[Dict[str, Any]] = None
     actor_peer_id: Optional[str] = None
     bypass_acl: bool = False
     reason: str = ""
     instruction: str = ""
-    timeout: Optional[float] = None
     build_index: bool = True
     summarize: bool = False
     strict: bool = False
@@ -50,6 +51,8 @@ class AddResourceMsg:
     source_name: Optional[str] = None
     to_is_directory: Optional[bool] = None
     watch_interval: float = 0
+    is_active: Optional[bool] = None
+    watch_task_id: Optional[str] = None
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     cleanup_empty_target_on_failure: bool = False
@@ -59,6 +62,7 @@ class AddResourceMsg:
     parse_mode: str = "default"
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
+    acl: Optional[Dict[str, Any]] = None
     internal_task: bool = False
 
     def __post_init__(self) -> None:
@@ -75,6 +79,7 @@ class AddResourceMsg:
             raise ValueError("source jobs cannot contain prepared post-process data")
         if self.prepared is not None and (
             self.staged_source is not None
+            or self.shared_source is not None
             or self.understanding_response_id is not None
             or self.understanding_file_id is not None
         ):
@@ -83,6 +88,7 @@ class AddResourceMsg:
             payload is not None
             for payload in (
                 self.staged_source,
+                self.shared_source,
                 self.understanding_response_id,
                 self.understanding_file_id,
             )
@@ -104,14 +110,22 @@ class AddResourceMsg:
         task_id = data.get("task_id")
         path = data.get("path")
         root_uri = data.get("root_uri")
+        account_id = data.get("account_id")
         prepared = data.get("prepared") if isinstance(data.get("prepared"), dict) else None
         staged_source = None
         if data.get("staged_source") is not None:
             from openviking.resource.staged_source import StagedSource
 
             staged_source = StagedSource.from_dict(data["staged_source"]).to_dict()
-        if prepared is not None and staged_source is not None:
-            raise ValueError("prepared and staged_source are mutually exclusive")
+        shared_source = None
+        if data.get("shared_source") is not None:
+            from openviking.resource.shared_source import SharedSource
+
+            shared_source = SharedSource.from_dict(data["shared_source"]).to_dict()
+        if prepared is not None and (staged_source is not None or shared_source is not None):
+            raise ValueError("prepared and source payloads are mutually exclusive")
+        if staged_source is not None and shared_source is not None:
+            raise ValueError("staged_source and shared_source are mutually exclusive")
         job_phase = data.get("job_phase") or (
             AddResourcePhase.POST_PROCESS.value
             if prepared is not None
@@ -125,22 +139,32 @@ class AddResourceMsg:
             lock_handoff_retry = 0
         if prepared is not None:
             args.clear()
-        if not task_id or (not path and not prepared and not staged_source) or not root_uri:
+        has_source_payload = bool(prepared or staged_source or shared_source)
+        if (
+            not task_id
+            or (not path and not has_source_payload)
+            or not root_uri
+            or not isinstance(account_id, str)
+            or not account_id.strip()
+        ):
             missing = []
             if not task_id:
                 missing.append("task_id")
-            if not path and not prepared and not staged_source:
-                missing.append("path, prepared, or staged_source")
+            if not path and not has_source_payload:
+                missing.append("path, prepared, staged_source, or shared_source")
             if not root_uri:
                 missing.append("root_uri")
+            if not isinstance(account_id, str) or not account_id.strip():
+                missing.append("account_id")
             raise ValueError(f"Missing required fields: {missing}")
 
         return cls(
             task_id=str(task_id),
+            _task_work_id=str(data.get("_task_work_id") or ""),
             path=str(path or ""),
             source_path=str(data.get("source_path") or path or ""),
             root_uri=str(root_uri),
-            account_id=str(data.get("account_id", "default")),
+            account_id=account_id,
             user_id=str(data.get("user_id", "default")),
             group_ids=(
                 [str(group_id) for group_id in data["group_ids"]]
@@ -158,7 +182,6 @@ class AddResourceMsg:
             else None,
             reason=str(data.get("reason", "")),
             instruction=str(data.get("instruction", "")),
-            timeout=float(data["timeout"]) if data.get("timeout") is not None else None,
             build_index=bool(data.get("build_index", True)),
             summarize=bool(data.get("summarize", False)),
             strict=bool(data.get("strict", False)),
@@ -182,8 +205,15 @@ class AddResourceMsg:
             ),
             prepared=prepared,
             staged_source=staged_source,
+            shared_source=shared_source,
             job_phase=job_phase,
             watch_interval=float(data.get("watch_interval", 0) or 0),
+            is_active=(data.get("is_active") if isinstance(data.get("is_active"), bool) else None),
+            watch_task_id=(
+                str(data["watch_task_id"])
+                if isinstance(data.get("watch_task_id"), str) and data["watch_task_id"]
+                else None
+            ),
             skip_watch_management=bool(data.get("skip_watch_management", True)),
             defer_target_resolution=bool(data.get("defer_target_resolution", False)),
             cleanup_empty_target_on_failure=bool(
@@ -201,6 +231,7 @@ class AddResourceMsg:
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
             parse_mode=str(data.get("parse_mode") or "default"),
+            acl=data.get("acl"),
             tags=(list(data["tags"]) if isinstance(data.get("tags"), list) else None),
             tag_mode=str(data.get("tag_mode") or "replace"),
             internal_task=bool(data.get("internal_task", False)),

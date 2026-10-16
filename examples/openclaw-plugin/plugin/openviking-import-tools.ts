@@ -66,7 +66,6 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
           reason: Type.Optional(Type.String({ description: "Reason or note for adding this resource" })),
           instruction: Type.Optional(Type.String({ description: "Processing instruction for semantic extraction" })),
           wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
-          timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           if (deps.isBypassedSession(ctx)) {
@@ -81,7 +80,6 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
             reason: typeof params.reason === "string" ? params.reason : undefined,
             instruction: typeof params.instruction === "string" ? params.instruction : undefined,
             wait: typeof params.wait === "boolean" ? params.wait : undefined,
-            timeout: typeof params.timeout === "number" ? params.timeout : undefined,
           }, session.actorPeerId);
           return {
             content: [{ type: "text" as const, text: formatResourceImportText(result) }],
@@ -107,7 +105,6 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
         source: Type.Optional(Type.String({ description: "Local SKILL.md path or skill directory path" })),
         data: Type.Optional(Type.Any({ description: "Raw SKILL.md content or MCP tool dict" })),
         wait: Type.Optional(Type.Boolean({ description: "Wait for processing to complete" })),
-        timeout: Type.Optional(Type.Number({ description: "Timeout in seconds when wait is true" })),
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
         if (deps.isBypassedSession(ctx)) {
@@ -119,7 +116,6 @@ export function registerOpenVikingImportTools(deps: OpenVikingImportToolsDeps): 
           path: typeof params.source === "string" ? params.source : undefined,
           data: params.data,
           wait: typeof params.wait === "boolean" ? params.wait : undefined,
-          timeout: typeof params.timeout === "number" ? params.timeout : undefined,
         }, session.actorPeerId);
         return {
           content: [{ type: "text" as const, text: formatSkillImportText(result) }],

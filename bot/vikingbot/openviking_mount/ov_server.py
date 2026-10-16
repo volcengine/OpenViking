@@ -71,11 +71,6 @@ class VikingClient:
 
         self.admin_user_client = None
         self._user_clients = {}
-        self._namespace_policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        self._namespace_policy_loaded = False
         connection_actor_peer_id = (
             self._request_connection.get("actor_peer_id") if self._request_connection else None
         )
@@ -160,23 +155,7 @@ class VikingClient:
             value = connection.get(key)
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, Mapping):
-            normalized["namespace_policy"] = {
-                "isolate_user_scope_by_agent": bool(
-                    policy.get("isolate_user_scope_by_agent", False)
-                ),
-                "isolate_agent_scope_by_user": bool(
-                    policy.get("isolate_agent_scope_by_user", False)
-                ),
-            }
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 
@@ -191,11 +170,6 @@ class VikingClient:
         self.workspace_id = self.agent_id
         self.account_id = connection.get("account_id")
         self.admin_user_id = connection.get("user_id")
-
-        policy = connection.get("namespace_policy")
-        if isinstance(policy, dict):
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
 
         remote_client_kwargs = {
             "url": self.openviking_config.server_url,
@@ -214,7 +188,6 @@ class VikingClient:
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
-        await self._load_namespace_policy()
 
     @classmethod
     async def create(
@@ -350,47 +323,10 @@ class VikingClient:
         if self.actor_peer_id:
             client_kwargs["actor_peer_id"] = self.actor_peer_id
 
-    async def _load_namespace_policy(self) -> None:
-        if self._namespace_policy_loaded:
-            return
-
-        policy = {
-            "isolate_user_scope_by_agent": False,
-            "isolate_agent_scope_by_user": False,
-        }
-        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
-            self._namespace_policy = policy
-            self._namespace_policy_loaded = True
-            return
-
-        if self._is_root_key_mode() and self.account_id:
-            try:
-                accounts = await self.client.admin_list_accounts()
-                for account in accounts or []:
-                    if account.get("account_id") == self.account_id:
-                        policy = {
-                            "isolate_user_scope_by_agent": bool(
-                                account.get("isolate_user_scope_by_agent", False)
-                            ),
-                            "isolate_agent_scope_by_user": bool(
-                                account.get("isolate_agent_scope_by_user", False)
-                            ),
-                        }
-                        break
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load account namespace policy for {self.account_id}: {e}"
-                )
-
-        self._namespace_policy = policy
-        self._namespace_policy_loaded = True
-
     def _user_space_fragment(self, user_id: Optional[str]) -> str:
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
             return ""
-        if self._namespace_policy["isolate_user_scope_by_agent"] and self.agent_id:
-            return f"{effective_user_id}/agent/{self.agent_id}"
         return effective_user_id
 
     def _memory_target_uri(self, user_id: Optional[str]) -> str:
@@ -561,11 +497,17 @@ class VikingClient:
         limit: int = 10,
     ):
         """搜索资源"""
-        kwargs: Dict[str, Any] = {"limit": limit}
+        # The SDK find/search sync moved context_type/filter out of top-level
+        # find() kwargs into FindOptions. Adapt here so callers keep the stable
+        # VikingClient.find(context_type=..., filter=...) interface.
+        options: Dict[str, Any] = {}
         if context_type is not None:
-            kwargs["context_type"] = context_type
+            options["context_type"] = context_type
         if filter is not None:
-            kwargs["filter"] = filter
+            options["filter"] = filter
+        kwargs: Dict[str, Any] = {"limit": limit}
+        if options:
+            kwargs["options"] = options
         if target_uri:
             return await self.client.find(query, target_uri=target_uri, **kwargs)
         return await self.client.find(query, **kwargs)
@@ -584,20 +526,45 @@ class VikingClient:
         )
         return result
 
+    async def compile_embeddings(
+        self, texts: List[str], *, target_uri: str, expected_model: str | None = None
+    ) -> Dict[str, Any]:
+        """Use the authenticated server embedder for transient Compile routing batches."""
+        response = await self.client._request(
+            "POST",
+            "/api/v1/compile/embeddings",
+            json={"texts": texts, "target_uri": target_uri, "expected_model": expected_model},
+        )
+        return self.client._handle_response_data(response).get("result", {})
+
     async def list_resources(
         self,
         path: Optional[str] = None,
         recursive: bool = False,
         node_limit: int = 1000,
+        *,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """列出资源"""
+        """列出资源；offset 跳过指定数量的可见节点，递归深度遵循服务端默认值。"""
         if path is None or path == "":
             path = viking_resource_prefix
-        entries = await self.client.ls(path, recursive=recursive, node_limit=node_limit)
+        entries = await self.client.ls(
+            path, recursive=recursive, node_limit=node_limit, offset=offset
+        )
         return entries
 
     async def stat(self, uri: str) -> Dict[str, Any]:
-        return await self.client.stat(uri)
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.stat(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def attrs(self, uri: str) -> Dict[str, Any]:
         return await self.client.attrs(uri)
@@ -605,14 +572,27 @@ class VikingClient:
     async def mkdir(self, uri: str) -> None:
         await self.client.mkdir(uri)
 
-    async def tree(self, uri: str, *, node_limit: int = 1000) -> List[Dict[str, Any]]:
-        return await self.client.tree(uri, node_limit=node_limit)
+    async def tree(
+        self, uri: str, *, node_limit: int = 1000, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Return one visible tree page; offset skips entries from preceding pages."""
+        return await self.client.tree(uri, node_limit=node_limit, offset=offset)
 
     async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return await self.client.read_raw(uri, offset=offset, limit=limit)
 
     async def download_bytes(self, uri: str) -> bytes:
-        return await self.client.download_bytes(uri)
+        client = self.client
+        should_close = False
+        scoped_user_id = self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
+        try:
+            return await client.download_bytes(uri)
+        finally:
+            if should_close:
+                await client.close()
 
     async def find_skills(
         self,
@@ -653,13 +633,11 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.add_skill(
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def update_skill(
@@ -669,14 +647,12 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.update_skill(
             skill_name,
             path,
-            target_uri=target_uri,
+            options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def batch_write(
@@ -685,13 +661,14 @@ class VikingClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
+        skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
+        """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
             root_uri=root_uri,
             operations=operations,
             wait=wait,
-            timeout=timeout,
+            options={"skip_conflicts": skip_conflicts},
         )
 
     async def read_content(
@@ -1057,7 +1034,7 @@ class VikingClient:
                         "type": "tool",
                         "tool_id": tool_id,
                         "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
                         if session_id
                         else "",
                         "tool_input": tool_input,
@@ -1169,7 +1146,7 @@ class VikingClient:
 
         return await client.create_session(
             session_id=session_id,
-            options={"memory_policy": memory_policy} if memory_policy else None,
+            options={"memory_policy": memory_policy} if memory_policy is not None else None,
         )
 
     @staticmethod
@@ -1229,6 +1206,7 @@ class VikingClient:
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        enable_working_memory: Optional[bool] = None,
         retention_mode: Optional[str] = None,
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
@@ -1245,6 +1223,7 @@ class VikingClient:
         retention_kwargs = {
             key: value
             for key, value in {
+                "enable_working_memory": enable_working_memory,
                 "retention_mode": retention_mode,
                 "keep_recent_turn_count": keep_recent_turn_count,
                 "retained_message_token_budget": retained_message_token_budget,

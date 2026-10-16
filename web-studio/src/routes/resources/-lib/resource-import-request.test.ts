@@ -181,6 +181,20 @@ describe('resource import request builders', () => {
     })
   })
 
+  it('serializes clear mode without tags', () => {
+    const body = buildResourceImportCommonBody({
+      ...BASE_FORM_STATE,
+      additionalOptions: {
+        ...BASE_FORM_STATE.additionalOptions,
+        tagMode: 'clear',
+        tags: '',
+      },
+    })
+
+    expect(body).not.toHaveProperty('tags')
+    expect(body.tag_mode).toBe('clear')
+  })
+
   it('removes remote-only scheduling and routing fields from uploads', () => {
     expect(
       buildUploadedResourceRequest(' temp-id ', 'guide.pdf', {

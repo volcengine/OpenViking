@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Vector store integration mixin for VikingFS."""
 
-from typing import TYPE_CHECKING, Any, List, Optional, Sequence
+from functools import partial
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs._base import logger
@@ -34,73 +35,67 @@ class _VectorMixin:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
 
-    async def _update_vector_store_uris(
+    async def _copy_vector_store_uris(
         self,
-        uris: List[str],
         old_base: str,
         new_base: str,
+        *,
+        recursive: bool,
         ctx: Optional[RequestContext] = None,
-    ) -> List[tuple[str, str]]:
-        """Update URIs in vector store (when moving files).
+        source_uris: List[str] | None = None,
+    ) -> Any:
+        """Copy a complete vector URI scope while preserving the source."""
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return None
+        return await vector_store.copy_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+            target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
+            **({"source_uris": source_uris} if source_uris is not None else {}),
+        )
+
+    async def _update_vector_store_uris(
+        self,
+        old_base: str,
+        new_base: str,
+        *,
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+        source_uris: List[str] | None = None,
+    ) -> Any:
+        """Move a vector URI scope, overwriting matching target records.
 
         Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
-            return []
-
-        real_ctx = self._ctx_or_default(ctx)
-        mappings: List[tuple[str, str]] = []
-
-        try:
-            for uri in uris:
-                new_uri = new_base + uri[len(old_base) :]
-                updated = await vector_store.update_uri_mapping(
-                    ctx=real_ctx,
-                    uri=uri,
-                    new_uri=new_uri,
-                )
-                if updated:
-                    mappings.append((uri, new_uri))
-                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
-        except Exception:
-            await self._restore_vector_store_uris(mappings, ctx=real_ctx)
-            raise
-        return mappings
-
-    async def _restore_vector_store_uris(
-        self,
-        mappings: Sequence[tuple[str, str]],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        vector_store = self._get_vector_store()
-        if not vector_store:
-            return
-        real_ctx = self._ctx_or_default(ctx)
-        for old_uri, new_uri in sorted(mappings, key=lambda item: item[0].count("/")):
-            try:
-                restored = await vector_store.update_uri_mapping(
-                    ctx=real_ctx,
-                    uri=new_uri,
-                    new_uri=old_uri,
-                )
-                if not restored:
-                    logger.warning(
-                        "[VikingFS] Vector URI rollback found no records: %s -> %s",
-                        new_uri,
-                        old_uri,
-                    )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] Failed to roll back vector URI: %s -> %s",
-                    new_uri,
-                    old_uri,
-                )
+            return None
+        return await vector_store.update_uri_mapping(
+            ctx=self._ctx_or_default(ctx),
+            source_uri=old_base,
+            target_uri=new_base,
+            recursive=recursive,
+            target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
+            **({"source_uris": source_uris} if source_uris is not None else {}),
+        )
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
         return self.vector_store
 
-    def _get_embedder(self) -> Any:
-        """Get embedder instance."""
-        return self.query_embedder
+    def _get_embedder(self, ctx=None) -> Any:
+        """Bind query calls to the account, resolving settings at each call.
+
+        Fails closed: a request that already carries an account_id must never
+        fall back to a process-wide startup embedder. When the account embedding
+        provider is absent the caller gets an explicit initialization error
+        instead of a Cluster-scoped embedder.
+        """
+        ctx = self._require_request_context(ctx)
+        provider = self._embedding_provider
+        if provider is None:
+            raise RuntimeError("Account embedding provider is not initialized")
+        return provider.bind(ctx.account_id)

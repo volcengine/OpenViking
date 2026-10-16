@@ -30,6 +30,35 @@ use std::{
     io::{self, IsTerminal},
 };
 
+const MAX_TIME_DECAY_DURATION_DAYS: u128 = 3000 * 365;
+
+fn parse_event_time_decay_protection(value: &str) -> std::result::Result<String, String> {
+    if value == "0" {
+        return Ok(value.to_string());
+    }
+    let Some((amount, unit)) = value.split_at_checked(value.len().saturating_sub(1)) else {
+        return Err("must be '0' or a non-negative integer followed by m, h, or d".to_string());
+    };
+    if amount.is_empty() || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("must be '0' or a non-negative integer followed by m, h, or d".to_string());
+    }
+    let amount = amount
+        .parse::<u128>()
+        .map_err(|_| "exceeds the maximum duration of 1095000d".to_string())?;
+    let duration_minutes = match unit {
+        "m" => amount,
+        "h" => amount.saturating_mul(60),
+        "d" => amount.saturating_mul(24 * 60),
+        _ => {
+            return Err("must be '0' or a non-negative integer followed by m, h, or d".to_string());
+        }
+    };
+    if duration_minutes > MAX_TIME_DECAY_DURATION_DAYS * 24 * 60 {
+        return Err("exceeds the maximum duration of 1095000d".to_string());
+    }
+    Ok(value.to_string())
+}
+
 /// CLI context shared across commands
 #[derive(Debug, Clone)]
 pub struct CliContext {
@@ -296,8 +325,11 @@ enum AclCommands {
     },
     Set {
         uri: String,
-        #[arg(long = "entry", required = true)]
+        #[arg(long = "entry")]
         entries: Vec<String>,
+        /// Whether this node uses inherited grants or direct grants only
+        #[arg(long, value_parser = ["inherit", "restricted"])]
+        acl_mode: Option<String>,
     },
     Grant {
         uri: String,
@@ -350,7 +382,7 @@ enum Commands {
             conflicts_with_all = [
                 "add_type", "to", "parent", "parent_auto_create",
                 "strict_mode", "ignore_dirs", "include", "exclude",
-                "no_directly_upload_media", "tags", "tag_mode",
+                "no_directly_upload_media", "tags", "tag_mode", "acl",
                 "reason", "instruction"
             ]
         )]
@@ -401,14 +433,6 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Request timeout in seconds. Used with --wait and by Manifest private Git imports
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
         /// Enable strict mode for directory scanning (fail if any unsupported files found)
         #[arg(
             long = "strict",
@@ -449,47 +473,25 @@ enum Commands {
         /// locally, e.g. --args dry_run:true (supported keys: catalog, dry_run, skip_failed)
         #[arg(long = "args")]
         resource_args: Option<String>,
-        /// Explicit k=v retrieval tag to apply after import. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        /// Comma-separated k=v retrieval tags to apply after import
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
         #[command(flatten)]
         upload_options: UploadCliOptions,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
-    /// [Data] Add a skill into OpenViking
-    AddSkill {
-        /// Skill directory, SKILL.md, or raw content
-        #[arg(value_name = "skill-path-or-content")]
-        data: String,
-        /// Wait until processing is complete
-        #[arg(long, help_heading = "Common options")]
-        wait: bool,
-        /// Wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
-        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(
-            short = 'p',
-            long = "parent-auto-create",
-            value_name = "uri",
-            help_heading = "Skill options"
-        )]
-        parent: Option<String>,
-        #[command(flatten)]
-        upload_options: UploadCliOptions,
-    },
+    /// [Data] Add skills from a source (same as `skills add`)
+    AddSkill(SkillAddArgs),
     /// [Data] Manage installed skills
     Skills {
         #[command(subcommand)]
@@ -516,6 +518,37 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         abs_limit: i32,
+        /// Include directory L0 abstracts (defaults to the selected output mode)
+        #[arg(
+            long = "include-abstract",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            require_equals = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Output options"
+        )]
+        include_abstract: Option<bool>,
+        /// Include directory L1 overviews
+        #[arg(
+            long = "include-overview",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            require_equals = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Output options"
+        )]
+        include_overview: Option<bool>,
+        /// Maximum overview content length
+        #[arg(
+            long = "overview-limit",
+            default_value = "4000",
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Advanced options"
+        )]
+        overview_limit: i32,
         /// Show all hidden files
         #[arg(short, long, help_heading = "Common options")]
         all: bool,
@@ -523,23 +556,60 @@ enum Commands {
         #[arg(
             long = "node-limit",
             short = 'n',
-            alias = "limit",
             default_value = "256",
             value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
         node_limit: i32,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,abstract)
-        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        /// Number of visible entries to skip
+        #[arg(
+            long,
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        offset: i32,
+        /// Maximum number of visible entries to return
+        #[arg(
+            long,
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        limit: Option<i32>,
+        /// Sort entries by name or modification time
+        #[arg(long, value_parser = ["name", "mtime"], value_name = "field", help_heading = "Common options")]
+        sort_by: Option<String>,
+        /// Sort direction
+        #[arg(
+            long,
+            requires = "sort_by",
+            value_parser = ["asc", "desc"],
+            value_name = "order",
+            help_heading = "Common options"
+        )]
+        sort_order: Option<String>,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract,overview)
+        #[arg(
+            short = 'f',
+            long = "fields",
+            value_delimiter = ',',
+            value_name = "FIELDS",
+            help_heading = "Output options"
+        )]
         fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Get directory tree
     Tree {
         /// Viking URI to get tree for
         #[arg(value_name = "uri")]
         uri: String,
-        /// Abstract content limit (only for agent output)
+        /// Maximum returned abstract length
         #[arg(
             long = "abs-limit",
             short = 'l',
@@ -548,20 +618,70 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         abs_limit: i32,
+        /// Include directory L0 abstracts (defaults to the selected output mode)
+        #[arg(
+            long = "include-abstract",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            require_equals = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Output options"
+        )]
+        include_abstract: Option<bool>,
+        /// Include directory L1 overviews
+        #[arg(
+            long = "include-overview",
+            default_missing_value = "true",
+            num_args = 0..=1,
+            require_equals = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Output options"
+        )]
+        include_overview: Option<bool>,
+        /// Maximum overview content length
+        #[arg(
+            long = "overview-limit",
+            default_value = "4000",
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Advanced options"
+        )]
+        overview_limit: i32,
         /// Show all hidden files
         #[arg(short, long, help_heading = "Common options")]
         all: bool,
+        /// Only include directories
+        #[arg(long = "directories-only", help_heading = "Common options")]
+        directories_only: bool,
         /// Maximum number of nodes to list
         #[arg(
             long = "node-limit",
             short = 'n',
-            alias = "limit",
             default_value = "256",
             value_parser = clap::value_parser!(i32).range(0..),
             value_name = "n",
             help_heading = "Common options"
         )]
         node_limit: i32,
+        /// Number of visible entries to skip
+        #[arg(
+            long,
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        offset: i32,
+        /// Maximum number of visible entries to return
+        #[arg(
+            long,
+            value_parser = clap::value_parser!(i32).range(1..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        limit: Option<i32>,
         /// Maximum depth level to traverse (default: 3)
         #[arg(
             short = 'L',
@@ -574,9 +694,12 @@ enum Commands {
         /// Simple path output (just paths, no tree formatting)
         #[arg(short, long, help_heading = "Common options")]
         simple: bool,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count)
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,count,tags,abstract,overview)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
     },
     /// [Data] Create directory
     Mkdir {
@@ -586,6 +709,9 @@ enum Commands {
         /// Initial directory description
         #[arg(long, value_name = "text", help_heading = "Common options")]
         description: Option<String>,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
     /// [Data] Remove resource
     #[command(alias = "del", alias = "delete")]
@@ -599,14 +725,18 @@ enum Commands {
         /// Wait until semantic refresh is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Wait timeout in seconds (only used with --wait)
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
+    },
+    /// [Data] Copy a file or directory
+    Cp {
+        /// Source URI
+        #[arg(value_name = "source")]
+        from_uri: String,
+        /// Target URI
+        #[arg(value_name = "target")]
+        to_uri: String,
+        /// Copy a directory recursively
+        #[arg(short, long, help_heading = "Common options")]
+        recursive: bool,
     },
     /// [Data] Move or rename resource
     #[command(alias = "rename")]
@@ -639,6 +769,12 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
+        /// Starting line offset (0-indexed)
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(i64).range(0..), help_heading = "Common options")]
+        offset: i64,
+        /// Number of lines to read; -1 reads to the end
+        #[arg(long, default_value_t = -1, allow_negative_numbers = true, value_parser = clap::value_parser!(i64).range(-1..), help_heading = "Common options")]
+        limit: i64,
     },
     /// [Data] Read abstract content (Level 0)
     Abstract {
@@ -695,14 +831,15 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Optional wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
+        /// Comma-separated k=v retrieval tags to write with the content
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode; clear does not require --tags
+        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append", "clear"])]
+        tag_mode: String,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -796,6 +933,14 @@ enum Commands {
         /// Include the full visible content for every matched URI
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
+        /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
+        #[arg(
+            long,
+            alias = "events_time_decay_protection",
+            value_parser = parse_event_time_decay_protection,
+            help_heading = "Advanced options"
+        )]
+        events_time_decay_protection: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -809,7 +954,24 @@ enum Commands {
             help_heading = "Common options"
         )]
         image: Option<String>,
-        /// Target URI
+        /// Retrieval type
+        #[arg(
+            long,
+            default_value = "semantic",
+            value_parser = ["semantic", "keywords"],
+            help_heading = "Common options"
+        )]
+        search_type: String,
+        /// Return ranked hits (list) or assembled context (context)
+        #[arg(
+            long,
+            default_value = "list",
+            value_parser = ["list", "context"],
+            value_name = "list|context",
+            help_heading = "Common options"
+        )]
+        mode: String,
+        /// Target URI (list mode only)
         #[arg(
             short,
             long,
@@ -845,7 +1007,7 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         before: Option<String>,
-        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        /// Filter levels (0=abstract, 1=overview, 2=file); ignored in context mode
         #[arg(
             short = 'L',
             long = "level",
@@ -865,9 +1027,17 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
-        /// Include the full visible content for every matched URI
+        /// Include the full visible content for every matched URI (list mode only)
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
+        /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
+        #[arg(
+            long,
+            alias = "events_time_decay_protection",
+            value_parser = parse_event_time_decay_protection,
+            help_heading = "Advanced options"
+        )]
+        events_time_decay_protection: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -894,6 +1064,26 @@ enum Commands {
         /// Case insensitive
         #[arg(short, long, help_heading = "Common options")]
         ignore_case: bool,
+        /// Number of lines to show after each match
+        #[arg(
+            short = 'a',
+            long = "after-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        after_context: i32,
+        /// Number of lines to show before each match
+        #[arg(
+            short = 'b',
+            long = "before-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        before_context: i32,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -914,6 +1104,12 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         level_limit: i32,
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Fields to include in output (currently: tags)
+        #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
+        fields: Option<Vec<String>>,
     },
     /// [Data] Run file glob pattern search
     Glob {
@@ -943,7 +1139,10 @@ enum Commands {
         /// Simple output (one entry per line)
         #[arg(short, long, help_heading = "Common options")]
         simple: bool,
-        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id)
+        /// Comma-separated k=v retrieval tags; all tags must match
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
+        tags: Vec<String>,
+        /// Comma-separated fields to display (name,uri,path,type,size,mode,mtime,locked,id,tags)
         #[arg(short = 'f', long = "fields", value_delimiter = ',', value_name = "FIELDS", help_heading = "Output options")]
         fields: Option<Vec<String>>,
     },
@@ -1073,55 +1272,31 @@ enum Commands {
     },
     /// [Interactive] Compile source materials with a VikingBot Skill
     Compile {
-        /// Source file or directory; repeat the flag or separate entries with commas
+        /// Source file or directory; repeat the flag or separate entries with commas.
+        /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(
             long = "from",
-            required = true,
             value_delimiter = ',',
             value_name = "uri"
         )]
         from_uris: Vec<String>,
-        /// Target Wiki directory or skills namespace
+        /// Target resource directory or skills namespace
         #[arg(long, value_name = "uri")]
         to: String,
-        /// Skill directory or SKILL.md Viking URI
+        /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
         #[arg(long, value_name = "uri")]
         skill: String,
-        /// Description of this organization task
+        /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
-        reason: Option<String>,
-        /// Wait for the Compile task to finish
-        #[arg(long)]
-        wait: bool,
-        /// Local wait timeout in seconds; does not cancel the task
-        #[arg(
-            long,
-            requires = "wait",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        timeout: Option<f64>,
-        /// Server-side runtime limit in seconds; reaching it saves partial resource output
-        #[arg(
-            long = "runtime-timeout",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        runtime_timeout: Option<f64>,
+        instruction: Option<String>,
+        /// Provider arguments as JSON; VikingBot wiki_links defaults to false
+        #[arg(long, value_name = "json")]
+        args: Option<String>,
     },
 
     // --- Status & Observability ---
     /// [Status] Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// [Status] Track async resource processing tasks
     Task {
         #[command(subcommand)]
@@ -1176,11 +1351,11 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors; prune_orphans deletes orphan vector records
+        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors
         #[arg(
             long,
             default_value = "vectors_only",
-            value_parser = ["vectors_only", "semantic_and_vectors", "prune_orphans"],
+            value_parser = ["vectors_only", "semantic_and_vectors"],
             value_name = "mode",
             help_heading = "Common options"
         )]
@@ -1194,17 +1369,17 @@ enum Commands {
             help_heading = "Common options"
         )]
         wait: bool,
-        /// Preview prune_orphans deletions without mutating vectors
+        /// Rebuild all selected semantic/vector data without comparing fingerprints
         #[arg(long, help_heading = "Common options")]
-        dry_run: bool,
-        /// Explicit k=v retrieval tag for rebuilt vector records. Can be repeated.
-        #[arg(long = "tag", value_name = "k=v", help_heading = "Common options")]
+        force: bool,
+        /// Comma-separated k=v retrieval tags for rebuilt vector records
+        #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tag is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
@@ -1234,7 +1409,14 @@ impl Commands {
     }
 
     fn supports_upload_options(&self) -> bool {
-        matches!(self, Self::AddResource { .. } | Self::AddSkill { .. })
+        matches!(
+            self,
+            Self::AddResource { .. }
+                | Self::AddSkill(_)
+                | Self::Skills {
+                    action: SkillCommands::Add(_)
+                }
+        )
     }
 }
 
@@ -1244,7 +1426,7 @@ fn legacy_upload_option_error(
 ) -> Option<&'static str> {
     if options.is_set() && !command.supports_upload_options() {
         Some(
-            "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill.",
+            "--progress, --no-progress, and --verbose are only supported for add-resource, add-skill, and skills add.",
         )
     } else {
         None
@@ -1287,7 +1469,7 @@ pub(crate) enum SnapshotCmd {
     Commit {
         #[arg(short = 'm', long)]
         message: String,
-        /// Limit to specific viking:// URIs (comma-separated); accepts files and directories. Directories are expanded recursively with the snapshot pruning rules. Omit to snapshot the full account tree.
+        /// Limit to specific viking:// URIs (comma-separated); accepts files and directories. Directories are expanded recursively with the snapshot pruning rules. Required for USER/ADMIN callers; only local ROOT mode may omit paths to snapshot the full account tree.
         #[arg(long, value_delimiter = ',')]
         paths: Option<Vec<String>>,
         #[arg(long, default_value = "main")]
@@ -1363,11 +1545,7 @@ pub(crate) enum SnapshotCmd {
 #[derive(Subcommand)]
 enum SystemCommands {
     /// Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(long, value_parser = config::parse_positive_timeout, value_name = "seconds")]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// Show component status
     Status,
     /// Quick health check
@@ -1382,29 +1560,6 @@ enum SystemCommands {
     Crypto {
         #[command(subcommand)]
         action: commands::crypto::CryptoCommands,
-    },
-    /// Backend sync inspection and repair commands
-    Backend {
-        #[command(subcommand)]
-        action: SystemBackendCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum SystemBackendCommands {
-    /// Show multi-write backend sync status for a URI subtree
-    #[command(name = "sync-status")]
-    SyncStatus {
-        /// Viking URI to inspect
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
-    /// Retry pending multi-write backend sync work for a URI subtree
-    #[command(name = "sync-retry")]
-    SyncRetry {
-        /// Viking URI to repair
-        #[arg(value_name = "uri")]
-        uri: String,
     },
 }
 
@@ -1579,29 +1734,34 @@ enum SessionConfigCommands {
     },
 }
 
+#[derive(Args)]
+struct SkillAddArgs {
+    /// Local skill file/directory, Git repository or GitHub tree URL, or raw content
+    #[arg(value_name = "source")]
+    source: String,
+    /// Install only the named skill(s); use '*' to install all skills in a source
+    #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
+    skills: Vec<String>,
+    /// List available skills in the source without installing
+    #[arg(short = 'l', long = "list")]
+    list: bool,
+    /// Wait until processing is complete
+    #[arg(short = 'w', long)]
+    wait: bool,
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long = "yes")]
+    yes: bool,
+    /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
+    #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+    parent: Option<String>,
+    #[command(flatten)]
+    upload_options: UploadCliOptions,
+}
+
 #[derive(Subcommand)]
 enum SkillCommands {
     /// Add skills from a source
-    Add {
-        /// Skill source
-        #[arg(value_name = "source")]
-        source: String,
-        /// Install only the named skill(s); use '*' to install all skills in a source
-        #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
-        skills: Vec<String>,
-        /// List available skills in the source without installing
-        #[arg(short = 'l', long = "list")]
-        list: bool,
-        /// Wait until processing is complete
-        #[arg(short = 'w', long)]
-        wait: bool,
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
-        parent: Option<String>,
-    },
+    Add(SkillAddArgs),
     /// List installed agent skills
     #[command(alias = "ls")]
     List {
@@ -2333,14 +2493,6 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
         {
             path.push(watch_subcommand.to_string());
         }
-        if command == "system"
-            && path.get(1).is_some_and(|token| token == "backend")
-            && let Some(backend_subcommand) =
-                tokens.get(2).map(|token| canonical_plain_help_token(token))
-            && backend_subcommand != "help"
-        {
-            path.push(backend_subcommand.to_string());
-        }
         return Some(PlainHelpMisuse {
             help_command: prefixed_help_command(&path),
         });
@@ -2552,10 +2704,6 @@ fn known_task_command_requires_config(tokens: &[String]) -> bool {
 fn known_system_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
         Some("wait" | "status" | "health" | "consistency") => true,
-        Some("backend") => matches!(
-            tokens.get(2).map(String::as_str),
-            None | Some("sync-status" | "sync-retry")
-        ),
         Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
         _ => false,
     }
@@ -3164,7 +3312,9 @@ async fn main() {
             reason,
             instruction,
             wait,
-            timeout,
+            tags,
+            tag_mode,
+            acl,
             strict_mode,
             ignore_dirs,
             include,
@@ -3173,8 +3323,6 @@ async fn main() {
             watch_interval,
             processing_mode,
             resource_args,
-            tags,
-            tag_mode,
             upload_options,
         } => {
             let ctx =
@@ -3196,7 +3344,6 @@ async fn main() {
                                 processing_mode,
                                 external_connector: run.external_connector,
                             },
-                            timeout,
                             ctx,
                         )
                         .await
@@ -3212,7 +3359,6 @@ async fn main() {
                     reason,
                     instruction,
                     wait,
-                    timeout,
                     strict_mode,
                     ignore_dirs,
                     include,
@@ -3223,6 +3369,7 @@ async fn main() {
                     resource_args,
                     tags,
                     tag_mode,
+                    acl,
                     ctx,
                 )
                 .await
@@ -3232,41 +3379,12 @@ async fn main() {
                 ))
             }
         }
-        Commands::AddSkill {
-            data,
-            wait,
-            timeout,
-            parent,
-            upload_options,
-        } => {
-            let ctx =
-                ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_skill(data, wait, timeout, parent, ctx).await
+        Commands::AddSkill(args) => {
+            handlers::handle_add_skill(args, legacy_upload_options, ctx).await
         }
         Commands::Skills { action } => match action {
-            SkillCommands::Add {
-                source,
-                skills,
-                list,
-                wait,
-                yes,
-                parent,
-            } => {
-                let client = ctx.get_client();
-                commands::skills::add(
-                    &client,
-                    &source,
-                    skills,
-                    list,
-                    wait,
-                    yes,
-                    ctx.should_show_progress(),
-                    ctx.is_verbose(),
-                    ctx.output_format,
-                    ctx.compact,
-                    parent.as_deref(),
-                )
-                .await
+            SkillCommands::Add(args) => {
+                handlers::handle_add_skill(args, legacy_upload_options, ctx).await
             }
             SkillCommands::List { node_limit, parent } => {
                 let client = ctx.get_client();
@@ -3388,9 +3506,9 @@ async fn main() {
             on_conflict,
             vector_mode,
         } => handlers::handle_restore(file_path, on_conflict, vector_mode, ctx).await,
-        Commands::Wait { timeout } => {
+        Commands::Wait => {
             let client = ctx.get_client();
-            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+            commands::system::wait(&client, ctx.output_format, ctx.compact).await
         }
         Commands::Task { action } => match action {
             TaskCommands::Status { task_id } => {
@@ -3483,26 +3601,88 @@ async fn main() {
             simple,
             recursive,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             all,
             node_limit,
+            offset,
+            limit,
+            sort_by,
+            sort_order,
             fields,
-        } => handlers::handle_ls(uri, simple, recursive, abs_limit, all, node_limit, fields, ctx).await,
+            tags,
+        } => {
+            handlers::handle_ls(
+                uri,
+                simple,
+                recursive,
+                abs_limit,
+                include_abstract,
+                include_overview,
+                overview_limit,
+                all,
+                node_limit,
+                offset,
+                limit,
+                sort_by,
+                sort_order,
+                fields,
+                tags,
+                ctx,
+            )
+            .await
+        }
         Commands::Tree {
             uri,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             all,
+            directories_only,
             node_limit,
+            offset,
+            limit,
             level_limit,
             simple,
             fields,
-        } => handlers::handle_tree(uri, abs_limit, all, node_limit, level_limit, simple, fields, ctx).await,
-        Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
+            tags,
+        } => {
+            handlers::handle_tree(
+                uri,
+                abs_limit,
+                include_abstract,
+                include_overview,
+                overview_limit,
+                all,
+                directories_only,
+                node_limit,
+                offset,
+                limit,
+                level_limit,
+                simple,
+                fields,
+                tags,
+                ctx,
+            )
+            .await
+        }
+        Commands::Mkdir {
+            uri,
+            description,
+            acl,
+        } => handlers::handle_mkdir(uri, description, acl, ctx).await,
         Commands::Rm {
             uri,
             recursive,
             wait,
-            timeout,
-        } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        } => handlers::handle_rm(uri, recursive, wait, ctx).await,
+        Commands::Cp {
+            from_uri,
+            to_uri,
+            recursive,
+        } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
         Commands::Attrs { action } => match action {
@@ -3553,10 +3733,8 @@ async fn main() {
             from_uris,
             to,
             skill,
-            reason,
-            wait,
-            timeout,
-            runtime_timeout,
+            instruction,
+            args,
         } => {
             let client = ctx.get_client();
             commands::compile::run(
@@ -3564,10 +3742,8 @@ async fn main() {
                 from_uris,
                 to,
                 skill,
-                reason,
-                wait,
-                timeout,
-                runtime_timeout,
+                instruction,
+                args,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -3600,7 +3776,9 @@ async fn main() {
             }
             Ok(())
         }
-        Commands::Read { uri } => handlers::handle_read(uri, ctx).await,
+        Commands::Read { uri, offset, limit } => {
+            handlers::handle_read(uri, offset, limit, ctx).await
+        }
         Commands::Abstract { uri } => handlers::handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handlers::handle_overview(uri, ctx).await,
         Commands::Write {
@@ -3611,7 +3789,9 @@ async fn main() {
             mode,
             wait,
             processing_mode,
-            timeout,
+            tags,
+            tag_mode,
+            acl,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3626,8 +3806,10 @@ async fn main() {
                 from_file,
                 effective_mode,
                 wait,
-                timeout,
                 processing_mode,
+                tags,
+                tag_mode,
+                acl,
                 ctx,
             )
             .await
@@ -3642,12 +3824,12 @@ async fn main() {
             uri,
             mode,
             wait,
-            dry_run,
+            force,
             tags,
             tag_mode,
             recursive,
         } => {
-            handlers::handle_reindex(uri, mode, wait, dry_run, tags, tag_mode, recursive, ctx).await
+            handlers::handle_reindex(uri, mode, wait, force, tags, tag_mode, recursive, ctx).await
         }
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
@@ -3662,6 +3844,7 @@ async fn main() {
             context_type,
             tags,
             read_content,
+            events_time_decay_protection,
         } => {
             handlers::handle_find(
                 query,
@@ -3675,6 +3858,7 @@ async fn main() {
                 context_type,
                 tags,
                 read_content,
+                events_time_decay_protection,
                 ctx,
             )
             .await
@@ -3682,6 +3866,8 @@ async fn main() {
         Commands::Search {
             query,
             image,
+            search_type,
+            mode,
             uri,
             session_id,
             node_limit,
@@ -3692,11 +3878,14 @@ async fn main() {
             context_type,
             tags,
             read_content,
+            events_time_decay_protection,
         } => {
             handlers::handle_search(
                 query,
                 uri,
                 image,
+                search_type,
+                mode,
                 session_id,
                 node_limit,
                 threshold,
@@ -3706,6 +3895,7 @@ async fn main() {
                 context_type,
                 tags,
                 read_content,
+                events_time_decay_protection,
                 ctx,
             )
             .await
@@ -3715,16 +3905,24 @@ async fn main() {
             exclude_uri,
             pattern,
             ignore_case,
+            after_context,
+            before_context,
             node_limit,
             level_limit,
+            tags,
+            fields,
         } => {
             handlers::handle_grep(
                 uri,
                 exclude_uri,
                 pattern,
                 ignore_case,
+                after_context,
+                before_context,
                 node_limit,
                 level_limit,
+                tags,
+                fields,
                 ctx,
             )
             .await
@@ -3736,7 +3934,8 @@ async fn main() {
             node_limit,
             simple,
             fields,
-        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, ctx).await,
+            tags,
+        } => handlers::handle_glob(pattern, uri, node_limit, simple, fields, tags, ctx).await,
     };
 
     if let Err(e) = result {
@@ -3766,7 +3965,7 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -3791,6 +3990,42 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_parses_copy_recursive_flag() {
+        let file = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "viking://resources/a.md",
+            "viking://resources/b.md",
+        ])
+        .expect("file copy should parse");
+        match file.command {
+            Commands::Cp {
+                from_uri,
+                to_uri,
+                recursive,
+            } => {
+                assert_eq!(from_uri, "viking://resources/a.md");
+                assert_eq!(to_uri, "viking://resources/b.md");
+                assert!(!recursive);
+            }
+            _ => panic!("expected cp command"),
+        }
+
+        let directory = Cli::try_parse_from([
+            "ov",
+            "cp",
+            "-r",
+            "viking://resources/src",
+            "viking://resources/dst",
+        ])
+        .expect("recursive directory copy should parse");
+        match directory.command {
+            Commands::Cp { recursive, .. } => assert!(recursive),
+            _ => panic!("expected cp command"),
+        }
     }
 
     #[test]
@@ -3892,12 +4127,23 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_search_context_type() {
-        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
-            .expect("search context type should parse");
+    fn cli_parses_search_context_mode_and_type() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "search",
+            "invoice",
+            "--mode",
+            "context",
+            "--context-type",
+            "skill",
+        ])
+        .expect("search context mode and type should parse");
 
         match cli.command {
-            Commands::Search { context_type, .. } => {
+            Commands::Search {
+                mode, context_type, ..
+            } => {
+                assert_eq!(mode, "context");
                 assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
@@ -3910,11 +4156,42 @@ mod tests {
             .expect("search image should parse");
 
         match cli.command {
-            Commands::Search { query, image, .. } => {
+            Commands::Search {
+                query, image, mode, ..
+            } => {
                 assert_eq!(query.as_deref(), Some("poster"));
                 assert_eq!(image.as_deref(), Some("viking://x.png"));
+                assert_eq!(mode, "list");
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_grep_context_lines() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "grep",
+            "--uri",
+            "viking://resources",
+            "-a",
+            "2",
+            "-b",
+            "3",
+            "needle",
+        ])
+        .expect("grep context should parse");
+
+        match cli.command {
+            Commands::Grep {
+                after_context,
+                before_context,
+                ..
+            } => {
+                assert_eq!(after_context, 2);
+                assert_eq!(before_context, 3);
+            }
+            _ => panic!("expected grep command"),
         }
     }
 
@@ -3964,29 +4241,24 @@ mod tests {
             "viking://resources/wiki",
             "--skill",
             "viking://agent/skills/wiki",
-            "--wait",
-            "--timeout",
-            "10",
-            "--runtime-timeout",
-            "86400",
+            "--instruction",
+            "Keep supporting evidence.",
+            "--args",
+            r#"{"model_name":"endpoint-1"}"#,
         ])
         .expect("compile flags should parse");
         match cli.command {
             Commands::Compile {
                 from_uris,
                 skill,
-                reason,
-                wait,
-                timeout,
-                runtime_timeout,
+                instruction,
+                args,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
                 assert_eq!(skill, "viking://agent/skills/wiki");
-                assert!(reason.is_none());
-                assert!(wait);
-                assert_eq!(timeout, Some(10.0));
-                assert_eq!(runtime_timeout, Some(86_400.0));
+                assert_eq!(instruction.as_deref(), Some("Keep supporting evidence."));
+                assert_eq!(args.as_deref(), Some(r#"{"model_name":"endpoint-1"}"#));
             }
             _ => panic!("expected compile command"),
         }
@@ -4002,45 +4274,143 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(
-            Cli::try_parse_from([
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/a",
-                "--to",
-                "viking://resources/wiki",
-                "--skill",
-                "viking://agent/skills/wiki",
-                "--timeout",
-                "10",
-            ])
-            .is_err()
-        );
     }
 
     #[test]
-    fn cli_parses_system_backend_sync_status() {
-        let cli = Cli::try_parse_from(["ov", "system", "backend", "sync-status", "viking://a"])
-            .expect("system backend sync-status should parse");
-
-        match cli.command {
-            Commands::System { action } => match action {
-                SystemCommands::Backend { action } => match action {
-                    SystemBackendCommands::SyncStatus { uri } => assert_eq!(uri, "viking://a"),
-                    _ => panic!("expected backend sync-status command"),
-                },
-                _ => panic!("expected system backend command"),
-            },
-            _ => panic!("expected system command"),
+    fn cli_read_line_ranges() {
+        for (args, expected_offset, expected_limit) in [
+            (vec![], 0, -1),
+            (vec!["--offset", "10", "--limit", "5"], 10, 5),
+            (vec!["--offset", "10", "--limit", "-1"], 10, -1),
+            (vec!["--limit", "0"], 0, 0),
+            (vec!["--offset", "10"], 10, -1),
+        ] {
+            let mut argv = vec!["ov", "read", "viking://resources/example.md"];
+            argv.extend(args);
+            let cli = Cli::try_parse_from(argv).expect("valid read range should parse");
+            match cli.command {
+                Commands::Read { offset, limit, .. } => {
+                    assert_eq!((offset, limit), (expected_offset, expected_limit));
+                }
+                _ => panic!("expected read command"),
+            }
+        }
+        for args in [["--offset", "-1"], ["--limit", "-2"], ["--limit", "abc"]] {
+            assert!(
+                Cli::try_parse_from(
+                    ["ov", "read", "viking://resources/example.md"]
+                        .into_iter()
+                        .chain(args)
+                )
+                .is_err()
+            );
         }
     }
 
     #[test]
+    fn cli_compile_memory_mode_parses_without_from() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "--to",
+            "viking://user/u1/memories/entities",
+            "--skill",
+            "memory",
+        ])
+        .expect("memory-mode compile should parse without --from");
+        match cli.command {
+            Commands::Compile {
+                from_uris, skill, ..
+            } => {
+                assert!(from_uris.is_empty());
+                assert_eq!(skill, "memory");
+            }
+            _ => panic!("expected compile command"),
+        }
+    }
+
+
+    #[test]
     fn server_commands_require_existing_cli_config() {
         let cli = Cli::try_parse_from(["ov", "ls"]).expect("ls should parse");
+        let paged_ls = Cli::try_parse_from([
+            "ov",
+            "ls",
+            "--offset",
+            "4",
+            "--limit",
+            "5",
+            "--sort-by",
+            "mtime",
+            "--sort-order",
+            "desc",
+            "--include-abstract",
+            "--include-overview=false",
+            "--overview-limit",
+            "512",
+        ])
+        .expect("paged ls should parse");
+        let paged_tree = Cli::try_parse_from([
+            "ov",
+            "tree",
+            "viking://resources",
+            "--offset",
+            "6",
+            "--limit",
+            "7",
+            "--directories-only",
+            "--include-abstract",
+            "--include-overview=false",
+            "--overview-limit",
+            "512",
+        ])
+        .expect("paged tree should parse");
         let health = Cli::try_parse_from(["ov", "health"]).expect("health should parse");
 
+        match paged_ls.command {
+            Commands::Ls {
+                offset,
+                limit,
+                sort_by,
+                sort_order,
+                node_limit,
+                include_abstract,
+                include_overview,
+                overview_limit,
+                ..
+            } => {
+                assert_eq!(offset, 4);
+                assert_eq!(limit, Some(5));
+                assert_eq!(sort_by.as_deref(), Some("mtime"));
+                assert_eq!(sort_order.as_deref(), Some("desc"));
+                assert_eq!(node_limit, 256);
+                assert_eq!(include_abstract, Some(true));
+                assert_eq!(include_overview, Some(false));
+                assert_eq!(overview_limit, 512);
+            }
+            _ => panic!("expected ls command"),
+        }
+        match paged_tree.command {
+            Commands::Tree {
+                offset,
+                limit,
+                node_limit,
+                directories_only,
+                include_abstract,
+                include_overview,
+                overview_limit,
+                ..
+            } => {
+                assert_eq!(offset, 6);
+                assert_eq!(limit, Some(7));
+                assert_eq!(node_limit, 256);
+                assert!(directories_only);
+                assert_eq!(include_abstract, Some(true));
+                assert_eq!(include_overview, Some(false));
+                assert_eq!(overview_limit, 512);
+            }
+            _ => panic!("expected tree command"),
+        }
         assert!(cli.command.requires_cli_config_file());
         assert!(health.command.requires_cli_config_file());
     }
@@ -4184,7 +4554,6 @@ mod tests {
             &["ov", "config", "validate"],
             &["ov", "config", "show"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend", "sync-status"],
             &["ov", "admin", "list-accounts"],
         ] {
             assert!(
@@ -4269,9 +4638,6 @@ mod tests {
             &["ov", "system", "status"],
             &["ov", "system", "health"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend"],
-            &["ov", "system", "backend", "sync-status"],
-            &["ov", "system", "backend", "sync-retry"],
             &["ov", "system", "crypto"],
             &["ov", "system", "crypto", "init-key"],
             &["ov", "session", "new"],
@@ -4465,13 +4831,13 @@ mod tests {
         let add_skill = Cli::try_parse_from(["ov", "add-skill", "./skill", "--no-progress"])
             .expect("add-skill upload flags should parse");
         match add_skill.command {
-            Commands::AddSkill { upload_options, .. } => {
-                assert!(upload_options.no_progress);
+            Commands::AddSkill(args) => {
+                assert!(args.upload_options.no_progress);
             }
             _ => panic!("expected add-skill command"),
         }
 
-        assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_ok());
         assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
     }
 
@@ -4536,10 +4902,8 @@ mod tests {
             "ov",
             "add-resource",
             "./README.md",
-            "--tag",
-            "team=search",
-            "--tag",
-            "env=test",
+            "--tags",
+            "team=search,env=test",
             "--tag-mode",
             "append",
         ])
@@ -4552,6 +4916,53 @@ mod tests {
             }
             _ => panic!("expected add-resource command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_clear_tag_mode_without_tags() {
+        let add = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("add-resource clear mode should parse");
+        match add.command {
+            Commands::AddResource { tags, tag_mode, .. } => {
+                assert!(tags.is_empty());
+                assert_eq!(tag_mode, "clear");
+            }
+            _ => panic!("expected add-resource command"),
+        }
+
+        let write = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/demo.md",
+            "--content",
+            "content",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("write clear mode should parse");
+        assert!(matches!(
+            write.command,
+            Commands::Write { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
+
+        let reindex = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("reindex clear mode should parse");
+        assert!(matches!(
+            reindex.command,
+            Commands::Reindex { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
     }
 
     #[test]
@@ -4610,35 +5021,35 @@ mod tests {
             _ => panic!("expected skills update"),
         }
 
-        let add_selected = Cli::try_parse_from([
-            "ov",
-            "skills",
-            "add",
-            "https://github.com/acme/skills.git",
-            "--skill",
-            "foo",
-            "bar",
-            "--list",
-            "--yes",
-        ])
-        .expect("skills add RFC flags should parse");
-        match add_selected.command {
-            Commands::Skills {
-                action:
-                    SkillCommands::Add {
-                        source,
-                        skills,
-                        list,
-                        yes,
-                        ..
-                    },
-            } => {
-                assert_eq!(source, "https://github.com/acme/skills.git");
-                assert_eq!(skills, vec!["foo", "bar"]);
-                assert!(list);
-                assert!(yes);
-            }
-            _ => panic!("expected skills add"),
+        for mut argv in [vec!["ov", "add-skill"], vec!["ov", "skills", "add"]] {
+            argv.extend([
+                "https://github.com/acme/skills.git",
+                "--skill",
+                "foo",
+                "bar",
+                "--list",
+                "--yes",
+                "--wait",
+                "--parent-auto-create",
+                "viking://agent/skills",
+                "--no-progress",
+            ]);
+            let add_selected = Cli::try_parse_from(argv)
+                .expect("both skill add commands should accept the same options");
+            let args = match add_selected.command {
+                Commands::AddSkill(args)
+                | Commands::Skills {
+                    action: SkillCommands::Add(args),
+                } => args,
+                _ => panic!("expected skill add command"),
+            };
+            assert_eq!(args.source, "https://github.com/acme/skills.git");
+            assert_eq!(args.skills, vec!["foo", "bar"]);
+            assert!(args.list);
+            assert!(args.yes);
+            assert!(args.wait);
+            assert_eq!(args.parent.as_deref(), Some("viking://agent/skills"));
+            assert!(args.upload_options.no_progress);
         }
 
         let show = Cli::try_parse_from([
@@ -4736,7 +5147,7 @@ mod tests {
         assert_eq!(
             legacy_upload_option_error(upload_options, &tree.command),
             Some(
-                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
+                "--progress, --no-progress, and --verbose are only supported for add-resource, add-skill, and skills add."
             )
         );
 
@@ -4746,12 +5157,7 @@ mod tests {
 
         let skills_add = Cli::try_parse_from(["ov", "--progress", "skills", "add", "./skill"])
             .expect("hidden legacy flag still parses before runtime validation");
-        assert_eq!(
-            legacy_upload_option_error(upload_options, &skills_add.command),
-            Some(
-                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
-            )
-        );
+        assert!(legacy_upload_option_error(upload_options, &skills_add.command).is_none());
     }
 
     #[test]
@@ -4830,55 +5236,6 @@ mod tests {
     }
 
     #[test]
-    fn all_timeout_options_require_positive_finite_seconds() {
-        let command_prefixes = [
-            vec!["ov", "add-resource", "https://example.com", "--timeout"],
-            vec!["ov", "add-skill", "skill", "--timeout"],
-            vec!["ov", "rm", "viking://resources/item", "--timeout"],
-            vec![
-                "ov",
-                "write",
-                "viking://resources/item",
-                "--content",
-                "value",
-                "--timeout",
-            ],
-            vec![
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/source",
-                "--to",
-                "viking://resources/target",
-                "--skill",
-                "viking://user/skills/compiler",
-                "--wait",
-                "--timeout",
-            ],
-            vec!["ov", "wait", "--timeout"],
-            vec!["ov", "system", "wait", "--timeout"],
-        ];
-
-        for prefix in command_prefixes {
-            for invalid in ["0", "-1", "inf", "NaN", "1e300"] {
-                let mut args = prefix.clone();
-                args.push(invalid);
-                assert!(
-                    Cli::try_parse_from(&args).is_err(),
-                    "{args:?} should reject an invalid timeout"
-                );
-            }
-
-            let mut args = prefix;
-            args.push("0.1");
-            assert!(
-                Cli::try_parse_from(&args).is_ok(),
-                "{args:?} should accept a positive finite timeout"
-            );
-        }
-    }
-
-    #[test]
     fn all_node_limit_options_accept_zero_and_reject_negative_values() {
         let command_prefixes = [
             vec!["ov", "ls", "--node-limit"],
@@ -4912,6 +5269,32 @@ mod tests {
                 Cli::try_parse_from(&args).is_ok(),
                 "{args:?} should accept a positive node limit"
             );
+        }
+
+        for prefix in [
+            vec!["ov", "ls", "--limit"],
+            vec!["ov", "tree", "viking://resources", "--limit"],
+        ] {
+            let mut zero_args = prefix.clone();
+            zero_args.push("0");
+            assert!(Cli::try_parse_from(&zero_args).is_err());
+
+            let mut positive_args = prefix;
+            positive_args.push("1");
+            assert!(Cli::try_parse_from(&positive_args).is_ok());
+        }
+
+        for prefix in [
+            vec!["ov", "ls", "--offset"],
+            vec!["ov", "tree", "viking://resources", "--offset"],
+        ] {
+            let mut negative_args = prefix.clone();
+            negative_args.push("-1");
+            assert!(Cli::try_parse_from(&negative_args).is_err());
+
+            let mut zero_args = prefix;
+            zero_args.push("0");
+            assert!(Cli::try_parse_from(&zero_args).is_ok());
         }
     }
 
@@ -5135,10 +5518,6 @@ mod tests {
             (
                 vec!["ov", "system", "consistency", "help"],
                 "ov system consistency --help",
-            ),
-            (
-                vec!["ov", "system", "backend", "sync-status", "help"],
-                "ov system backend sync-status --help",
             ),
         ] {
             let misuse = plain_help_misuse(&os_args(&args))
@@ -5508,10 +5887,10 @@ mod tests {
             "reindex",
             "viking://resources/demo",
             "--mode",
-            "prune_orphans",
+            "semantic_and_vectors",
             "--wait=false",
-            "--dry-run",
-            "--tag",
+            "--force",
+            "--tags",
             "team=search",
             "--tag-mode",
             "append",
@@ -5521,12 +5900,14 @@ mod tests {
         let cli = result.expect("reindex command should parse");
         match cli.command {
             Commands::Reindex {
+                force,
                 tags,
                 tag_mode,
                 recursive,
                 ..
             } => {
                 assert_eq!(tags, vec!["team=search"]);
+                assert!(force);
                 assert_eq!(tag_mode, "append");
                 assert!(!recursive);
             }

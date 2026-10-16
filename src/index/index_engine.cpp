@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 namespace vectordb {
-IndexEngine::IndexEngine(const std::string& path_or_json) {
-  impl_ = std::make_shared<IndexManagerImpl>(path_or_json);
+IndexEngine::IndexEngine(const std::string& path_or_json, bool normalize_vector) {
+  impl_ = std::make_shared<IndexManagerImpl>(path_or_json, normalize_vector);
 }
 
 SearchResult IndexEngine::search(const SearchRequest& req) {
@@ -68,6 +68,12 @@ int IndexEngine::add_data(const std::vector<AddDataRequest>& data_list) {
 
 int IndexEngine::delete_data(const std::vector<DeleteDataRequest>& data_list) {
   return impl_->delete_data(data_list);
+}
+
+int IndexEngine::rebuild_scalar_index(
+    const std::string& scalar_index_json,
+    const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) {
+  return impl_->rebuild_scalar_index(scalar_index_json, read_batch);
 }
 
 int64_t IndexEngine::dump(const std::string& dir) {

@@ -20,7 +20,7 @@ function readRequestHeader(config: AxiosRequestConfig, name: string): string {
   return typeof value === 'string' ? value : ''
 }
 
-function createRecordingClient() {
+function createRecordingClient(baseUrl = 'http://openviking.test') {
   const requests: AxiosRequestConfig[] = []
   const instance = axios.create({
     adapter: async (config) => {
@@ -36,11 +36,44 @@ function createRecordingClient() {
   })
   const client = createOvClient({
     axios: instance,
-    baseUrl: 'http://openviking.test',
+    baseUrl,
     bindSdkClient: false,
   })
   return { client, requests }
 }
+
+it('uses the documented hosted Bearer credential and returns to source headers after switching', async () => {
+  const { client, requests } = createRecordingClient(
+    'https://api.vikingdb.cn-beijing.volces.com/openviking',
+  )
+  client.setConnection({ apiKey: 'user-key' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[0], 'Authorization')).toBe(
+    'Bearer user-key',
+  )
+  expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('')
+  client.setOptions({
+    baseUrl: 'https://proxy.example/openviking',
+    apiKeyAuth: 'bearer',
+  })
+  await client.instance.get('/health', {
+    headers: { Authorization: 'Bearer candidate-key' },
+  })
+  expect(readRequestHeader(requests[1], 'Authorization')).toBe(
+    'Bearer candidate-key',
+  )
+  client.setOptions({ baseUrl: 'http://localhost:19340' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[2], 'X-API-Key')).toBe('user-key')
+  expect(readRequestHeader(requests[2], 'Authorization')).toBe('')
+  client.setOptions({
+    baseUrl: 'https://api.vikingdb.cn-beijing.volces.com/openviking',
+  })
+  client.setConnection({ apiKey: '', adminApiKey: 'source-control-key' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[3], 'Authorization')).toBe('')
+  expect(readRequestHeader(requests[3], 'X-API-Key')).toBe('')
+})
 
 describe('createOvClient API key selection', () => {
   it('uses the data API key for dashboard metrics when both keys are configured', async () => {
@@ -136,4 +169,28 @@ describe('createOvClient API key selection', () => {
     )
     expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe('bob')
   })
+})
+
+it('uses the control credential for Studio bot management only', async () => {
+  const { client, requests } = createRecordingClient()
+  client.setConnection({ adminApiKey: 'admin-key', apiKey: 'user-key' })
+  await client.instance.get('/api/v1/admin/accounts/team/bot/connections')
+  await client.instance.post('/bot/v1/chat/stream')
+  expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('admin-key')
+  expect(readRequestHeader(requests[1], 'X-API-Key')).toBe('user-key')
+})
+
+it('scopes Studio root management to the selected account without asserting a data identity', async () => {
+  const { client, requests } = createRecordingClient()
+  client.setConnection({
+    adminApiKey: 'root-key',
+    apiKey: 'user-key',
+    accountId: 'team',
+    identityHeaders: false,
+  })
+  await client.instance.get('/api/v1/admin/accounts/team/bot/connections')
+  await client.instance.get('/bot/v1/chat')
+  expect(readRequestHeader(requests[0], 'X-OpenViking-Studio-Account')).toBe('')
+  expect(readRequestHeader(requests[0], 'X-OpenViking-Account')).toBe('')
+  expect(readRequestHeader(requests[1], 'X-OpenViking-Studio-Account')).toBe('')
 })

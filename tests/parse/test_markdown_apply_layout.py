@@ -9,8 +9,10 @@ isolated while replaying their layouts.
 """
 
 import asyncio
+from pathlib import Path
 from unittest.mock import patch
 
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.markdown import MarkdownParser, _Layout, _LayoutOp
 
@@ -123,3 +125,20 @@ class TestApplyLayout:
         for name, result in zip(("a", "b"), results, strict=True):
             uri = f"{result.temp_dir_path}/{name}/{name}.md"
             assert fake.files[uri] == f"[target](../{name}.txt)"
+
+
+async def test_markdown_parser_writes_local_artifact_and_manifest(tmp_path: Path):
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    parser = MarkdownParser()
+
+    result = await parser.parse_content(
+        "# Hello\n\nworld",
+        source_path=str(tmp_path / "hello.md"),
+        parse_output_store=store,
+    )
+
+    assert result.artifact_ref is not None
+    assert result.artifact_ref.backend == "local"
+    assert result.artifact_ref.resource_rel == "hello"
+    assert Path(result.artifact_ref.root, "hello", "hello.md").read_text() == "# Hello\n\nworld"
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {"hello/hello.md"}

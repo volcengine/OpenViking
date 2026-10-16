@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -33,7 +36,7 @@ func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
 	return c.AdminListAccountsWithOptions(ctx, nil)
 }
 
-// AdminListAccountsWithOptions lists accounts (ordered by account ID), optionally
+// AdminListAccountsWithOptions lists accounts (in creation order), optionally
 // filtering by a wildcard name pattern and paging via Limit/Page.
 func (c *Client) AdminListAccountsWithOptions(ctx context.Context, opts *AdminListAccountsOptions) ([]any, error) {
 	query := url.Values{}
@@ -90,8 +93,9 @@ func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, e
 	return c.AdminListUsersWithOptions(ctx, accountID, nil)
 }
 
-// AdminListUsersWithOptions lists users in an account (ordered by user ID),
-// optionally filtering by a wildcard name pattern, role, and paging via Limit/Page.
+// AdminListUsersWithOptions lists users in an account (in creation order),
+// optionally filtering by a wildcard name pattern, role, and paging via
+// Limit/Page.
 func (c *Client) AdminListUsersWithOptions(ctx context.Context, accountID string, opts *AdminListUsersOptions) ([]any, error) {
 	query := url.Values{}
 	if opts != nil {

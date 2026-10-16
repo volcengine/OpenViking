@@ -552,7 +552,6 @@ def has_codex_auth_available() -> bool:
     )
 
 
-
 def resolve_codex_runtime_credentials(
     *,
     force_refresh: bool = False,
@@ -594,15 +593,20 @@ def resolve_codex_runtime_credentials(
                 ).expanduser()
             elif _default_codex_auth_path().exists():
                 external_path = _default_codex_auth_path()
-            external_missing = False
-            should_resync = force_refresh or (
-                refresh_if_expiring
-                and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
-            )
-            if should_resync:
-                if external_path is not None:
+            external_missing = external_path is None or not external_path.exists()
+            external_unavailable = False
+            external_payload = None
+            if external_path is not None and not external_missing:
+                if not external_path.is_file():
+                    external_unavailable = True
+                else:
                     external_payload = _load_tokens_from_source("codex-cli", external_path)
-                    if external_payload is not None:
+                    if external_payload is None:
+                        external_unavailable = True
+                    elif (
+                        external_payload["access_token"] != access_token
+                        or external_payload["refresh_token"] != refresh_token
+                    ):
                         _write_tokens_to_ov_store(
                             ov_auth_path,
                             external_payload["access_token"],
@@ -615,15 +619,12 @@ def resolve_codex_runtime_credentials(
                         payload = external_payload
                         access_token = payload["access_token"]
                         refresh_token = payload["refresh_token"]
-                    else:
-                        external_missing = True
-                else:
-                    external_missing = True
 
-            should_refresh = force_refresh or (
-                refresh_if_expiring
-                and _codex_access_token_is_expiring(access_token, refresh_skew_seconds)
+            should_refresh = refresh_if_expiring and _codex_access_token_is_expiring(
+                access_token, refresh_skew_seconds
             )
+            if force_refresh and external_missing:
+                should_refresh = True
             if should_refresh and external_missing:
                 refreshed = refresh_codex_oauth(
                     refresh_token,
@@ -649,6 +650,12 @@ def resolve_codex_runtime_credentials(
                     "path": str(ov_auth_path),
                     "auth_owner": CODEX_AUTH_OWNER_OPENVIKING,
                 }
+
+            if (force_refresh or should_refresh) and external_unavailable:
+                raise CodexAuthError(
+                    "Externally managed Codex auth exists but could not be read. "
+                    "Retry after Codex CLI finishes updating it or re-run openviking-server init."
+                )
 
             if should_refresh:
                 raise CodexAuthError(

@@ -44,21 +44,33 @@ fn compact_success_value<T: Serialize>(result: T) -> Value {
         value => return json!({ "ok": true, "result": value }),
     };
 
-    let Some(profile) = obj.remove("profile") else {
-        return json!({ "ok": true, "result": Value::Object(obj) });
+    let had_profile = obj.contains_key("profile");
+    let profile = obj.remove("profile").filter(|value| !value.is_null());
+    let has_more = if obj.contains_key("result") {
+        obj.remove("has_more").filter(|value| !value.is_null())
+    } else {
+        None
     };
-
-    let result = if obj.len() == 1 && obj.contains_key("result") {
+    let result = if (had_profile || has_more.is_some())
+        && obj.len() == 1
+        && obj.contains_key("result")
+    {
         obj.remove("result").unwrap_or(Value::Null)
     } else {
         Value::Object(obj)
     };
 
-    if profile.is_null() {
-        return json!({ "ok": true, "result": result });
+    let mut response = match profile {
+        Some(profile) => json!({ "status": "ok", "result": result, "profile": profile }),
+        None => json!({ "ok": true, "result": result }),
+    };
+    if let Some(has_more) = has_more {
+        response
+            .as_object_mut()
+            .expect("success response must be an object")
+            .insert("has_more".to_string(), has_more);
     }
-
-    json!({ "status": "ok", "result": result, "profile": profile })
+    response
 }
 
 fn print_table<T: Serialize>(result: T, compact: bool) {
@@ -1228,6 +1240,50 @@ mod tests {
                 "result": [
                     {"id": "1", "name": "alpha"}
                 ]
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_lifts_has_more_next_to_list_result() {
+        let value = json!({
+            "result": [
+                {"uri": "viking://resources/a.md"}
+            ],
+            "has_more": false
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "ok": true,
+                "result": [
+                    {"uri": "viking://resources/a.md"}
+                ],
+                "has_more": false
+            })
+        );
+    }
+
+    #[test]
+    fn test_compact_json_keeps_business_has_more_inside_result() {
+        let value = json!({
+            "items": [{"id": "1"}],
+            "has_more": true
+        });
+
+        let rendered = compact_success_value(value);
+
+        assert_eq!(
+            rendered,
+            json!({
+                "ok": true,
+                "result": {
+                    "items": [{"id": "1"}],
+                    "has_more": true
+                }
             })
         );
     }

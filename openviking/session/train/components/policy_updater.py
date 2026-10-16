@@ -15,7 +15,7 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
-from openviking.session.memory.memory_type_registry import create_default_registry
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.train.domain import (
     Policy,
@@ -118,7 +118,7 @@ class MemoryFilePolicyUpdater:
 
         try:
             updater = MemoryUpdater(
-                registry=create_default_registry(),
+                registry=get_default_registry(),
                 vikingdb=self.vikingdb,
                 transaction_handle=operation_lease,
             )

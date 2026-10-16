@@ -1,7 +1,8 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
-import { buildRecallBlock } from "./shared/recall-core.mjs";
-import { RecallLedger, ledgerKey } from "./shared/recall-ledger.mjs";
+import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
+import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
+import { RecallLedger, ledgerKey } from "./lib/recall-ledger.mjs";
 
 export interface RecallCache {
   block: string | null;
@@ -44,7 +45,23 @@ export class RecallManager {
 
     const userQuery = this.pendingPrompt;
     this.pendingPrompt = "";
-    if (userQuery.trim().length < this.config.minQueryLength) {
+    if (!isRecallEnabled(this.config)) {
+      this.cache = { block: null, promptText: userQuery };
+      return null;
+    }
+    // Filters run before the length gate, so a prompt whose only content was a
+    // stripped prefix counts as short rather than searching for the rest.
+    let query = userQuery;
+    const queryFilters = compileInputFilters(this.config.recallQueryFilters);
+    if (queryFilters.rules.length) {
+      const verdict = applyInputFilters(query, queryFilters.rules, { role: "user" });
+      if (verdict.dropped) {
+        this.cache = { block: null, promptText: userQuery };
+        return null;
+      }
+      query = verdict.text;
+    }
+    if (query.trim().length < this.config.minQueryLength) {
       this.cache = { block: null, promptText: userQuery };
       return null;
     }
@@ -53,15 +70,18 @@ export class RecallManager {
       // 10s is this extension's own budget for a bare retrieval; when the
       // request also spends a server fuse the helper hands down a longer
       // deadline, and ignoring it would abort a request still inside its fuse.
-      (path: string, init?: any, options?: any) =>
-        this.client.fetchJSON(path, init, options?.timeoutMs ?? 10000),
-      this.config as any,
-      userQuery,
+      (path, init, options) => this.client.fetchJSON(path, init, options),
+      this.config,
+      query,
       {
         actorPeerId: this.config.peerId,
+        // Under `actor` scope the effective peer is the only one asked, so a
+        // workspace whose id changed would lose everything written before it.
+        legacyPeerId: this.config.legacyPeerId,
         // Passing the OV session id is what turns on server-side query
         // expansion and the cross-turn dedup ledger.
         sessionId: this.sessionId() ?? "",
+        excludeUris: this.config.recallExcludeUris,
       },
     );
     this.cache = { block, promptText: userQuery };

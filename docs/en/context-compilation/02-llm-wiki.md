@@ -1,6 +1,6 @@
 # Example: LLM Wiki
 
-Compile a set of heterogeneous sources into a Karpathy-style, evidence-grounded, interlinked **LLM Wiki**: every page has one clear retrieval purpose, opens with a direct summary, uses consistent terminology, makes relationships explicit, keeps evidence close to the claims it supports, and is fronted by an `index.md` navigation page.
+Organize material from different sources into a Karpathy-style LLM Wiki of interlinked Markdown pages. Each page covers an entity, concept, or question, leading with a conclusion and citing its sources. An `index.md` page provides navigation.
 
 The Skill picks the smallest page type that matches each page's retrieval purpose:
 
@@ -11,11 +11,13 @@ The Skill picks the smallest page type that matches each page's retrieval purpos
 | `method` | A reusable procedure with prerequisites, ordered steps, and a verifiable outcome |
 | `comparison` | Two or more subjects evaluated side by side on explicit dimensions |
 | `analysis` | A cross-source conclusion tied to a clear question |
-| `summary` | A faithful digest of one source (only when `--reason` explicitly asks for it) |
+| `summary` | A faithful digest of one source (only when `--instruction` explicitly asks for it) |
 
-`entity` and `concept` are the defaults; the others are promoted only when they pass their stricter tests. The result is a knowledge base, not a source-by-source pile of summaries.
+The default page types are `entity` and `concept`; other types follow the conditions in the Skill. Related material from multiple sources is grouped under the same topic.
 
 Skill source: [examples/compile/ov-compile-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/llm-wiki) · Visualization script: [examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
+
+Check the [prerequisites](01-overview.md#prerequisites) and run these commands from the OpenViking repository root. Replace the source directory with your own material.
 
 ## Step 1: Prepare the sources
 
@@ -28,7 +30,7 @@ ov add-resource ./my-research --to viking://resources/research --wait
 # Or write a single file
 ov mkdir viking://resources/research
 ov write viking://resources/research/notes.md \
-  --from-file ./notes.md --mode create --wait
+  --from-file ./notes.md --mode create
 ```
 
 Confirm the source is in place:
@@ -39,17 +41,17 @@ ov ls -r viking://resources/research
 
 ## Step 2: Add the Skill
 
-Install the LLM Wiki Skill. By default it lands in your user-private skills namespace; use `-p viking://agent/skills` to make it shared across the team:
+This example installs the Skill under `viking://agent/skills`, matching the compile command below. Omit `-p` for a private installation, then use the returned URI in `--skill`:
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki --wait
+ov add-skill examples/compile/ov-compile-skills/llm-wiki -p viking://agent/skills --wait
 ```
 
 Find the installed Skill URI:
 
 ```bash
 ov skills list
-# → viking://agent/skills/llm-wiki  (or viking://user/<you>/skills/llm-wiki)
+# → viking://agent/skills/llm-wiki
 ```
 
 ## Step 3: Run compile
@@ -59,13 +61,12 @@ ov compile \
   --from viking://resources/research \
   --to viking://resources/research-wiki \
   --skill viking://agent/skills/llm-wiki \
-  --reason "Organize into a team-searchable Wiki, keeping the source of every claim" \
-  --wait
+  --instruction "Organize into a team-searchable Wiki, keeping the source of every claim"
 ```
 
 - `--from` can be repeated or comma-separated to pass multiple sources at once.
 - The `--to` directory is created automatically if it does not exist.
-- Add `-o json` for machine-readable output; drop `--wait` to avoid blocking and poll with the returned `task_id`:
+- Add `-o json` for machine-readable output. The command returns a `task_id` immediately; use it to inspect or cancel the task:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -128,4 +129,4 @@ python examples/compile/graph-show/llm-wiki/wiki_graph.py \
 
 - [Context Compilation Overview](./01-overview.md)
 - [Knowledge Graph example](./03-knowledge-graph.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

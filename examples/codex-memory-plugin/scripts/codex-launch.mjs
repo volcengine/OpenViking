@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { win32 } from "node:path";
+import { accessSync, constants, existsSync } from "node:fs";
+import { delimiter, join, win32 } from "node:path";
 
 function stripPathQuotes(value) {
   const entry = String(value || "").trim();
@@ -72,4 +72,19 @@ export function trySpawnCodex(args, options, {
   } catch (error) {
     return { ...launch, child: null, error };
   }
+}
+
+/** Check the executable without starting a model or a CLI subprocess. */
+export function isCodexAvailable({
+  platform = process.platform,
+  pathValue = process.env.PATH || "",
+  canExecute = (path) => {
+    try { accessSync(path, constants.X_OK); return true; } catch { return false; }
+  },
+  pathExists = existsSync,
+} = {}) {
+  if (platform === "win32") {
+    return resolveCodexLaunch({ platform, pathValue, pathExists }).command !== "codex";
+  }
+  return pathValue.split(delimiter).some((entry) => canExecute(join(entry || ".", "codex")));
 }

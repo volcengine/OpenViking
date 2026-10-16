@@ -7,8 +7,8 @@ const resources = {
   requestLogs: {
     accessRequired: {
       description:
-        'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
-      title: 'Admin access required',
+        'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
+      title: 'Connection identity required',
     },
     clear: 'Clear',
     description:
@@ -37,7 +37,7 @@ const resources = {
       description: 'Failed to load audited request logs from the server.',
       title: 'Request failed',
     },
-    eyebrow: 'Playground telemetry',
+    eyebrow: 'Server API telemetry',
     filters: {
       all: 'All logs',
       apiTypePlaceholder: 'API type',
@@ -62,9 +62,9 @@ const resources = {
     reset: 'Reset',
     searchPlaceholder: 'Filter method, path, or status',
     scope: {
-      currentIdentity: 'Current scope: Current API key identity',
+      currentIdentity: 'Current scope: Current connection identity',
       currentIdentityWithName:
-        'Current scope: Current API key identity ({{identity}})',
+        'Current scope: Current connection identity ({{identity}})',
     },
     status: {
       error: 'ERR',
@@ -133,6 +133,10 @@ const resources = {
     tooManyFiles: 'Only the first {{count}} files were kept.',
     error: 'Request Failed',
     dirPicker: {
+      scope: 'Resource scope',
+      mine: 'My resources',
+      shared: 'Shared resources',
+
       title: 'Select Directory',
       select: 'Select',
       cancel: 'Cancel',
@@ -311,6 +315,7 @@ const resources = {
     tagMode: 'Tag Write Mode',
     'tagMode.replace': 'Replace',
     'tagMode.append': 'Append',
+    'tagMode.clear': 'Clear',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',
@@ -415,6 +420,14 @@ const resources = {
       },
     },
     filePreview: {
+      editFailed: 'Unable to load the complete file for editing.',
+      saveFailed: 'Unable to save the file.',
+      directoryLevels: {
+        abstractLabel: 'Abstract',
+        overviewLabel: 'Overview',
+        abstractDescription: 'Short semantic abstract',
+        overviewDescription: 'Directory overview',
+      },
       cancel: 'Cancel',
       edit: 'Edit',
       emptyFile: '(empty file)',
@@ -429,6 +442,14 @@ const resources = {
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',
       markdownSource: 'Source',
+      mermaid: {
+        diagramLabel: 'Mermaid diagram',
+        errorDetails: 'Error details',
+        loading: 'Rendering Mermaid diagram...',
+        renderFailed: 'Unable to render Mermaid diagram.',
+        showSource: 'Show Mermaid source',
+        unknownError: 'Unknown Mermaid rendering error.',
+      },
       noDirectoryContext: 'No abstract or overview available for this folder.',
       save: 'Save',
       selectDirectoryContext: 'Select a chip to show folder context.',
@@ -459,6 +480,12 @@ const resources = {
     },
   },
   retrieval: {
+    modeDescriptions: {
+      find: 'Find relevant context by meaning for a standalone query.',
+      search: 'Search by meaning, optionally using session context.',
+      grep: 'Match file contents using text or a regular expression.',
+      glob: 'Find files using a path pattern, such as **/*.md.',
+    },
     title: 'Retrieval',
     searchPlaceholder: 'Search context',
     placeholders: {
@@ -528,7 +555,7 @@ const resources = {
     detail: {
       score: 'Score',
       level: 'Level',
-      openPlayground: 'Open in Playground',
+      openFilesystem: 'Open in Filesystem',
       uri: 'URI',
       summary: 'Summary',
       noSummary: 'No summary available',

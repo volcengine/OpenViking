@@ -28,9 +28,10 @@ import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact", cfg);
 let activePeerId = cfg.peerId || "";
 
@@ -52,9 +53,9 @@ function noop(message) {
   output(message ? { systemMessage: message } : {});
 }
 
-async function compact(sessionId, transcriptPath, trigger, heartbeat) {
+async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
   const state = await loadState(sessionId);
-  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
@@ -136,42 +137,28 @@ async function compact(sessionId, transcriptPath, trigger, heartbeat) {
   return `OpenViking session ${liveOvSessionId} is committed` + (traceId ? ` (trace_id=${traceId})` : "");
 }
 
-async function main() {
-  if (!cfg.autoCommitOnCompact) {
-    log("skip", { stage: "init", reason: "autoCommitOnCompact disabled" });
-    noop();
-    return;
-  }
-
-  let input;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    noop();
-    return;
-  }
-
-  const sessionId = input.session_id || "unknown";
-  const transcriptPath = input.transcript_path || null;
-  const trigger = input.trigger || "auto";
+runHookStage({
+  loadConfig,
+  gates: { enabled: (reloaded) => reloaded.autoCommitOnCompact },
+  envelope: noop,
+  onSkip: (reason) => log("skip", { stage: "init", reason }),
+}, async (stage) => {
+  cfg = stage.cfg;
+  const sessionId = stage.input.session_id || "unknown";
+  const transcriptPath = stage.input.transcript_path || null;
+  const trigger = stage.input.trigger || "auto";
 
   // Compaction means the thread is running, so any earlier end marker is stale.
   await clearEnded(sessionId, { before: HOOK_STARTED_AT });
 
   const outcome = await withSessionLock(
     sessionId,
-    ({ heartbeat }) => compact(sessionId, transcriptPath, trigger, heartbeat),
+    ({ heartbeat }) => compact(sessionId, transcriptPath, trigger, stage.cwd, heartbeat),
     { waitMs: LOCK_WAIT_MS },
   );
   if (outcome.skipped) {
     logError("lock_timeout", `another writer holds ${sessionId}; leaving state untouched`);
-    noop();
     return;
   }
-  noop(outcome.value);
-}
-
-main().catch((err) => { logError("uncaught", err); noop(); });
+  return outcome.value;
+}).catch((err) => { logError("uncaught", err); noop(); });

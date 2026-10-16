@@ -11,7 +11,10 @@ import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from openviking.parse.feishu_import import FeishuImportPlan
 
 
 class SourceType:
@@ -58,6 +61,8 @@ class LocalResource:
     is_temporary: bool = True
     """Whether this is a temporary resource that can be cleaned up after parsing."""
 
+    feishu_plan: Optional["FeishuImportPlan"] = None
+
     def cleanup(self) -> None:
         """
         Clean up the local resource if it's temporary.
@@ -97,6 +102,11 @@ class DataAccessor(ABC):
     """
     Abstract base class for data accessors.
 
+    Registry-owned accessor instances may be shared by concurrent requests.
+    Implementations must therefore be reentrant: constructor state must be
+    immutable or concurrency-safe, and request-scoped mutable state must live
+    in local variables or in an operation object created by ``access()``.
+
     Data Accessors are responsible for:
     - Detecting if they can handle a given source
     - Fetching the data from the source to a local path
@@ -124,6 +134,11 @@ class DataAccessor(ABC):
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
         Fetch the source and make it available locally.
+
+        The same accessor instance may execute this method concurrently. Do not
+        store request-specific credentials, configuration, clients, temporary
+        paths, or progress on ``self``. If an implementation needs shared state
+        within one access operation, create a request-scoped operation object.
 
         Args:
             source: Source string (URL, path, etc.) or Path object

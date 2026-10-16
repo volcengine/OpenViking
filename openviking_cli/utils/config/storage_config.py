@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from openviking_cli.utils.logger import get_logger
 
 from .agfs_config import AGFSConfig
+from .parse_output_config import ParseOutputConfig
 from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
 
@@ -26,8 +27,9 @@ class StorageConfig(BaseModel):
     skip_process_lock: bool = Field(
         default=False,
         description=(
-            "Skip the startup PID lock for the workspace directory. Use only when you "
-            "explicitly accept the risk of multi-process storage contention."
+            "Skip the workspace file lock for embedded vector backends ('local', 'cuvs'). "
+            "Other backends do not acquire this lock. Use only when you explicitly accept "
+            "the risk of multi-process contention on embedded vector storage."
         ),
     )
 
@@ -43,11 +45,14 @@ class StorageConfig(BaseModel):
         description="VectorDB backend configuration",
     )
 
+    parse_output: ParseOutputConfig = Field(
+        default_factory=ParseOutputConfig,
+        description="Where parsers write intermediate artifacts (agfs temp or local dir)",
+    )
+
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod
@@ -90,18 +95,6 @@ class StorageConfig(BaseModel):
                 "StorageConfig: 'transaction.redo_recovery_enabled' is deprecated and ignored. "
                 "Session commit phase-2 recovery now resumes from the persistent "
                 "'session_commit' queue."
-            )
-
-        if self.agfs.path is not None:
-            logger.warning(
-                f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.agfs.path}'"
-            )
-
-        if self.vectordb.path is not None:
-            logger.warning(
-                f"StorageConfig: 'vectordb.path' is deprecated and will be ignored. "
-                f"Using '{self.workspace}' from workspace instead of '{self.vectordb.path}'"
             )
 
         # Update paths to use workspace (expand ~ first)

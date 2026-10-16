@@ -23,3 +23,6 @@ def test_entity_filename_is_case_insensitive(schema_path):
     upper_path = template.render(category="CONCEPT", name="SMART")
 
     assert lower_path == upper_path == "concept/smart.md"
+    fields = {field["name"]: field for field in schema["fields"]}
+    assert fields["category"]["merge_op"] == "replace"
+    assert fields["name"]["merge_op"] == "replace"

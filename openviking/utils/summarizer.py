@@ -5,14 +5,15 @@
 Handles summarization and key information extraction.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -22,6 +23,28 @@ if TYPE_CHECKING:
     from openviking.server.identity import RequestContext
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class FileRefreshRequest:
+    """One committed flat-file change awaiting parent semantic maintenance.
+
+    This is an execution-time input for the shared summarizer, not a durable
+    RNFV or queue schema.  A batch coordinator collects one request per
+    successfully committed file and lets :meth:`refresh_file_parents` coalesce
+    them by direct parent.
+    """
+
+    file_uri: str
+    created: bool = False
+    md5: str | None = None
+    abstract: str = ""
+    vector_action: str = ""
+    ingest_options: IngestOptions = field(default_factory=IngestOptions)
+
+    def __post_init__(self) -> None:
+        if self.vector_action not in {"", "upsert", "merge"}:
+            raise ValueError(f"unsupported file vector action: {self.vector_action}")
 
 
 class Summarizer:
@@ -40,57 +63,169 @@ class Summarizer:
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         created: bool = False,
+        file_md5: str | None = None,
+        file_abstract: str = "",
+        file_vector_action: str = "",
+        generation_trigger: str = "semantic_refresh",
+        force_refresh: bool | None = None,
     ) -> Dict[str, Any]:
-        """Summarize one flat file and refresh its parent directory semantics."""
+        """Summarize one flat file and refresh its parent directory semantics.
+
+        ``force_refresh`` controls parent-directory aggregation. ``None`` (the
+        default used by resource ingest) always aggregates immediately. A boolean
+        opts into the freshness gate: the changed file is still summarized and
+        vectorized, but parent L0/L1 aggregation is deferred by the freshness
+        policy unless ``force_refresh`` is ``True``. The returned
+        ``semantic_action`` reports the gate decision so callers can surface a
+        ``deferred``/``skipped`` status.
+        """
         parent = VikingURI(file_uri).parent
         if parent is None:
             return {"status": "error", "message": f"file has no parent URI: {file_uri}"}
+        result = await self.refresh_file_parents(
+            changes=(
+                FileRefreshRequest(
+                    file_uri=file_uri,
+                    created=created,
+                    md5=file_md5,
+                    abstract=file_abstract,
+                    vector_action=file_vector_action,
+                    ingest_options=IngestOptions.from_value(ingest_options),
+                ),
+            ),
+            ctx=ctx,
+            skip_vectorization=skip_vectorization,
+            ingest_options=ingest_options,
+            generation_trigger=generation_trigger,
+            force_refresh=force_refresh,
+        )
+        return {
+            "status": "success",
+            "enqueued_count": result["enqueued_count"],
+            "semantic_action": result["parent_actions"][parent.uri.rstrip("/")],
+        }
+
+    async def refresh_file_parents(
+        self,
+        *,
+        changes: Sequence[FileRefreshRequest],
+        ctx: "RequestContext",
+        skip_vectorization: bool = False,
+        ingest_options: IngestOptions | None = None,
+        generation_trigger: str = "semantic_refresh",
+        force_refresh: bool | None = None,
+    ) -> Dict[str, Any]:
+        """Queue flat-file semantic maintenance grouped by each direct parent.
+
+        A file remains the RNFV planning unit, while this execution helper owns
+        the batch-only concern: one freshness decision and at most one
+        ``SemanticMsg`` for every direct parent directory.
+        """
+        from openviking.storage.abstract_overview import plan_abstract_overview_refresh
+        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+        from openviking_cli.utils.config import get_openviking_config
+
+        grouped: dict[str, list[FileRefreshRequest]] = defaultdict(list)
+        for change in changes:
+            parent = VikingURI(change.file_uri).parent
+            if parent is None:
+                raise ValueError(f"file has no parent URI: {change.file_uri}")
+            grouped[parent.uri.rstrip("/")].append(change)
+
+        if not grouped:
+            return {"status": "success", "enqueued_count": 0, "parent_actions": {}}
 
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        parent_uri = parent.uri.rstrip("/")
-        msg = SemanticMsg(
-            uri=parent_uri,
-            context_type=context_type_for_uri(file_uri),
-            recursive=False,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            peer_id=ctx.user.user_id,
-            role=str(ctx.role),
-            skip_vectorization=skip_vectorization,
-            telemetry_id=telemetry_id,
-            changes={"added" if created else "modified": [file_uri]},
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=context_type_for_uri(file_uri),
+        parent_actions: dict[str, str] = {}
+        enqueued_count = 0
+        for parent_uri, parent_changes in sorted(grouped.items()):
+            context_types = {context_type_for_uri(change.file_uri) for change in parent_changes}
+            if len(context_types) != 1:
+                raise ValueError(f"mixed context types under parent refresh: {parent_uri}")
+            context_type = context_types.pop()
+            added = sorted(change.file_uri for change in parent_changes if change.created)
+            modified = sorted(change.file_uri for change in parent_changes if not change.created)
+
+            semantic_action = FreshnessAction.REFRESH_NOW
+            if force_refresh is not None:
+                semantic_config = get_openviking_config().semantic
+                try:
+                    decision = await plan_abstract_overview_refresh(
+                        viking_fs=get_viking_fs(),
+                        dir_uri=parent_uri,
+                        changed_entries=len(parent_changes),
+                        ctx=ctx,
+                        overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                        refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                        force_refresh=force_refresh,
+                    )
+                    semantic_action = decision.action
+                except LockAcquisitionError:
+                    # Parent aggregation is best-effort; changed-file work still runs.
+                    logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
+                    semantic_action = FreshnessAction.NOOP
+            parent_actions[parent_uri] = semantic_action.value
+            aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
+
+            msg = SemanticMsg(
                 uri=parent_uri,
+                context_type=context_type,
+                recursive=False,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
-            ),
-            ingest_options=ingest_options,
-        )
-        if telemetry_id:
-            get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
-        try:
+                role=str(ctx.role),
+                skip_vectorization=skip_vectorization,
+                telemetry_id=telemetry_id,
+                changes={
+                    change_type: uris
+                    for change_type, uris in (("added", added), ("modified", modified))
+                    if uris
+                },
+                coalesce_key=(
+                    build_semantic_coalesce_key(
+                        context_type=context_type,
+                        uri=parent_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        peer_id=ctx.user.user_id,
+                    )
+                    if aggregate_directory
+                    else ""
+                ),
+                generation_trigger=generation_trigger,
+                aggregate_directory=aggregate_directory,
+                ingest_options=ingest_options,
+                file_md5s={change.file_uri: change.md5 for change in parent_changes if change.md5}
+                or None,
+                file_abstracts={
+                    change.file_uri: change.abstract for change in parent_changes if change.abstract
+                }
+                or None,
+                file_vector_actions={
+                    change.file_uri: change.vector_action
+                    for change in parent_changes
+                    if change.vector_action
+                },
+                file_ingest_options={
+                    change.file_uri: change.ingest_options
+                    for change in parent_changes
+                    if change.ingest_options != IngestOptions()
+                },
+            )
             enqueue_id = await semantic_queue.enqueue(msg)
-        except Exception as exc:
-            if telemetry_id:
-                get_request_wait_tracker().mark_semantic_failed(
-                    telemetry_id,
-                    msg.id,
-                    str(exc),
-                )
-            raise
-        if enqueue_id == "deduplicated":
-            if telemetry_id:
-                get_request_wait_tracker().mark_semantic_done(
-                    telemetry_id,
-                    msg.id,
-                    processed_delta=0,
-                )
-            return {"status": "success", "enqueued_count": 0}
-        return {"status": "success", "enqueued_count": 1}
+            if enqueue_id == "deduplicated":
+                continue
+            else:
+                enqueued_count += 1
+        return {
+            "status": "success",
+            "enqueued_count": enqueued_count,
+            "parent_actions": parent_actions,
+        }
 
     async def summarize(
         self,
@@ -111,6 +246,17 @@ class Summarizer:
         ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
         source = kwargs.get("semantic_source")
         generation_trigger = str(kwargs.get("generation_trigger") or "manual_refresh")
+        # Pre-computed change set (local incremental import): when present, the
+        # semantic tree restricts re-summarization/vectorization to these files
+        # instead of diffing the whole tree.
+        changes = kwargs.get("changes")
+        # Per-file md5 (target-URI keyed) for those changed files, so the tree executor's
+        # re-vectorization records the fresh fingerprint.
+        file_md5s = kwargs.get("file_md5s") or {}
+        artifact_ref = kwargs.get("artifact_ref")
+        artifact_files = kwargs.get("artifact_files") or []
+        file_abstracts = kwargs.get("file_abstracts") or {}
+        semantic_plan = kwargs.get("semantic_plan")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -127,20 +273,6 @@ class Summarizer:
         lock_handoff: Optional[Dict[str, Any]] = None
         if lock is not None:
             lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
-        target_preexisting_arg = kwargs.get("target_preexisting")
-
-        def resolve_target_preexisting(index: int, target_uri: str) -> Optional[bool]:
-            if target_preexisting_arg is None:
-                return None
-            if isinstance(target_preexisting_arg, dict):
-                value = target_preexisting_arg.get(target_uri)
-                return None if value is None else bool(value)
-            if isinstance(target_preexisting_arg, (list, tuple)):
-                if index >= len(target_preexisting_arg):
-                    return None
-                value = target_preexisting_arg[index]
-                return None if value is None else bool(value)
-            return bool(target_preexisting_arg)
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -177,7 +309,7 @@ class Summarizer:
             else:
                 enqueue_units.append((uri, temp_uri))
 
-            for idx, (target_uri, source_uri) in enumerate(enqueue_units):
+            for target_uri, source_uri in enqueue_units:
                 msg = SemanticMsg(
                     uri=source_uri,
                     context_type=context_type,
@@ -191,28 +323,18 @@ class Summarizer:
                     target_uri=target_uri if target_uri != source_uri else None,
                     lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
-                    target_preexisting=resolve_target_preexisting(idx, target_uri),
                     ingest_options=ingest_options,
                     source=source,
                     generation_trigger=generation_trigger,
+                    changes=changes,
+                    file_md5s=file_md5s,
+                    artifact_ref=artifact_ref,
+                    artifact_files=artifact_files,
+                    file_abstracts=file_abstracts,
+                    plan=semantic_plan,
                 )
-                if msg.telemetry_id:
-                    get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
-                try:
-                    enqueue_id = await semantic_queue.enqueue(msg)
-                except Exception as e:
-                    if msg.telemetry_id:
-                        get_request_wait_tracker().mark_semantic_failed(
-                            msg.telemetry_id, msg.id, str(e)
-                        )
-                    raise
+                enqueue_id = await semantic_queue.enqueue(msg)
                 if enqueue_id == "deduplicated":
-                    if msg.telemetry_id:
-                        get_request_wait_tracker().mark_semantic_done(
-                            msg.telemetry_id,
-                            msg.id,
-                            processed_delta=0,
-                        )
                     logger.info("Semantic generation already queued for: %s", target_uri)
                     continue
                 enqueued_count += 1

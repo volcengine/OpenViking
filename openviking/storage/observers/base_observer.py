@@ -7,6 +7,7 @@ Defines the common interface that all observers must implement.
 """
 
 import abc
+from typing import Any
 
 
 class BaseObserver(abc.ABC):
@@ -26,6 +27,10 @@ class BaseObserver(abc.ABC):
             Formatted table string representation of status information
         """
         pass
+
+    def get_status_json(self) -> Any | None:
+        """Return structured status information when available."""
+        return None
 
     @abc.abstractmethod
     def is_healthy(self) -> bool:

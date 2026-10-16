@@ -1,123 +1,46 @@
-# Introduction
+# What OpenViking does
 
-**OpenViking** is an open-source context database designed specifically for AI Agents. OpenViking unifies the management of context (memory, resources, and skills) that Agents need through a **file system paradigm**, enabling **hierarchical context delivery** and **self-iteration**. The ultimate goal is to lower the barrier for Agent development, allowing developers to focus on business innovation rather than underlying context management.
+OpenViking is an open-source context database for AI agents. It organizes sources, memories and skills in one virtual file system so agents can find relevant content and reuse it in later tasks.
 
-## Why OpenViking
+If your sources are hard to find, you keep repeating background in new conversations, or useful experience is difficult to reuse, choose a path below.
 
-In the AI era, data is abundant, but high-quality context is scarce. When building AI Agents, developers often face these challenges:
+## Start with your task
 
-- **Context Fragmentation**: Memory in code, resources in vector databases, skills scattered everywhere — difficult to manage uniformly
-- **Context Explosion**: Long-running Agent tasks generate context with each execution; simple truncation or compression leads to information loss
-- **Poor Retrieval Quality**: Traditional RAG uses flat storage, lacking global perspective and struggling to understand complete context
-- **Context Opacity**: Traditional RAG's implicit retrieval pipeline is like a black box, making debugging difficult
-- **Limited Memory Iteration**: Current memory systems only record user memories, lacking Agent-related task memories
+| What you want to do | First step | Then continue to |
+| --- | --- | --- |
+| Help an agent find evidence in project sources | [Import and retrieve your first document](02-quickstart.md) | Replace the sample with your sources and [evaluate the result](06-evaluate.md) |
+| Add cross-session memory to an existing agent | [Choose an agent integration](../agent-integrations/01-overview.md) | Follow its installation guide, then [check memory across two sessions](06-evaluate.md#check-memory-across-two-sessions) |
+| Use context in your own application | [Application workflows](../workflows/01-overview.md) | Choose a resource, session or skill workflow, then look up its APIs |
+| Turn sources into a wiki, graph or report | [Context Compilation Overview](../context-compilation/01-overview.md) | Choose an output and check it against familiar sources |
 
-OpenViking is designed to solve these pain points.
+**Not sure where to start?** [Import and retrieve your first document](02-quickstart.md). This path uses a small document to connect, import, retrieve and read the source, without requiring you to study the architecture first.
 
-## Core Features
+If you already have a service URL and API key, [install and use the CLI](05-cli-setup.md). To provide a service yourself, choose a [deployment path](../guides/00-overview.md). To use the agent included with OpenViking, see [VikingBot Installation and Configuration](../guides/17-vikingbot.md).
 
-### 1. File System Management Paradigm
+## Turn a first result into a working habit
 
-Moving away from traditional flat database thinking, all context is organized as a virtual file system. Agents no longer rely solely on vector search to find data — they can locate and browse data through deterministic paths and standard file system commands.
+1. **Get a first result.** Confirm that you can read imported content, beyond checking service health.
+2. **Try your own task.** Use sources with known answers or context needed across sessions. Check what is found and used through [Evaluate OpenViking on your tasks](06-evaluate.md).
+3. **Connect it to your work.** Choose an agent, application or compilation workflow. Add deployment and access controls when you need to share the service.
 
-**Unified URI Identification**: Each context is assigned a unique `viking://` URI, enabling precise location and access to resources stored in different locations.
+If something fails, use [observability and diagnostics](../guides/05-observability.md) to distinguish connection, processing and retrieval problems.
 
-```
-viking://
-├── resources/              # Resources: project docs, code repos, web pages
-│   └── my_project/
-├── user/
-│   └── {user_id}/          # Private context for the current user
-│       ├── memories/       # User memories
-│       ├── resources/      # Private user resources
-│       ├── skills/         # Private user skills (default)
-│       ├── peers/
-│       │   └── {peer_id}/
-│       │       ├── memories/
-│       │       └── resources/
-│       └── sessions/
-└── agent/
-    └── skills/             # Optional account-wide shared skills
-```
+## How context is organized
 
-**Three Context Types**:
+| Context | What it stores |
+| --- | --- |
+| Resources | Documents, code repositories and other external sources |
+| Memories | Preferences, facts and experience extracted from sessions |
+| Skills | Instructions and supporting files for reusable workflows |
 
-| Type | Purpose | Lifecycle |
-|------|---------|-----------|
-| **Resource** | Knowledge and rules (docs, code, FAQ) | Long-term, relatively static |
-| **Memory** | Agent's cognition (user preferences, learned experiences) | Long-term, dynamically updated |
-| **Skill** | Callable capabilities (tools, MCP) | Long-term, static |
+Content is addressed by a `viking://` URI. Browse a known path, or retrieve a match and then read it. [Context Types](../concepts/02-context-types.md) and [Viking URI](../concepts/04-viking-uri.md) explain the objects and their scope.
 
-**Unix-like API**: Familiar command-style operations
+## Load context in layers
 
-```python
-client.find(query="user authentication")       # Semantic search
-client.ls(uri="viking://resources/")            # List directory
-client.read(uri="viking://resources/doc")       # Read content
-client.abstract(uri="viking://...")             # Get L0 abstract
-client.overview(uri="viking://...")             # Get L1 overview
-```
+During semantic processing, OpenViking can generate directory abstracts (L0) and overviews (L1), then load source content (L2) when needed. L0 and L1 are directory sidecars; availability depends on processing state and configuration. They are not a fixed pair of summaries for every file. See [Context Layers](../concepts/03-context-layers.md).
 
-### 2. Hierarchical Context On-Demand Loading
+## Build memory from sessions
 
-Stuffing massive context into prompts all at once is not only expensive but also risks exceeding model windows and introducing noise. OpenViking automatically processes context into three levels upon ingestion:
+Applications record messages and commit sessions for asynchronous extraction under a memory policy. Plugins can automate some of these steps; check the [capability comparison](../agent-integrations/16-capability-reference.md) for their scope. Inspect the actual output and recall behavior to learn what was retained and used.
 
-| Level | Name | Default body limit | Purpose |
-| --- | --- | --- | --- |
-| **L0** | Abstract | 256 characters | Vector search, quick filtering |
-| **L1** | Overview | 4000 characters | Rerank, content navigation |
-| **L2** | Detail | No uniform limit | Full content, on-demand loading |
-
-```
-viking://resources/my_project/
-├── .abstract.md               # L0 layer: abstract
-├── .overview.md               # L1 layer: overview
-├── docs/
-│   ├── .abstract.md          # Semantically processed directories commonly have L0/L1
-│   ├── .overview.md
-│   └── api.md                # L2 layer: full content
-└── src/
-```
-
-L0/L1 are directory sidecars, not per-file sidecars, and they are not guaranteed to coexist. See [Context Layers](../concepts/03-context-layers.md).
-
-### 3. Directory Recursive Retrieval
-
-Single vector retrieval struggles with complex query intents. OpenViking implements an innovative **directory recursive retrieval strategy**:
-
-1. **Intent Analysis**: Generate multiple retrieval conditions through intent analysis
-2. **Initial Positioning**: Use vector retrieval to quickly locate high-scoring directories
-3. **Fine Exploration**: Perform secondary retrieval within directories, updating candidate sets with high-scoring results
-4. **Recursive Descent**: If subdirectories exist, recursively repeat the secondary retrieval
-5. **Result Aggregation**: Return the most relevant context
-
-This "lock onto high-scoring directories first, then explore content in detail" strategy not only finds semantically matching fragments but also understands the complete context of information.
-
-### 4. Visualized Retrieval Traces
-
-OpenViking's organization uses a hierarchical virtual file system structure, with all context integrated in a unified format and each entry corresponding to a unique URI, breaking away from traditional flat black-box management.
-
-The retrieval process uses directory recursive strategy, with complete traces of directory browsing and file positioning preserved for each retrieval, enabling clear observation of problem sources and guiding retrieval logic optimization.
-
-### 5. Automatic Session Management
-
-OpenViking includes a memory self-iteration loop. After a session is committed, the system asynchronously analyzes task outcomes and user feedback, then updates memory for the current user or Peer according to the active memory policy.
-
-**Built-in memory types**:
-
-| Purpose | Built-in types | Description |
-|---------|----------------|-------------|
-| **User and environment understanding** | `profile`, `preferences`, `entities`, `events` | User profile, preferences, entities, and events |
-| **Assistant identity and continuity** | `identity`, `soul` | Assistant identity, boundaries, style, and continuity |
-| **Task execution and learning** | `cases`, `trajectories`, `experiences`, `tools`, `skills` | Trainable cases, execution traces, reusable experience, and tool/skill usage knowledge |
-
-OpenViking lets applications extend or adjust memory types for their own needs.
-
-Enabling Agents to become "smarter with use" through world interaction, achieving self-evolution.
-
-## Next Steps
-
-- [Quick Start](./02-quickstart.md) - Get started in 5 minutes
-- [Architecture Overview](../concepts/01-architecture.md) - Understand system design
-- [Context Types](../concepts/02-context-types.md) - Deep dive into three context types
-- [Retrieval Mechanism](../concepts/07-retrieval.md) - Learn about retrieval flow
+For a reading path through these mechanisms, start with [Concepts and principles](../concepts/00-overview.md). To continue with a task, choose a link under “Use it in your work” in the sidebar.

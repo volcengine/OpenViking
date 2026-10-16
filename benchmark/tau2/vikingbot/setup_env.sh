@@ -5,7 +5,7 @@
 #   1. creates a fresh .venv at the OpenViking repo root (if missing)
 #   2. clones tau2-bench into ./tau2-bench (if missing; external dependency)
 #   3. installs openviking + vikingbot  (pip install -e .[bot]  -> runs the Cargo build;
-#      the [bot] extra provides prompt_toolkit/gradio/mcp/... needed by the runner and
+#      the [bot] extra provides prompt_toolkit/mcp/... needed by the runner and
 #      `openviking-server --with-bot`)
 #   4. ensures the ragfs_python native binding is built (via maturin) and bundled into
 #      openviking/lib/ (the editable install can skip it under pip build isolation)
@@ -121,7 +121,7 @@ _setup_install() {
     echo "[setup_env] WARNING: 'cargo' not found on PATH; the openviking Rust build may fail." >&2
   fi
   # Install with the [bot] extra: the vikingbot runner imports vikingbot.cli and
-  # `openviking-server --with-bot` needs the bot deps (prompt_toolkit, gradio, mcp, ...).
+  # `openviking-server --with-bot` needs the bot deps (prompt_toolkit, mcp, ...).
   echo "[setup_env] Installing openviking + vikingbot with bot extras (pip install -e ${REPO_ROOT}[bot])"
   "${PY}" -m pip install -e "${REPO_ROOT}[bot]" || { echo "[setup_env] openviking install failed"; return 1; }
 

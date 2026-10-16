@@ -2,12 +2,15 @@
 
 RAGFS cache is an optional read-cache layer for OpenViking. It speeds up full file reads and directory reads. It is only an acceleration layer, not the source of truth; backend filesystem data remains authoritative.
 
-Assumptions:
+CachedFileSystem assumptions:
 
-- Only one OpenViking / RAGFS process writes to the same namespace.
+- Only one OpenViking / RAGFS process writes to the same cache namespace.
 - File and directory changes go through RAGFS.
 - The backend is not modified externally by bypassing RAGFS.
 - After a cache Provider successfully writes or deletes one key, later reads of that key do not return the old value.
+
+These assumptions apply to the read-cache layer. QueueFS and PathLock also use
+CacheRuntime, but define their own consistency rules.
 
 ## Quick Start
 
@@ -22,6 +25,7 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
 
 ```json
 {
+  "service_name": "openviking-server",
   "cache": {
     "provider": "redis",
     "params": {
@@ -39,9 +43,12 @@ Configure the global top-level `cache` Provider, then select `backend=cache` und
       "backend": "local",
       "cachefs": {
         "backend": "cache",
-        "namespace": "openviking",
         "max_file_size_bytes": 1048576,
         "bypass_prefixes": ["/queue", "/tmp"]
+      },
+      "pathlock": {
+        "provider": "cache",
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -52,6 +59,11 @@ Start Redis and OpenViking:
 
 ```bash
 redis-server
+```
+
+In a second terminal, start OpenViking:
+
+```bash
 openviking-server --config ~/.openviking/ov.conf
 ```
 
@@ -66,9 +78,38 @@ Available Providers:
 | Provider | Best for | Notes |
 |----------|----------|-------|
 | `redis` | Default delivery on standard networks | Built into RAGFS; supports standalone, Cluster, and Sentinel |
-| `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Not implemented in this release; returns UnsupportedProvider |
+| `dynamic` | YuanRong, Mooncake, or closed-source cache systems | Loaded from an external shared library through the versioned C ABI |
 
 `MemoryMockProvider` is only used by unit and smoke tests; it is not a production configuration option.
+
+### Cache-backed PathLock
+
+Set `storage.agfs.pathlock.provider` to `cache` to coordinate path locks
+between OpenViking processes through the shared Redis CacheRuntime.
+OpenViking derives the PathLock Redis namespace from top-level `service_name`.
+Use distinct service names for independent deployments. Distributed path
+locking does not remove the single-writer requirement of CachedFileSystem.
+Cache-backed PathLock only supports the built-in Redis Provider.
+
+Redis HASH keys are partitioned by logical path scope:
+
+```text
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
+```
+
+`{service_name}` is used as the Redis Cluster
+hash tag, so all PathLock keys for one deployment remain in one slot. Tree
+conflict checks scan only the HASH for
+the request scope. `/` and `/local` use the global HASH but do not scan
+account or `_system` HASHes. A batch containing paths from different scopes
+is rejected.
+
+Do not run versions that use the legacy single HASH key together with versions
+that use scoped keys. Stop old writers, wait at least
+`2 * lock_expire_secs` for legacy keys to expire, and then start the new
+version.
 
 ## Breaking Configuration Change
 
@@ -81,13 +122,10 @@ Legacy cache configuration is no longer accepted. Migrate before upgrading:
 | Redis `mode="singleton"` | `mode="standalone"` |
 | `tls_enabled=true` | use `rediss://` endpoints |
 | `read_from_replica` | removed; all reads use the primary |
-| Redis Provider `key_prefix` | CacheFS uses `cachefs.namespace`; QueueFS uses `queuefs.cache_key_prefix` |
 
-OpenViking rejects removed fields with a migration error instead of silently translating them.
+## DynamicProvider
 
-## Future DynamicProvider
-
-This release only ships the built-in RedisProvider. DynamicProvider, `.so` loading, and the versioned C ABI are deferred; configuring `provider=dynamic` currently returns UnsupportedProvider during startup.
+OpenViking ships the DynamicProvider loader and a versioned C ABI. The default wheel does not bundle third-party SDKs or Provider libraries. Deploy the Provider shared library separately and configure `provider=dynamic` when an external cache system is required.
 
 A dynamic library must export this versioned entry point:
 
@@ -95,17 +133,23 @@ A dynamic library must export this versioned entry point:
 openviking_cache_provider_v1
 ```
 
-Provider artifacts should declare the ABI version, target OS and CPU, minimum glibc version, external SDK version, dynamic dependencies, and SHA256. When a Provider depends on native libraries, its publisher must make them discoverable through RPATH, `LD_LIBRARY_PATH`, or deployment instructions.
+The C contract is defined by `crates/ragfs/include/openviking_cache_provider_v1.h`. The Provider must use the Host allocator for returned data, obey the documented ownership and close semantics, catch exceptions before they cross the C ABI, and make its handle safe for concurrent calls.
+
+Provider artifacts should declare the ABI version, target OS and CPU, minimum runtime version, external SDK version, dynamic dependencies, and SHA256. When a Provider depends on native libraries, its publisher must make them discoverable through RPATH, `LD_LIBRARY_PATH`, or deployment instructions.
 
 External Providers can be upgraded independently without rebuilding the default OpenViking wheel. OpenViking only needs a coordinated upgrade when the DynamicProvider ABI becomes incompatible.
 
 ## Configuration
 
+Top-level `service_name` defaults to `"openviking-server"` and supplies the Redis
+namespace for CacheFS, QueueFS cache backend, cache-backed PathLock, and
+cache-backed multi-write metadata.
+
 The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | none | Provider name; this release supports `redis` |
+| `provider` | str | none | Provider name; supports `redis` and `dynamic` |
 | `params` | object | `{}` | Provider-owned parameters |
 
 `storage.agfs.cachefs` controls CacheFS behavior:
@@ -113,10 +157,16 @@ The top-level `cache` section is a sibling of `storage`:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `backend` | str | `"local"` | `local` preserves existing behavior; `cache` enables CachedFileSystem |
-| `namespace` | str | `"openviking"` | Cache namespace for isolating deployments or tenants |
 | `max_file_size_bytes` | int | `1048576` | Maximum full-file object size admitted to cache |
 | `traversal_mode` | str | `"backend"` | Use backend traversal or `cached_traversal` for recursive APIs |
 | `bypass_prefixes` | list[str] | `[]` | Path prefixes that always bypass cache |
+
+`storage.agfs.pathlock` controls PathLock storage:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, or `cache` |
+| `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:
 
@@ -134,9 +184,9 @@ Redis configuration:
 
 All Redis reads are sent to the primary node so QueueFS does not observe stale queue state. CacheRuntime relies on Redis transport security when required and does not add a separate application-layer value encryption format.
 
-Future DynamicProvider configuration shape:
+DynamicProvider configuration:
 
-`cache.params` is entirely Provider-owned. The fields below only illustrate configuration forwarding; use the schema documented by the Provider publisher.
+OpenViking uses `cache.params.library` to load the dynamic library. All remaining fields are Provider-owned and passed to `create` as JSON. Use the schema documented by the Provider publisher.
 
 ```json
 {
@@ -153,23 +203,28 @@ Future DynamicProvider configuration shape:
 
 ## Architecture
 
-RAGFS splits caching into two layers:
+RAGFS separates Provider access from its consumers:
 
 - `CachedFileSystem`: implements filesystem semantics, including cache hit/miss handling, backend fallback, cache fill, invalidation, generation checks, and metrics.
-- `CacheRuntime`: exposes common primitive operations and binds the built-in RedisProvider in this release; DynamicProvider remains a future extension.
+- `CacheRuntime`: exposes common primitive operations and binds either the built-in RedisProvider or an external DynamicProvider during startup.
+- `QueueFS` and `RedisPathLockProvider`: reuse the shared CacheRuntime for queue and distributed-lock storage. RedisPathLockProvider requires the built-in RedisProvider.
 
 Call flow:
 
 ```text
 OpenViking
   -> RAGFS / MountableFS
-  -> CachedFileSystem
-       |-> CacheRuntime -> RedisProvider
-       |               `-> DynamicProvider (future)
+       |-> CachedFileSystem ------\
+       |-> QueueFS cache backend --+-> shared CacheRuntime -> RedisProvider
+       `-> RedisPathLockProvider --/                     `-> DynamicProvider
        `-> Backend FileSystem
 ```
 
-With this boundary, file, directory, rename, recursive delete, and write-after-invalidation logic live only in the common layer. An external Provider does not need to understand path semantics; it only supplies primitive key-value operations through the stable C ABI.
+CachedFileSystem and QueueFS can use RedisProvider or DynamicProvider.
+RedisPathLockProvider depends on Redis Lua execution and therefore only uses
+RedisProvider. Filesystem semantics remain in CachedFileSystem; an external
+Provider only supplies primitive key-value operations through the stable C
+ABI.
 
 ## Cache Objects
 
@@ -180,7 +235,7 @@ RAGFS mainly caches three object types.
 File keys use a stable namespace and path hash:
 
 ```text
-ragfs:v1:{namespace}:file:{hash(path)}
+<service_name>:ov:cache:v1:file:<hash(path)>
 ```
 
 The file value is a `CacheEnvelope` containing file content, object kind, path, and generation snapshots. After a full-read cache hit, RAGFS validates the envelope and generation before returning the content.
@@ -192,7 +247,7 @@ The default policy prefers summary files such as `.abstract.md` and `.overview.m
 Directory key:
 
 ```text
-ragfs:v1:{namespace}:dir:{hash(path)}
+<service_name>:ov:cache:v1:dir:<hash(path)>
 ```
 
 The directory cache stores raw backend `read_dir` entries, not permission-filtered final results. Permission, role, and agent-context filtering still happens in the OpenViking upper layer at request time.
@@ -204,7 +259,7 @@ This lets one directory cache object serve `ls`, `tree`, `glob`, the file-collec
 Subtree generation key:
 
 ```text
-ragfs:v1:{namespace}:subtree:{hash(scope)}
+<service_name>:ov:cache:v1:subtree:<hash(scope)>
 ```
 
 `remove_all` and directory `rename` can leave descendant keys behind in the Provider. RAGFS bumps the subtree generation so old envelopes fail their generation snapshot check. Later real reads fall back to the backend and rebuild the cache.
@@ -278,4 +333,6 @@ Recommended signals to watch:
 4. Cache summary files and raw `read_dir` first, then expand to more regular small files.
 5. Add lock, control-plane, and permission-sensitive paths to `bypass_prefixes`.
 
-In short: RAGFS cache is responsible for correct invalidation according to filesystem semantics, while the Provider is responsible for where cache objects live. As long as the backend remains the source of truth, every cache hit must pass envelope and generation validation before it is returned.
+RAGFS cache handles invalidation according to filesystem semantics; the Provider decides where cache objects live. The backend remains the source of truth, and every cache hit must pass envelope and generation validation before it is returned.
+
+After enabling the cache, compare repeated reads and invalidation after a file update against the baseline. A higher hit rate is useful only if the returned contents remain current.

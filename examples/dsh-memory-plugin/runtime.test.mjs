@@ -1,18 +1,37 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
+import { deriveWorkspacePeerId } from "./shared/workspace-peer.mjs";
+import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 
 const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
+const originalStateDir = process.env.OPENVIKING_STATE_DIR;
 const tempDirs = [];
 
 afterEach(async () => {
   if (originalPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;
   else process.env.OPENVIKING_PENDING_DIR = originalPendingDir;
+  if (originalStateDir === undefined) delete process.env.OPENVIKING_STATE_DIR;
+  else process.env.OPENVIKING_STATE_DIR = originalStateDir;
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+
+test("runtime uses a portable OpenViking id for DSH IM sessions", () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  const state = runtime.stateFor({
+    id: "im:weixin_fixture:dm:1790750070550:chat_fixture@im.wechat",
+    header: { cwd: "/workspace" },
+  });
+
+  assert.equal(
+    state.ovSessionId,
+    "dsh-im_weixin_fixture_dm_1790750070550_chat_fixture@im.wechat__eb8b3dae7d74",
+  );
 });
 
 test("capture queues retryable failures but drops permanent client errors", async () => {
@@ -56,6 +75,35 @@ test("initialization queues capture only when the failure is retryable", async (
   }
 });
 
+test("existing OpenViking sessions are reusable on DSH resume", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-resume-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      return {
+        ok: false,
+        status: 409,
+        error: { code: "ALREADY_EXISTS", message: "session exists" },
+      };
+    },
+    async fetchJSON() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+  }, config(), { debug() {} });
+
+  const state = await runtime.initialize({
+    session: { id: "resume", header: { cwd: "/workspace" } },
+  });
+
+  assert.equal(state.ready, true);
+  assert.equal(state.initializationRetryable, false);
+});
+
 test("a retryable threshold commit failure is queued", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-commit-"));
   tempDirs.push(pendingDir);
@@ -77,6 +125,38 @@ test("a retryable threshold commit failure is queued", async () => {
   assert.deepEqual((await listPending()).map(item => item.entry.type), [
     "commitSession",
   ]);
+});
+
+test("compaction/start commits below the token threshold without reading session metadata", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compaction-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let getSessionCalls = 0;
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      getSessionCalls += 1;
+      return { pending_tokens: 5 };
+    },
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
+
+  runtime.maybeCommit(session, { type: "compaction/end" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
 });
 
 test("once a write is queued, later messages and the final commit stay ordered on disk", async () => {
@@ -116,11 +196,11 @@ test("once a write is queued, later messages and the final commit stay ordered o
   ]);
   assert.deepEqual(
     pending.map(item => (
-      item.entry.payload.parts?.[0]?.text
-      || item.entry.payload.content
-      || item.entry.payload.keep_recent_count
+      item.entry.type === "commitSession"
+        ? item.entry.payload
+        : item.entry.payload.parts?.[0]?.text || item.entry.payload.content
     )),
-    ["First queued message.", "Second queued message.", 10],
+    ["First queued message.", "Second queued message.", { keep_recent_count: 0 }],
   );
   assert.deepEqual(
     pending.map(item => item.entry.createdAt),
@@ -222,6 +302,7 @@ test("persisted profile delivery survives dispose and re-seed", async () => {
   firstState.profileBlock = "profile v1";
 
   const profile = await runtime.profileMessage({ session });
+  assert.equal(profile?.source?.kind, OPENVIKING_PLUGIN_KIND);
   assert.equal(profile?.source?.form, "instructions");
   session.events.push({ type: "user/message", data: profile });
   await runtime.dispose(session);
@@ -264,6 +345,43 @@ test("persisted profile delivery survives dispose and re-seed", async () => {
   );
 });
 
+test("profile delivery uses current DSH session-owned history on resume and fork", async () => {
+  const profile = {
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "stored profile" }],
+      source: { kind: "plugin", plugin: "openviking-memory", form: "instructions" },
+    },
+  };
+  for (const [id, ownEvents, expected] of [
+    ["resumed", [profile], null],
+    ["forked", [], "instructions"],
+    ["forked-resumed", [profile], null],
+  ]) {
+    const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+    let historyReads = 0;
+    const session = {
+      id,
+      header: { cwd: "/workspace", isSeeded: id !== "resumed" },
+      ownEvents() {
+        historyReads += 1;
+        return ownEvents;
+      },
+    };
+    const state = runtime.stateFor(session);
+    state.ready = true;
+    state.profileBlock = "current profile";
+
+    const message = await runtime.profileMessage({ session });
+
+    assert.equal(message?.source?.form ?? null, expected, id);
+    assert.equal(historyReads, 1, id);
+    assert.equal(state.profileDelivered, true, id);
+    assert.equal(await runtime.profileMessage({ session }), null, id);
+  }
+});
+
 test("disposeAll drains every live session", async () => {
   const committed = [];
   const runtime = new OpenVikingRuntime({
@@ -280,6 +398,155 @@ test("disposeAll drains every live session", async () => {
 
   assert.deepEqual(committed.sort(), ["dsh-one", "dsh-two"]);
   assert.equal(runtime.states.size, 0);
+});
+
+// dsh and pi had no recall switch at all: every other harness could turn recall
+// off and these two retrieved on every prompt regardless.
+test("autoRecall false stops the recall request", async () => {
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON() {
+      throw new Error("recall must not reach the server when it is switched off");
+    },
+  }, { ...config(), autoRecall: false }, { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: { ...config(), autoRecall: false } });
+
+  assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]), null);
+});
+
+// A batch of injected context alone (time-context, job notices) carries no
+// user query, so it must not trigger a recall request.
+test("injected context alone does not trigger recall", async () => {
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON() {
+      throw new Error("recall must not run without user input");
+    },
+  }, { ...config(), minQueryLength: 0 }, { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: { ...config(), minQueryLength: 0 } });
+
+  assert.equal(await runtime.recallMessage({}, [{
+    role: "user",
+    content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+    source: { kind: "time-context" },
+  }]), null);
+});
+
+// recall-core reads options.excludeUris, but the DSH runtime built its options
+// without it, so nothing a user configured could stop a subtree from being
+// recalled: generated directory files came back as ordinary hits.
+test("recallExcludeUris reaches the search request", async () => {
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON(path, init) {
+      if (/\/search\/search$/.test(path)) bodies.push(JSON.parse(init.body));
+      return {
+        ok: true,
+        result: {
+          context: "<openviking-context>\nrecalled\n</openviking-context>",
+          stats: {},
+        },
+      };
+    },
+  }, { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] }, { debug() {} });
+  runtime.initialize = async () => ({
+    ready: true,
+    config: { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] },
+  });
+
+  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(bodies[0].exclude_uris, ["viking://user/default/skills", "viking://agent/skills"]);
+});
+
+test("recall sends no exclude_uris when recallExcludeUris is unset", async () => {
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON(path, init) {
+      if (/\/search\/search$/.test(path)) bodies.push(JSON.parse(init.body));
+      return {
+        ok: true,
+        result: { context: "<openviking-context>\nrecalled\n</openviking-context>", stats: {} },
+      };
+    },
+  }, config(), { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: config() });
+
+  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+
+  assert.equal(bodies.length, 1);
+  assert.equal("exclude_uris" in bodies[0], false);
+});
+
+test("syncTurns false sends nothing: no capture, no commit, no dispose flush, no replay", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-sync-off-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  await enqueue("addMessage", "dsh-earlier", { content: "queued while capture was on" });
+
+  const writes = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      return { ok: true };
+    },
+    async fetchJSON(path, init) {
+      if (init?.method === "POST" && /\/(messages|commit)$/.test(path)) writes.push(path);
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+    async addMessage() {
+      writes.push("addMessage");
+      return { ok: true };
+    },
+    async getSession() {
+      return { pending_tokens: 1000000 };
+    },
+    async commitSession() {
+      writes.push("commitSession");
+      return { ok: true };
+    },
+  }, { ...config(), syncTurns: false }, { debug() {} });
+  const session = { id: "sync-off", header: { cwd: "/workspace" } };
+
+  runtime.capture(session, userEvent("Never sent."));
+  runtime.maybeCommit(session, { type: "turn/end" });
+  // The recall path reaches initialization even when nothing is captured, and
+  // the toggle takes the replay out of it without taking the reads with it.
+  assert.equal((await runtime.initialize({ session })).ready, true);
+  await runtime.flush(session);
+  await runtime.dispose(session);
+
+  assert.deepEqual(writes, []);
+  const pending = await listPending();
+  assert.deepEqual(pending.map(item => item.entry.sessionId), ["dsh-earlier"]);
+  assert.ok(!pending[0].entry.retries);
+});
+
+test("the per-session peer honors peerSource", async () => {
+  const root = realpathSync(await mkdtemp(join(tmpdir(), "dsh-memory-peer-")));
+  tempDirs.push(root);
+  await mkdir(join(root, ".git"), { recursive: true });
+  await writeFile(
+    join(root, ".git", "config"),
+    '[remote "origin"]\n\turl = git@github.com:volcengine/OpenViking.git\n',
+  );
+  process.env.OPENVIKING_STATE_DIR = join(root, ".state");
+  const session = { id: "peer", header: { cwd: root } };
+
+  const byGit = new OpenVikingRuntime({}, {
+    ...config(),
+    workspacePeer: true,
+  }, { debug() {} }).stateFor(session).config;
+  const byCwd = new OpenVikingRuntime({}, {
+    ...config(),
+    workspacePeer: true,
+    peerSource: "cwd",
+  }, { debug() {} }).stateFor(session).config;
+
+  assert.equal(byGit.peerId, "github.com-volcengine-openviking");
+  assert.equal(byGit.legacyPeerId, deriveWorkspacePeerId(root));
+  assert.equal(byCwd.peerId, deriveWorkspacePeerId(root));
 });
 
 function config() {

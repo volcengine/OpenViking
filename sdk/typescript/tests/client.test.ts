@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -45,7 +48,11 @@ describe("OpenVikingClient", () => {
       actorPeerId: "peer",
       fetch: fetcher,
     });
-    await client.find("hello", { targetUri: "viking://resources", limit: 5 });
+    await client.find("hello", {
+      targetUri: "viking://resources",
+      limit: 5,
+      eventsTimeDecayProtection: "2d",
+    });
     const [url, init] = fetcher.mock.calls[0]!;
     expect(String(url)).toBe("https://example.com/api/v1/search/find");
     expect(new Headers(init?.headers).get("X-OpenViking-Actor-Peer")).toBe(
@@ -55,6 +62,36 @@ describe("OpenVikingClient", () => {
       query: "hello",
       target_uri: "viking://resources",
       limit: 5,
+      events_time_decay_protection: "2d",
+    });
+  });
+
+  it("sends glob tags only when requested", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({ matches: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.glob("**/*.md", "resources");
+    await client.glob("**/*.md", "resources", {
+      tags: ["team=search", "env=prod"],
+      includeTags: true,
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      pattern: "**/*.md",
+      uri: "viking://resources",
+      node_limit: 256,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      pattern: "**/*.md",
+      uri: "viking://resources",
+      node_limit: 256,
+      tags: ["team=search", "env=prod"],
+      include_tags: true,
     });
   });
 
@@ -72,19 +109,23 @@ describe("OpenVikingClient", () => {
     await expect(
       client.searchContext("continue refactor", {
         sessionId: "session-1",
+        searchType: "keywords",
         purpose: "coding",
         maxTokens: 3000,
         dedupTurns: 5,
+        eventsTimeDecayProtection: "2d",
       }),
     ).resolves.toMatchObject({ rendered: "<memory />" });
 
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       query: "continue refactor",
       mode: "context",
+      search_type: "keywords",
       session_id: "session-1",
       purpose: "coding",
       max_tokens: 3000,
       dedup_turns: 5,
+      events_time_decay_protection: "2d",
     });
     await expect(
       client.searchContext("query", { extra: { mode: "list" } }),
@@ -108,6 +149,7 @@ describe("OpenVikingClient", () => {
       sourceMessageIds: ["user-1"],
     });
     await client.commitSession("session-1", {
+      enableWorkingMemory: true,
       retentionMode: "turn_budget",
       keepRecentTurnCount: 3,
       retainedMessageTokenBudget: 12_000,
@@ -122,6 +164,7 @@ describe("OpenVikingClient", () => {
       source_message_ids: ["user-1"],
     });
     expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      enable_working_memory: true,
       retention_mode: "turn_budget",
       keep_recent_turn_count: 3,
       retained_message_token_budget: 12_000,
@@ -144,12 +187,7 @@ describe("OpenVikingClient", () => {
       [{ role: "user", content: "hello" }],
       telemetry,
     );
-    await client.commitSession(
-      "session-1",
-      2,
-      telemetry,
-      ["team=platform"],
-    );
+    await client.commitSession("session-1", 2, telemetry, ["team=platform"]);
 
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       messages: [{ role: "user", content: "hello" }],
@@ -255,6 +293,23 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("forwards the search type", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ resources: [] }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.search("OAuth token", { searchType: "keywords" });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "OAuth token",
+      search_type: "keywords",
+    });
+  });
+
   it("preserves explicit zero and empty retrieval options", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -291,7 +346,7 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("sends dry_run for prune_orphans reindex requests", async () => {
+  it("sends force and recursive for reindex requests", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(ok({ status: "completed" }));
@@ -301,9 +356,9 @@ describe("OpenVikingClient", () => {
     });
 
     await client.reindex("resources", {
-      mode: "prune_orphans",
+      mode: "vectors_only",
       wait: true,
-      dryRun: true,
+      force: true,
       recursive: false,
     });
 
@@ -311,9 +366,9 @@ describe("OpenVikingClient", () => {
     expect(String(url)).toBe("https://example.com/api/v1/content/reindex");
     expect(JSON.parse(String(init?.body))).toEqual({
       uri: "viking://resources",
-      mode: "prune_orphans",
+      mode: "vectors_only",
       wait: true,
-      dry_run: true,
+      force: true,
       recursive: false,
     });
   });
@@ -406,6 +461,74 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("sends explicit tags for write, list, tree, and grep", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.write("resources/demo.md", "updated", {
+      tags: [],
+      tagMode: "replace",
+    });
+    await client.list("resources", { tags: ["env=prod"], includeTags: true });
+    await client.tree("resources", { tags: ["env=prod"], includeTags: true });
+    await client.grep("resources", "needle", {
+      tags: ["env=prod"],
+      includeTags: true,
+    });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      tags: [],
+      tag_mode: "replace",
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags"),
+    ).toBe("env=prod");
+    expect(
+      new URL(String(fetcher.mock.calls[1]![0])).searchParams.get(
+        "include_tags",
+      ),
+    ).toBe("true");
+    expect(
+      new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("tags"),
+    ).toBe("env=prod");
+    expect(
+      new URL(String(fetcher.mock.calls[2]![0])).searchParams.get(
+        "include_tags",
+      ),
+    ).toBe("true");
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toMatchObject({
+      tags: ["env=prod"],
+      include_tags: true,
+    });
+  });
+
+  it("sends clear tag mode without tags", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addResource("https://example.com/demo.md", {
+      tagMode: "clear",
+    });
+    await client.write("resources/demo.md", "updated", { tagMode: "clear" });
+    await client.reindex("resources/demo.md", { tagMode: "clear" });
+
+    for (const call of fetcher.mock.calls) {
+      const body = JSON.parse(String(call[1]?.body));
+      expect(body).not.toHaveProperty("tags");
+      expect(body.tag_mode).toBe("clear");
+    }
+  });
+
   it("supports batch write, byte download, and resource extra", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -430,9 +553,15 @@ describe("OpenVikingClient", () => {
           uri: "resources/project/a.txt",
           content: "hello",
           mode: "upsert",
+          tags: ["team=search"],
+          tagMode: "append",
+          acl: {
+            acl_mode: "restricted",
+            entries: [{ principal: "group:engineering", level: "write" }],
+          },
         },
       ],
-      { extra: { future_flag: 0 } },
+      { processingMode: "vectors_only", extra: { future_flag: 0 } },
     );
     await expect(
       client.downloadBytes("resources/project/a.txt"),
@@ -452,8 +581,15 @@ describe("OpenVikingClient", () => {
         uri: "viking://resources/project/a.txt",
         content: "hello",
         mode: "upsert",
+        tags: ["team=search"],
+        tag_mode: "append",
+        acl: {
+          acl_mode: "restricted",
+          entries: [{ principal: "group:engineering", level: "write" }],
+        },
       },
     ]);
+    expect(batchWriteBody.processing_mode).toBe("vectors_only");
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");
@@ -499,32 +635,92 @@ describe("OpenVikingClient", () => {
     );
   });
 
-  it("passes directory list ordering and tree depth to the server", async () => {
+  it("preserves listing options, pagination metadata, and legacy results", async () => {
+    const entries = [{ name: "docs" }];
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockImplementation(async () => ok([]));
+      .mockImplementation(async () => ok(entries))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            result: entries,
+            has_more: true,
+          }),
+        ),
+      );
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
     });
 
-    await client.list("viking://session", {
+    const listPage = await client.listPage("viking://session", {
       nodeLimit: 200,
+      offset: 4,
+      limit: 5,
       sortBy: "mtime",
       sortOrder: "desc",
+      includeAbstract: false,
+      includeOverview: true,
+      overviewLimit: 512,
+      extraFields: ["locked", "id"],
     });
-    await client.tree("viking://resources/docs", { levelLimit: 2 });
-    await client.tree("viking://resources/docs", { levelLimit: 0 });
+    expect(listPage).toEqual({ result: entries, hasMore: true });
+    await expect(client.list("viking://session")).resolves.toEqual(entries);
+    const treePage = await client.treePage("viking://resources/docs", {
+      levelLimit: 2,
+      offset: 6,
+      limit: 7,
+      directoriesOnly: true,
+      includeAbstract: false,
+      includeOverview: true,
+      overviewLimit: 512,
+      extraFields: ["count"],
+    });
+    expect(treePage).toEqual({ result: entries, hasMore: false });
+    await expect(
+      client.tree("viking://resources/docs", { levelLimit: 0 }),
+    ).resolves.toEqual(entries);
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
     expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.get("offset")).toBe("4");
+    expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
     expect(listUrl.searchParams.get("sort_order")).toBe("desc");
-    const treeLimits = fetcher.mock.calls
-      .slice(1)
-      .map((call) => new URL(String(call[0])).searchParams.get("level_limit"));
+    expect(listUrl.searchParams.get("include_abstract")).toBe("false");
+    expect(listUrl.searchParams.get("include_overview")).toBe("true");
+    expect(listUrl.searchParams.get("overview_limit")).toBe("512");
+    expect(listUrl.searchParams.getAll("extra_fields")).toEqual([
+      "locked",
+      "id",
+    ]);
+    const defaultListUrl = new URL(String(fetcher.mock.calls[1]![0]));
+    expect(defaultListUrl.searchParams.has("include_abstract")).toBe(false);
+    expect(defaultListUrl.searchParams.has("include_overview")).toBe(false);
+    expect(defaultListUrl.searchParams.get("overview_limit")).toBe("4000");
+    const treeUrls = fetcher.mock.calls
+      .slice(2)
+      .map((call) => new URL(String(call[0])));
+    const treeLimits = treeUrls.map((url) =>
+      url.searchParams.get("level_limit"),
+    );
     expect(treeLimits).toEqual(["2", "0", "3"]);
+    expect(treeUrls[0]!.searchParams.get("offset")).toBe("6");
+    expect(treeUrls[0]!.searchParams.get("directories_only")).toBe("true");
+    expect(treeUrls[0]!.searchParams.get("include_abstract")).toBe("false");
+    expect(treeUrls[0]!.searchParams.get("include_overview")).toBe("true");
+    expect(treeUrls[0]!.searchParams.get("overview_limit")).toBe("512");
+    expect(treeUrls[0]!.searchParams.getAll("extra_fields")).toEqual(["count"]);
+    expect(treeUrls[2]!.searchParams.has("include_abstract")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("include_overview")).toBe(false);
+    expect(treeUrls[2]!.searchParams.get("overview_limit")).toBe("4000");
+    expect(treeUrls[0]!.searchParams.get("limit")).toBe("7");
+    expect(treeUrls[1]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[1]!.searchParams.has("limit")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("limit")).toBe(false);
   });
 
   it("sends addResource tags and tagMode to the server", async () => {
@@ -571,6 +767,22 @@ describe("OpenVikingClient", () => {
         extra: { uri: "viking://other" },
       }),
     ).toThrow("extra cannot override uri");
+  });
+
+  it("omits tags when clear is requested", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ updated: 1 }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.setTags("resources/demo.md", undefined, { mode: "clear" });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      uri: "viking://resources/demo.md",
+      mode: "clear",
+      recursive: false,
+    });
   });
 
   it("converts an existing Node.js image path to a data URI", async () => {
@@ -718,9 +930,10 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("uses Go SDK defaults for skill details and returns null for missing tasks", async () => {
+  it("uses public Compile and task routes with SDK-compatible options", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ task_id: "cmp_1" }))
       .mockResolvedValueOnce(ok({ name: "demo" }))
       .mockResolvedValueOnce(
         new Response(
@@ -736,10 +949,31 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
+    await expect(
+      client.compile(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        {
+          instruction: "Keep supporting evidence.",
+          args: { model_name: "endpoint-1" },
+        },
+      ),
+    ).resolves.toEqual({ task_id: "cmp_1" });
     await client.getSkill("demo");
     await expect(client.getTask("missing")).resolves.toBeNull();
 
-    const skillUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      "https://example.com/api/v1/compile",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      from: ["viking://resources/source"],
+      to: "viking://resources/output",
+      skill: "viking://agent/skills/wiki",
+      instruction: "Keep supporting evidence.",
+      args: { model_name: "endpoint-1" },
+    });
+    const skillUrl = new URL(String(fetcher.mock.calls[1]![0]));
     expect(skillUrl.searchParams.get("include_files")).toBe("true");
     expect(skillUrl.searchParams.get("include_source")).toBe("false");
   });
@@ -761,6 +995,56 @@ describe("OpenVikingClient", () => {
       content: "",
     });
   });
+
+  it.each(["addSkill", "updateSkill"] as const)(
+    "%s sends long inline Markdown without a local upload",
+    async (method) => {
+      const source =
+        "---\nname: demo\ndescription: An inline skill\n---\n" +
+        "Follow these instructions carefully.\n".repeat(20);
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await expect(
+        method === "addSkill"
+          ? client.addSkill(source)
+          : client.updateSkill("demo", source),
+      ).resolves.toEqual({});
+
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const [url, init] = fetcher.mock.calls[0]!;
+      expect(String(url)).toBe(
+        `https://example.com/api/v1/skills${method === "addSkill" ? "" : "/demo"}`,
+      );
+      expect(init?.method).toBe(method === "addSkill" ? "POST" : "PUT");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        wait: false,
+        data: source,
+      });
+    },
+  );
+
+  it.each(["addResource", "importOVPack", "restoreOVPack"] as const)(
+    "%s preserves local path errors before sending a request",
+    async (method) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      const source = join(tmpdir(), "x".repeat(300));
+
+      await expect(
+        method === "importOVPack"
+          ? client.importOVPack(source, "resources")
+          : client[method](source),
+      ).rejects.toMatchObject({ code: "ENAMETOOLONG" });
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps non-JSON upload failures to OpenVikingError", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-error-"));
@@ -1079,6 +1363,36 @@ describe("OpenVikingClient", () => {
       message: "snapshot",
       branch: "main",
     });
+  });
+
+  it("supports optional observer format query parameters", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ is_healthy: true }))
+      .mockResolvedValueOnce(ok({ name: "queue" }))
+      .mockResolvedValueOnce(ok({ name: "models" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await expect(client.getStatus()).resolves.toEqual({ is_healthy: true });
+    await expect(client.queueStatus("json")).resolves.toEqual({
+      name: "queue",
+    });
+    await expect(client.modelsStatus("table")).resolves.toEqual({
+      name: "models",
+    });
+
+    const first = new URL(String(fetcher.mock.calls[0]![0]));
+    const second = new URL(String(fetcher.mock.calls[1]![0]));
+    const third = new URL(String(fetcher.mock.calls[2]![0]));
+    expect(first.pathname).toBe("/api/v1/observer/system");
+    expect(first.searchParams.get("format")).toBeNull();
+    expect(second.pathname).toBe("/api/v1/observer/queue");
+    expect(second.searchParams.get("format")).toBe("json");
+    expect(third.pathname).toBe("/api/v1/observer/models");
+    expect(third.searchParams.get("format")).toBe("table");
   });
 
   it("supports snapshot restore, binary show, log, diff and ignore operations", async () => {

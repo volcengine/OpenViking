@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { getContentDownload } from '#/lib/ov-client'
+import { saveFileContent } from '../-lib/api'
+import { toast } from 'sonner'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import {
   FilePreview,
@@ -14,11 +23,66 @@ import {
 } from './file-preview'
 
 const previewState = vi.hoisted(() => ({
-  override: null as { content: string; fileType: string } | null,
+  override: null as {
+    content: string
+    fileType: string
+    truncated?: boolean
+  } | null,
+}))
+
+const previewMocks = vi.hoisted(() => ({
+  renderMermaid: vi.fn(async (_id: string, _source: string) => ({
+    svg: '<svg viewBox="0 0 120 40"><text>Client to server</text></svg>',
+  })),
+}))
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('../-lib/api', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  saveFileContent: vi.fn(),
+}))
+vi.mock('#/components/code-editor', async () => {
+  const React = await import('react')
+  return {
+    CodeEditor: React.forwardRef(
+      ({ initialContent }: { initialContent: string }, ref) => {
+        React.useImperativeHandle(ref, () => ({
+          getContent: () => initialContent,
+        }))
+        return <div data-testid="editor-content">{initialContent}</div>
+      },
+    ),
+  }
+})
+
+vi.mock('@streamdown/mermaid', () => ({
+  mermaid: {
+    getMermaid: () => ({
+      initialize: vi.fn(),
+      render: previewMocks.renderMermaid,
+    }),
+    language: 'mermaid',
+    name: 'mermaid',
+    type: 'diagram',
+  },
+}))
+
+vi.mock('next-themes', () => ({
+  useTheme: () => ({ resolvedTheme: 'light' }),
 }))
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) =>
+      ({
+        'filePreview.mermaid.diagramLabel': 'Mermaid diagram',
+        'filePreview.mermaid.errorDetails': 'Error details',
+        'filePreview.mermaid.loading': 'Rendering Mermaid diagram...',
+        'filePreview.mermaid.renderFailed': 'Unable to render Mermaid diagram.',
+        'filePreview.mermaid.showSource': 'Show Mermaid source',
+        'filePreview.mermaid.unknownError': 'Unknown Mermaid rendering error.',
+      })[key] ?? key,
+  }),
 }))
 
 vi.mock('#/gen/ov-client/client.gen', () => ({
@@ -112,7 +176,15 @@ function renderPreview(
   )
 }
 
-describe('FilePreview Markdown links', () => {
+describe('FilePreview Markdown rendering', () => {
+  beforeEach(() => {
+    cleanup()
+    previewMocks.renderMermaid.mockClear()
+  })
+  afterEach(() => {
+    previewState.override = null
+  })
+
   it('opens internal Markdown links in the resource preview', () => {
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
@@ -124,6 +196,7 @@ describe('FilePreview Markdown links', () => {
 
     expect(onNavigate).toHaveBeenCalledOnce()
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
+    expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
   })
 
   it('opens viking links from a directory overview', () => {
@@ -174,6 +247,26 @@ describe('FilePreview Markdown links', () => {
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/资料/目标.md')
   })
 
+  it.each([file, directory])('opens encoded filenames from $name', (entry) => {
+    const onNavigate = vi.fn()
+    const prefix = entry.isDir ? 'viking://resources/wiki/' : './'
+    const content = `[One](${prefix}a%23one.md#intro)\n\n[Percent](${prefix}a%2523one.md#intro)`
+    previewState.override = entry.isDir
+      ? null
+      : { content, fileType: 'markdown' }
+    renderPreview(entry, onNavigate, content)
+    fireEvent.click(screen.getByRole('link', { name: 'One' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Percent' }))
+    expect(onNavigate).toHaveBeenNthCalledWith(
+      1,
+      'viking://resources/wiki/a#one.md',
+    )
+    expect(onNavigate).toHaveBeenNthCalledWith(
+      2,
+      'viking://resources/wiki/a%23one.md',
+    )
+  })
+
   it('preserves non-viking links in a directory overview', () => {
     const onNavigate = vi.fn()
     renderPreview(
@@ -204,6 +297,48 @@ describe('FilePreview Markdown links', () => {
     expect(screen.queryByRole('link', { name: 'Data' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Blob' })).toBeNull()
     expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('renders Mermaid fences as diagrams', async () => {
+    previewState.override = {
+      content: [
+        '```mermaid',
+        'graph TD',
+        '    A[Client] --> B[Server]',
+        '```',
+      ].join('\n'),
+      fileType: 'markdown',
+    }
+
+    const { container } = renderPreview(file, vi.fn())
+
+    const diagram = await screen.findByRole('img', {
+      name: 'Mermaid diagram',
+    })
+    await waitFor(() => {
+      expect(diagram.innerHTML).toContain('<svg')
+      expect(diagram.textContent).toContain('Client to server')
+    })
+    expect(previewMocks.renderMermaid).toHaveBeenCalledWith(
+      expect.stringMatching(/^mermaid-/),
+      expect.stringContaining('graph TD\n    A[Client] --> B[Server]'),
+    )
+    expect(diagram.parentElement?.style.width).toBe('120px')
+    expect(container.querySelector('code.language-mermaid')).toBeNull()
+  })
+
+  it('shows Mermaid errors with the original source', async () => {
+    previewState.override = {
+      content: ['```mermaid', 'this is not a diagram', '```'].join('\n'),
+      fileType: 'markdown',
+    }
+    previewMocks.renderMermaid.mockRejectedValueOnce(new Error('parse error'))
+    const { container } = renderPreview(file, vi.fn())
+
+    await screen.findByText('Unable to render Mermaid diagram.')
+    expect(container.textContent).toContain('parse error')
+    expect(container.textContent).toContain('Show Mermaid source')
+    expect(container.textContent).toContain('this is not a diagram')
   })
 
   it('renders directory L0 and L1 frontmatter as independent metadata panels', () => {
@@ -869,5 +1004,65 @@ describe('FilePreview JSONL rendering', () => {
     // Raw mode: line 1 still listed, the tool-only line 2 is gone.
     expect(screen.getByText('1')).toBeTruthy()
     expect(screen.queryByText('2')).toBeNull()
+  })
+})
+
+describe('FilePreview complete-content editing', () => {
+  beforeEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+  afterEach(() => {
+    cleanup()
+    previewState.override = null
+  })
+  it('loads the complete original before editing a limited hosted preview', async () => {
+    previewState.override = {
+      content: 'limited preview',
+      fileType: 'text',
+      truncated: true,
+    }
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: 'complete original\nlast line',
+    } as never)
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    expect((await screen.findByTestId('editor-content')).textContent).toBe(
+      'complete original\nlast line',
+    )
+    expect(getContentDownload).toHaveBeenCalledWith({
+      query: { uri: file.uri },
+      responseType: 'text',
+      throwOnError: true,
+    })
+    vi.mocked(saveFileContent).mockRejectedValue(new Error('Forbidden'))
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByTestId('editor-content').textContent).toBe(
+      'complete original\nlast line',
+    )
+  })
+
+  it('does not open an editor when the complete original cannot be read', async () => {
+    previewState.override = {
+      content: 'limited preview',
+      fileType: 'text',
+      truncated: true,
+    }
+    vi.mocked(getContentDownload).mockRejectedValue(new Error('Forbidden'))
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.queryByTestId('editor-content')).toBeNull()
   })
 })

@@ -20,11 +20,13 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallMaxInjectedChars).toBe(4000);
     expect(cfg.recallTokenBudget).toBe(4000);
     expect(cfg.commitTokenThresholdRatio).toBe(0.5);
+    expect(cfg.commitRetentionMode).toBe("message_count");
+    expect(cfg.commitKeepRecentCount).toBe(10);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
-    expect(cfg.autoRecallTimeoutMs).toBe(5000);
+    expect(cfg.autoRecallTimeoutMs).toBe(15000);
     expect(cfg.recallMaxContentChars).toBe(5000);
-    expect(cfg.peer_role).toBe("assistant");
+    expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("");
     expect(cfg.emitStandardDiagnostics).toBe(false);
     expect(cfg.traceRecall).toBe(false);
@@ -253,6 +255,11 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallScoreThreshold).toBe(1);
   });
 
+  it.each(["unknown", "", null, 0, false])("rejects invalid commitRetentionMode %j", (value) => {
+    expect(() => memoryOpenVikingConfigSchema.parse({ commitRetentionMode: value }))
+      .toThrow('commitRetentionMode must be "message_count" or "turn_budget"');
+  });
+
   it("throws on invalid captureMode", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ captureMode: "fast" }),
@@ -320,18 +327,22 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("accepts explicit peer_role values", () => {
     expect(memoryOpenVikingConfigSchema.parse({ peer_role: "none" }).peer_role).toBe("none");
     expect(memoryOpenVikingConfigSchema.parse({ peer_role: "assistant" }).peer_role).toBe("assistant");
-    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("person");
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "sender" }).peer_role).toBe("sender");
+  });
+
+  it("normalizes the legacy person peer_role alias to sender", () => {
+    expect(memoryOpenVikingConfigSchema.parse({ peer_role: "person" }).peer_role).toBe("sender");
   });
 
   it("throws on invalid peer_role", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ peer_role: "agent" }),
-    ).toThrow('peer_role must be "none", "assistant", or "person"');
+    ).toThrow('peer_role must be "none", "assistant", or "sender"');
   });
 
   it("resolves peer_prefix from configured value", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({ peer_prefix: "  my-agent  " });
-    expect(cfg.peer_role).toBe("assistant");
+    expect(cfg.peer_role).toBe("none");
     expect(cfg.peer_prefix).toBe("my-agent");
   });
 
@@ -526,5 +537,15 @@ describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", ()
     // Completely missing → env fallback kicks in.
     const cfg2 = memoryOpenVikingConfigSchema.parse({});
     expect(cfg2.apiKey).toBe("fallback-key");
+  });
+});
+
+describe("cloud compression configuration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("accepts server configuration and environment override", () => {
+    vi.stubEnv('OPENVIKING_RECALL_COMPRESS', undefined);
+    expect(memoryOpenVikingConfigSchema.parse({ recallCompress: 'server' }).recallCompress).toBe('server');
+    vi.stubEnv('OPENVIKING_RECALL_COMPRESS', 'auto');
+    expect(memoryOpenVikingConfigSchema.parse({ recallCompress: 'server' }).recallCompress).toBe('auto');
   });
 });

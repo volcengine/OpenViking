@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": [
+        "__OPENVIKING_PLUGIN_ROOT__/servers/mcp-proxy.mjs"
+      ]
+    }
+  }
+}

@@ -8,10 +8,13 @@ API key. Tokens are 6-character base62 strings indexed in a process-local dict �
 key, no on-disk state, no replay-set bookkeeping. ``dict.pop`` doubles as the
 consume-and-burn primitive.
 
-The token carries the identity bound at issue time (account/user), the caller's actor peer
-scope (``actor_peer_id``), and the business params (``to``/``reason``/``parse_mode``) so the server can
+The token carries the identity bound at issue time (account/user/role and OAuth origin),
+the caller's actor peer scope (``actor_peer_id``), and the business params
+(``to``/``parent``/``reason``/``parse_mode``) so the server can
 finish ingestion automatically once the file lands — the caller does not re-invoke
-``add_resource``, and the ingest keeps the original peer scope. The ``temp_file_id`` is minted by
+``add_resource``, and the ingest keeps the original peer scope. Tokens minted by the MCP
+``add_skill`` tool carry ``kind="skill"`` plus the skill install params instead, and the upload
+is installed as skills rather than ingested as a resource. The ``temp_file_id`` is minted by
 :class:`openviking.server.temp_upload_store.TempUploadStore` at upload time, so the token
 does not pre-bind a filename and the upload can flow through either the local or shared
 TempUploadStore mode without a side-channel.
@@ -30,6 +33,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
+from openviking.server.identity import Role
+from openviking.storage.acl import AclSpec
 
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
 _TOKEN_LENGTH = 6
@@ -43,7 +48,9 @@ class UploadTokenError(Exception):
 class _TokenInfo:
     account_id: str
     user_id: str
+    role: Role
     to: str
+    parent: str
     reason: str
     actor_peer_id: str
     processing_mode: ProcessingMode
@@ -51,6 +58,12 @@ class _TokenInfo:
     tag_mode: str
     parse_mode: str
     expires_at: float
+    kind: str = "resource"
+    skill_target_uri: str = ""
+    skill_names: Optional[list[str]] = None
+    list_only: bool = False
+    acl: AclSpec | None = None
+    from_oauth: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,13 +72,21 @@ class ConsumedUploadToken:
 
     account_id: str
     user_id: str
+    role: Role
     to: str
     reason: str
     actor_peer_id: str
+    parent: str = ""
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
     parse_mode: str = "default"
+    kind: str = "resource"
+    skill_target_uri: str = ""
+    skill_names: Optional[list[str]] = None
+    list_only: bool = False
+    acl: AclSpec | None = None
+    from_oauth: bool = False
 
 
 class UploadTokenStore:
@@ -78,15 +99,23 @@ class UploadTokenStore:
         user_id: str,
         ttl_seconds: int,
         *,
+        role: Role,
         to: str = "",
+        parent: str = "",
         reason: str = "",
         actor_peer_id: str = "",
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         tags: Optional[list[str]] = None,
         tag_mode: str = "replace",
         parse_mode: str = "default",
+        kind: str = "resource",
+        skill_target_uri: str = "",
+        skill_names: Optional[list[str]] = None,
+        list_only: bool = False,
+        acl: AclSpec | None = None,
+        from_oauth: bool = False,
     ) -> Tuple[str, float]:
-        """Mint a fresh token bound to (account, user) plus ``to``/``reason``/``actor_peer_id``.
+        """Mint a fresh token bound to the caller identity and ingestion parameters.
 
         ``actor_peer_id`` is captured from the minting request's context so server-side
         auto-ingest keeps the caller's peer scope (reason-memory routing) — it is NOT taken
@@ -98,7 +127,9 @@ class UploadTokenStore:
         info = _TokenInfo(
             account_id,
             user_id,
+            role,
             to,
+            parent,
             reason,
             actor_peer_id,
             processing_mode,
@@ -106,6 +137,12 @@ class UploadTokenStore:
             tag_mode,
             parse_mode,
             expires_at,
+            kind,
+            skill_target_uri,
+            skill_names,
+            list_only,
+            acl,
+            from_oauth,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -124,15 +161,23 @@ class UploadTokenStore:
         if info.expires_at < time.time():
             raise UploadTokenError("upload token expired")
         return ConsumedUploadToken(
-            info.account_id,
-            info.user_id,
-            info.to,
-            info.reason,
-            info.actor_peer_id,
-            info.processing_mode,
-            info.tags,
-            info.tag_mode,
-            info.parse_mode,
+            account_id=info.account_id,
+            user_id=info.user_id,
+            role=info.role,
+            to=info.to,
+            parent=info.parent,
+            reason=info.reason,
+            actor_peer_id=info.actor_peer_id,
+            processing_mode=info.processing_mode,
+            tags=info.tags,
+            tag_mode=info.tag_mode,
+            parse_mode=info.parse_mode,
+            kind=info.kind,
+            skill_target_uri=info.skill_target_uri,
+            skill_names=info.skill_names,
+            list_only=info.list_only,
+            acl=info.acl,
+            from_oauth=info.from_oauth,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

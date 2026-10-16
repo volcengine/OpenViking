@@ -28,12 +28,22 @@ jobs:
         run: npm run test:theme
         working-directory: docs
 
+      - name: Check bilingual docs and examples
+        run: npm run check:docs
+        working-directory: docs
+
       - name: Check API reference
         run: npm run check:api
         working-directory: docs
 
       - name: Build docs
         run: npm run docs:build
+        working-directory: docs
+        env:
+          DOCS_BASE: /
+
+      - name: Check built section links
+        run: python3 scripts/check-built-anchors.py
         working-directory: docs
         env:
           DOCS_BASE: /

@@ -21,7 +21,7 @@ use tracing::warn;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::types::FileInfo;
-use crate::core::{FsContextInner, FS_CTX};
+use crate::core::{FsContextInner, FsContextView, PathLockContext, FS_CTX};
 use crate::git::{
     error::{GitError, ObjectStoreError, RefStoreError},
     ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_PATH},
@@ -262,7 +262,10 @@ impl GitService {
                     let abs = format!("/local/{}/{}", account, p);
                     match self.vfs.stat(&abs).await {
                         Ok(info) if info.is_dir => {
-                            // Directory: recursive listing + prev_tree subtree.
+                            // Directory: recursive listing + prev_tree subtree. Include an
+                            // old blob at this exact path too (file -> directory), even if
+                            // the new directory is empty and contributes no listed files.
+                            cleanup_exact.insert(p.clone());
                             cleanup_prefixes.push(format!("{}/", p));
 
                             let listed =
@@ -288,7 +291,7 @@ impl GitService {
                                 }
                                 let pref = format!("{}/", p);
                                 for (path, _) in prev_paths_cache.as_ref().unwrap() {
-                                    if !path.starts_with(&pref) {
+                                    if path != p && !path.starts_with(&pref) {
                                         continue;
                                     }
                                     if should_track_path(path, &ignore_matcher) {
@@ -549,8 +552,17 @@ impl GitService {
         let index_saved_at_ns: Option<i128> = prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
         for rel_path in candidates {
             let abs = format!("/local/{}/{}", account, rel_path);
-            match self.vfs.stat(&abs).await {
-                Ok(info) => {
+            // Candidates include previous snapshot blobs. If one has become a
+            // directory, remove the old blob rather than reading the directory as
+            // a file. Its current children are separate, later-sorted candidates.
+            let file_info = match self.vfs.stat(&abs).await {
+                Ok(info) if !info.is_dir => Some(info),
+                Ok(_) => None,
+                Err(e) if is_not_found(&e) => None,
+                Err(e) => return Err(e.into()),
+            };
+            match file_info {
+                Some(info) => {
                     let stat = stat_signature(&info);
 
                     // Fast Path 1: cached `(size, mtime_ns)` match → reuse oid,
@@ -635,7 +647,7 @@ impl GitService {
                         }
                     }
                 }
-                Err(e) if is_not_found(&e) => {
+                None => {
                     // Only count as a change if the path actually existed
                     // in prev_tree, since TreeEditor::remove silently no-ops
                     // for missing paths. With no prev_tree (root commit) a
@@ -659,12 +671,11 @@ impl GitService {
                             .await?;
                         changed += 1;
                     }
-                    // Path is gone → drop any lingering cache entry.
+                    // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
                         new_index_entries.remove(&rel_path);
                     }
                 }
-                Err(e) => return Err(e.into()),
             }
         }
 
@@ -973,7 +984,17 @@ impl GitService {
             validate_project_dir(project_dir)?;
         }
 
-        let ctx = Arc::new(FsContextInner::new(req.account.clone()));
+        // Encrypted writeback must reuse the caller's tree lock rather than
+        // acquire a conflicting lock. The request remains the tenant authority.
+        let ctx = Arc::new(FsContextInner::with_pathlock(
+            req.account.clone(),
+            PathLockContext {
+                lease_ref: FsContextView::current()
+                    .pathlock_lease_ref()
+                    .map(str::to_owned),
+                ..Default::default()
+            },
+        ));
         FS_CTX.scope(ctx, self.restore_impl(req)).await
     }
 
@@ -1267,6 +1288,10 @@ impl GitService {
             let is_empty = match crate::core::filesystem::FileSystem::read_dir(
                 self.vfs.as_ref(),
                 &abs,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             {
@@ -1948,7 +1973,14 @@ mod tests {
                 .insert(path.to_string(), data.to_vec());
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -1974,6 +2006,10 @@ mod tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -2311,6 +2347,77 @@ mod tests {
 
         let paths = commit_paths(object_store.as_ref() as &dyn ObjectStore, "acct", oid).await;
         assert_eq!(paths, vec!["foo/bar.md".to_string()]);
+    }
+
+    /// A previously snapshotted file can become a real directory. MockVfs reports
+    /// directories as NotFound, so it misses both the read-directory error when
+    /// committing a parent and the stale blob when committing the exact directory.
+    #[tokio::test]
+    async fn test_commit_file_to_directory_on_localfs() {
+        use crate::git::backends::local::LocalIndexStore;
+        use crate::git::index_store::IndexStore;
+        use crate::plugins::localfs::LocalFileSystem;
+
+        for scope in [None, Some("docs"), Some("docs/note.md")] {
+            for with_child in [false, true] {
+                let store_dir = tempfile::tempdir().unwrap();
+                let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+                let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+                let index_store = Arc::new(LocalIndexStore::new(store_dir.path()));
+                let work_dir = tempfile::tempdir().unwrap();
+                let acct_root = work_dir.path().join("local/acct");
+                std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+                std::fs::write(acct_root.join("docs/note.md"), b"old file").unwrap();
+                std::fs::write(acct_root.join("outside.md"), b"keep").unwrap();
+                let vfs: Arc<dyn FileSystem> =
+                    Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+                let svc = GitService::with_index(
+                    vfs,
+                    object_store.clone(),
+                    ref_store,
+                    Some(index_store.clone()),
+                );
+                make_commit(&svc, "acct", "main", "before").await;
+                std::fs::remove_file(acct_root.join("docs/note.md")).unwrap();
+                std::fs::create_dir(acct_root.join("docs/note.md")).unwrap();
+                if with_child {
+                    std::fs::write(acct_root.join("docs/note.md/child.md"), b"new child").unwrap();
+                }
+                let paths = scope.map(|path| vec![path.to_string()]);
+                let response = svc
+                    .commit(req("acct", "main", "after", paths.clone()))
+                    .await
+                    .unwrap();
+                let commit_oid = match response {
+                    CommitResponse::Created { commit_oid, .. } => commit_oid,
+                    other => {
+                        panic!("expected Created for {scope:?}, child={with_child}: {other:?}")
+                    }
+                };
+                let actual = commit_paths(object_store.as_ref(), "acct", commit_oid).await;
+                let expected = if with_child {
+                    vec![
+                        "docs/note.md/child.md".to_string(),
+                        "outside.md".to_string(),
+                    ]
+                } else {
+                    vec!["outside.md".to_string()]
+                };
+                assert_eq!(actual, expected, "scope={scope:?}, child={with_child}");
+                let index = index_store.load("acct", "main").await.unwrap().unwrap();
+                assert!(!index.entries.contains_key("docs/note.md"));
+                assert_eq!(
+                    index.entries.contains_key("docs/note.md/child.md"),
+                    with_child
+                );
+                assert!(matches!(
+                    svc.commit(req("acct", "main", "unchanged", paths))
+                        .await
+                        .unwrap(),
+                    CommitResponse::Noop { .. }
+                ));
+            }
+        }
     }
 
     // ── 4e ─────────────────────────────────────────────────────────────
@@ -6070,7 +6177,14 @@ mod fast_path1_tests {
                 .insert(path.to_string(), (data.to_vec(), 0));
             Ok(data.len() as u64)
         }
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             unimplemented!()
         }
 
@@ -6102,6 +6216,10 @@ mod fast_path1_tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -6527,7 +6645,9 @@ mod fast_path1_tests {
         )
         .unwrap();
 
-        let stack = build_default_stack(RagfsConfig::default()).await;
+        let mut ragfs_config = RagfsConfig::default();
+        ragfs_config.pathlock.provider = "memory".to_string();
+        let stack = build_default_stack(ragfs_config).await.unwrap();
         let mut params = HashMap::new();
         params.insert(
             "local_dir".to_string(),
@@ -6540,25 +6660,17 @@ mod fast_path1_tests {
                 mount_path: "/local".to_string(),
                 params,
                 backups: Some(BackendsConfig {
-                    sync_type: "async".to_string(),
-                    write_ack_count: None,
-                    write_ack_timeout_ms: None,
-                    write_concurrency: None,
-                    retry_interval_ms: None,
-                    retry_backoff_base_ms: None,
-                    retry_max_retries_per_round: None,
-                    retry_quarantine_after_failures: None,
-                    read_probe_cache_ttl_ms: None,
+                    service_name: "mw-test".to_string(),
+                    initial_partitions: 16,
+                    checkpoint_interval_secs: 86_400,
+                    provider: "filesystem".to_string(),
                     items: vec![BackendItemConfig {
                         name: "backup1".to_string(),
                         backend: "localfs".to_string(),
                         params: serde_json::json!({
                             "local_dir": backup_dir.path().to_str().unwrap(),
                         }),
-                        timeout: None,
                         encryption: None,
-                        operations: None,
-                        excludes: None,
                     }],
                 }),
                 ..PluginConfig::default()

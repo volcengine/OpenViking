@@ -15,6 +15,7 @@ from typing import Any
 
 from loguru import logger
 
+from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from openviking.utils.multimodal import redact_image_data_urls
@@ -257,6 +258,8 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         effective_model = model or self._default_model
 
@@ -287,13 +290,23 @@ class VLMProviderAdapter(LLMProvider):
             # An explicit empty list asks VLM backends for a structured response
             # without exposing tools, so per-response usage is preserved.
             response_tools = tools if tools is not None else []
+            # Effort overrides are scoped to the native Ark backend, not compatible APIs.
+            completion_overrides = (
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None and self._vlm.provider == "volcengine"
+                else {}
+            )
             while True:
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
-                        thinking=getattr(self._vlm, "thinking", None),
+                        thinking=thinking
+                        if thinking is not None
+                        else getattr(self._vlm, "thinking", None),
                         tools=response_tools,
                         tool_choice="auto" if response_tools else None,
+                        max_tokens=max_tokens,
+                        **completion_overrides,
                     )
                     break
                 except Exception as e:
@@ -324,6 +337,7 @@ class VLMProviderAdapter(LLMProvider):
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
+                error_kind=model_error_kind(e),
             )
 
     async def chat_stream(
@@ -377,6 +391,7 @@ class VLMProviderAdapter(LLMProvider):
                 response=LLMResponse(
                     content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
                     finish_reason="error",
+                    error_kind=model_error_kind(exc),
                 ),
             )
 
@@ -590,9 +605,7 @@ class VLMProviderAdapter(LLMProvider):
     ) -> dict[str, Any]:
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
-        effective_max_tokens = (
-            configured_max_tokens if configured_max_tokens is not None else max_tokens
-        )
+        effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
         # A wrapped credential owns its model.  The model passed by AgentLoop is
         # the outer/default model and must not overwrite a backup credential.
         effective_model = (
@@ -629,10 +642,13 @@ class VLMProviderAdapter(LLMProvider):
         kwargs["model"] = effective_model
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
-        if effective_max_tokens is not None and not (
-            "max_tokens" in kwargs or "max_completion_tokens" in kwargs
-        ):
-            token_key = "max_completion_tokens" if "reasoning_effort" in kwargs else "max_tokens"
+        if effective_max_tokens is not None:
+            token_key = (
+                "max_completion_tokens"
+                if "max_completion_tokens" in kwargs
+                or ("max_tokens" not in kwargs and "reasoning_effort" in kwargs)
+                else "max_tokens"
+            )
             kwargs[token_key] = effective_max_tokens
         return kwargs
 
@@ -714,15 +730,46 @@ class VLMProviderAdapter(LLMProvider):
             content=result.content,
             tool_calls=tool_calls,
             finish_reason=result.finish_reason,
-            usage=result.usage,
+            usage={
+                k: v
+                for k, v in (result.usage if isinstance(result.usage, dict) else {}).items()
+                if isinstance(v, int)
+            }
+            | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
         )
 
     def get_default_model(self) -> str:
         return self._default_model
 
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Return true only for backends with native rich tool-result support."""
+        return self._backend_supports_tool_result_media(self._vlm)
+
+    @classmethod
+    def _backend_supports_tool_result_media(cls, vlm: Any) -> bool:
+        instances = getattr(vlm, "_vlm_instances", None)
+        if instances is not None:
+            return bool(instances) and all(
+                cls._backend_supports_tool_result_media(item) for item in instances
+            )
+
+        primary = getattr(vlm, "primary", None)
+        backup = getattr(vlm, "backup", None)
+        if primary is not None and backup is not None:
+            return cls._backend_supports_tool_result_media(
+                primary
+            ) and cls._backend_supports_tool_result_media(backup)
+
+        resolve_provider = getattr(vlm, "resolved_provider", None)
+        provider = (
+            resolve_provider() if callable(resolve_provider) else getattr(vlm, "provider", "")
+        )
+        provider = str(provider or "").lower()
+        return provider in {"anthropic", "openai-codex"}
+
     # ------------------------------------------------------------------
-    # Langfuse helpers (same pattern as LiteLLMProvider.chat())
+    # Langfuse helpers
     # ------------------------------------------------------------------
 
     def _end_langfuse_observation(self, obs, llm_response: LLMResponse) -> None:

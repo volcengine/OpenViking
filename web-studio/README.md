@@ -63,6 +63,10 @@ curl http://127.0.0.1:1933/bot/v1/health
 
 ### 2. Start Web Studio
 
+Use Node.js 22.x for local development, builds, and tests, matching the Studio build workflow.
+
+With the current Vitest/jsdom versions, Node.js 26 can cause `localStorage` errors during tests. If this occurs, switch to Node.js 22.x and run `npm ci && npm test` in `web-studio/`.
+
 ```bash
 cd web-studio
 npm install
@@ -82,6 +86,12 @@ VITE_OV_BASE_URL=http://127.0.0.1:1933 npm run dev
 ```
 
 The connection dialog can still override the server URL, API key, account ID, and user ID at runtime.
+
+### Filesystem Page
+
+Open `/filesystem` to browse and preview context, run terminal commands, or use the Agent panel. When Studio is served under `/studio`, the URL is `/studio/filesystem`.
+
+The former `/playground` route redirects to `/filesystem`, preserving the selected file, directory, panel, session, and URL fragment. Existing browser-stored layout and history remain available.
 
 ## Connection and Auth
 
@@ -342,6 +352,7 @@ Do not set `VITE_OV_BASE_URL` to `https://ov.example.com/web-studio`. `/web-stud
 The official OpenViking image can be used as the API server dependency:
 
 ```bash
+# Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \

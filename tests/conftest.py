@@ -4,7 +4,6 @@
 """Global test fixtures"""
 
 import asyncio
-import shutil
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -83,7 +82,6 @@ _patch_agfs_grep_if_missing()
 
 # Test data root directory
 PROJECT_ROOT = Path(__file__).parent.parent
-TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp"
 
 
 @pytest.fixture(scope="session")
@@ -95,11 +93,9 @@ def event_loop():
 
 
 @pytest.fixture(scope="function")
-def temp_dir() -> Generator[Path, None, None]:
-    """Create temp directory, auto-cleanup before and after test"""
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
-    TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    yield TEST_TMP_DIR
+def temp_dir(tmp_path: Path) -> Generator[Path, None, None]:
+    """Keep concurrent test runs from deleting each other's vector stores."""
+    yield tmp_path
 
 
 @pytest.fixture(scope="function")
@@ -108,6 +104,25 @@ def test_data_dir(temp_dir: Path) -> Path:
     data_dir = temp_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+@pytest.fixture
+def vector_backend_factory():
+    """Construct local storage with an explicit account configuration boundary."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+
+    def create(config):
+        backend = VikingVectorIndexBackend(config)
+        settings = SimpleNamespace(vectordb=config, dedicated_vectordb=False)
+        backend.set_vector_config_resolver(
+            SimpleNamespace(resolve=AsyncMock(return_value=settings))
+        )
+        return backend
+
+    return create
 
 
 # ============ Service Fixtures ============
@@ -176,3 +191,9 @@ def request_context() -> RequestContext:
         user=UserIdentifier.the_default_user(),
         role=Role.USER,
     )
+
+
+@pytest.fixture
+def working_memory_policy():
+    """Explicit opt-in for tests exercising WM/checkpoint generation."""
+    return {"working_memory": {"enabled": True}}

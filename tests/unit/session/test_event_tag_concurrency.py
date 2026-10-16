@@ -76,7 +76,7 @@ async def test_commit_uses_event_tags_from_lock_protected_meta_snapshot(monkeypa
         "_read_live_messages_strict",
         AsyncMock(return_value=[archived_message]),
     )
-    monkeypatch.setattr(session, "_list_archive_refs", AsyncMock(return_value=[]))
+    monkeypatch.setattr(session._archives, "list_refs", AsyncMock(return_value=[]))
 
     captured_queue_message = {}
 

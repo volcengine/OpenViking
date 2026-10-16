@@ -2,17 +2,17 @@
 
 OpenViking Server supports multiple built-in authentication modes with role-based access control. The mode is auto-detected if not explicitly configured. In addition, custom authentication plugins can be registered to support arbitrary identity sources.
 
-> **Recommended:** API Key mode is the most common and secure default choice, suitable for most deployment scenarios.
+API Key mode is recommended for most deployments; it is auto-selected when no mode is specified and a nonempty root key is configured. Use API Key mode when OpenViking should manage credentials, OIDC or LDAP for an existing identity service, and Trusted mode behind a gateway that validates callers.
 
 ## Authentication Modes Overview
 
-| Mode | `server.auth_mode` | Identity Source | Typical Use | Recommendation |
-|------|--------------------|-----------------|-------------|----------------|
-| **API Key Mode** ⭐ | `api_key` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment | ⭐⭐⭐⭐⭐ |
-| **OIDC Mode** | `oidc` | JWT tokens from external identity providers | Enterprise SSO integration with Okta/Auth0/Keycloak | ⭐⭐⭐⭐ |
-| **LDAP Mode** | `ldap` | Enterprise LDAP/AD directory services | Integrate with existing enterprise user directory | ⭐⭐⭐⭐ |
-| **Trusted Mode** | `trusted` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary | ⭐⭐⭐ |
-| **Dev Mode** | `dev` | No authentication, always ROOT | Local development only | ⭐⭐ |
+| Mode | `server.auth_mode` | Identity Source | Typical Use |
+|------|--------------------|-----------------|-------------|
+| **API Key Mode** | `api_key` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment |
+| **OIDC Mode** | `oidc` | JWT tokens from external identity providers | Enterprise SSO integration with Okta/Auth0/Keycloak |
+| **LDAP Mode** | `ldap` | Enterprise LDAP/AD directory services | Integrate with existing enterprise user directory |
+| **Trusted Mode** | `trusted` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on every deployment. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
+| **Dev Mode** | `dev` | No authentication, always ROOT | Local development only |
 
 If `auth_mode` is not explicitly configured:
 - If `root_api_key` is set (non-empty): auto-selects `api_key` mode
@@ -22,7 +22,7 @@ If `auth_mode` is not explicitly configured:
 
 ## Quick Start: API Key Mode (Recommended)
 
-API Key mode is the most secure and easiest default choice.
+API Key mode uses a root key for account administration and user/admin keys for tenant data access.
 
 ### Configuration
 
@@ -74,37 +74,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 
 ACL groups are the exception: groups and memberships are maintained through the [Admin API](../api/08-admin.md#groups), and members must be registered users in the current account. Clients cannot assert groups through headers or token claims. After authentication, the server resolves the group registry into `RequestContext.group_ids` for that request.
 
-Trusted deployments can also call Admin API through a trusted gateway. There are two supported patterns:
-
-- Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
-- Optionally also present `X-OpenViking-Account` + `X-OpenViking-User` when the admin route targets a specific account/user. Those headers must match the target URL and are kept as the request identity, but authorization still comes from the trusted `root_api_key`.
-
-Example using a trusted upstream identity:
-
-```bash
-# First, register the gateway admin (do this once in api_key mode)
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
-
-# Then promote it to root if it needs cross-account admin access
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
-
-# Then, in trusted mode, use that identity to call Admin API
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "X-OpenViking-Account: platform" \
-  -H "X-OpenViking-User: gateway-admin" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "account_id": "acme",
-    "admin_user_id": "alice"
-  }'
-```
+For gateway deployments, see [Trusted Mode](#trusted-mode) for identity headers and Admin API access.
 
 ### Client Usage
 
@@ -117,7 +87,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: <user-key>"
 ```
 
-**Authorization: Bearer ***
+**Authorization: Bearer header**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
@@ -127,7 +97,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 **Python SDK (HTTP)**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
@@ -146,10 +116,10 @@ client = ov.SyncHTTPClient(
 
 When you use a user key or admin key, the server derives `account` and `user` from the key. Do not send `X-OpenViking-Account` / `X-OpenViking-User` in `api_key` mode; those identity headers are accepted only in `trusted` mode.
 
-**CLI override flags**
+**CLI request**
 
 ```bash
-openviking ls viking://
+ov ls viking://
 ```
 
 ### Using --sudo with Root API Key
@@ -204,10 +174,10 @@ OIDC and LDAP authentication require optional dependencies. You can install them
 
 ```bash
 # Install auth features only
-uv pip install openviking[auth]
+uv pip install "openviking[auth]"
 
 # Or install with all features (including bot)
-uv pip install openviking[bot]
+uv pip install "openviking[bot]"
 ```
 
 ### Configure OIDC
@@ -362,7 +332,7 @@ Two modes are supported:
 {
   "account_id": {
     "source": "claim",
-    "claim": ["department", "team", "organization"],
+    "claims": ["department", "team", "organization"],
     "fallback": "default"
   }
 }
@@ -531,10 +501,12 @@ Clients submit credentials using Basic Auth:
 
 ```bash
 curl https://openviking.example.com/api/v1/fs/ls?uri=viking:// \
-  -u alice:password123
+  -u alice
 ```
 
 ## Trusted Mode
+
+Trusted mode manages user identities and roles without personal credentials. Creating accounts (including the first administrator) or users generates no personal key, hash, or key index. Resetting a personal key returns HTTP 412 (`FAILED_PRECONDITION`). Studio can select users without personal keys; Bot authenticates with the deployment root key and sends user identity separately. Existing personal keys are not automatically deleted and are not used for trusted authentication.
 
 Trusted mode skips user-key lookup and instead trusts explicit identity headers on each request:
 
@@ -542,10 +514,13 @@ Trusted mode skips user-key lookup and instead trusts explicit identity headers 
 {
   "server": {
     "auth_mode": "trusted",
+    "root_api_key": "your-secret-root-key",
     "host": "127.0.0.1"
   }
 }
 ```
+
+A missing, empty, or whitespace-only `server.root_api_key` prevents startup, including on localhost.
 
 ### Rules in Trusted Mode
 
@@ -554,8 +529,9 @@ Trusted mode skips user-key lookup and instead trusts explicit identity headers 
 - A trusted upstream may also send `X-OpenViking-Role: user` or `X-OpenViking-Role: admin` to assert the request role. This header is accepted only when `root_api_key` is configured and the request presents the matching API key. `root` is not an allowed asserted value; ROOT is reserved for validated Admin API fallback.
 - `/api/v1/admin/*` is special: when a configured `root_api_key` is presented, trusted mode treats the request as ROOT. Explicit account/user headers are allowed only when they are complete and match the target URL.
 - For ordinary trusted data APIs, role is determined by `X-OpenViking-Role` when present and authorized; otherwise by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
-- Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it acts as proof that the caller is an approved trusted upstream.
-- If `root_api_key` is also configured, every request must still provide a matching API key.
+- Trusted identity comes from the headers, not from a user key. The required `root_api_key` authenticates the trusted upstream.
+- Trusted data-plane identities are asynchronously registered in batches (five minutes by default) so they eventually appear in the existing account/user management APIs. Registration creates no user API key and never changes groups or an existing user's role. Set `server.trusted_identity_flush_interval_seconds` to `0` to disable registration entirely; `/api/v1/admin/*` requests are never registered.
+- Every authenticated request must provide the matching root API key. Anonymous `/health` probes remain available for liveness checks.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
 
 ### Trusted Deployment Admin API
@@ -565,25 +541,13 @@ Trusted deployments can also call Admin API through a trusted gateway. There are
 1. Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
 2. Optionally also present `X-OpenViking-Account` + `X-OpenViking-User` when the admin route targets a specific account/user. Those headers must match the target URL and are kept as the request identity, but authorization still comes from the trusted `root_api_key`.
 
-Example using a trusted upstream identity:
+A trusted deployment with a configured root key can create an account directly; switching to API key mode or registering a gateway user first is unnecessary.
 
 ```bash
-# First, register the gateway admin (do this once in api_key mode)
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "Content-Type: application/json" \
-  -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
-
-# Then use that identity in trusted mode; admin authorization comes from root_api_key
-curl -X POST http://localhost:1933/api/v1/admin/accounts \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "X-OpenViking-Account: platform" \
-  -H "X-OpenViking-User: gateway-admin" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "account_id": "acme",
-    "admin_user_id": "alice"
-  }'
+  -d '{"account_id": "acme", "admin_user_id": "alice"}'
 ```
 
 ### Trusted Mode Client Configuration
@@ -600,10 +564,13 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 }
 ```
 
+Provide the configured root key as `X-API-Key` or SDK `api_key`, including when connecting to localhost.
+
 **curl Example**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: your-secret-root-key" \
   -H "X-OpenViking-Account: acme" \
   -H "X-OpenViking-User: alice"
 ```
@@ -611,10 +578,11 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
+    api_key="your-secret-root-key",
     account="acme",
     user="alice",
 )
@@ -622,7 +590,7 @@ client = ov.SyncHTTPClient(
 
 ## Dev Mode
 
-When `auth_mode = "dev"` (or auto-detected when no `root_api_key` is configured), authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) in `dev` mode, the server will refuse to start.
+When `auth_mode = "dev"` (or auto-detected when no `root_api_key` is configured), authentication is disabled. Requests are accepted as ROOT; account/user default to `default` when identity headers are absent. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) in `dev` mode, the server will refuse to start.
 
 ```json
 {
@@ -645,23 +613,23 @@ Or explicitly:
 }
 ```
 
-> **Security note:** The default `host` is `127.0.0.1`. If you need to expose the server on the network, you **must** configure `root_api_key`.
+> The default `host` is `127.0.0.1`. Before binding to a network address, choose and configure API Key, OIDC, LDAP, or a protected Trusted deployment. Dev mode refuses non-loopback addresses.
 
 ## Roles and Permissions
 
 | Role | Scope | Capabilities |
 |------|-------|-------------|
-| ROOT | Global | All operations + Admin API (create/delete accounts, manage users) |
+| ROOT | Deployment administration | Admin API and selected system operations; a root API key cannot access tenant data in API key mode |
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
 
 Regular resource operations in this table are still subject to resource ACLs. Account roles determine identity administration and implicit management of public resources; [Resource Access Control (ACL)](../concepts/15-acl.md) determines `read/write/manage` permissions on individual directories and files.
 
-In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
+In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes grant ROOT only after validating the root key, with or without explicit identity headers.
 
 ## Unauthenticated Endpoints
 
-The `/health` endpoint never requires authentication. This allows load balancers and monitoring tools to check server health.
+Anonymous `/health` requests require no credentials, allowing load balancers and monitoring tools to check server health. Supplying credentials or complete trusted identity headers triggers authentication.
 
 ```bash
 curl http://localhost:1933/health
@@ -692,7 +660,6 @@ The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `A
 | `validate_config(config)` | Validate `ServerConfig` at startup; should `sys.exit(1)` on fatal misconfiguration. |
 | `initialize(app, service, config)` | Initialize runtime state (e.g., `APIKeyManager`) on `app.state`. |
 | `get_request_context_checks(path, identity)` | Optional post-auth path/identity checks. |
-| `requires_api_key_manager()` | Whether Admin API routes need an `APIKeyManager`. |
 | `can_skip_api_key_for_bot_proxy()` | Whether the bot proxy may skip API key validation (e.g., `dev` mode). |
 
 ### Register a Custom Plugin
@@ -726,10 +693,10 @@ The built-in `Role` class supports dynamic registration of custom roles with pri
 ```python
 from openviking.server.identity import Role
 
-Role.register("operator", rank=1)  # Between USER (0) and ADMIN (1)
+Role.register("operator", rank=1)  # Same rank as ADMIN for downgrade checks
 ```
 
-Custom roles work with `require_role()` and `require_auth_role()` decorators out of the box.
+The rank is used for downgrade checks; it does not inherit ADMIN permissions. `require_role()` and `require_auth_role()` check explicit role names, so a route must list the custom role to accept it.
 
 ---
 
@@ -748,8 +715,7 @@ Edit `~/.openviking/ovcli.conf` to add LDAP authentication settings:
     "url": "http://localhost:1933",
     "auth_mode": "ldap",
     "ldap_username": "alice",
-    "ldap_password": "password123",
-    "account": "default"
+    "ldap_password": "your-ldap-password"
 }
 ```
 
@@ -760,12 +726,11 @@ Edit `~/.openviking/ovcli.conf` to add LDAP authentication settings:
 | `url` | Yes | OpenViking server URL |
 | `auth_mode` | Yes | Authentication mode, set to `"ldap"` to enable LDAP |
 | `ldap_username` | Yes | LDAP username (UID) |
-| `ldap_password` | No | LDAP password (omit to skip password in CLI) |
-| `account` | No | OpenViking account ID (defaults to `"default"`) |
+| `ldap_password` | Yes | LDAP password; without it the CLI does not send Basic Auth |
 
 #### 2. Mixed Configuration
 
-You can configure some settings in the file and override others with environment variables (e.g. `OPENVIKING_URL`, `OPENVIKING_ACCOUNT`).
+Use `OPENVIKING_CLI_CONFIG_FILE` to select another complete configuration file. The `ov` CLI does not use `OPENVIKING_URL` or `OPENVIKING_ACCOUNT` as connection overrides (except `ov chat`, which derives the bot endpoint from `OPENVIKING_URL`); those variables configure Agent plugins.
 
 ### Using the CLI
 
@@ -798,7 +763,7 @@ You can switch between LDAP and API Key authentication by editing `~/.openviking
 
 ### Security Recommendations
 
-1. **Avoid storing plaintext passwords**: Prefer environment variables or secret managers over hardcoding in config files
+1. **Restrict config-file access**: The current CLI reads the LDAP password from its config file. Limit read access to the current user and keep the file out of repositories and shared logs
 2. **Use HTTPS**: Always use HTTPS in production environments
 3. **Least privilege**: Use regular user accounts for daily operations, admin accounts only for management tasks
 4. **Rotate passwords regularly**: Follow your organization's password security policy
@@ -807,7 +772,7 @@ You can switch between LDAP and API Key authentication by editing `~/.openviking
 
 **"Missing LDAP credentials" error:**
 - Check that `auth_mode` is set to `"ldap"`
-- Verify `username` and `password` are configured correctly
+- Verify `ldap_username` and `ldap_password` are configured correctly
 
 **"LDAP authentication failed" error:**
 - Verify LDAP username and password are correct
@@ -825,7 +790,7 @@ You can switch between LDAP and API Key authentication by editing `~/.openviking
 RUST_LOG=debug ov ls viking://
 
 # Check configuration
-ov doctor
+ov config validate
 ```
 
 ---

@@ -1,4 +1,4 @@
-# API Overview
+# SDK, HTTP and CLI conventions
 
 This page covers how to connect to OpenViking and the conventions shared across all API endpoints.
 
@@ -16,6 +16,12 @@ OpenViking clients connect to an OpenViking Server over HTTP.
 Client-Server mode connects to an OpenViking server via HTTP API, supporting multi-tenancy, remote access, and other features. See the deployment documentation for how to start the OpenViking server.
 
 #### Python SDK Client
+
+Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -62,7 +68,7 @@ tenant identity from the key. Set `Account` and `User` only for trusted
 deployments or gateways that explicitly forward tenant identity.
 
 It does not implement legacy `agent_id` compatibility.
-See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
+See [`sdk/go/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
 
@@ -87,23 +93,21 @@ const results = await client.search("deployment guide", {
 ```
 
 It uses the same identity headers and response envelope as the Python and Go
-HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
+HTTP clients. See [`sdk/typescript/README.md`](https://github.com/volcengine/OpenViking/blob/main/sdk/typescript/README.md)
 for package-level examples.
 
-When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
+The Python HTTP client reads connection information from `ovcli.conf`; explicit constructor values override the corresponding settings. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
-Configuration file example:
+Configuration file example using a user/admin key:
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key",
-  "account": "acme",
-  "user": "alice"
+  "api_key": "your-user-or-admin-key"
 }
 ```
 
@@ -113,34 +117,34 @@ Configuration field description:
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API Key | `null` (no auth) |
-| `account` | Default account header for tenant-scoped requests | `null` |
-| `user` | Default user header for tenant-scoped requests | `null` |
-| `timeout` | HTTP request timeout in seconds | `600.0` |
+| `account` | Account header; used in trusted and dev modes, ignored in api_key mode | `null` |
+| `user` | User header; used in trusted and dev modes, ignored in api_key mode | `null` |
+| `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
-See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
+See the [Configuration Guide](../guides/01-configuration.md#ovcli-conf) for details.
 
 #### Using Python SDK Client Without Configuration File
 
-`SyncHTTPClient` and `AsyncHTTPClient` support operating completely without relying on the `ovcli.conf` configuration file, by **explicitly passing all parameters** during initialization:
+`SyncHTTPClient` and `AsyncHTTPClient` work without an `ovcli.conf` file. Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
-    url="http://localhost:1933",          # Explicitly provided
-    api_key="your-key",                    # Explicitly provided (api_key usually identifies user identity)
-    timeout=30.0,                          # Don't use default 600.0
-    extra_headers={}                       # Pass empty dict instead of None, useful for gateway auth in some scenarios
+    url="http://localhost:1933",
+    api_key="your-key",
+    timeout=30.0,
+    extra_headers={},
 )
 client.initialize()
 ```
 
-⚠️ **Note**: The client will attempt to load the configuration file if any of the following conditions are met:
-- `url` is `None`
-- `api_key` is `None`
-- `timeout` equals `600.0` (default value)
-- `extra_headers` is `None`
+The SDK still reads an existing `ovcli.conf` when you pass explicit parameters. Explicit values override the corresponding settings; other settings may come from environment variables or the file. Invalid configuration can therefore fail client construction. The default timeout is 60 seconds. See [client configuration](../configuration/02-client.md) for the file location.
 
 #### HTTP Call Examples
 
@@ -160,12 +164,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI Mode
 
-The OpenViking CLI (can be abbreviated as `ov` command) connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
+The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and provides shell commands for common operations. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
 
 Basic usage:
 
 ```bash
-openviking [global options] <command> [arguments] [command options]
+ov [global options] <command> [arguments] [command options]
 ```
 
 Global options (must be placed before the command name):
@@ -178,7 +182,7 @@ Global options (must be placed before the command name):
 Example:
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Lifecycle
@@ -186,7 +190,7 @@ openviking -o json ls viking://resources/
 ### Client-Server Mode
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
@@ -199,7 +203,7 @@ client.close()
 The CLI is called directly via the command line, requiring the `ovcli.conf` file to be configured first, with no additional client initialization needed:
 
 ```
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Authentication
@@ -208,20 +212,19 @@ See the [Authentication Guide](../guides/04-authentication.md) for full details.
 
 - **Authorization Bearer** header: `Authorization: Bearer your-key` (recommended)
 - **X-API-Key** header: `X-API-Key: your-key`
-- If the server doesn't have an API Key configured, authentication is skipped.
+- Authentication is skipped only in dev mode, which is selected automatically when `server.root_api_key` is unset and `auth_mode` is not set. Other modes (api_key, trusted, OIDC, LDAP) resolve identity according to their configuration.
 - The `/health` and `/ready` endpoints never require authentication.
 
 ## Response Format
 
-All HTTP API responses follow a unified format:
+Regular JSON API responses use the following envelope. File downloads, SSE, Metrics, and WebDAV use the formats documented for those endpoints:
 
 ### Success Response
 
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -235,8 +238,7 @@ The top-level `status` describes whether the HTTP API request succeeded. Some su
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -253,18 +255,24 @@ Python HTTP SDKs (`SyncHTTPClient` and `AsyncHTTPClient`) raise the correspondin
 List data is rendered as tables; non-list data falls back to formatted JSON:
 
 ```bash
-openviking ls viking://resources/
+ov ls viking://resources/
 # name          size  mode  isDir  uri
 # .abstract.md  100   420   False  viking://resources/.abstract.md
 ```
 
 ### JSON Mode (`--output json`)
 
-All commands output formatted JSON, matching the `result` structure of API responses:
+By default, `-o json` uses compact output with an `{ok, result}` wrapper:
 
 ```bash
-openviking -o json ls viking://resources/
-# [{ "name": "...", "size": 100, ... }, ...]
+ov -o json ls viking://resources/
+# {"ok":true,"result":[{"name":"...","size":100,...},...]}
+```
+
+Use `--compact=false` to return the unwrapped result as formatted JSON:
+
+```bash
+ov -o json --compact=false ls viking://resources/
 ```
 
 The default output format can be set in `ovcli.conf`:
@@ -276,7 +284,7 @@ The default output format can be set in `ovcli.conf`:
 }
 ```
 
-### Compact Mode (`--compact`, `-c`)
+### Compact Mode (`--compact`, `-c`, enabled by default)
 
 - When `--output=json`: Compact JSON format + `{ok, result}` wrapper, suitable for scripts
 - When `--output=table`: Simplified representation for table output (e.g., removing empty columns)
@@ -295,19 +303,20 @@ JSON output - error:
 
 ### Special Cases
 
-- **String results** (`read`, `abstract`, `overview`): printed directly as plain text
-- **None results** (`mkdir`, `rm`, `mv`): no output
+- In table mode, `read`, `abstract`, and `overview` print text directly. `mkdir`, `rm`, and `mv` print a confirmation message.
+- In JSON mode, these commands use the JSON output format described above.
 
 ### Exit Codes
 
 **Note**: Exit codes are return codes from the CLI (command line tool), not HTTP API status codes.
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Configuration error |
-| 3 | Connection error |
+| Code | Meaning | Trigger |
+|------|---------|---------|
+| 0 | Success | Command completed successfully |
+| 1 | Runtime error | Command execution failed, including API or connection errors |
+| 2 | Arguments or configuration error | Invalid command-line arguments, configuration loading failed, missing required credentials, or `--sudo` used with an unsupported command |
+
+The current Rust CLI reports connection failures with exit code `1`; it does not use a separate connection-error exit code `3`.
 
 ## Error Codes
 
@@ -333,6 +342,8 @@ JSON output - error:
 | `SESSION_EXPIRED` | 410 | Session no longer exists |
 | `NOT_INITIALIZED` | - | Service or component not initialized (need to call initialize() first) |
 
+File/directory type misuse, copying or removing a directory without `recursive=true`, and a definitively nonexistent HTTP source hostname return `INVALID_ARGUMENT` (400). Path-lock contention, including encrypted writes, returns `CONFLICT` (409); corrupt lock tokens, lock I/O failures, and stored-data decryption failures return `INTERNAL` (500). An unavailable HTTP source or temporary network failure returns `UNAVAILABLE` (503), while a fetch timeout returns `DEADLINE_EXCEEDED` (504).
+
 ---
 
 ## API Endpoints
@@ -344,14 +355,10 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Basic health check (no authentication) |
-| GET | `/ready` | AGFS, VectorDB, and API key manager readiness (no authentication) |
+| GET | `/ready` | AGFS, VectorDB, API key manager, and embedding readiness (no authentication) |
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for background processing |
 | POST | `/api/v1/system/consistency` | Check filesystem and vector-index consistency |
-| POST | `/api/v1/system/backend/sync-status` | Query backend synchronization status |
-| POST | `/api/v1/system/backend/sync-retry` | Retry backend synchronization |
-| GET | `/api/v1/system/sync/{sync_path}` | Path-form compatibility endpoint for synchronization status |
-| POST | `/api/v1/system/sync/{sync_path}/retry` | Path-form compatibility endpoint for synchronization retry |
 
 ### [Resources](02-resources.md) and [Filesystem](03-filesystem.md)
 
@@ -366,6 +373,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags (compatibility alias) |
 | POST | `/api/v1/fs/mkdir` | Create a directory |
 | DELETE | `/api/v1/fs` | Delete a resource |
+| POST | `/api/v1/fs/cp` | Copy a file or directory together with its vector records |
 | POST | `/api/v1/fs/mv` | Move or rename a resource |
 
 ### [ACL](12-acl.md)
@@ -387,7 +395,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
 | GET | `/api/v1/content/download` | Download original file bytes |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
-| POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
+| POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
@@ -418,10 +426,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
-| POST | `/api/v1/sessions/{session_id}/extract` | Extract memory |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
-| POST | `/api/v1/sessions/{session_id}/used` | Record context or skills actually used |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
@@ -464,6 +470,9 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/compile` | Create an OV-owned Compile task |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/api/v1/tasks/{task_id}` | Get a background task |
 | POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
 | GET | `/api/v1/tasks` | List background tasks |
@@ -480,10 +489,19 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/agent-evolution` | Get the caller account's Agent Evolution status |
-| PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
-| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
-| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
+| GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
+| PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
+| POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
+| GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
+| PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get legacy account settings (deprecated) |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update legacy account settings (deprecated) |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List editable memory templates, defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one memory template |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one memory template |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove a memory template override and restore deployment defaults |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
 | POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
@@ -509,7 +527,33 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | Write and activate a new version |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | Activate a version |
 
-### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), and [VikingBot API](24-vikingbot.md)
+### [OpenViking Gateway Management](25-gateway.md)
+
+When the gateway runs inside the server, use the server's port; when it runs standalone, use the gateway's own port. The OpenViking API key decides which account the caller can reach. If the deployer set a gateway management key, changing upstreams and context profiles also requires it. Every user can issue gateway keys for themselves. The access matrix and error reasons are in the [Gateway Management API](25-gateway.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/gateway/admin/access` | Read the caller's permissions and deployment warnings |
+| GET | `/gateway/admin/guides` | Read the gateway address clients use |
+| GET | `/gateway/admin/tools` | List the OpenViking tools available to the caller |
+| GET | `/gateway/admin/upstreams/{identifier}` | Read one upstream |
+| GET | `/gateway/admin/policies/{identifier}` | Read one context profile |
+| GET | `/gateway/admin/keys/{identifier}` | Read one gateway key (without the secret) |
+| GET | `/gateway/admin/overview` | Read the usage overview within the caller's scope |
+| GET | `/gateway/admin/logs` | Read the request logs the caller can see |
+| GET | `/gateway/admin/upstreams` | List the account's upstreams |
+| PUT / DELETE | `/gateway/admin/upstreams/{identifier}` | Create/replace or delete an upstream |
+| POST | `/gateway/admin/upstreams/{identifier}/test` | Test an upstream connection or model |
+| POST | `/gateway/admin/upstreams/import-vlm` | Import the server's VLM settings as upstreams (embedded only) |
+| GET | `/gateway/admin/policies` | List the account's context profiles |
+| PUT / DELETE | `/gateway/admin/policies/{identifier}` | Create/replace or delete a context profile |
+| GET / POST | `/gateway/admin/keys` | List the gateway keys the caller can see, or issue a new one |
+| DELETE | `/gateway/admin/keys/{identifier}` | Revoke a gateway key |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | Start saving a conversation again |
+| DELETE | `/gateway/admin/users/{user_id}/data` | Admin or root: delete a user's gateway data |
+| DELETE | `/gateway/admin/account/data` | Root: delete an account's gateway data |
+
+### [OpenViking Assets](22-openviking-assets.md), [WebDAV](20-webdav.md), [Agent Runtime API](23-agent-runtime.md), and [VikingBot API](24-vikingbot.md)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -522,19 +566,23 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Delete a file or directory |
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
+| POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |
 | POST | `/bot/v1/feedback` | Submit feedback for a VikingBot answer |
-| POST | `/bot/v1/compile` | Start a Skill-driven Compile task |
-| GET | `/bot/v1/compile/{task_id}` | Get Compile task status |
-| POST | `/bot/v1/compile/{task_id}/cancel` | Cancel a Compile task |
+| POST | `/bot/v1/compile` | Retired; returns migration guidance for the new endpoint |
+| GET | `/bot/v1/compile/{task_id}` | Retired; returns Task API migration guidance |
+| POST | `/bot/v1/compile/{task_id}/cancel` | Retired; returns Task cancellation API migration guidance |
 
 ---
 
-## Documentation Reading Plan
+## Find an API by Task
 
-The sidebar is organized by responsibility rather than historical file size:
+Choose a reference page by operation type:
 
 | Group | What to look for |
 |-------|------------------|
@@ -543,4 +591,4 @@ The sidebar is organized by responsibility rather than historical file size:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, and VikingBot API |
+| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |

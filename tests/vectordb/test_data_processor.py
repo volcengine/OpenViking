@@ -134,6 +134,13 @@ class TestDataProcessor(unittest.TestCase):
 
         self.assertEqual(converted["abstract"], "face \U0001f600")
 
+    def test_convert_fields_for_index_handles_corrupted_json(self):
+        corrupted = '{"abstract": "truncated\x00\xff", "uri": "/tmp/bad"'
+
+        result = self.processor.convert_fields_for_index(corrupted)
+
+        self.assertEqual(result, corrupted)
+
 
 if __name__ == "__main__":
     unittest.main()

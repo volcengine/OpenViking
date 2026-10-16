@@ -3,11 +3,11 @@
 """Volcengine Embedder Implementation"""
 
 import time
-
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 import volcenginesdkarkruntime
 
+from openviking.metrics.datasources import EmbeddingEventDataSource
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -17,11 +17,15 @@ from openviking.models.embedder.base import (
     extract_text_from_content,
     truncate_and_normalize,
 )
-from openviking.telemetry import get_current_telemetry
-from openviking.metrics.datasources import EmbeddingEventDataSource
+from openviking.models.model_error import model_error_boundary
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.observability.context import get_root_observability_context
-from openviking.utils.model_retry import extract_metric_error_code
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.model_retry import extract_metric_error_code
 from openviking_cli.utils.logger import default_logger as logger
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
@@ -73,6 +77,30 @@ async def _measure_embedding_call_async(
             embedder, duration_seconds=time.perf_counter() - started, error=error
         )
         raise
+
+
+def _create_sync_ark(kwargs: Dict[str, Any]):
+    client_kwargs = dict(kwargs)
+    client_kwargs["max_retries"] = 0
+    http_client = create_optional_sync_httpx_client(
+        client_kwargs.get("base_url"),
+        timeout=60.0,
+    )
+    if http_client is not None:
+        client_kwargs["http_client"] = http_client
+    return volcenginesdkarkruntime.Ark(**client_kwargs)
+
+
+def _create_async_ark(kwargs: Dict[str, Any]):
+    client_kwargs = dict(kwargs)
+    client_kwargs["max_retries"] = 0
+    http_client = create_optional_async_httpx_client(
+        client_kwargs.get("base_url"),
+        timeout=60.0,
+    )
+    if http_client is not None:
+        client_kwargs["http_client"] = http_client
+    return volcenginesdkarkruntime.AsyncArk(**client_kwargs)
 
 
 def _build_volcengine_headers(extra_headers: Optional[Dict[str, str]]) -> Dict[str, str]:
@@ -174,7 +202,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -226,6 +254,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             duration_seconds=duration_seconds,
         )
 
+    @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text or multimodal content
 
@@ -276,7 +305,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            return self._run_with_retry(
+            return self._run_once(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine embedding",
@@ -286,9 +315,10 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
+    @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
@@ -324,7 +354,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self.dimension))
 
         try:
-            return await self._run_with_async_retry(
+            return await self._run_once_async(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine async embedding",
@@ -377,7 +407,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -411,6 +441,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             duration_seconds=duration_seconds,
         )
 
+    @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text or multimodal content
 
@@ -445,7 +476,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
 
         try:
-            return self._run_with_retry(
+            return self._run_once(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine sparse embedding",
@@ -455,9 +486,10 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
+    @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
@@ -479,7 +511,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
 
         try:
-            return await self._run_with_async_retry(
+            return await self._run_once_async(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine async sparse embedding",
@@ -545,7 +577,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         ark_kwargs = {"api_key": self.api_key}
         if self.api_base:
             ark_kwargs["base_url"] = self.api_base
-        self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
+        self.client = _create_sync_ark(ark_kwargs)
         self._ark_kwargs = ark_kwargs
         self._async_client_cache = LoopScopedAsyncClientCache()
         self._dimension = dimension or 2048
@@ -591,6 +623,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         """
         return False
 
+    @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text or multimodal content
 
@@ -630,7 +663,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
 
         try:
-            return self._run_with_retry(
+            return self._run_once(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine hybrid embedding",
@@ -640,9 +673,10 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
 
     def _get_async_client(self):
         return self._async_client_cache.get(
-            lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
+            lambda: _create_async_ark(self._ark_kwargs)
         )
 
+    @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
@@ -668,7 +702,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
 
         try:
-            return await self._run_with_async_retry(
+            return await self._run_once_async(
                 _embed_call,
                 logger=logger,
                 operation_name="Volcengine async hybrid embedding",

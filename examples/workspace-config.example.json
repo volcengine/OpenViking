@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/schemas/workspace-config-v1.json",
+  "version": 1,
+  "notes": "Copy to <repo-root>/.openviking/config.json and commit it. Settings here apply to everyone who clones the repository; anything private goes in config.local.json next to it, which stays out of git. Both are overridden by OPENVIKING_* and by this machine's ~/.openviking/workspaces/ entry, and neither may carry a url, an api key or any other connection setting. The peer defaults to the git repository; a directory that is not one gets no peer until you replace \"source\" here with an explicit \"id\".",
+
+  "peer": {
+    "source": "git"
+  },
+
+  "recall": {
+    "enabled": true,
+    "peer_scope": "all",
+    "max_items": 12,
+    "dedup_turns": 5
+  },
+
+  "capture": {
+    "enabled": true
+  },
+
+  "bypass": {
+    "session_patterns": ["*-scratch", "**/tmp/**"]
+  },
+
+  "labels": {
+    "project": "OpenViking"
+  }
+}

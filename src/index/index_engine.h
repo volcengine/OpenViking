@@ -14,7 +14,8 @@ namespace vectordb {
 
 class IndexEngine {
  public:
-  IndexEngine(const std::string& path_or_json);
+  // The caller normalizes vectors and supplies the same flag on every load.
+  IndexEngine(const std::string& path_or_json, bool normalize_vector = false);
 
   bool is_valid() const {
     return impl_ != nullptr;
@@ -22,6 +23,10 @@ class IndexEngine {
   int add_data(const std::vector<AddDataRequest>& data_list);
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list);
+
+  int rebuild_scalar_index(
+      const std::string& scalar_index_json,
+      const std::function<bool(std::vector<AddDataRequest>&)>& read_batch);
 
   SearchResult search(const SearchRequest& req);
 

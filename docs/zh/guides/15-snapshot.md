@@ -1,10 +1,44 @@
-# 多版本管理（快照）指南
+# 版本管理指南
 
-本指南介绍如何启用并使用 OpenViking 的多版本管理（快照）能力。多版本管理在 VikingFS 之上提供基于 Git 的 `commit`/`log`/`show`/`restore` 原语，让你把账号下的资源树保存成一系列不可变快照，随时回溯历史、对比版本，并把工作区恢复到任意历史状态。
+快照将指定范围内的文件树保存为不可变版本。使用 `commit` 保存、`log` 查看历史、`show` 读取旧版文件、`restore` 恢复已保存的内容。快照不保存未提交的改动或提交时被排除的文件，ACL 和向量索引也不保存历史版本。恢复会比较来源快照与 HEAD，因此受影响路径上的未提交改动可能被覆盖。
 
 多版本管理由内嵌在 Rust RAGFS 层的 [gitoxide](https://github.com/Byron/gitoxide) 驱动，以 `account_id` 为粒度维护一个逻辑 Git 仓库（每个账号一个仓库），对调用方完全透明——你无需手动执行任何 `git` 命令。
 
 > 关于各命令参数和响应结构的完整 API 参考，见 [多版本管理 API](../api/11-snapshot.md)。
+
+## 何时需要 commit
+
+普通 `write`、`rm` 等操作直接改变当前工作区，启用快照不代表每次写入都会自动生成版本。没有成功覆盖该路径的 snapshot commit，就不能通过快照找回它此前的内容。建议在导入完成、批量修改前后或一个业务阶段结束时提交，并保存返回的 `commit_oid`。
+
+Snapshot 保存文件树的版本，不会回滚当前 ACL，也不保存向量索引的历史。`restore` 写回文件后按需异步重建索引；它会修改工作区，执行前先用 `dry_run` 检查计划。
+
+`client.snapshot.commit()` 与会话的 `session.commit()` 职责不同：前者保存文件版本，后者归档对话并处理记忆。部分记忆流程会在更新 experience 后调用 snapshot，这不等于所有写入都自动快照。
+
+## 提交范围与并发
+
+USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有写权限的项目目录提交，可以避免把无关资源纳入同一次快照。
+
+| `commit(paths=...)` 输入 | 含义 |
+| --- | --- |
+| 现存文件 URI | 处理该文件 |
+| 现存目录 URI | 递归处理当前文件，并记录此前快照中该子树内文件的删除 |
+| 缺失 URI | 记录此前快照中该路径及其子树的删除；此前也不存在则无改动 |
+| `[]` | 显式空范围，不产生改动 |
+| `None` / 省略 | 整棵账号树，仅限 ROOT |
+
+局部提交沿用分支上一次快照作为基础，范围外文件保留原快照版本。删除后仍要提交被删除 URI 或覆盖它的父目录；从 `paths` 中去掉该 URI 会漏记删除。路径末尾 `/` 不是文件/目录类型声明，当前接口没有逐目标的显式类型参数。
+
+非 ROOT 的显式路径提交先按当前状态选锁，再检查范围权限并生成快照：
+
+| 目标状态 | Filesystem PathLock | Cache（Redis）PathLock |
+| --- | --- | --- |
+| 现存文件 | Exact | Exact |
+| 现存目录 | Tree | Tree |
+| 缺失路径 | 跳过该目标的锁 | Tree |
+
+Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失的父目录链；该目标仍参与快照删除处理。此时并发重建同一路径可能被漏记或读到尚未写完的内容，后续提交才能记录最终状态。ROOT 不经过这段显式路径加锁流程。
+
+快照不能视为任意并发 I/O 的全局原子视图。需要确定的业务检查点时，应先结束该范围内的写入，再提交；锁只协调参与 [PathLock 协议](../concepts/09-transaction.md) 的操作。
 
 ## 前置条件
 
@@ -30,7 +64,7 @@
     "author_name": "viking-bot",
     "author_email": "bot@viking.local",
     "local": {
-      "base_dir": "",
+      "base_dir": ""
     }
   }
 }
@@ -92,7 +126,7 @@
 | `git.s3.use_path_style` | `true` | `true` 用 path-style 寻址（MinIO 等）；`false` 用 virtual-host 寻址（TOS 等） |
 | `git.s3.cas_mode` | `native` | 引用 CAS 模式。`native` 使用 S3 条件写（If-Match） |
 
-修改配置后，重启 OpenViking 服务（或重新初始化 SDK 客户端）使其生效。
+修改服务端配置后，重启 OpenViking 服务。重新初始化 HTTP SDK 客户端不会重新加载服务端配置。
 
 > 仓库中提供了可直接参考的完整示例：[ov.conf.git-local.example](https://github.com/volcengine/OpenViking/blob/main/examples/snapshot/ov.conf.git-local.example) 与 [ov.conf.git-s3-tos.example](https://github.com/volcengine/OpenViking/blob/main/examples/snapshot/ov.conf.git-s3-tos.example)。
 
@@ -117,7 +151,7 @@ data/                      # storage.workspace
 
 - `.ovgit` 是内部数据目录，**不会**通过 `viking://` 暴露，用户在文件系统 API（`ls`/`read` 等）中看不到也无法修改它。
 - 它与 Git 的标准对象库布局一致（内容寻址的 `objects/`、loose 引用的 `refs/`），但由 OpenViking 自动管理，**无需也不应**手动运行 `git` 命令去操作它。
-- 备份或迁移工作区时，把 `.ovgit` 一并复制即可保留完整的版本历史。
+- 物理备份或迁移前先暂停写入，在同一检查点复制工作区和 `.ovgit`。[OVPack 导出](09-ovpack.md) 保存当前内容，不包含快照历史。
 - 选择 `s3` 后端时，不会创建本地 `.ovgit` 目录，数据改为存放在 bucket 的 `{prefix}/{account}/...` 键下。
 
 ## 使用方法
@@ -129,21 +163,24 @@ data/                      # storage.workspace
 快照方法挂在 `client.snapshot.*` 命名空间下。
 
 ```python
+from uuid import uuid4
 from openviking_sdk import SyncHTTPClient
 
 client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-root = "viking://resources/my_project"
+root = f"viking://resources/snapshot-demo-{uuid4().hex[:8]}"
 
 # 1. 写入初始内容并提交 v1
 client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
-v1 = client.snapshot.commit(message="v1 initial import")
+print(client.wait_processed())
+v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
+if not v1.get("commit_oid"):
+    raise RuntimeError(f"No snapshot created: {v1}")
 print("v1:", v1["commit_oid"])
 
 # 2. 修改后再提交 v2
@@ -151,22 +188,24 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
-v2 = client.snapshot.commit(message="v2 update")
+print(client.wait_processed())
+v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. 查看历史
-for c in client.snapshot.log(limit=10):
+for c in client.snapshot.log(limit=10, paths=[root]):
     print(c["oid"][:8], c["message"])
 
-# 4. 查看某个提交的元数据
-print(client.snapshot.show(v1["commit_oid"])["message"])
+# 4. 读取历史文件内容
+print(client.snapshot.show(v1["commit_oid"], path=f"{root}/guide.md"))
 
-# 5. 把工作区恢复到 v1（会在 v2 之上生成一个新的“正向”提交）
-client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], message="restore to v1")
+# 5. 预览恢复计划，暂不修改文件
+print(client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], dry_run=True))
 
 client.close()
 ```
+
+示例每次创建新目录，在每次提交前等待后台处理结束，最后只预览恢复计划。检查处理结果中的错误；队列结束不代表索引一致。检查计划后，重新连接客户端，使用相同的 `project_dir` 和 `source_commit`，并设置 `dry_run=False` 才会执行恢复。
 
 ### CLI
 
@@ -174,22 +213,28 @@ CLI 子命令位于 `ov snapshot` 下：
 
 ```bash
 # 提交当前工作区状态
-ov snapshot commit -m "v1 initial import" -o json
+ov snapshot commit -m "v1 initial import" --paths viking://resources/my_project -o json
 
 # 回溯历史（最新在前）
-ov snapshot log --limit 10 -o json
+ov snapshot log --paths viking://resources/my_project --limit 10 -o json
 
-# 查看提交元数据
-ov snapshot show <commit_oid> -o json
+# 填入上面返回的 commit_oid
+COMMIT_OID="replace-with-commit-oid"
+
+# 读取历史文件内容
+ov snapshot show "$COMMIT_OID" --path viking://resources/my_project/guide.md
 
 # 读取某个提交中的文件内容（默认输出到 stdout，可用 --out-file 写入本地文件）
-ov snapshot show <commit_oid> --path viking://resources/my_project/guide.md --out-file ./guide.md
+ov snapshot show "$COMMIT_OID" --path viking://resources/my_project/guide.md --out-file ./guide.md
 
-# 把目录恢复到某个历史快照（位置参数依次为 <source_commit> <project_dir>）
-ov snapshot restore <commit_oid> viking://resources/my_project -m "restore to v1" -o json
+# 预览会改动的文件
+ov snapshot restore "$COMMIT_OID" viking://resources/my_project --dry-run -o json
+```
 
-# 先预演，确认会改动哪些文件
-ov snapshot restore <commit_oid> viking://resources/my_project --dry-run -o json
+确认预览后，执行恢复：
+
+```bash
+ov snapshot restore "$COMMIT_OID" viking://resources/my_project -m "restore to v1" -o json
 ```
 
 ### HTTP API
@@ -199,29 +244,31 @@ ov snapshot restore <commit_oid> viking://resources/my_project --dry-run -o json
 curl -X POST "http://localhost:1933/api/v1/snapshot/commit" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"message": "v1 initial import"}'
+  -d '{"message": "v1 initial import", "paths": ["viking://resources/my_project"]}'
 
 # 回溯历史
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10&paths=viking://resources/my_project" \
   -H "X-API-Key: your-key"
 
-# 查看提交元数据
-curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>" \
+# 读取历史文件内容
+curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>&path=viking://resources/my_project/guide.md" \
   -H "X-API-Key: your-key"
 
-# 恢复
+# 预览恢复
 curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"project_dir": "viking://resources/my_project", "source_commit": "<commit_oid>", "message": "restore to v1"}'
+  -d '{"project_dir": "viking://resources/my_project", "source_commit": "<commit_oid>", "message": "restore to v1", "dry_run": true}'
 ```
+
+将 `<commit_oid>` 替换为保存的提交 ID。上面的恢复请求只预览；确认执行时再把 `dry_run` 改为 `false`。
 
 ## 重要语义：正向恢复
 
 `restore` 采用**正向恢复（forward-commit）**：它读取 `source_commit` 的内容，把差异写回工作区，并在**当前 HEAD 之上生成一个新的提交**。因此：
 
 - 新提交的父提交是恢复操作发生前的 HEAD，**不是** `source_commit`。
-- HEAD 始终单调向前推进，**历史永远不会被改写或丢失**——回到旧版本本身也是一次新的提交。
+- 所选范围内的来源快照与 HEAD 文件树存在差异时，恢复会追加提交，不改写历史。两棵树相同时返回 `result: "noop"`，不创建提交，即使工作区文件已有变化。快照存储本身仍需要备份。
 - `restore` 只影响 `project_dir`（省略时为整棵账号树）范围内的文件，范围之外的文件保持不变。
 
 ## 使用 `.ovgitignore` 排除文件
@@ -264,8 +311,8 @@ client.snapshot.delete_gitignore()
 随后提交时，匹配规则的文件会被排除，响应里的 `ignored` 字段给出本次被排除的候选路径数：
 
 ```python
-v = client.snapshot.commit(message="with ignore")
-print(v["result"], v.get("ignored"))  # created, 1
+v = client.snapshot.commit(message="with ignore", paths=["viking://resources/my_project"])
+print(v["result"], v.get("ignored"))
 ```
 
 ### CLI
@@ -302,7 +349,7 @@ curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
 
 ## 注意事项
 
-- 修改 `git` 配置后必须重启服务 / 重新初始化客户端才能生效。
+- 修改服务端 `git` 配置后，重启服务使其生效。
 - 启用 `s3` 后端时，`git.s3.bucket` 与 `git.s3.region` 为必填项，缺失会导致初始化失败。
 - 恢复操作如涉及向量副作用（写入/删除文件），响应会返回一个 `task_id`，可通过 `GET /api/v1/tasks/{task_id}` 轮询后台向量重建进度（参见 [系统指南](05-observability.md) 与 [API 概览](../api/01-overview.md)）。
 - `.ovgitignore` 内容过大（超过 64 KiB）或包含 `!` 取反、反斜杠转义等不支持语法时，`commit` 会失败并报 `invalid operation` 错误；写入时（`set_gitignore`）会预先校验大小。
@@ -312,4 +359,4 @@ curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
 
 - [多版本管理 API](../api/11-snapshot.md)：命令参数与响应的完整参考
 - [配置说明](01-configuration.md)：`ov.conf` 完整配置项
-- [多写存储指南](13-multi-write-storage.md)：资源数据的多后端复制
+- [主备存储指南](13-multi-write-storage.md)：资源数据的多后端复制

@@ -1,23 +1,40 @@
-import * as React from 'react'
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
+import { Button } from '#/components/ui/button'
+import studioI18n from '#/i18n'
+import { StudioSetup } from './studio-setup'
 import {
-  BlocksIcon,
+  needsStudioSetup,
+  studioSetupDestination,
+} from '#/lib/connection/onboarding'
+import * as React from 'react'
+import {
+  Link,
+  Navigate,
+  useNavigate,
+  useRouterState,
+} from '@tanstack/react-router'
+import {
+  MessagesSquareIcon,
   BookOpenIcon,
   BracesIcon,
+  BrainIcon,
   ChevronRightIcon,
-  ClipboardListIcon,
-  Clock3Icon,
+  ListChecksIcon,
+  HistoryIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
   MoonIcon,
-  MonitorUpIcon,
-  PlugZapIcon,
+  ActivityIcon,
+  BotIcon,
+  PanelsTopLeftIcon,
+  CableIcon,
   ScrollTextIcon,
   SearchIcon,
   SparklesIcon,
   SunIcon,
   UsersRoundIcon,
+  WaypointsIcon,
+  WorkflowIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -35,12 +52,14 @@ import { ScrollArea } from '#/components/ui/scroll-area'
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -53,8 +72,18 @@ import {
   AppConnectionProvider,
   useAppConnection,
 } from '#/hooks/use-app-connection'
+import type { ServerMode } from '#/lib/connection/health'
 import { cn } from '#/lib/utils'
-import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
+import { useGateway } from '#/routes/gateway/-lib/use-gateway'
+import { fetchServerHealth } from '#/lib/connection/health'
+import { useStudioService } from '#/hooks/use-studio-service'
+import { useStudioCapabilities } from '#/hooks/use-studio-capabilities'
+import { featureForPath, isStudioFeatureVisible } from '#/lib/studio-service'
+import { StudioFeatureBoundary } from './studio-feature-boundary'
+import {
+  canManageStudioGateway,
+  resolveStudioManagementCapabilities,
+} from '#/lib/studio-permissions'
 
 type NavItem = {
   icon: React.ComponentType
@@ -88,11 +117,18 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/home',
   },
   {
-    icon: PlugZapIcon,
-    id: 'playground',
+    icon: PanelsTopLeftIcon,
+    id: 'filesystem',
     section: 'workspace',
-    titleKey: 'navigation.playground.title',
-    to: '/playground',
+    titleKey: 'navigation.filesystem.title',
+    to: '/filesystem',
+  },
+  {
+    icon: BotIcon,
+    id: 'vikingbot',
+    section: 'workspace',
+    titleKey: 'vikingbot:title',
+    to: '/vikingbot',
   },
   {
     icon: SearchIcon,
@@ -108,12 +144,27 @@ const NAV_ITEMS: readonly NavItem[] = [
     titleKey: 'navigation.skills.title',
     to: '/skills',
   },
+
   {
-    icon: BlocksIcon,
+    icon: WorkflowIcon,
+    id: 'compile',
+    section: 'workspace',
+    titleKey: 'navigation.compile.title',
+    to: '/compile',
+  },
+  {
+    icon: MessagesSquareIcon,
     id: 'sessions',
     section: 'operations',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
+  },
+  {
+    icon: BrainIcon,
+    id: 'agentExperience',
+    section: 'operations',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
   },
   {
     icon: ScrollTextIcon,
@@ -123,21 +174,21 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/request-logs',
   },
   {
-    icon: ClipboardListIcon,
+    icon: ListChecksIcon,
     id: 'tasks',
     section: 'operations',
     titleKey: 'navigation.tasks.title',
     to: '/tasks',
   },
   {
-    icon: Clock3Icon,
+    icon: HistoryIcon,
     id: 'watches',
     section: 'operations',
     titleKey: 'navigation.watches.title',
     to: '/watches',
   },
   {
-    icon: MonitorUpIcon,
+    icon: ActivityIcon,
     id: 'monitoring',
     section: 'operations',
     titleKey: 'navigation.monitoring.title',
@@ -170,7 +221,7 @@ const LANGUAGE_OPTIONS = [
 ] as const
 
 const HEADER_ICON_BUTTON_CLASS =
-  'relative inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+  'relative inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 function resolveLanguage(
   value: string | undefined,
@@ -238,6 +289,51 @@ function NavGroupItem({ item, pathname, title, t }: NavGroupItemProps) {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const [needsSetup, setNeedsSetup] = React.useState(needsStudioSetup)
+  const [checkingHost, setCheckingHost] = React.useState(
+    () => needsSetup && window.location.pathname.startsWith('/studio'),
+  )
+  React.useEffect(() => {
+    if (!checkingHost) return
+    let cancelled = false
+    void fetchServerHealth(window.location.origin)
+      .then((health) => {
+        if (!cancelled && health.service === 'openviking-gateway')
+          setNeedsSetup(false)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setCheckingHost(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [checkingHost])
+  if (checkingHost)
+    return (
+      <div
+        role="status"
+        className="flex min-h-svh items-center justify-center bg-background text-sm text-muted-foreground"
+      >
+        {studioI18n.t('studio:loading')}
+      </div>
+    )
+  if (pathname === '/config')
+    return (
+      <StudioSetup
+        onComplete={(connection) => {
+          setNeedsSetup(false)
+          void navigate({
+            to: studioSetupDestination(connection),
+          })
+        }}
+      />
+    )
+  if (needsSetup) return <Navigate replace to="/config" />
   return (
     <AppConnectionProvider>
       <IdentityScopedAppShell>{children}</IdentityScopedAppShell>
@@ -245,9 +341,77 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-function IdentityScopedAppShell({ children }: { children: React.ReactNode }) {
-  const { identityScopeKey } = useAppConnection()
-  return <AppShellInner key={identityScopeKey}>{children}</AppShellInner>
+export function IdentityScopedAppShell({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const { identityScopeKey, activeProfileId, serverMode } = useAppConnection()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const isSettings = pathname === '/settings'
+  // Keep the settings tree stable across health transitions, but reset it when
+  // an actual profile changes. Business routes retain identity isolation.
+  if (serverMode === 'checking' && !isSettings)
+    return (
+      <div
+        role="status"
+        className="flex min-h-svh flex-col items-center justify-center gap-4 bg-background text-sm text-muted-foreground"
+      >
+        {studioI18n.t('studio:loading')}
+        <Button
+          nativeButton={false}
+          variant="outline"
+          render={<Link to="/settings" />}
+        >
+          {studioI18n.t('studio:connectionSettings')}
+        </Button>
+      </div>
+    )
+  return (
+    <AppShellInner
+      key={isSettings ? `settings:${activeProfileId}` : identityScopeKey}
+    >
+      {isSettings ? (
+        children
+      ) : (
+        <ConnectionScopedRouteContent serverMode={serverMode}>
+          <StudioFeatureBoundary>{children}</StudioFeatureBoundary>
+        </ConnectionScopedRouteContent>
+      )}
+    </AppShellInner>
+  )
+}
+
+export function ConnectionScopedRouteContent({
+  children,
+  serverMode,
+}: {
+  children: React.ReactNode
+  serverMode: ServerMode
+}) {
+  return serverMode === 'checking' ? null : children
+}
+
+/**
+ * Every signed-in user of an OpenViking server sees the gateway entry, even
+ * while the gateway is off: the page explains how to turn it on.
+ */
+export function shouldShowGatewayNavigation({
+  isGatewayHost,
+  serverMode,
+  allowed,
+}: {
+  isGatewayHost: boolean
+  serverMode: ServerMode
+  /** `useGateway().allowed`: the gateway can be asked for /access. */
+  allowed: boolean
+}): boolean {
+  return (
+    isGatewayHost ||
+    (serverMode !== 'checking' && serverMode !== 'offline' && allowed)
+  )
 }
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
@@ -263,24 +427,68 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const agentIntegrationsHref = `https://docs.openviking.ai/${
     currentLanguage === 'zh-CN' ? 'zh' : 'en'
   }/agent-integrations/01-overview`
-  const sdkApiHref = `https://docs.openviking.ai/${
+  const opensourceApiHref = `https://docs.openviking.ai/${
     currentLanguage === 'zh-CN' ? 'zh' : 'en'
   }/api/01-overview`
   const [crossDeviceVerifyOpen, setCrossDeviceVerifyOpen] =
     React.useState(false)
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
+  const {
+    connection,
+    connectionRole,
+    isConnectionRoleLoading,
+    isGatewayHost,
+    serverMode,
+  } = useAppConnection()
+  const service = useStudioService()
+  const { provider } = service
+  const sdkApiHref =
+    provider === 'volcengine'
+      ? 'https://docs.volcengine.com/docs/84313/2381937'
+      : opensourceApiHref
   const settingsActive = pathname === '/settings'
-  const usersActive = pathname === '/users'
-  const { canManageUsers } = resolveStudioManagementCapabilities({
+  const usersActive = pathname === '/users' || pathname.startsWith('/users/')
+  const gatewayActive =
+    pathname === '/gateway' || pathname.startsWith('/gateway/')
+  const permissionInput = {
+    serviceProvider: provider,
     hasControlCredential: Boolean(connection.adminApiKey.trim()),
     isRoleLoading: isConnectionRoleLoading,
     role: connectionRole,
     serverMode,
+  }
+  const gateway = useGateway()
+  const canManageGateway =
+    service.ready && canManageStudioGateway(permissionInput)
+  const showGateway = shouldShowGatewayNavigation({
+    isGatewayHost,
+    serverMode,
+    allowed: canManageGateway && gateway.allowed,
   })
+  const navSections = isGatewayHost ? [] : NAV_SECTIONS
+  const { canManageUsers: canManageServiceUsers } =
+    resolveStudioManagementCapabilities({
+      serviceProvider: provider,
+      hasControlCredential: Boolean(connection.adminApiKey.trim()),
+      isRoleLoading: isConnectionRoleLoading,
+      role: connectionRole,
+      serverMode,
+    })
+  const canManageUsers = !isGatewayHost && canManageServiceUsers
   const crossDeviceVerifyActive =
     pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
-  const visibleNavItems = NAV_ITEMS
+  const capabilities = useStudioCapabilities()
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    const feature = featureForPath(item.to)
+    return (
+      !feature ||
+      (service.ready &&
+        isStudioFeatureVisible(
+          provider,
+          feature,
+          capabilities[feature.id]?.data,
+        ))
+    )
+  })
 
   function openCrossDeviceVerify(): void {
     if (crossDeviceVerifyActive) {
@@ -307,66 +515,69 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     >
       <Sidebar variant="sidebar" collapsible="icon">
         <SidebarHeader className="h-12 border-b border-sidebar-border/70 px-2 py-0">
-          <div className="flex h-full items-center justify-between gap-2 group-data-[collapsible=icon]:justify-center">
+          <div className="flex h-full items-center gap-1 group-data-[collapsible=icon]:justify-center">
             <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
               <AccountSwitcher />
             </div>
-            <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
           </div>
         </SidebarHeader>
 
         <SidebarContent className="gap-0 py-1">
-          {NAV_SECTIONS.map((section) => (
-            <SidebarGroup key={section.id} className="pb-1">
-              <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
-                {t(section.titleKey, { ns: 'appShell' })}
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {visibleNavItems
-                    .filter((item) => item.section === section.id)
-                    .map((item) => {
-                      const isActive =
-                        pathname === item.to ||
-                        pathname.startsWith(`${item.to}/`)
-                      const title = t(item.titleKey, { ns: 'appShell' })
+          {navSections
+            .filter((section) =>
+              visibleNavItems.some((item) => item.section === section.id),
+            )
+            .map((section) => (
+              <SidebarGroup key={section.id} className="pb-1">
+                <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
+                  {t(section.titleKey, { ns: 'appShell' })}
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {visibleNavItems
+                      .filter((item) => item.section === section.id)
+                      .map((item) => {
+                        const isActive =
+                          pathname === item.to ||
+                          pathname.startsWith(`${item.to}/`)
+                        const title = t(item.titleKey, { ns: 'appShell' })
 
-                      if (item.children) {
-                        return (
-                          <NavGroupItem
-                            key={item.id}
-                            item={
-                              item as NavItem & {
-                                children: readonly NavSubItem[]
+                        if (item.children) {
+                          return (
+                            <NavGroupItem
+                              key={item.id}
+                              item={
+                                item as NavItem & {
+                                  children: readonly NavSubItem[]
+                                }
                               }
-                            }
-                            pathname={pathname}
-                            title={title}
-                            t={t}
-                          />
+                              pathname={pathname}
+                              title={title}
+                              t={t}
+                            />
+                          )
+                        }
+
+                        const Icon = item.icon
+
+                        return (
+                          <SidebarMenuItem key={item.id}>
+                            <SidebarMenuButton
+                              render={<Link to={item.to} />}
+                              isActive={isActive}
+                              tooltip={title}
+                              className="h-9"
+                            >
+                              <Icon />
+                              <span>{title}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
                         )
-                      }
-
-                      const Icon = item.icon
-
-                      return (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            render={<Link to={item.to} />}
-                            isActive={isActive}
-                            tooltip={title}
-                            className="h-9"
-                          >
-                            <Icon />
-                            <span>{title}</span>
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      )
-                    })}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))}
+                      })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ))}
 
           <SidebarGroup className="pb-1">
             <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
@@ -381,10 +592,29 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     tooltip={t('footer.connection', { ns: 'appShell' })}
                     className="h-9"
                   >
-                    <PlugZapIcon />
+                    <CableIcon />
                     <span>{t('footer.connection', { ns: 'appShell' })}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {showGateway ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={<Link to="/gateway" />}
+                      isActive={gatewayActive}
+                      tooltip={t('footer.gatewayBeta', {
+                        ns: 'appShell',
+                      })}
+                      className="h-9 pr-12"
+                    >
+                      <WaypointsIcon />
+                      <span>{t('footer.gateway', { ns: 'appShell' })}</span>
+                    </SidebarMenuButton>
+                    {/* Hidden while the sidebar is collapsed; the tooltip says Beta then. */}
+                    <SidebarMenuBadge className="h-4.5 rounded-full border border-sidebar-border px-1.5 text-[10px] font-medium text-sidebar-foreground/55 peer-data-[size=default]/menu-button:top-[9px]">
+                      {t('footer.beta', { ns: 'appShell' })}
+                    </SidebarMenuBadge>
+                  </SidebarMenuItem>
+                ) : null}
                 {canManageUsers ? (
                   <SidebarMenuItem>
                     <SidebarMenuButton
@@ -398,28 +628,30 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ) : null}
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    onClick={openCrossDeviceVerify}
-                    isActive={crossDeviceVerifyActive}
-                    tooltip={t('navigation.crossDeviceVerify.title', {
-                      ns: 'appShell',
-                    })}
-                    className="h-9"
-                  >
-                    <KeyRoundIcon />
-                    <span>
-                      {t('navigation.crossDeviceVerify.title', {
+                {provider === 'opensource' && !isGatewayHost ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      onClick={openCrossDeviceVerify}
+                      isActive={crossDeviceVerifyActive}
+                      tooltip={t('navigation.crossDeviceVerify.title', {
                         ns: 'appShell',
                       })}
-                    </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                      className="h-9"
+                    >
+                      <KeyRoundIcon />
+                      <span>
+                        {t('navigation.crossDeviceVerify.title', {
+                          ns: 'appShell',
+                        })}
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <SidebarGroup className="pb-1">
+          <SidebarGroup className="pb-1" hidden={isGatewayHost}>
             <SidebarGroupLabel className="h-7 px-2 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sidebar-foreground/45">
               {t('sidebar.groups.resources', { ns: 'appShell' })}
             </SidebarGroupLabel>
@@ -429,7 +661,11 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                   <SidebarMenuButton
                     render={
                       <a
-                        href="https://docs.openviking.ai/"
+                        href={
+                          provider === 'volcengine'
+                            ? sdkApiHref
+                            : 'https://docs.openviking.ai/'
+                        }
                         target="_blank"
                         rel="noreferrer"
                       />
@@ -453,44 +689,49 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     <span>{t('footer.sdkApi', { ns: 'appShell' })}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    render={
-                      <a
-                        href={agentIntegrationsHref}
-                        target="_blank"
-                        rel="noreferrer"
-                      />
-                    }
-                    tooltip={t('footer.agentIntegrations', {
-                      ns: 'appShell',
-                    })}
-                    className="h-9"
-                  >
-                    <PlugZapIcon />
-                    <span>
-                      {t('footer.agentIntegrations', { ns: 'appShell' })}
-                    </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                {provider === 'opensource' && !isGatewayHost ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      render={
+                        <a
+                          href={agentIntegrationsHref}
+                          target="_blank"
+                          rel="noreferrer"
+                        />
+                      }
+                      tooltip={t('footer.agentIntegrations', {
+                        ns: 'appShell',
+                      })}
+                      className="h-9"
+                    >
+                      <BotIcon />
+                      <span>
+                        {t('footer.agentIntegrations', { ns: 'appShell' })}
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
+        <SidebarFooter className="hidden items-end border-t border-sidebar-border/70 px-2 py-1 group-data-[collapsible=icon]:items-center md:flex">
+          <SidebarTrigger className="hidden shrink-0 md:inline-flex" />
+        </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
-        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
+        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-sidebar px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="relative flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
+              className="relative flex h-8 items-center rounded-lg border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
               role="group"
             >
               <span
                 className={cn(
-                  'absolute h-8 min-w-10 rounded-xl bg-background shadow-sm transition-transform duration-200 ease-in-out',
+                  'absolute h-6 min-w-8 rounded-md bg-background shadow-sm transition-transform duration-200 ease-in-out',
                   currentLanguage === 'en' && 'translate-x-full',
                 )}
               />
@@ -503,7 +744,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'relative z-10 h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                      'relative z-10 h-6 min-w-8 rounded-md px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       isActive && 'text-foreground',
                     )}
                     onClick={() => {
@@ -526,8 +767,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
               }
             >
-              <MoonIcon className="size-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <SunIcon className="absolute size-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+              <MoonIcon className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+              <SunIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             </button>
 
             <a
@@ -537,12 +778,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               aria-label={t('footer.github', { ns: 'appShell' })}
               className={HEADER_ICON_BUTTON_CLASS}
             >
-              <GithubIcon className="size-5" />
+              <GithubIcon className="size-4" />
             </a>
 
             <div className="h-6 w-px bg-border/80" aria-hidden="true" />
 
-            <CurrentUserMenu />
+            {isGatewayHost ? null : <CurrentUserMenu />}
           </div>
         </header>
 
@@ -553,10 +794,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </ScrollArea>
       </SidebarInset>
 
-      <CrossDeviceVerifyDialog
-        open={crossDeviceVerifyOpen}
-        onOpenChange={setCrossDeviceVerifyOpen}
-      />
+      {provider === 'opensource' && !isGatewayHost ? (
+        <CrossDeviceVerifyDialog
+          open={crossDeviceVerifyOpen}
+          onOpenChange={setCrossDeviceVerifyOpen}
+        />
+      ) : null}
       <GeneratedCredentialDialog />
     </SidebarProvider>
   )

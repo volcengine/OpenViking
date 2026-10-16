@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
+from openviking.core.retrieval_types import SearchType
+
 Detail = Literal["abstract", "overview", "full"]
 # "auto" no longer selects a strategy; it is accepted as a synonym for "unset".
 DetailRequest = Union[Literal["auto", "abstract", "overview", "full"], Dict[str, Detail]]
@@ -76,8 +78,9 @@ FULL_BODY_ABSTRACT_CATEGORIES: frozenset[str] = frozenset(
 # reading resource bodies.
 DEPTH_CEILING_BY_CATEGORY: Dict[str, Tier] = {"events": "full"}
 
-# Purpose presets are absolute bucket ceilings. Their total is the candidate
-# width for bucketed retrieval; ``limit`` belongs only to quota-free flat mode.
+# Purpose presets are first-pass bucket ceilings. Their total is the candidate
+# width for bucketed retrieval, and slots a bucket leaves unused go to the best
+# remaining hits of the other buckets; ``limit`` belongs only to flat mode.
 PURPOSE_PRESETS: Dict[str, Dict[str, int]] = {
     "coding": {
         "events": 1,
@@ -120,10 +123,12 @@ class AssembleParams:
     """Resolved request contract for one context assembly run."""
 
     query: str = ""
+    search_type: SearchType = "semantic"
     image_url: Optional[str] = None
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    events_time_decay_protection: Optional[str] = None
 
     session_id: Optional[str] = None
     query_expansion: Literal["off", "auto"] = "auto"

@@ -215,15 +215,17 @@ class CollectorManager:
 
         Returns:
             A `RefreshResult` describing the collector outcome without propagating exceptions to
-            the caller.
+            the caller. An explicit False return means collection was skipped.
         """
         try:
-            await asyncio.wait_for(asyncio.to_thread(collector.collect, registry), timeout=timeout)
+            collected = await asyncio.wait_for(
+                asyncio.to_thread(collector.collect, registry), timeout=timeout
+            )
             return RefreshResult(
                 collector=self._collector_name(collector),
-                attempted=True,
-                success=True,
-                reason="ok",
+                attempted=collected is not False,
+                success=collected is not False,
+                reason="skipped" if collected is False else "ok",
             )
         except asyncio.TimeoutError:
             return RefreshResult(

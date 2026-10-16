@@ -27,8 +27,8 @@ def image_format_from_mime(mime_type: str | None) -> ImageFormat | None:
     return _MIME_FORMATS.get(mime_type.lower().split(";", 1)[0].strip())
 
 
-def detect_image_format(image_data: bytes, fallback_mime: str | None = None) -> ImageFormat:
-    """Detect common image formats from magic bytes, falling back to a MIME hint."""
+def sniff_image_format(image_data: bytes) -> ImageFormat | None:
+    """Detect common image formats from magic bytes."""
     if image_data.startswith(b"\x89PNG\r\n\x1a\n"):
         return PNG_FORMAT
     if image_data.startswith(b"\xff\xd8\xff"):
@@ -39,5 +39,14 @@ def detect_image_format(image_data: bytes, fallback_mime: str | None = None) -> 
         return ImageFormat("bmp", "image/bmp")
     if len(image_data) >= 12 and image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
         return ImageFormat("webp", "image/webp")
+
+    return None
+
+
+def detect_image_format(image_data: bytes, fallback_mime: str | None = None) -> ImageFormat:
+    """Detect common image formats from magic bytes, falling back to a MIME hint."""
+    detected = sniff_image_format(image_data)
+    if detected is not None:
+        return detected
 
     return image_format_from_mime(fallback_mime) or PNG_FORMAT

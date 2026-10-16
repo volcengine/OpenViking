@@ -13,6 +13,8 @@
   "plugin": {
     "recallCompress": "auto",
 
+    "peerSource": "git",
+
     "claude_code": {},
     "codex": {}
   }

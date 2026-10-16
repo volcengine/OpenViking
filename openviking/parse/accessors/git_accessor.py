@@ -31,7 +31,9 @@ from openviking.utils.code_hosting_utils import (
 )
 from openviking.utils.git_auth import (
     build_git_http_auth_env,
+    is_git_https_url,
     parse_git_http_auth_config,
+    raise_git_auth_error,
 )
 from openviking_cli.utils.logger import get_logger
 
@@ -132,10 +134,21 @@ class GitAccessor(DataAccessor):
                 if auth_config is not None:
                     git_env = build_git_http_auth_env(auth_config, repo_url)
                 if self._is_github_url(repo_url) and auth_config is None:
+                    github_token = kwargs.get("github_token") or os.environ.get("GITHUB_TOKEN")
+                    if github_token and is_git_https_url(repo_url):
+                        github_auth = parse_git_http_auth_config(
+                            {"token": github_token},
+                            repo_url,
+                        )
+                        assert github_auth is not None
+                        git_env = build_git_http_auth_env(github_auth, repo_url)
                     # Try GitHub ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._github_zip_download(
-                            repo_url, branch or commit, temp_local_dir
+                            repo_url,
+                            branch or commit,
+                            temp_local_dir,
+                            github_token=github_token,
                         )
                     except Exception as zip_exc:
                         logger.warning(
@@ -200,7 +213,7 @@ class GitAccessor(DataAccessor):
             # Build metadata
             # repo_name is in "org/repo" format (e.g. "volcengine/OpenViking")
             # This is extracted via parse_code_hosting_url() from the original URL
-            meta = {"repo_name": repo_name}
+            meta = {"repo_name": repo_name, "_cleanup_path": temp_local_dir}
             if branch:
                 meta["repo_ref"] = branch
             if commit:
@@ -311,15 +324,12 @@ class GitAccessor(DataAccessor):
                 await asyncio.shield(proc.wait())
             raise
         if proc.returncode != 0:
+            raise_git_auth_error(stderr)
             error_msg = stderr.decode().strip()
             user_msg = "Git command failed."
             if "Could not resolve hostname" in error_msg:
                 user_msg = (
                     "Git command failed: could not resolve hostname. Check the URL or your network."
-                )
-            elif "Permission denied" in error_msg or "publickey" in error_msg:
-                user_msg = (
-                    "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
             if env is None:
                 logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
@@ -446,6 +456,8 @@ class GitAccessor(DataAccessor):
         repo_url: str,
         branch: Optional[str],
         target_dir: str,
+        *,
+        github_token: Optional[str] = None,
     ) -> Tuple[Path, str]:
         """Download a GitHub repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
@@ -467,10 +479,11 @@ class GitAccessor(DataAccessor):
         extract_dir = os.path.join(target_dir, "_extracted")
         os.makedirs(extract_dir, exist_ok=True)
 
+        github_token = github_token or os.environ.get("GITHUB_TOKEN")
+
         # Download (blocking HTTP; run in thread pool)
         def _download() -> None:
             headers = {"User-Agent": "OpenViking"}
-            github_token = os.environ.get("GITHUB_TOKEN")
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
 

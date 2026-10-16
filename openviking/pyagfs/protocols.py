@@ -12,8 +12,17 @@ AGFSByteStream = Iterator[bytes]
 class AGFSSyncClientProtocol(Protocol):
     """AGFS binding contract used by OpenViking."""
 
-    def ls(self, path: str = "/") -> list[Dict[str, Any]]:
-        """List directory entries under the given AGFS path."""
+    def ls(
+        self,
+        path: str = "/",
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> list[Dict[str, Any]]:
+        """List a sorted directory range."""
 
     @overload
     def read(
@@ -90,8 +99,14 @@ class AGFSSyncClientProtocol(Protocol):
         show_hidden: bool = False,
         node_limit: int | None = None,
         level_limit: int | None = None,
+        ctx: Dict[str, str] | None = None,
+        *,
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+        directories_only: bool = False,
     ) -> list[Dict[str, Any]]:
-        """Return a tree view for the given AGFS directory."""
+        """Return a sorted range from a directory tree."""
 
     def glob_directory(
         self,
@@ -103,12 +118,6 @@ class AGFSSyncClientProtocol(Protocol):
         continuation_token: str | None = None,
     ) -> Dict[str, Any]:
         """Return one page of flat glob matches for the given AGFS directory."""
-
-    def system_sync_status(self, path: str) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
-
-    def system_sync_retry(self, path: str) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
 
     def pathlock_acquire_batch_async(
         self,

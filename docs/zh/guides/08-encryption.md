@@ -4,27 +4,27 @@
 
 ## 概述
 
-OpenViking 提供透明的静态数据加密，确保多租户环境下的数据安全与隔离：
+OpenViking 可以按账户加密存储中新写入的文件。加解密由存储层处理，客户端沿用现有 API：
 
-- ✅ **透明加密**：API 无变化，应用层无感知
-- ✅ **多租户隔离**：不同账户使用独立密钥
-- ✅ **三种密钥提供程序**：Local、Vault、火山引擎 KMS
-- ✅ **向后兼容**：未加密的旧文件仍可正常读取
+- **透明加密**：API 无变化，应用层无感知
+- **多租户隔离**：不同账户使用独立密钥
+- **三种密钥提供程序**：Local、Vault、火山引擎 KMS
+- **向后兼容**：未加密的旧文件仍可正常读取
 
 加密功能的概念说明见 [数据加密](../concepts/10-encryption.md)。
 
-## 多写存储中的加密
+## 主备存储中的加密
 
-多写存储复用同一套透明加密机制。加密仍在 RAGFS 内部完成，Python SDK、HTTP API 和 CLI 不需要处理加解密。
+主备存储复用同一套透明加密机制。加密仍在 RAGFS 内部完成，Python SDK、HTTP API 和 CLI 不需要处理加解密。
 
 规则：
 
 - 全局 `encryption.enabled=true` 时，primary backend 必须加密。
 - backup backend 可以通过自己的 `encryption.enabled` 控制是否加密。
-- `.redirect.json` 和 `.sync_log.json` 等多写内部元数据跟随 primary 加密策略。
+- V2 多写 metadata 存储在 raw primary，不经过 `EncryptionWrappedFS`。
 - OpenViking 不提供也不需要公开的加解密 API 来操作这些内部文件。
 
-更多多写配置见 [多写存储指南](./13-multi-write-storage.md)。
+更多主备存储配置见 [主备存储指南](./13-multi-write-storage.md)。
 
 ## 快速开始
 
@@ -36,7 +36,7 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 2. 配置加密
 
-编辑 `~/.openviking/ov.conf`：
+将下面的加密配置合并到 `~/.openviking/ov.conf`，保留已有模型和服务端配置：
 
 ```json
 {
@@ -55,68 +55,46 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 3. 验证
 
+修改加密配置后重启服务，再对该服务运行示例。在运行脚本的环境中安装 [Python SDK](../api/01-overview.md#完全不依赖配置文件使用-python-sdk-客户端)。
+
 ```python
-import asyncio
 from pathlib import Path
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
 
-async def test():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
+def test():
+    # 启用认证时，将 OPENVIKING_API_KEY 设置为绑定租户身份的 user/admin key。
+    client = SyncHTTPClient(url="http://localhost:1933")
+    try:
+        client.initialize()
+        sample = Path("./encrypted-sample.txt")
+        sample.write_text("Hello, encrypted world!", encoding="utf-8")
+        imported = client.add_resource(
+            path=str(sample),
+            wait=True,
+            timeout=120,
+        )
+        results = client.find(
+            query="encrypted", target_uri=imported["root_uri"]
+        )
+        print(f"找到 {len(results.get('resources', []))} 个资源")
+    finally:
+        client.close()
 
-    # add_resource 接收文件路径或 URL
-    sample = Path("./encrypted-sample.txt")
-    sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(
-        path=str(sample),
-        options={"reason": "测试加密"},
-    )
 
-    # 读取资源（自动解密）
-    results = await client.find(query="encrypted")
-    print(f"找到 {len(results)} 个结果")
-
-    await client.close()
-
-
-asyncio.run(test())
+test()
 ```
 
-完成！现在所有写入的数据都会自动加密。
+示例会等待导入处理完成并检查检索；检索成功本身不能证明文件已加密。请按下方“验证加密”的文件内容检查步骤确认存储文件头。
 
 ## API Key 哈希配置
 
-OpenViking 提供两层加密保护：
+文件加密和 API Key 哈希是两项独立配置：
 
 | 加密层 | 配置项 | 算法 | 可逆性 | 说明 |
 |--------|--------|------|--------|------|
-| **文件层** | `encryption.enabled` | AES-GCM | ✅ 可逆 | 保护整个存储文件 |
-| **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ 不可逆 | 保护 API key 本身 |
-
-### ⚠️ Breaking Change 说明
-
-**版本变更**：OpenViking v0.3.12 → later versions
-
-**行为变化**：
-- **之前**：`encryption.enabled = true` 隐式启用 API key Argon2id 哈希
-- **现在**：需要显式配置 `encryption.api_key_hashing.enabled`
-
-**影响**：
-- 升级后，如果 `encryption.enabled = true` 但 `encryption.api_key_hashing.enabled` 未显式配置为 `true`，会在启动时看到以下警告日志：
-  ```
-  API key hashing is disabled while file encryption is enabled.
-  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
-  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
-  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
-  ```
-
-**迁移选项**：
-
-| 选项 | 配置 | 行为 |
-|------|------|------|
-| **保持原有行为** | `api_key_hashing.enabled = true` | API key 使用 Argon2id 哈希存储 |
-| **推荐新行为** | `api_key_hashing.enabled = false`（默认） | API key 明文存储（文件层仍加密） |
+| **文件层** | `encryption.enabled` | AES-GCM | 可逆 | 保护整个存储文件 |
+| **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | 不可逆 | 保护 API key 本身 |
 
 ### 默认行为
 
@@ -124,10 +102,11 @@ OpenViking 提供两层加密保护：
 - API key 以明文存储在 JSON 文件中
 - 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
 - `ov admin list-users` 可以显示完整的 API key
+- 如果 `encryption.enabled = true` 且未启用 API key 哈希，服务端启动时会输出一条说明此情况的 INFO 日志
 
 ### 启用 Argon2id 哈希
 
-如果需要最高级别的 API key 保护，可以启用 Argon2id 单向哈希：
+启用 Argon2id 单向哈希后，服务端不再保存可还原的 API Key 明文：
 
 ```json
 {
@@ -167,7 +146,7 @@ OpenViking 提供两层加密保护：
 
 | 提供程序 | 适用场景 | 优点 | 缺点 |
 |---------|---------|------|------|
-| **Local** | 开发环境、单节点部署 | 简单，无需外部服务 | 密钥存储在本地，安全性较低 |
+| **Local** | 开发环境、单节点部署 | 简单，无需外部服务 | 需要管理本地文件权限和独立密钥备份 |
 | **Vault** | 生产环境、多云部署 | 企业级密钥管理，支持版本控制 | 需要部署和维护 Vault |
 | **Volcengine KMS** | 火山引擎云部署 | 云原生密钥管理服务 | 仅限火山引擎环境 |
 
@@ -218,7 +197,7 @@ ov system crypto init-key -f ~/.openviking/master.key
 
 ### 前置条件
 
-1. 已部署 HashiCorp Vault 服务
+1. 已部署 HashiCorp Vault 服务，并在服务端 Python 环境安装 `hvac`
 2. 已启用 Transit 引擎
 3. 有足够权限的 Vault Token
 
@@ -234,10 +213,16 @@ vault secrets enable transit
 
 ```bash
 # KV v2（推荐）
-vault secrets enable -version=2 kv
+vault secrets enable -path=secret -version=2 kv
 
 # 或 KV v1
-vault secrets enable kv
+vault secrets enable -path=secret -version=1 kv
+```
+
+按实际部署选择一条 KV 命令，不要两条都执行。下面使用 `secret` 挂载点和 KV v2。先由管理员创建 Transit key：
+
+```bash
+vault write -f transit/keys/openviking-root-key type=aes256-gcm96
 ```
 
 3. 配置 OpenViking：
@@ -252,7 +237,7 @@ vault secrets enable kv
       "token": "hvs.xxxxxxxxxxxxxxxxxxxxx",
       "mount_point": "transit",
       "kv_mount_point": "secret",
-      "kv_version": 1,
+      "kv_version": 2,
       "root_key_name": "openviking-root-key",
       "encrypted_root_key_key": "openviking-encrypted-root-key"
     }
@@ -274,17 +259,31 @@ vault secrets enable kv
 
 ### Vault 权限建议
 
-为 Token 配置最小权限：
+对于上面的配置，服务 token 需要读取 Transit key 元数据、加解密权限，以及保存封装根密钥的 KV 读写权限。提前创建引擎和 Transit key 后，可参考：
 
 ```hcl
-path "transit/encrypt/openviking-root" {
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
+path "transit/keys/openviking-root-key" {
+  capabilities = ["read"]
+}
+
+path "secret/data/openviking-encrypted-root-key" {
+  capabilities = ["read", "create", "update"]
+}
+
+path "transit/encrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 
-path "transit/decrypt/openviking-root" {
+path "transit/decrypt/openviking-root-key" {
   capabilities = ["update"]
 }
 ```
+
+使用 KV v1 时，将 `secret/data/openviking-encrypted-root-key` 改为 `secret/openviking-encrypted-root-key`。provider 还会检查 `sys/mounts`；权限不足会记录警告，Transit 已启用时不会因此停止启动。
 
 ---
 
@@ -360,7 +359,7 @@ path "transit/decrypt/openviking-root" {
 
 ### 方法一：检查文件内容
 
-加密文件以魔术数 `OVE1` 开头：
+检查物理后端文件，API 返回的内容已经解密。下面的路径需换成实际文件路径。加密文件以魔术数 `OVE1` 开头：
 
 ```bash
 # 查看文件前 4 字节
@@ -378,21 +377,11 @@ hexdump -C ./data/agfs/your-file | head -1
 00000000  7b 22 63 6f 6e 74 65 6e  74 73 22 3a 5b 7b 22 70  |{"contents":[{"p|
 ```
 
-### 方法二：跨提供程序验证
+### 方法二：重启后读回
 
-尝试用不同提供程序解密彼此的数据，应该会失败（这是正常的安全行为）：
+重启前后，通过 API 读取同一份已导入文件，确认内容一致，再按上面的方法核对物理存储文件头。这能检查部署是否重新加载了原密钥，并能读取已有密文。
 
-```python
-# 用 Provider A 加密
-encrypted = await provider_a.encrypt_file_key(plaintext, "test-account")
-
-# 尝试用 Provider B 解密（应该失败）
-try:
-    await provider_b.decrypt_file_key(encrypted, "test-account")
-    print("❌ 安全漏洞：跨提供程序解密成功！")
-except Exception as e:
-    print("✓ 安全：跨提供程序解密失败，符合预期")
-```
+内部 provider 调用抛出异常不能直接当作加密验证通过。参数错误、依赖缺失和网络错误都可能在解密前失败。
 
 ---
 
@@ -409,24 +398,21 @@ ov backup ./backups/before-encryption.ovpack
 ```
 
 2. 停止 OpenViking，启用加密，并将存储配置指向**全新的空** workspace/backend。验证完成前保留原数据和加密密钥备份。
-3. 启动加密环境后恢复逻辑备份。恢复过程会通过加密存储层写入 package 内容：
+3. 启动加密环境。API Key 模式下，先创建目标 account 和持有 admin key 的恢复操作用户，再让 CLI 使用该 key 连接目标环境，参见 [全量备份和恢复](09-ovpack.md#全量备份和恢复)。恢复过程会通过加密存储层写入 package 内容：
+
+创建 account 会生成 scope 目录，因此 `fail` 会拒绝这次恢复。仅在确认目标只有新建 account 的预置内容后，使用下方的 `overwrite`。如果已有业务数据，先停止操作，按 OVPack 指南备份目标并审查冲突。
 
 ```bash
-ov restore ./backups/before-encryption.ovpack --on-conflict fail
+ov restore ./backups/before-encryption.ovpack --on-conflict overwrite
 ```
 
 4. 切流前验证资源、用户、session 和索引数据。OVPack 不包含 queue、upload、lock、watch 和 relation 文件等运行时/内部状态，这些内容需要单独重建或验证。
 
-支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份与恢复)。
+支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份和恢复)。
 
 ### 切换密钥提供程序
 
-1. 备份现有数据和密钥
-2. 使用旧提供程序解密所有数据
-3. 配置新提供程序
-4. 重新加密所有数据
-
-**注意**：这是一个破坏性操作，建议在测试环境先验证。
+保持旧 provider 和密钥可用，导出逻辑 OVPack 备份。按上面的迁移步骤，在使用新 provider 的独立空环境恢复，核对内容、权限和重建后的索引，再切换流量。直接修改原环境的 provider 配置不会重新加密已有文件。
 
 ---
 
@@ -466,19 +452,11 @@ Error: Invalid credentials
 2. 确认密钥有足够权限
 3. 验证区域配置正确
 
-### 跨提供程序解密失败（这是正常的）
+### 已有密文无法读取
 
-```
-Error: KeyMismatchError
-```
+检查原根密钥、provider 配置、account 身份和密文是否仍然完整。Vault 需要保留 Transit key 和存放封装根密钥的 KV 条目；KMS 需要保留 KMS key 和本地封装密钥文件。不要通过生成新根密钥修复旧密文的读取问题。
 
-**说明**：这是预期的安全行为。不同提供程序使用不同的根密钥，无法相互解密。
-
-### 部分读取返回密文
-
-如果使用旧版本 OpenViking 创建的加密文件，部分读取可能返回密文。
-
-**解决方案**：升级到最新版本的 OpenViking。
+部分读取会先加载并校验整个加密文件，再返回所需的明文切片。部分读取返回密文时，记录服务版本，在测试副本上比较完整读取与部分读取，核对存储加密配置和相关修复后再升级。保留原数据及密钥，以便回退。
 
 ---
 
@@ -487,3 +465,5 @@ Error: KeyMismatchError
 - [数据加密](../concepts/10-encryption.md) - 加密概念说明
 - [配置指南](./01-configuration.md) - 完整配置参考
 - [多租户](../concepts/11-multi-tenant.md) - 账号、用户与 Agent 的隔离模型
+
+Vault 参考：[KV v2](https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2)、[Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit)。

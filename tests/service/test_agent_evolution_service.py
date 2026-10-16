@@ -22,8 +22,9 @@ def _ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
-async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagination():
-    experience_uri = "viking://user/alice/memories/experiences/exchange.md"
+@pytest.mark.parametrize("filename", ["exchange.md", "vikingdb_fe_repo_workflows.md"])
+async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagination(filename):
+    experience_uri = f"viking://user/alice/memories/experiences/{filename}"
     viking_fs = Mock()
     viking_fs.stat = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()
@@ -189,8 +190,9 @@ async def test_list_trajectories_by_experience_accepts_1000_and_paginates_all_re
 
 
 @pytest.mark.asyncio
-async def test_get_experience_outcome_distribution_counts_two_tags_on_same_list_field():
-    experience_uri = "viking://user/alice/memories/experiences/exchange.md"
+@pytest.mark.parametrize("filename", ["exchange.md", "vikingdb_fe_repo_workflows.md"])
+async def test_get_experience_outcome_distribution_counts_two_tags_on_same_list_field(filename):
+    experience_uri = f"viking://user/alice/memories/experiences/{filename}"
     viking_fs = Mock()
     viking_fs.stat = AsyncMock(return_value={"isDir": False})
     vikingdb = Mock()

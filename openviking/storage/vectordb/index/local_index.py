@@ -22,13 +22,14 @@ from openviking.storage.vectordb.index.cuvs_index import (
 )
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
-from openviking.storage.vectordb.utils.constants import IndexFileMarkers
+from openviking.storage.vectordb.utils.constants import MANAGER_META_FILE, IndexFileMarkers
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
+from openviking.storage.vectordb.utils.json_safety import safe_json_dumps
 from openviking.storage.vectordb.utils.path_safety import (
     safe_join,
     safe_join_name,
 )
-from openviking.storage.vectordb.utils.validation import validate_name_str
+from openviking.storage.vectordb.utils.validation import fix_fields_data, validate_name_str
 from openviking_cli.utils.logger import default_logger as logger
 
 _DENSE_REBUILD_MEMORY_RETRY_BASE_SECONDS = 1.0
@@ -128,7 +129,9 @@ class IndexEngineProxy:
             normalize_vector_flag (bool): If True, all vectors will be L2-normalized
                 before being added to the index or used for search. Defaults to False.
         """
-        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(index_path_or_json)
+        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(
+            index_path_or_json, normalize_vector_flag
+        )
         self.normalize_vector_flag = normalize_vector_flag
 
     def search(
@@ -138,7 +141,12 @@ class IndexEngineProxy:
         filters: Optional[Dict[str, Any]] = None,
         sparse_raw_terms: Optional[List[str]] = None,
         sparse_values: Optional[List[float]] = None,
-    ) -> Tuple[List[int], List[float]]:
+        *,
+        time_decay: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        Tuple[List[int], List[float]],
+        Tuple[List[int], List[float], Dict[str, Any]],
+    ]:
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
 
@@ -149,6 +157,8 @@ class IndexEngineProxy:
                 query_vector = normalize_vector(query_vector)
             req.query = query_vector
         req.topk = limit
+        if time_decay is not None:
+            req.time_decay = json.dumps(time_decay)
 
         if filters is None:
             filters = {}
@@ -161,6 +171,8 @@ class IndexEngineProxy:
         search_result = self.index_engine.search(req)
         labels = search_result.labels
         scores = search_result.scores
+        if time_decay is not None:
+            return labels, scores, json.loads(search_result.extra_json or "{}")
         return labels, scores
 
     def search_with_filter_token(
@@ -198,6 +210,16 @@ class IndexEngineProxy:
                 add_req_list[i].sparse_values = data.sparse_values
             add_req_list[i].fields_str = data.fields
         self.index_engine.add_data(add_req_list)
+
+    def rebuild_scalar_index(
+        self, scalar_index_meta: List[Dict[str, str]], requests: Iterable[engine.AddDataRequest]
+    ) -> None:
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+
+        result = self.index_engine.rebuild_scalar_index(json.dumps(scalar_index_meta), requests)
+        if result != 0:
+            raise RuntimeError("Failed to rebuild native scalar index")
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if not self.index_engine:
@@ -457,13 +479,50 @@ class LocalIndex(IIndex):
         description: Optional[str],
     ):
         meta_data: Dict[str, Any] = {}
-        if scalar_index:
+        if scalar_index is not None:
             meta_data["ScalarIndex"] = scalar_index
-        if description:
+        if description is not None:
             meta_data["Description"] = description
         if not meta_data:
             return
         self.meta.update(meta_data)
+
+    def rebuild_scalar_index(
+        self, scalar_index: List[str], cands_fields: Iterable[Tuple[int, str]]
+    ) -> None:
+        if not self.engine_proxy:
+            raise RuntimeError("Index engine not initialized")
+
+        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        indexed_fields = {
+            name: self.meta.collection_meta.fields_dict[name] for name in scalar_index
+        }
+
+        def requests() -> Iterator[engine.AddDataRequest]:
+            for label, fields_json in cands_fields:
+                fields = json.loads(fields_json)
+                fields = {name: fields[name] for name in indexed_fields if name in fields}
+                fix_fields_data(fields, indexed_fields)
+                request = engine.AddDataRequest()
+                request.label = label
+                request.fields_str = safe_json_dumps(
+                    self.field_type_converter.convert_fields_dict_for_index(fields),
+                    ensure_ascii=False,
+                )
+                yield request
+
+        engine_scalar_meta = self.field_type_converter.build_scalar_index_meta(scalar_index)
+        self.engine_proxy.rebuild_scalar_index(engine_scalar_meta, requests())
+        if isinstance(self, PersistentIndex) and self.persist() <= 0:
+            raise RuntimeError("Failed to persist rebuilt scalar index")
+        if not self.meta.update({"ScalarIndex": scalar_index}):
+            raise RuntimeError("Failed to persist scalar index metadata")
+
+        if self.dense_search is not None:
+            self.dense_search.field_types = {
+                name: DataProcessor.normalize_field_type(field_meta.get("FieldType", ""))
+                for name, field_meta in self.meta.collection_meta.fields_dict.items()
+            }
 
     def get_meta_data(self):
         return self.meta.get_meta_data()
@@ -791,6 +850,18 @@ class LocalIndex(IIndex):
                 return False
             self._raise_dense_rebuild_failure()
         return self.dense_search is not None
+
+    def search_with_time_decay(
+        self, query_vector, limit, filters, sparse_raw_terms, sparse_values, time_decay
+    ):
+        """Use the native scalar/vector index, including for cuVS-backed collections."""
+        if not self.engine_proxy:
+            raise RuntimeError("Index engine not initialized")
+        if self.field_type_converter and filters is not None:
+            filters = self.field_type_converter.convert_filter_for_index(filters)
+        return self.engine_proxy.search(
+            query_vector, limit, filters, sparse_raw_terms, sparse_values, time_decay=time_decay
+        )
 
     def search(
         self,
@@ -1554,8 +1625,15 @@ class PersistentIndex(LocalIndex):
         - It has a corresponding .write_done marker file
         - The version directory exists
         - The version number is a valid integer timestamp
+        - It contains a non-empty manager_meta.json, the metadata file the
+          native loader requires when opening a snapshot
 
-        Invalid or incomplete versions (without .write_done) are ignored.
+        Invalid or incomplete versions are ignored. In particular, a torn
+        snapshot that carries a .write_done marker but no payload (e.g. left
+        behind by a crash after the marker was created but before the dumped
+        blocks reached disk) is skipped, so selection falls back to the
+        previous complete snapshot instead of returning a version the loader
+        would reject.
         """
         if not os.path.exists(self.version_dir):
             return 0
@@ -1574,6 +1652,13 @@ class PersistentIndex(LocalIndex):
             # Must have corresponding .write_done file
             marker_path = Path(str(version_path) + IndexFileMarkers.WRITE_DONE.value)
             if not marker_path.exists():
+                continue
+
+            # Must contain a non-empty manager metadata file. This is the
+            # file the native loader fail-fasts on, so a snapshot without it
+            # can never be loaded even though its .write_done marker exists.
+            manager_meta_path = version_path / MANAGER_META_FILE
+            if not manager_meta_path.is_file() or manager_meta_path.stat().st_size == 0:
                 continue
 
             valid_versions.append(int(name))

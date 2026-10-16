@@ -3,7 +3,7 @@
 """Log-source abstraction: one ABC + two intermediates so a new harness is a thin subclass.
 
 - ``JsonlLogSource``  — append-only JSONL (Claude Code, Codex, Hermes, OpenClaw); byte-offset cursor.
-- ``SqliteLogSource`` — relational SQLite (OpenCode); (time, id) cursor, polled read-only.
+- ``SqliteLogSource`` — relational SQLite (OpenCode, MiMo); (time, id) cursor, polled read-only.
 """
 
 from __future__ import annotations

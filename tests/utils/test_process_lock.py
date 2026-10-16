@@ -12,16 +12,18 @@ import time
 
 import pytest
 
-from openviking.utils.process_lock import acquire_data_dir_lock
+from openviking.utils.process_lock import acquire_data_dir_lock, release_data_dir_lock
 
 
 def test_acquire_does_not_override_sigterm_handler(tmp_path):
     """Uvicorn must retain ownership of SIGTERM for graceful lifespan shutdown."""
     original_handler = signal.getsignal(signal.SIGTERM)
 
-    acquire_data_dir_lock(str(tmp_path))
-
-    assert signal.getsignal(signal.SIGTERM) is original_handler
+    lock_path = acquire_data_dir_lock(str(tmp_path))
+    try:
+        assert signal.getsignal(signal.SIGTERM) is original_handler
+    finally:
+        release_data_dir_lock(lock_path)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM lifecycle is POSIX-specific")
@@ -87,6 +89,7 @@ def test_uvicorn_sigterm_runs_lifespan_and_releases_process_lock(tmp_path):
     assert process.returncode in {0, -signal.SIGTERM}, output
     assert "Application shutdown complete" in output
     assert "Finished server process" in output
-    assert not (workspace / ".openviking.pid").exists()
+    lock_path = acquire_data_dir_lock(str(workspace))
+    release_data_dir_lock(lock_path)
     assert "SystemExit" not in output
     assert "CancelledError" not in output

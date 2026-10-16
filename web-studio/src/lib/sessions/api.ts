@@ -1,3 +1,4 @@
+import { parseSessionArchive, parseSessionMessages } from './parse-messages'
 import {
   deleteSessionBySessionId,
   getContentRead,
@@ -8,9 +9,7 @@ import {
   postBotV1Chat,
   postSessions,
   postSessionIdCommit,
-  postSessionIdExtract,
   postSessionIdMessages,
-  postSessionIdUsed,
 } from '#/gen/ov-client/sdk.gen'
 import {
   getOvResult,
@@ -34,7 +33,6 @@ import type {
   SessionListItem,
   SessionMeta,
 } from '@ov-server/api/v1/sessions'
-import type { UsedRequest } from '#/gen/ov-client/types.gen'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -101,18 +99,30 @@ export async function deleteSession(
 // Session Messages
 // ---------------------------------------------------------------------------
 
-function isMessage(value: unknown): value is Message {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'id' in value &&
-    'role' in value &&
-    'parts' in value
-  )
-}
+export type SessionHistorySource = 'api' | 'content' | 'none'
 
-function getMessages(value: unknown): Message[] {
-  return Array.isArray(value) ? value.filter(isMessage) : []
+async function fetchArchiveFileMessages(
+  session: SessionMeta,
+  archiveId: string,
+): Promise<Message[]> {
+  // Use the server's session URI: hosted user space names need not match user IDs.
+  if (!session.uri) {
+    throw new OvClientError({
+      code: 'INVALID_SESSION_ARCHIVE',
+      message: 'Session URI is missing',
+    })
+  }
+  const result = await getOvResult<unknown>(
+    getContentRead({
+      query: {
+        uri: `${session.uri.replace(/\/+$/, '')}/history/${archiveId}/messages.jsonl`,
+        offset: 0,
+        limit: -1,
+        raw: true,
+      } as Parameters<typeof getContentRead>[0]['query'] & { raw?: boolean },
+    }),
+  )
+  return parseSessionArchive(result, archiveId)
 }
 
 function deduplicateMessages(messages: Message[]): Message[] {
@@ -162,6 +172,7 @@ function isMissingArchive(error: unknown): boolean {
 export async function fetchSessionMessages(
   sessionId: string,
   sessionMeta?: SessionMeta,
+  historySource: SessionHistorySource = 'api',
 ): Promise<Message[]> {
   const context = await getOvResult<SessionContextResult>(
     getSessionIdContext({
@@ -169,9 +180,12 @@ export async function fetchSessionMessages(
     }),
   )
 
+  if (historySource === 'none') return parseSessionMessages(context.messages)
+
   let commitCount = 0
+  let session = sessionMeta
   try {
-    const session = sessionMeta ?? (await fetchSession(sessionId))
+    session ??= await fetchSession(sessionId)
     commitCount = Math.max(0, Math.floor(session.commit_count || 0))
   } catch {
     // Older servers may not expose session details. Current context is still
@@ -187,21 +201,74 @@ export async function fetchSessionMessages(
     SESSION_ARCHIVE_CONCURRENCY,
     async (archiveId) => {
       try {
-        return await fetchSessionArchive(sessionId, archiveId)
+        return historySource === 'content'
+          ? await fetchArchiveFileMessages(session!, archiveId)
+          : parseSessionMessages(
+              (await fetchSessionArchive(sessionId, archiveId)).messages,
+            )
       } catch (error) {
         if (isMissingArchive(error)) return null
         throw error
       }
     },
   )
-  const archivedMessages = archives.flatMap((archive) =>
-    archive ? getMessages(archive.messages) : [],
-  )
+  const archivedMessages = archives.flatMap((archive) => archive ?? [])
 
   return deduplicateMessages([
     ...archivedMessages,
-    ...getMessages(context.messages),
+    ...parseSessionMessages(context.messages),
   ])
+}
+
+// Share four slots across title backfills from both conversation entry points.
+let activeTitleRequests = 0
+const titleWaiters: Array<() => void> = []
+
+export async function fetchSessionFirstTitle(
+  sessionId: string,
+): Promise<string> {
+  if (activeTitleRequests >= 4) {
+    await new Promise<void>((resolve) => titleWaiters.push(resolve))
+  } else {
+    activeTitleRequests += 1
+  }
+  try {
+    const session = await fetchSession(sessionId)
+    const count = Math.max(0, Math.floor(session.commit_count || 0))
+    for (let index = 1; index <= count; index += 1) {
+      try {
+        const archive = await fetchSessionArchive(
+          sessionId,
+          `archive_${String(index).padStart(3, '0')}`,
+        )
+        const title = firstUserTitle(archive.messages)
+        if (title) return title
+      } catch (error) {
+        if (!isMissingArchive(error)) throw error
+      }
+    }
+    return firstUserTitle((await fetchSessionContext(sessionId)).messages)
+  } finally {
+    const next = titleWaiters.shift()
+    if (next) next()
+    else activeTitleRequests -= 1
+  }
+}
+
+function firstUserTitle(value: unknown): string {
+  const first = parseSessionMessages(value).find(
+    (message) =>
+      message.role === 'user' &&
+      message.parts.some((part) => part.type === 'text' && part.text.trim()),
+  )
+  return (
+    first?.parts
+      .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || ''
+  )
 }
 
 export async function fetchSessionMemoryDiffs(
@@ -275,26 +342,6 @@ export async function commitSession(
         keepRecentCount === undefined
           ? undefined
           : { keep_recent_count: keepRecentCount },
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
-export async function extractSession(sessionId: string): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdExtract({
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
-export async function recordSessionUsed(
-  sessionId: string,
-  body: UsedRequest,
-): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdUsed({
-      body,
       path: { session_id: sessionId },
     }),
   )
@@ -466,6 +513,14 @@ export function serializeParts(
   return parts.flatMap((part) => {
     if (part.type === 'text') {
       return [{ type: 'text', text: part.text }]
+    }
+    if (part.type === 'image_url') {
+      return [
+        {
+          type: 'image_url',
+          image_url: { ...part.image_url },
+        },
+      ]
     }
     if (part.type === 'context') {
       return [

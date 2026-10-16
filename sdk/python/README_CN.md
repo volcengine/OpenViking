@@ -12,7 +12,7 @@ pip install openviking-sdk
 
 要求：
 
-- Python 3.10+
+- Python 3.8+
 - 一个可访问的 OpenViking HTTP 服务，例如 `http://127.0.0.1:1933`
 
 ## 包名与导入名
@@ -222,6 +222,8 @@ print(result)
 
 ### 从本地文件添加资源
 
+`add_resource` 默认返回 `task_id`。通过 `client.get_task(result["task_id"])` 查询状态，任务为 `completed` 后再使用处理结果。
+
 `add_resource` 会自动处理本地路径对应的文件上传。
 
 ```python
@@ -233,7 +235,6 @@ client.initialize()
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    wait=True,
     options={
         "reason": "knowledge import",
     },
@@ -248,7 +249,6 @@ print(result)
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    wait=True,
     options={
         "processing_mode": "vectors_only",
     },

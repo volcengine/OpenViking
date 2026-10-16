@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-25",
+  "updatedAt": "2026-10-13",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -44,7 +44,7 @@
       "id": "claude-code",
       "name": "Claude Code",
       "tags": ["Plugin"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Claude-Code.png",
+      "logo": "https://docs.openviking.net/agents/image/claude-code/logo.png",
       "summary": "Adds long-term memory to Claude Code across projects and sessions. Install once; recall and capture run automatically.",
       "detailPath": "https://docs.openviking.net/agents/en/claude-code.md"
     },
@@ -76,7 +76,7 @@
       "id": "trae",
       "name": "TRAE",
       "tags": ["Hook", "MCP"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Trae.png",
+      "logo": "https://docs.openviking.net/agents/image/trae/logo.png",
       "summary": "Add automatic prompt recall and turn capture to TRAE and TRAE CN through native hooks plus MCP tools.",
       "detailPath": "https://docs.openviking.net/agents/en/trae.md"
     },
@@ -84,7 +84,7 @@
       "id": "cursor",
       "name": "Cursor",
       "tags": ["Plugin", "Memory"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
+      "logo": "https://docs.openviking.net/agents/image/cursor/logo.png",
       "summary": "One command installs Cursor lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
       "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
     },
@@ -101,14 +101,14 @@
       "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "Hermes includes OpenViking as a native memory provider. Run hermes memory setup openviking, keep VolcEngine Cloud, and paste the API key.",
+      "summary": "Long-term memory for Hermes with automatic capture and recall. Connect to OpenViking Service or your own server, or use Quick Local with the external plugin.",
       "detailPath": "https://docs.openviking.net/agents/en/hermes.md"
     },
     {
       "id": "opencode",
       "name": "OpenCode",
       "tags": ["Plugin"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
+      "logo": "https://docs.openviking.net/agents/image/opencode/logo.png",
       "summary": "Provides one unified OpenCode plugin for repository context, memory tools, session sync, and automatic recall.",
       "detailPath": "https://docs.openviking.net/agents/en/opencode.md"
     },
@@ -124,7 +124,7 @@
       "id": "deerflow",
       "name": "DeerFlow",
       "tags": ["MemoryManager", "MCP"],
-      "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/deer.png",
+      "logo": "https://docs.openviking.net/agents/image/deerflow/logo.png",
       "summary": "DeerFlow can connect through MemoryManager and MCP to automatically write, recall, inject, and manage memory. Enable both methods for the full memory experience.",
       "detailPath": "https://docs.openviking.net/agents/en/deerflow-memory-manager.md",
       "tabs": [
@@ -139,6 +139,30 @@
           "detailPath": "https://docs.openviking.net/agents/en/deerflow-mcp.md"
         }
       ]
+    },
+    {
+      "id": "pi",
+      "name": "pi",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/pi/logo.png",
+      "summary": "Give pi cross-session long-term memory with automatic recall, turn capture, and context takeover; the server's MCP tools are registered as native pi tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/pi.md"
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "tags": ["Hook", "MCP"],
+      "logo": "https://docs.openviking.net/agents/image/zcode/logo.png",
+      "summary": "Add automatic profile injection, prompt recall, and turn capture to ZCode through lifecycle hooks plus MCP tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/zcode.md"
+    },
+    {
+      "id": "kimi-code",
+      "name": "Kimi Code",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/kimi-code/logo.png",
+      "summary": "A native Kimi Code plugin for automatic memory recall and turn capture, with OpenViking MCP tools.",
+      "detailPath": "https://docs.openviking.net/agents/en/kimi-code.md"
     }
   ]
 }

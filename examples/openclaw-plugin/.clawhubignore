@@ -1,6 +1,5 @@
 setup-helper/
 tests/
-__tests__/
 health_check_tools/
 upgrade_scripts/
 INSTALL*.md

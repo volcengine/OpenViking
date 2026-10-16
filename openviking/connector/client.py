@@ -54,6 +54,19 @@ class ConnectorClient:
         headers["Authorization"] = token
         return headers
 
+    def get_oauth_access_token(
+        self, auth_url: str, api_key: str, reference: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Read a centrally managed token from synchronous Feishu worker threads."""
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                rsp = client.post(auth_url, json=reference, headers={"X-API-Key": api_key})
+            rsp.raise_for_status()
+            return _unwrap_connector_response(rsp.json())
+        except (httpx.HTTPError, ValueError, InternalError):
+            # Neither remote business messages nor response bodies may expose credentials.
+            raise InternalError("External OAuth access token request failed.") from None
+
     async def submit_doc_add(
         self,
         add_type: str,
@@ -64,6 +77,7 @@ class ConnectorClient:
         include_child: bool = True,
         param_config: Optional[Dict[str, Any]] = None,
         auth_config: Optional[Dict[str, Any]] = None,
+        stream_states: Optional[Dict[str, Any]] = None,
         extra_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Submit a document import job via the configured doc/add endpoint.
@@ -89,10 +103,23 @@ class ConnectorClient:
             payload["param_config"] = param_config
         if auth_config:
             payload["auth_config"] = auth_config
+        if stream_states is not None:
+            payload["stream_states"] = stream_states
         if extra_params:
             # Authentication belongs exclusively in the Authorization header.
             payload.update({key: value for key, value in extra_params.items() if key != "api_key"})
 
+        # Log shape only: param_config values and auth_config may carry source credentials.
+        logger.info(
+            "[ConnectorClient] doc/add: add_type=%s to=%s include_child=%s param_config_keys=%s "
+            "has_auth_config=%s has_stream_states=%s",
+            add_type,
+            to,
+            include_child,
+            sorted(param_config or {}),
+            bool(auth_config),
+            stream_states is not None,
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             rsp = await client.post(
                 self._doc_add_url,
@@ -120,4 +147,8 @@ class ConnectorClient:
             return data
         if not isinstance(task, dict):
             raise InternalError("Connector task response contains an invalid Task object")
+        task = dict(task)
+        for key in ("StreamStates", "stream_states"):
+            if key in data:
+                task[key] = data[key]
         return task

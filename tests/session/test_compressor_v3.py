@@ -18,6 +18,7 @@ from openviking.session.compressor_v3 import (
     _experience_root_uri,
     _experience_snapshot_provenance,
     _experience_trajectory_map,
+    _report_extraction_telemetry,
     _visible_experience_snapshot_uris,
 )
 from openviking.session.memory.dataclass import (
@@ -46,6 +47,8 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -88,6 +91,26 @@ def test_factory_defaults_to_v3():
     assert isinstance(compressor, SessionCompressorV3)
 
 
+@pytest.mark.asyncio
+async def test_commit_extraction_propagates_template_conflict():
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    conflict = ConflictError("Conflicting memory template snapshots; Re-extract before retrying")
+    compressor._extract_user_memories = AsyncMock(side_effect=conflict)
+    compressor._write_final_memory_diff = AsyncMock()
+
+    with pytest.raises(ConflictError) as raised:
+        await compressor.extract_long_term_memories(
+            messages=_messages(),
+            ctx=_ctx(),
+            allowed_memory_types={"profile"},
+            # The Session commit worker uses this mode: a conflict must reach it,
+            # not turn into an empty successful extraction or memory diff.
+            strict_extract_errors=True,
+        )
+    assert raised.value is conflict
+    compressor._write_final_memory_diff.assert_not_awaited()
+
+
 def test_factory_ignores_deprecated_memory_version():
     assert isinstance(
         create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
@@ -109,6 +132,44 @@ def test_extract_long_term_memories_preserves_legacy_positional_parameter_order(
         "event_search_tags",
         "peer_memory_enabled",
     ]
+
+
+def test_report_extraction_telemetry_handles_placeholder_error_targets():
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(
+                old_memory_file_content=None,
+                memory_fields={},
+                memory_type="events",
+                uris=["unknown"],
+            )
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+    result = MemoryUpdateResult()
+    result.add_written("unknown")
+    result.add_edited("viking://user/u/memories/preferences/pref.md")
+    result.add_deleted("viking://user/u/memories/events/old.md")
+    result.add_error("events(page_id=xyz)", ValueError("Missing resolved URI"))
+
+    telemetry = OperationTelemetry(operation="session.commit", enabled=True)
+    with bind_telemetry(telemetry):
+        _report_extraction_telemetry(result, operations)
+
+    summary = telemetry.finish().summary
+    extract = summary["memory"]["extract"]
+    assert extract["actions"] == {
+        "created": 1,
+        "merged": 1,
+        "deleted": 1,
+        "failed": 1,
+    }
+    assert extract["actions_by_type"] == {
+        "events": {"created": 1, "deleted": 1},
+        "preferences": {"merged": 1},
+        "unknown": {"failed": 1},
+    }
 
 
 @pytest.mark.asyncio
@@ -384,7 +445,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
 
@@ -775,7 +836,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
         lambda: SimpleNamespace(write_file=AsyncMock()),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
     monkeypatch.setattr(
@@ -883,7 +944,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
 
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
     monkeypatch.setattr(
-        "openviking.session.compressor_v3.create_default_registry",
+        "openviking.session.compressor_v3.get_default_registry",
         lambda: DummyRegistry(),
     )
     monkeypatch.setattr(

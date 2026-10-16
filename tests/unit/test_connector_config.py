@@ -38,6 +38,7 @@ def test_openviking_config_parses_connector_section():
         "enable": True,
         "connector": "https://connector.example/doc/add",
         "tracker": "https://connector.example/task/info",
+        "auth": "",
         "timeout_seconds": 120,
         "poll_interval_ms": 250,
         "allowed_add_types": ["tos"],
@@ -58,8 +59,16 @@ def test_openviking_config_parses_connector_section():
         ),
         ({"timeout_seconds": 0}, "timeout_seconds must be > 0"),
         ({"poll_interval_ms": 0}, "poll_interval_ms must be > 0"),
+        ({"auth": "file:///tmp/auth"}, "connector.auth must be"),
+        ({"auth": "https://user:secret@connector.example/auth"}, "connector.auth must be"),
     ],
 )
 def test_connector_config_rejects_invalid_runtime_settings(kwargs, match):
     with pytest.raises(ValueError, match=match):
         ConnectorConfig(**kwargs)
+
+
+def test_connector_auth_does_not_enable_ingestion_delegation():
+    config = ConnectorConfig(auth=" https://connector.example/oauth/access_token ")
+    assert config.auth == "https://connector.example/oauth/access_token"
+    assert config.enable is False

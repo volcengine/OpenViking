@@ -568,35 +568,31 @@ class OAuthStore:
         async with self._lock:
             return await asyncio.to_thread(_revoke)
 
-    async def revoke_user_tokens(self, *, account_id: str, user_id: str) -> dict[str, int]:
-        """Revoke all access + refresh tokens for a (account, user) pair.
-
-        Used when an API key for that user is rotated / deleted: every OAuth
-        token derived from that user identity gets invalidated. Auth codes for
-        the same user are also wiped to prevent in-flight completion of an
-        exchange started before the revocation.
-        """
+    async def revoke_tokens(self, *, account_id: str, user_id: str | None = None) -> dict[str, int]:
+        """Revoke OAuth grants for one account, or for one user within it."""
 
         def _revoke() -> dict[str, int]:
             assert self._conn is not None
+            predicate = "account_id = ?" + (" AND user_id = ?" if user_id is not None else "")
+            pending_predicate = "verified_account_id = ?" + (
+                " AND verified_user_id = ?" if user_id is not None else ""
+            )
+            params = (account_id, user_id) if user_id is not None else (account_id,)
             access = self._conn.execute(
-                "UPDATE oauth_access_tokens SET revoked = 1 "
-                "WHERE account_id = ? AND user_id = ? AND revoked = 0",
-                (account_id, user_id),
+                f"UPDATE oauth_access_tokens SET revoked = 1 WHERE {predicate} AND revoked = 0",
+                params,
             ).rowcount
             refresh = self._conn.execute(
-                "UPDATE oauth_refresh_tokens SET consumed = 1 "
-                "WHERE account_id = ? AND user_id = ? AND consumed = 0",
-                (account_id, user_id),
+                f"UPDATE oauth_refresh_tokens SET consumed = 1 WHERE {predicate} AND consumed = 0",
+                params,
             ).rowcount
             codes = self._conn.execute(
-                "UPDATE oauth_codes SET used = 1 WHERE account_id = ? AND user_id = ? AND used = 0",
-                (account_id, user_id),
+                f"UPDATE oauth_codes SET used = 1 WHERE {predicate} AND used = 0",
+                params,
             ).rowcount
             pending = self._conn.execute(
-                "DELETE FROM oauth_pending_authorizations "
-                "WHERE verified_account_id = ? AND verified_user_id = ?",
-                (account_id, user_id),
+                f"DELETE FROM oauth_pending_authorizations WHERE {pending_predicate}",
+                params,
             ).rowcount
             return {
                 "access_tokens_revoked": access,

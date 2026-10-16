@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import HeatMap from '@uiw/react-heat-map'
@@ -5,8 +6,6 @@ import HeatMap from '@uiw/react-heat-map'
 import {
   HEATMAP_COLOR_STOPS,
   HEATMAP_EMPTY_COLOR,
-  HEATMAP_MONTH_LABELS,
-  HEATMAP_WEEK_LABELS,
 } from '../-constants/dashboard'
 import type {
   CommitHeatmapStats,
@@ -32,6 +31,20 @@ export function ContextCommitsHeatmap({
   stats: CommitHeatmapStats
   t: HomeT
 }) {
+  const { i18n } = useTranslation('home')
+  const locale = i18n.resolvedLanguage ?? i18n.language
+  const monthLabels = Array.from({ length: 12 }, (_, month) =>
+    new Intl.DateTimeFormat(locale, { month: 'short' }).format(
+      new Date(2026, month, 1),
+    ),
+  )
+  const weekLabels = Array.from({ length: 7 }, (_, day) =>
+    day % 2 === 1
+      ? new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(
+          new Date(2026, 0, 4 + day),
+        )
+      : '',
+  )
   const [tooltip, setTooltip] = useState<CommitTooltip | null>(null)
   const heatmapScrollRef = useRef<HTMLDivElement>(null)
 
@@ -61,11 +74,11 @@ export function ContextCommitsHeatmap({
         <div className="min-w-0">
           <div ref={heatmapScrollRef} className="overflow-x-auto">
             <HeatMap
-              className="[--heatmap-empty:oklch(0.92_0_0)] text-muted-foreground dark:[--heatmap-empty:oklch(0.31_0_0)] [&_.w-heatmap-month]:fill-current [&_.w-heatmap-week]:fill-current"
+              className="[--rhm-text-color:var(--muted-foreground)]"
               endDate={endDate}
               height={128}
               legendCellSize={0}
-              monthLabels={HEATMAP_MONTH_LABELS}
+              monthLabels={monthLabels}
               panelColors={panelColors}
               rectProps={{ rx: 2 }}
               rectRender={(props, item) => {
@@ -104,7 +117,7 @@ export function ContextCommitsHeatmap({
               space={3}
               startDate={startDate}
               value={items}
-              weekLabels={HEATMAP_WEEK_LABELS}
+              weekLabels={weekLabels}
               width={820}
             />
           </div>
@@ -240,24 +253,20 @@ function CommitTooltipView({
             {t('contextCommits.tooltip.total')}
           </div>
         </div>
-        <div className="rounded-md bg-[oklch(0.68_0.12_232_/_0.14)] px-2 py-1 text-sm font-semibold tabular-nums text-[oklch(0.45_0.13_242)] dark:bg-[oklch(0.68_0.14_232_/_0.18)] dark:text-[oklch(0.76_0.14_232)]">
+        <div className="py-1 text-lg font-semibold tabular-nums text-popover-foreground">
           {details.total}
         </div>
       </div>
 
       <div className="mt-3 space-y-2 border-t border-border/70 pt-3">
-        {rows.map((row, index) => (
+        {rows.map((row) => (
           <div
             key={row.label}
             className="grid grid-cols-[auto_1fr_auto] items-center gap-2"
           >
             <span
-              className="size-1.5 rounded-full"
+              className="size-1.5 rounded-full bg-muted-foreground"
               style={{
-                backgroundColor:
-                  HEATMAP_COLOR_STOPS[
-                    Math.min(index, HEATMAP_COLOR_STOPS.length - 1)
-                  ],
                 opacity: row.value > 0 ? 1 : 0.35,
               }}
             />

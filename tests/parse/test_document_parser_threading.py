@@ -9,7 +9,10 @@ from typing import Any, Callable
 import pytest
 
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
-from openviking.parse.parsers import anydoc, anydoc_converter
+from openviking.parse.output import LocalParseOutputStore
+from openviking.parse.parsers import anydoc, anydoc_converter, pdf
+from openviking.parse.parsers.html import HTMLParser
+from openviking.parse.parsers.text import TextParser
 from openviking_cli.utils.config.parser_config import AnydocConfig
 
 
@@ -84,3 +87,40 @@ async def test_anydoc_parser_offloads_docx_conversion(monkeypatch, tmp_path: Pat
     assert seen["kwargs"]["allowed_media_dirs"] == [storage.media_dir]
     assert result.source_format == "docx"
     assert result.parser_name == "AnyDocParser"
+
+
+@pytest.mark.asyncio
+async def test_pdf_parser_forwards_parse_output_store_to_markdown(monkeypatch, tmp_path: Path):
+    parser = pdf.PDFParser()
+    markdown_parser = parser._get_markdown_parser()
+    seen = _stub_markdown_parse(SimpleNamespace(_md_parser=markdown_parser))
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"%PDF-placeholder")
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+
+    async def convert(_path, *, resource_name=None):
+        return "# converted pdf", {}
+
+    monkeypatch.setattr(parser, "_convert_to_markdown", convert)
+
+    await parser.parse(source, parse_output_store=store)
+
+    assert seen["kwargs"]["parse_output_store"] is store
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parser",
+    [TextParser(), HTMLParser(), anydoc.AnyDocParser()],
+)
+async def test_markdown_delegate_parsers_write_local_artifacts(tmp_path: Path, parser) -> None:
+    store = LocalParseOutputStore(str(tmp_path / type(parser).__name__))
+
+    result = await parser.parse_content(
+        "# title\n\nbody",
+        source_path=str(tmp_path / "document.md"),
+        parse_output_store=store,
+    )
+
+    assert result.artifact_ref is not None
+    assert result.artifact_ref.backend == "local"

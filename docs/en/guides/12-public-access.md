@@ -14,6 +14,41 @@ public HTTPS domain.
 Prerequisites: a public domain, ports 80 + 443 reachable, DNS pointing at
 your host.
 
+## Authenticate before exposing the proxy
+
+Configure authentication before publishing any route, including when the upstream listens on `127.0.0.1`. A reverse proxy makes that localhost service reachable from the internet. The default `dev` mode accepts requests as ROOT; TLS and `OPENVIKING_PUBLIC_BASE_URL` do not add authentication.
+
+For API key authentication, merge this section into `ov.conf`, replace the placeholder with a secret, and restart the server:
+
+```json
+{
+  "server": {
+    "auth_mode": "api_key",
+    "root_api_key": "<your-secret-root-key>"
+  }
+}
+```
+
+Use the root key only for administration, such as creating the account and its first admin through the [Admin API](04-authentication.md#managing-accounts-and-users). Use the resulting user/admin key for tenant data APIs. Do not put the root key in a public browser client or configure the proxy to attach it to all requests. Keep the backend port private so clients use the intended HTTPS entrypoint.
+
+Before allowing users to connect, check the public URL:
+
+```bash
+# Expected: 401 in the API key setup above, never a successful directory listing.
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# Set OPENVIKING_API_KEY to a tenant-bound user/admin key first. Expected: 200.
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "X-API-Key: $OPENVIKING_API_KEY" \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# Health is intentionally unauthenticated; 200 here does not verify access control.
+curl -sS https://ov.your-domain.com/health
+```
+
+If you use OIDC or a trusted identity gateway instead, follow that mode's [authentication requirements](04-authentication.md) and verify rejection of unauthenticated data requests. Do not expose a `trusted` backend directly to callers who can supply their own identity headers.
+
 <a id="adding-https-for-public-access"></a>
 
 ## Option A: bundled Caddy with auto Let's Encrypt (recommended)
@@ -36,11 +71,13 @@ as the issuer in OAuth metadata and `WWW-Authenticate` headers) and Caddy
 
 ```caddyfile
 {$OPENVIKING_PUBLIC_BASE_URL} {
-    reverse_proxy openviking:1933
+    reverse_proxy openviking:{$OPENVIKING_SERVER_PORT:1933}
     # Pin ACME registration email (optional):
     # tls {$OV_ACME_EMAIL}
 }
 ```
+
+With OpenViking Gateway enabled (`gateway.enabled: true`), the model APIs and the gateway management API are served under `/gateway` on the server port, so this proxy block covers them too. No extra upstream or path-based routing is needed.
 
 ### 3. Uncomment HTTPS lines in `docker-compose.yml`
 
@@ -61,14 +98,15 @@ volumes:
   caddy_config:
 ```
 
+For a proxy-only public entrypoint, remove the OpenViking host port mapping, or bind it to `127.0.0.1`. Also remove the legacy `1934:1934` mapping or bind it to localhost. Caddy can still reach `openviking:1933` through the Compose network.
+
 ### 4. Launch
 
 ```bash
 docker compose up -d
 ```
 
-The first HTTPS request triggers ACME certificate issuance. Subsequent
-requests use the cached cert. Caddy handles renewal automatically.
+Caddy obtains and renews certificates for the configured domain. Check its logs if issuance fails; on-demand issuance is a separate configuration. See [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https).
 
 ### 5. Verify
 
@@ -90,9 +128,12 @@ point the upstream straight at OV's 1933.
 
 ### nginx
 
+This example assumes nginx and OpenViking share a host. The upstream timeout is an example; size it for your longest request. Disabling response buffering lets streamed MCP responses reach the client promptly; see [nginx proxy buffering](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffering).
+
 ```nginx
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;  # nginx < 1.25.1: remove this line and use `listen 443 ssl http2;`
     server_name ov.your-domain.com;
 
     ssl_certificate     /etc/letsencrypt/live/ov.your-domain.com/fullchain.pem;
@@ -100,6 +141,9 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:1933;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
         proxy_set_header Host              $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
@@ -123,28 +167,28 @@ ov.your-domain.com {
 
 ### Cloudflare / CDN
 
-Point the CDN origin at `http://your-server-ip:1933`. Set
-`OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com` so the server knows
-its public address. Make sure the CDN forwards `Host`, `X-Forwarded-Proto`,
-and `X-Forwarded-Host`.
+Configure an HTTPS origin with certificate validation, or a private origin tunnel. Keep direct origin access restricted to the proxy. Set `OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com`, forward the public host/protocol headers, and check that the proxy preserves streaming and allows your request duration and upload sizes.
 
 ## Telling the server its public URL
 
-OAuth metadata, `WWW-Authenticate` headers, and resource URLs need to embed
-the public origin. Resolution order (**highest to lowest**):
+OAuth metadata and `WWW-Authenticate` headers need the public origin. The OAuth origin helper resolves it in this order (**highest to lowest**):
 
 1. `OPENVIKING_PUBLIC_BASE_URL` environment variable
 2. `oauth.issuer` in `ov.conf`
 3. `X-Forwarded-Proto` + `X-Forwarded-Host` request headers
 4. The request's `Host` header
 
-Behind any reverse proxy, set option 1 explicitly:
+The authorization-server issuer is fixed at startup: environment variable → `oauth.issuer` → `http://127.0.0.1:1933`; forwarded headers do not change it. Protected-resource metadata uses an explicit `oauth.issuer` for `authorization_servers`, even when the environment variable is set.
+
+MCP upload URLs use: environment variable → `server.public_base_url` → forwarded host/protocol → `Host` → listen-address fallback. Setting the environment variable keeps both aligned; if you also set `oauth.issuer`, use the same origin.
+
+Behind a reverse proxy, set option 1 in the server process environment:
 
 ```bash
 export OPENVIKING_PUBLIC_BASE_URL="https://ov.your-domain.com"
 ```
 
-or in `ov.conf`:
+For Compose, set it in `.env` and run `docker compose up -d`; an `export` in an unrelated shell does not update an existing container. If configuring the OAuth issuer in `ov.conf` instead:
 
 ```jsonc
 {
@@ -155,16 +199,18 @@ or in `ov.conf`:
 }
 ```
 
-## Compatibility note: the `:1934` single-upstream proxy
+<a id="compatibility-note-the-1934-single-upstream-proxy"></a>
 
-`docker compose up` also ships a Caddy reverse proxy on port 1934, simply
-`reverse_proxy openviking:1933` — **kept only for compatibility with
-deployments that already bookmarked 1934**. New deployments can connect to
-1933 directly; there is no routing value here. Remove the caddy service and
-the 1934 port mapping in `docker-compose.yml` if you don't need it.
+## Compatibility note: the `:1934` proxy
+
+The bundled Caddy's compatibility port 1934 forwards all paths to `openviking:{$OPENVIKING_SERVER_PORT:1933}`. With OpenViking Gateway enabled, port 1933 serves the regular OpenViking APIs and, under `/gateway`, the model APIs, tool uploads and the gateway management API. You no longer need a separate gateway container, port 1935 or path-based routing rules.
+
+Keep 1934 if existing bookmarks or clients still use it; otherwise remove its port mapping. Public clients should use the HTTPS entrypoint.
+
 
 ## Related
 
 - [Deployment Guide](03-deployment.md) — Docker, systemd, Kubernetes
 - [OAuth Guide](11-oauth.md) — OAuth 2.1 setup and client onboarding
 - [Authentication](04-authentication.md) — API key management
+- [OpenViking Gateway deployment and operations](22-gateway-operations.md) — deploying the gateway, its routes and reverse proxy requirements

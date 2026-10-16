@@ -2,16 +2,22 @@ const workspace = {
   appShell: {
     footer: {
       agentIntegrations: 'Agent Integrations',
+      beta: 'Beta',
       connection: 'Connection Settings',
+      gateway: 'OpenViking Gateway',
+      gatewayBeta: 'OpenViking Gateway · Beta',
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
-      users: 'User Management',
+      users: 'Users & Permissions',
     },
     header: {
+      backToConfig: 'Back to workspace setup',
+      chooseWorkspace: 'Choose workspace',
       currentUser: {
-        account: 'Account',
-        accountSummary: 'Account · {{account}}',
+        account: 'Space',
+        accountSummary: 'Space · {{account}}',
+        keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
         noUsers: 'No users in this account',
@@ -29,6 +35,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      compile: { title: 'Compile' },
       home: {
         title: 'Home',
       },
@@ -47,6 +54,9 @@ const workspace = {
       skills: {
         title: 'Skills',
       },
+      agentExperience: {
+        title: 'Agent Experience',
+      },
       tasks: {
         title: 'Task Center',
       },
@@ -59,8 +69,8 @@ const workspace = {
       sessions: {
         title: 'Sessions',
       },
-      playground: {
-        title: 'Playground',
+      filesystem: {
+        title: 'Filesystem',
       },
     },
     sidebar: {
@@ -84,6 +94,7 @@ const workspace = {
     loading: 'Loading monitoring data...',
     loadFailed: 'Could not load monitoring data',
     health: {
+      unknown: 'No data',
       healthy: 'Healthy',
       unhealthy: 'Unhealthy',
     },
@@ -203,10 +214,172 @@ const workspace = {
       action: 'Open connection settings',
     },
   },
+  agentExperiencePage: {
+    pageCount: '{{count}} experiences on this page',
+    searchCount: '{{count}} search results shown',
+    setup: {
+      expand: 'Expand steps',
+      collapse: 'Collapse',
+      title: 'Give your Agent experience and evolution capabilities',
+      connect: 'Connect OpenViking to your Agent',
+      docs: 'View integration guide',
+      install: 'Install the experience Skill for your Agent',
+      hint: 'Run this command in your terminal and select your Agent when prompted.',
+      copy: 'Copy install command',
+      view: 'View command',
+      copied: 'Install command copied',
+      copyFailed: 'Copy failed. Expand the command and copy it manually.',
+      enable: 'Enable Agent Evolution',
+      enableHint:
+        'Ask an account administrator to enable Agent Evolution so future session commits can generate experiences.',
+    },
+    title: 'Agent Experience',
+    description:
+      'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
+    refresh: 'Refresh',
+    searchPlaceholder: 'Search experiences',
+    searchClear: 'Clear',
+    searchNoResults: 'No matching experiences',
+    searchNoResultsDescription: 'Clear the search to continue browsing.',
+    loading: 'Loading experiences...',
+    loadFailed: 'Could not load experiences',
+    networkError:
+      'Could not connect to the OpenViking service. Check the server URL and connection status.',
+    connectionSettings: 'Open connection settings',
+    empty: 'No Agent experiences yet',
+    emptyDescription:
+      'Experiences are distilled automatically from committed sessions. Once a session is committed, reusable experiences will appear here.',
+    emptyAction: 'Go to Sessions',
+    directoryHint: 'memories / experiences',
+    updated: 'Updated {{time}}',
+    updatedBadge: 'Updated',
+    columnFile: 'Experience file',
+    columnUpdated: 'Updated',
+    columnActions: 'Actions',
+    viewAnalysis: 'Impact',
+    openDetail: 'View impact for {{name}}',
+    pagination: {
+      summary: 'Page {{page}}',
+      pageSize: 'Rows per page',
+      pageSizeValue: '{{count}} / page',
+      previous: 'Previous',
+      next: 'Next',
+    },
+    help: {
+      title: 'No experiences yet? Check:',
+      reasonConnected: 'Whether the Agent is connected to OpenViking',
+      reasonSessions: 'Whether new sessions ran after connecting',
+      reasonCommit: 'Whether those sessions were committed to OpenViking',
+    },
+    settings: {
+      title: 'Experience settings',
+      description:
+        'Agent Evolution switch for the target account. When off, new session commits in that account stop extracting experiences and trajectories.',
+      scopeMismatch:
+        'The API target account differs from the current account or cannot be confirmed. Changes are disabled. Use an administrator credential for the current account.',
+      loading: 'Reading switch status...',
+      loadFailed: 'Could not read switch status',
+      statusEnabled: 'Enabled',
+      statusDisabled: 'Disabled',
+      statusEnabledHint:
+        'Session commits extract experiences and trajectories.',
+      statusDisabledHint:
+        'While disabled no new experiences or trajectories are produced, and impact panels stay empty.',
+      pending: 'Applying...',
+      enabledToast: 'Agent Experience enabled',
+      disabledToast: 'Agent Experience disabled',
+      toggleFailed: 'Could not update the switch',
+    },
+    detail: {
+      back: 'Back',
+      copyUri: 'Copy URI',
+      openFilesystem: 'Open in Filesystem',
+      copied: 'Copied',
+      copyFailed: 'Copy failed',
+      contentTitle: 'Experience content',
+      contentLoading: 'Loading experience content...',
+      contentLoadFailed: 'Could not load experience content',
+      analysisTitle: 'Application impact',
+      analysisDescription:
+        'Trajectories and task outcomes produced by commits that read this experience.',
+      tabImpact: 'Impact',
+      tabSource: 'Source',
+      sourceTitle: 'Source trace',
+      sourceDescription:
+        'Trajectories that generated and evolved this experience, via experience relations.',
+      sourceLoading: 'Loading source relations...',
+      sourceLoadFailed: 'Could not load source relations',
+      sourceEmpty:
+        'No source relations yet. Links are established as later commits evolve this experience.',
+      rangeLabel: 'Time range',
+      rangeAll: 'All time',
+      range7d: 'Last 7 days',
+      range30d: 'Last 30 days',
+      rangeCustom: 'Custom',
+      rangeStart: 'Start date (UTC)',
+      rangeEnd: 'End date (UTC)',
+      rangeApply: 'Apply',
+      rangeCancel: 'Cancel',
+      rangeOrderError: 'Start date must not be after end date',
+      rangeInvalidError: 'Invalid date format, expected YYYY-MM-DD',
+      rangeUtcHint: 'Filtered by UTC date',
+      outcomeTitle: 'Outcome distribution',
+      outcomeTotal: '{{count}} trajectories',
+      outcomeEmpty: 'No applied trajectories in this time range',
+      outcomeEmptyDescription:
+        'This experience has not been applied yet, or its trajectories carry no outcome tags. Switch to “All time” to see historical trajectories.',
+      trajectoriesTitle: 'Applied trajectories',
+      trajectoriesLoadFailed: 'Could not load trajectories',
+      trajectoryView: 'View trajectory {{name}}',
+      loadMore: 'Load more',
+      loadingMore: 'Loading...',
+      noMore: 'All {{count}} trajectories shown',
+      previewTitle: 'Trajectory content',
+      previewLoading: 'Loading trajectory content...',
+      previewLoadFailed: 'Could not load trajectory content',
+      totalApplied: 'Applied {{count}} times',
+      successRate: '{{rate}}% success',
+    },
+    outcomes: {
+      success: 'Success',
+      failure: 'Failure',
+      partial: 'Partial',
+      unknown: 'Unknown',
+      unfinished: 'Unfinished',
+    },
+  },
   skillsPage: {
     title: 'Skills',
     description:
       'View Agent skills available to the current user and workspace.',
+    add: {
+      title: 'Add Skill',
+      description:
+        'Import a SKILL.md for agents to find and read. Execution is controlled by the agent using it.',
+      scope: 'Add to',
+      scopeDescription: {
+        user: 'Available only to the current user',
+        agent: 'Shared with this account; requires permission',
+      },
+      content: 'SKILL.md content',
+      placeholder:
+        '---\nname: my-skill\ndescription: What this skill does\n---\n\n# My skill',
+      contentHint:
+        'Paste the complete content or select a local SKILL.md file. This imports one file only.',
+      upload: 'Choose SKILL.md',
+      removeFile: 'Remove file {{fileName}}',
+      warnings: 'Validation notes',
+      failed: 'Could not add Skill',
+      processingFailed: 'Background processing failed',
+      processing: 'Submitted and processing in the background',
+      completed: 'Skill added and processing completed',
+      taskId: 'Task ID',
+      close: 'Close',
+      another: 'Add another',
+      validating: 'Validating…',
+      adding: 'Submitting…',
+      submit: 'Add Skill',
+    },
     refresh: 'Refresh',
     loading: 'Loading skills...',
     empty: 'No skills available',
@@ -220,7 +393,7 @@ const workspace = {
       'Could not connect to the OpenViking service. Check the server URL and connection status.',
     connectionSettings: 'Open connection settings',
     detail: 'Details',
-    openPlayground: 'Open in Playground',
+    openFilesystem: 'Open in Filesystem',
     viewDetail: 'View {{name}} details',
     detailLoading: 'Loading skill details...',
     detailLoadFailed: 'Could not load skill details',
@@ -249,6 +422,43 @@ const workspace = {
     },
   },
   tasksPage: {
+    labels: {
+      timing: 'Duration',
+      totalDuration: 'Total Time',
+      processingNotStarted: 'Not started',
+      processingDurationHelp:
+        'Processing time is wall-clock time after at least one Work is claimed by a worker, including model calls, I/O, downstream waits, and backoff; overlapping workers count once. Waiting time is total time minus processing time, mainly queue and scheduling gaps.',
+      processingDuration: 'Processing Time',
+      waitingDuration: 'Waiting Time',
+      timingUnavailable: 'Not recorded',
+
+      missingResource: 'Missing resource ID for task',
+      requeueFailed: 'Re-queue failed',
+      requeueSubmitted: 'Re-queue request submitted successfully!',
+      successRate: 'Success Rate',
+      avgDuration: 'Avg Total Duration',
+      avgProcessingTime: 'Finished tasks only, including queue time',
+      totalTasks: 'Total Tasks',
+      activePending: 'Active/Pending',
+      runningPending: 'Running / Pending Workloads',
+      taskQueueStatus: 'Task Queue Status',
+      processQueueStatus: 'Process Queue Status',
+      queuePipeline: 'Queue Pipeline',
+      duration: 'Total Duration (incl. queue)',
+      taskSummary: 'Total {{total}} ({{failed}} failed)',
+      taskCount: 'Tasks: {{count}}',
+      completedTasks: 'Completed: {{count}}',
+      serialFlow: 'Sequential process flow',
+      parallelBatch: 'Parallel process batch',
+      serialBatch: 'Sequential process batch',
+      latestPerResource: 'Latest per Resource',
+      individualTasks: 'Individual Tasks',
+    },
+    retry: {
+      noPendingMessages:
+        'No new task created: this session has no pending messages',
+      commitSkipped: 'No new task created: this session commit was skipped',
+    },
     title: 'Task Center',
     description:
       'Track background work such as resource processing, session commits, and reindexing.',
@@ -276,6 +486,15 @@ const workspace = {
       },
       error: 'Failure reason',
       result: 'Result',
+      noResultRunning: 'Task in progress',
+      noResultRunningDescription:
+        'No final result is available yet. See the reported stages and execution log above.',
+      noResultPending: 'Task queued',
+      noResultPendingDescription:
+        'The task has not started yet. Reported stages and execution events will appear when available.',
+      noResultCompleted: 'Task completed',
+      noResultCompletedDescription:
+        'This task did not return a displayable result.',
       noResult: 'No result yet',
       noResultDescription:
         'Results returned by the API will appear here when the task completes.',
@@ -284,6 +503,27 @@ const workspace = {
       noResultCancelledDescription:
         'This task was cancelled before it returned a result.',
     },
+    events: {
+      title: 'Task execution log',
+      description:
+        'Reported task events. Times show when the backend recorded each event.',
+      created: 'Task registered',
+      statusChanged: 'Task status changed to {{status}}',
+      stageChanged: 'Reported stage changed to {{stage}}',
+      errorRecorded: 'Backend recorded an error',
+      waitingForDescendants:
+        'Unfinished work remains; waiting for owned work to settle',
+      stageContext: 'Last reported stage: {{stage}}',
+      operation: 'Operation: {{operation}}',
+      partial: 'Only events recorded after tracking began are available.',
+      truncated: '{{count}} earlier events were truncated.',
+      unsupported: 'The server did not provide task events.',
+      empty: 'No execution events were recorded for this task.',
+      copy: 'Copy events',
+      copied: 'Events copied',
+      copyFailed: 'Could not copy events',
+      context: 'Current task context',
+    },
     filters: {
       label: 'Filter',
       type: 'Task type',
@@ -291,6 +531,29 @@ const workspace = {
       allTypes: 'All types',
       allStatuses: 'All statuses',
       clear: 'Clear filters',
+    },
+    actions: {
+      retrigger: 'Re-trigger Task',
+    },
+    pipeline: {
+      steps: 'Pipeline Steps',
+      duration: 'Duration',
+      count: '{{count}} items',
+      status: {
+        completed: 'Completed',
+        running: 'Running',
+        failed: 'Failed',
+        pending: 'Pending',
+      },
+      step: {
+        sessionPersistence: 'Session Persistence',
+        sessionCommit: 'Session Commit',
+        connectorAuth: 'Connector Auth',
+        resourceFetching: 'Resource Fetching',
+        externalParse: 'Document Parsing',
+        semantic: 'Semantic Processing',
+        embedding: 'Vector Embedding',
+      },
     },
     pagination: {
       next: 'Next',
@@ -318,6 +581,7 @@ const workspace = {
       unknown: 'Unknown',
     },
     types: {
+      compile: 'Compile',
       session_commit: 'Session commit',
       add_resource: 'Resource processing',
       add_skill: 'Skill import',
@@ -421,6 +685,20 @@ const workspace = {
   },
   accountSwitcher: {
     create: 'Create account',
+    connections: {
+      add: 'Add connection',
+      savedOnly: 'Connections saved in Connection Settings',
+      switch: 'Switch connection',
+      title: 'Saved connections',
+    },
+    serverAccountsTitle: 'Server accounts',
+    provider: {
+      hosted: 'Volcengine hosted',
+      opensource: 'Open source',
+    },
+    hosted: {
+      currentWorkspace: 'Current space',
+    },
     dialog: {
       accountLabel: 'Account',
       accountPlaceholder: 'team-account',
@@ -464,6 +742,19 @@ const workspace = {
     unset: 'No account selected',
   },
   common: {
+    ui: {
+      close: 'Close',
+      loading: 'Loading',
+      pagination: 'Pagination',
+      previous: 'Previous',
+      next: 'Next',
+      previousPage: 'Go to previous page',
+      nextPage: 'Go to next page',
+      morePages: 'More pages',
+      sidebar: 'Sidebar',
+      mobileSidebar: 'Mobile navigation sidebar',
+      toggleSidebar: 'Toggle Sidebar',
+    },
     action: {
       cancel: 'Cancel',
       saveConnection: 'Save Connection',
@@ -536,6 +827,363 @@ const workspace = {
     },
   },
   settings: {
+    gatewayConnection: {
+      title: 'Sign in to OpenViking Gateway',
+      openvikingUrl: 'This gateway uses OpenViking at {{url}}',
+      apiKey: 'OpenViking API key',
+      keyHint: 'A user, account admin or root API key all work.',
+      wrongKey:
+        "Gateway keys (ovgw_) and gateway management keys (ovgm_) can't be used to sign in. Enter an OpenViking API key.",
+      invalidKey:
+        'OpenViking rejected this API key. Check the key and try again.',
+      unreachable:
+        "The gateway can't reach OpenViking ({{url}}). Make sure OpenViking is running and the gateway's openviking_url (in gateway.conf or OPENVIKING_GATEWAY_OPENVIKING_URL) points to it, then try again.",
+      gatewayUnreachable:
+        "Can't reach this gateway. Make sure it is running, then try again.",
+      connect: 'Sign in',
+      connecting: 'Signing in…',
+    },
+    pageTitle: 'Settings',
+    tabs: { connection: 'Connection', configuration: 'Server configuration' },
+    models: {
+      editMode: 'Editing mode',
+      formMode: 'Form editor',
+      fileMode: 'File editor',
+      fileContent: 'ov.conf JSON',
+      validateFailed: 'Configuration validation failed.',
+      validating: 'Validating...',
+      fileScope:
+        'Both editors share one configuration draft. Form edits cover VLM and Embedding; the file editor covers the full configuration as standard JSON. Web Studio does not support environment variable configuration. If your configuration uses environment variables, maintain ov.conf directly on the server. Saving updates ov.conf and requires a server restart. It does not restart the service or update runtime overrides.',
+      invalidJsonObject: 'Enter a valid JSON object',
+      copyModelId: 'Copy model ID',
+      copied: 'Model ID copied',
+      copyFailed: 'Copy failed',
+      hasOverrides: 'Runtime overrides present',
+      more: 'More actions',
+      fileLocation: 'File location',
+      readOnlyStatus: 'Read-only',
+      pendingRestart: 'Restart pending',
+      inSync: 'Matches running settings',
+      discardAll: 'Discard changes',
+      saveAll: 'Save configuration',
+      reloadFile: 'Reload file (discard unsaved edits first)',
+      restartRequired:
+        'File settings differ from running settings. Restart the server to apply them.',
+      fileReadOnly:
+        'The configuration file is read-only. Saving is unavailable.',
+      overrideWarning:
+        'Runtime overrides detected; these may still take precedence after restart:',
+      parameters: 'Model parameters',
+      advanced: 'Advanced settings',
+      environmentObject:
+        'This configuration contains environment references or escaped reference symbols. The form is read-only. Web Studio does not support environment variable configuration. If your configuration uses environment variables, maintain ov.conf directly on the server.',
+      embeddingContract:
+        'Model identity, dimensions and input type are fixed at account creation.',
+      fields: {
+        provider: 'Provider',
+        text_source: 'Embedding text source',
+        dimension: 'Dimensions',
+        input: 'Input type',
+        query_param: 'Query task',
+        document_param: 'Document task',
+        version: 'Model version',
+        model: 'Model ID',
+        api_key: 'API Key',
+        api_base: 'API URL',
+        api_version: 'API version',
+        ak: 'Access Key',
+        sk: 'Secret Key',
+        host: 'Host',
+        region: 'Region',
+        timeout: 'Request timeout (seconds)',
+        thinking: 'Thinking',
+        max_input_tokens: 'Input token limit',
+        extra_headers: 'Extra headers (JSON)',
+        max_retries: 'Retries',
+        max_concurrent: 'Concurrency limit',
+        circuit_breaker: 'Circuit breaker (JSON)',
+        failback_timeout_seconds: 'Failback interval (seconds)',
+        failback_request_count: 'Failback request count',
+      },
+      listModel: 'Model ID',
+      dimension: 'Dimensions',
+      dense: 'Dense',
+      sparse: 'Sparse',
+      hybrid: 'Hybrid',
+      priority: 'Order',
+      preferred: 'Preferred',
+      backup: 'Backup',
+      priorityHint:
+        'The first entry is preferred; later entries are failover connections. This does not indicate the connection currently in use.',
+      actions: 'Actions',
+      moveUp: 'Move up',
+      moveDown: 'Move down',
+      view: 'View model',
+      edit: 'Edit model',
+      addModel: 'Add model',
+      serverSource: 'ov.conf',
+      unsaved: 'Unsaved',
+      providerDefault: 'Provider default URL',
+      notSet: 'Not set',
+      empty: 'No model settings',
+      showKey: 'Show API key',
+      hideKey: 'Hide API key',
+      close: 'Close',
+      dismiss: 'Cancel',
+      apply: 'Confirm changes',
+      confirmRemove: 'Remove this model configuration?',
+      vlmType: 'VLM',
+      embeddingType: 'Embedding',
+      loading: 'Loading model settings...',
+      rootRequired:
+        'Connect with a ROOT management credential to configure models.',
+      loadFailed:
+        'Could not load model settings. Check the connection, permissions and server version.',
+      retry: 'Retry',
+      model: 'Default model ID',
+      provider: 'Provider',
+      selectProvider: 'Select a provider',
+      customProvider: 'Custom (OpenAI compatible)',
+      apiKey: 'API key',
+      apiBase: 'API URL',
+      remove: 'Remove credential',
+      saving: 'Saving...',
+      saved: 'Saved to ov.conf. Restart the server to apply changes.',
+      saveAndRestart: 'Save and restart',
+      restartService: 'Restart service',
+      restarting: 'Restarting the service, waiting for the connection…',
+      restarted: 'Service restarted and configuration reloaded.',
+      restartRolledBack:
+        'Startup with the new configuration failed. The previous running configuration was restored and the service restarted.',
+      restartFailed:
+        'Could not confirm the restart. Check the service status and current configuration. If the address, port or ROOT credential changed, update connection settings and retry.',
+      restartUnsupported:
+        'This launch mode does not support remote restart. Restart through your deployment platform.',
+      saveFailed:
+        'Could not save. Check the model parameters and permissions, then retry.',
+    },
+    acl: {
+      page: {
+        advanced: 'Advanced settings',
+        aboutLevels: 'About permission levels',
+        title: 'Resource permissions',
+        description:
+          'Browse shared resource directories and manage access to each one.',
+        path: 'Current directory',
+        back: 'Go to parent directory',
+        listFailed: 'Could not load directory',
+        parentAclFailed:
+          'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
+        emptyDirectory: 'No subdirectories here.',
+        nameColumn: 'Name',
+        ruleColumn: 'Permission rule',
+        granteesColumn: 'Grants on this directory',
+        actionsColumn: 'Actions',
+        unreadable: 'Unable to load',
+        noGrantees: 'No direct grants',
+        editAction: 'Edit permissions',
+        manageAction: 'Manage permissions',
+        limitFor: 'Restrict access to {{directory}}',
+        restoreInheritanceTitle: 'Inherit permissions from the parent again?',
+        restoreInheritanceWarning:
+          'Parent directory grants will apply again. Grants added on this directory will remain.',
+        disableLimitTitle: 'Clear direct grants and restore inheritance?',
+        disableLimitWarning:
+          'Direct grants on this directory will be cleared and parent permissions inherited again. Separate permissions on child directories remain.',
+        editDirectory: 'Who can access {{directory}}',
+        whoCanAccess: 'Grant access to these users or groups',
+        grantScope:
+          'Permissions set here apply to this directory and its descendants by default. A child directory can have different rules.',
+        advancedRules: 'Parent permissions and other settings',
+        parentAccess: 'Parent directory grants',
+        parentGrantsActive:
+          '{{count}} additional parent grants apply here. Open “Parent permissions and other settings” to review them.',
+        parentGrantsInactive:
+          '{{count}} parent grants exist, but this directory has stopped inheriting them.',
+        unavailable:
+          'This page requires account administrator or Root management credentials. Check connection settings.',
+      },
+      title: 'Access permissions',
+      accountTitle: 'Resource access control · {{account}}',
+      accountHint:
+        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone management access. Descendants inherit by default and can restrict access separately.',
+      enableAction: 'Enable access control',
+      disableAction: 'Disable access control',
+      enabled: 'Enabled',
+      disabled: 'Disabled — resource ACL grants are not enforced',
+      enableTitle: 'Enable resource access control?',
+      disableTitle: 'Disable resource access control?',
+      enableWarning:
+        'Enable ACL for Account {{account}}? The shared root always grants everyone management access; these permissions cannot be changed. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
+      disableWarning:
+        'Disable ACL for Account {{account}}? All configured resource ACLs stop being enforced. Resources follow the original sharing rules, which may expand access. Stored grants are retained.',
+      saved: 'Permissions updated',
+      failed: 'Could not update permissions',
+      confirm: 'Confirm',
+      parentGrantsLabel: 'Parent directory grants',
+      parentIncluded: 'Includes parent grants',
+      parentExcluded: 'Excludes parent grants',
+      includeParent: 'Include parent grants',
+      excludeParent: 'Exclude parent grants',
+      limitAccess: 'Restrict access',
+      inheritParent: 'Inherit parent grants',
+      inheritHelpLabel: 'About inheriting parent grants',
+      inheritHelp:
+        'When enabled, parent grants and grants added here both apply. When disabled, only grants added here apply. Switching does not delete direct grants. Descendants inherit this directory’s effective permissions by default.',
+      limitTitle: 'Restrict access to this directory?',
+      limitWarning:
+        'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
+      peopleWithAccess: 'People and groups with access',
+      grantSubjectColumn: 'User / group',
+      grantLevelColumn: 'Permission',
+      effectiveLevel: 'Effective: {{level}}',
+      grantSourceColumn: 'Source',
+      accountAdministrators: 'Account administrators',
+      administratorRole: 'System role',
+      administratorSource: 'Account administrator access',
+      removeFor: 'Remove direct grant for {{principal}}',
+      defaultRule: 'Inherits parent permissions by default',
+      onlyAdmins: 'No grants yet; account administrators can still access',
+      directSource: 'Direct grant',
+      inheritedSource: 'Inherited grant',
+      directAndInheritedSource: 'Inherited + direct grant',
+      adminCredentialIdentity:
+        'Permission management uses the account administrator credential for {{account}}. Resource browsing still uses the current user.',
+      identity:
+        'Resource operations use the current data identity: {{account}} / {{user}}.',
+      loadFailed: 'Could not load resource permissions',
+      accessHint:
+        'The current data identity needs resource management access. In API Key mode, use an Account Admin user key, not a Root key.',
+      retryHint:
+        'The request failed. Retry, or inspect the error details if it persists.',
+      recovery: {
+        loadFailed: 'Failed to load account administrators.',
+        switchFailed: 'Failed to switch user.',
+        title: 'Switch to a user with permission',
+        description:
+          'This panel manages access to the current resource. Your user cannot read its grants. Switch to an account administrator to add users or groups with read, write, or manage access.',
+        scope:
+          'Switching also changes the user identity used throughout Web Studio to browse and operate on resources.',
+        unsupported:
+          'This connection mode does not support switching users here. Check your connection settings.',
+        noAdmins:
+          'No account administrators are available. Check user roles in Users & Permissions, or ask someone with resource management access to grant permission.',
+        admin: 'Account administrator',
+        selectAdmin: 'Select an account administrator',
+        key: 'Administrator user API key',
+        keyHint:
+          'The server did not return a key for this user. Enter their existing API key. A Root key cannot be used here.',
+        switch: 'Switch user and load permissions',
+        switching: 'Switching…',
+        switched:
+          'User switched. Select a directory to continue managing permissions.',
+        retryAccess: 'Check access again',
+        details: 'Error details',
+        scopeTitle: 'About switching identity',
+        users: 'Go to Users & Permissions',
+      },
+      modes: {
+        none: 'Inherited by default',
+        inherit: 'Inherited permissions',
+        restricted: 'Custom permissions',
+      },
+      modeDescriptions: {
+        none: 'No permissions are configured on this directory. It inherits parent permissions by default.',
+        inherit:
+          'Parent grants and grants added here both apply, including to descendant directories and files by default. A descendant can stop inheritance.',
+        restricted:
+          'This directory does not use parent grants. Grants added here still apply to descendant directories and files unless a descendant stops inheritance.',
+      },
+      levels: {
+        read: 'View',
+        write: 'Edit',
+        manage: 'Manage',
+      },
+      levelHint:
+        'View: read and search. Edit: create, modify, delete or move files. Manage: edit permissions and delete or move directories; directory operations also check the entire subtree.',
+      direct: 'Grants added to this directory',
+      inherited: 'Grants from parent directories',
+      noDirect:
+        'No direct grants have been added. Users may still have access through parent grants when inheritance is enabled.',
+      noInherited: 'No inherited grants.',
+      inheritedHint:
+        'These grants apply here and to descendant directories and files by default. Edit them in the parent directory.',
+      inheritedInactive:
+        'These parent grants remain stored but do not apply here or to descendants through this directory.',
+      inactive: 'Inactive',
+      adminHint:
+        'Account administrators always retain management access, even when no grants are listed.',
+      indexHint:
+        'Changing permissions requires an indexed resource. Wait for indexing to finish before configuring newly created resources.',
+      levelFor: 'Permission for {{principal}}',
+      remove: 'Remove grant',
+      restoreInheritance: 'Restore parent permissions',
+      restrict: 'Stop inheriting parent permissions',
+      restrictTitle: 'Stop inheriting parent directory permissions?',
+      restoreTitle: 'Restore parent directory permissions?',
+      restrictWarning:
+        'Parent grants will stop applying to this directory and its contents. Only grants added here and account administrators will have access.',
+      restoreWarning:
+        'Parent grants will apply to this directory and its contents again.',
+      removeWarning:
+        'Remove the direct grant for {{principal}}? Access may remain through inherited grants, groups, or an Everyone grant. Removing a grant does not change the inheritance mode.',
+      subjectType: 'Grant to',
+      subjects: {
+        user: 'User',
+        group: 'User group',
+        everyoneShort: 'All users',
+        everyone: 'Everyone in this Account',
+      },
+      everyone: 'Everyone in this Account',
+      search: 'Search users or groups',
+      subject: 'User or group',
+      selectSubject: 'Select a user or group',
+      noCandidates: 'No matching users or groups.',
+      candidatesFailed: 'Could not load grant candidates',
+      level: 'Permission level',
+      addGrant: 'Add permission',
+      backToGrants: 'Back to permissions',
+      confirmGrant: 'Grant {{level}} access to {{count}} selected',
+      confirmEveryoneGrant: 'Grant {{level}} access to all users',
+    },
+    groups: {
+      navigation: 'Users & Permissions',
+      usersTab: 'Users',
+      title: 'User groups',
+      description: 'Manage groups and members in the current account.',
+      id: 'Group ID',
+      count: 'Members',
+      actions: 'Actions',
+      create: 'Create group',
+      idHint:
+        'A unique ID within this Account. It cannot be renamed after creation.',
+      manage: 'Manage members',
+      delete: 'Delete group',
+      deleteHint: 'Remove all members before deleting this group.',
+      deleteDescription:
+        'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
+      empty: 'No user groups yet.',
+      notJoined: 'No groups',
+      search: 'Search groups',
+      members: 'Members of {{group}}',
+      memberHint:
+        'Membership changes affect subsequent requests. Other grants may still allow access after removal.',
+      add: 'Add',
+      remove: 'Remove',
+      searchUsers: 'Search existing users to add',
+      currentMembers: 'Current members',
+      candidates: 'Account users',
+      noMembers: 'This group has no members.',
+      noUsers: 'No matching users.',
+      created: 'User group created',
+      deleted: 'User group deleted',
+      updated: 'Group membership updated',
+      failed: 'Operation failed',
+      loadFailed: 'Could not load data',
+      previous: 'Previous',
+      next: 'Next',
+      page: 'Page {{page}} of {{pages}}',
+    },
     actions: {
       addAccount: 'Add account',
       addUser: 'Add user',
@@ -565,31 +1213,31 @@ const workspace = {
       keyGuide: {
         control: {
           primary:
-            'Your User API Key already enables the Playground and data access. Regular users do not need a control credential.',
+            'Your User API Key already enables the Filesystem and data access. Regular users do not need a control credential.',
           secondary:
             'To switch Accounts or manage users, request a Root Key from the deployment admin or an Admin Key from the current Account admin. The Root Key is stored at server.root_api_key in the server-side ov.conf.',
           title: 'Need to manage Accounts or users?',
         },
         data: {
           primary:
-            'The Root/Admin API Key is mainly for management. The Playground and tenant data APIs require a User API Key bound to a user identity.',
+            'The Root/Admin API Key is mainly for management. The Filesystem and tenant data APIs require a User API Key bound to a user identity.',
           secondary:
-            'Select or create a user in User Management, or regenerate its key, then use it as the User API Key.',
+            'Select or create a user in Users & Permissions, or regenerate its key, then use it as the User API Key.',
           title: 'A User API Key is still required',
         },
         empty: {
           primary:
             'Regular users should request a User API Key from their Account admin.',
           secondary:
-            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in User Management.',
+            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in Users & Permissions.',
           title: 'No OpenViking API Key yet?',
         },
         learnMore: 'Learn how to get an API Key',
         trusted: {
           primary:
-            'This trusted server enforces Root Key validation. The browser needs the same Root API Key for management and tenant data requests.',
+            "Trusted mode requires a Root API Key, including on localhost. Enter the server's root key in the “Root or Admin API Key” field above.",
           secondary:
-            'Request the Root Key from the deployment admin; it is stored at server.root_api_key in the server-side ov.conf. Trusted-mode data identity comes from Account/User assertions and does not need a User API Key.',
+            'Request the key from the deployment admin. If the server has no key yet, set a non-empty server.root_api_key in its ov.conf, restart the server, and enter the same value here. No separate User API Key is needed.',
           title: 'This trusted server requires a Root API Key',
         },
       },
@@ -601,7 +1249,11 @@ const workspace = {
         primary: 'This server is configured with {{mode}} authentication.',
         title: 'Unsupported authentication mode',
       },
-      userHint: 'Used by the Playground and tenant data APIs.',
+      trustedRootHint:
+        'Use server.root_api_key from the server-side ov.conf for both management and data access in trusted mode.',
+      trustedUserHint:
+        'Trusted mode needs no separate User API Key; Account and User identify whose data to access.',
+      userHint: 'Used by the Filesystem and tenant data APIs.',
     },
     connectionPage: {
       description:
@@ -673,6 +1325,8 @@ const workspace = {
         dataKeyRequired: 'A user or account-admin API key is required',
         rootAvailable: 'Root admin control available',
         tenantDataAvailable: 'Tenant data access available',
+        trustedKeyRequired:
+          'A Root API Key is required. Use server.root_api_key from the server-side ov.conf',
         trustedIdentityRequired:
           'Trusted mode data access requires account and user',
       },
@@ -690,19 +1344,32 @@ const workspace = {
       title: 'New API key',
     },
     loading: 'Loading identities...',
+    userList: {
+      search: 'Search all users by username',
+      noResults: 'No matching users',
+      noResultsDescription: 'Try another username or clear the search.',
+      pagination: 'User pagination',
+      summary: '{{total}} users · Page {{page}} of {{pageCount}}',
+      pageSize: 'Users per page',
+      pageSizeValue: '{{count}} per page',
+      first: 'First',
+      previous: 'Previous',
+      next: 'Next',
+      last: 'Last',
+    },
     management: {
       accountFilter: 'Accounts',
       accessDeniedDescription:
         'User management requires a validated Root or Account Admin API key.',
       accessDeniedTitle: 'User management unavailable',
       currentAccountDescription:
-        'Manage users and access credentials in the {{account}} workspace.',
+        'Manage users and access credentials in the current account.',
       description:
         'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       memberListDescription:
-        '"Switch identity" uses that user for data pages such as Playground and Retrieval without changing the active Root/Admin management credential.',
+        '"Switch identity" uses that user for data pages such as Filesystem and Retrieval without changing the active Root/Admin management credential.',
       memberListDescriptionRoot:
-        'You can change member roles here. "Switch identity" only changes the user used by data pages such as Playground and Retrieval; it does not change the active Root management credential.',
+        'You can change member roles here. "Switch identity" only changes the user used by data pages such as Filesystem and Retrieval; it does not change the active Root management credential.',
       memberListTitle: 'Workspace members',
       cannotRemoveCurrentIdentity: 'The active identity cannot be deleted.',
       cannotRemoveLastManager:
@@ -710,7 +1377,7 @@ const workspace = {
       noUsableKey:
         'This user has no plaintext API key available for data access.',
       openConnection: 'Open connection settings',
-      title: 'User management',
+      title: 'Users',
     },
     page: {
       adminDescription:
@@ -752,13 +1419,14 @@ const workspace = {
       actions: 'Actions',
       apiKey: 'API key',
       role: 'Role',
+      groups: 'Groups',
       user: 'User',
     },
     toast: {
       accountCreated: 'Account created',
-      accountDeleted: '{{account}} deleted',
-      accountDeletedRecoveryFailed:
-        'The account was deleted, but the remaining account list could not be loaded: {{error}}',
+      accountDeletionStarted: '{{account}} disabled. Cleanup task: {{taskId}}',
+      accountDeletionRecoveryFailed:
+        'Account cleanup was submitted, but the remaining account list could not be loaded: {{error}}',
       connectionSaved: 'Connection saved',
       copyFailed: 'Copy failed',
       copied: 'Copied',
@@ -842,7 +1510,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

@@ -1,4 +1,5 @@
 export type OpenVikingContextEngineRegistrationApi = {
+  runtime?: { version?: string };
   registerContextEngine?: (id: string, factory: () => unknown) => void;
 };
 
@@ -22,6 +23,7 @@ export type OpenVikingContextEngineCreateParams<
   id: string;
   name: string;
   version: string;
+  hostVersion?: string;
   cfg: TCfg;
   logger: TLogger;
   getClient: () => Promise<TClient>;
@@ -80,6 +82,7 @@ export function registerOpenVikingContextEngine<
       id: deps.plugin.id,
       name: deps.plugin.name,
       version: deps.version,
+      hostVersion: deps.api.runtime?.version,
       cfg: deps.cfg,
       logger: deps.logger,
       getClient: deps.getClient,

@@ -9,11 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
+from openviking.models.model_error import model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     PrimaryBackupSwitcher,
-    classify_api_error,
     extract_metric_error_code,
 )
 from openviking_cli.utils import get_logger
@@ -112,6 +112,7 @@ class VLMBase(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -121,6 +122,7 @@ class VLMBase(ABC):
             tools: Optional list of tool definitions in OpenAI function format
             tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
             messages: Optional list of message dicts (takes precedence over prompt)
+            max_tokens: Optional per-call output cap; overrides the configured value
 
         Returns:
             str if no tools provided, VLMResponse if tools provided
@@ -331,6 +333,9 @@ class VLMBase(ABC):
         """Reset token usage"""
         self._token_tracker.reset()
 
+    def close(self) -> None:
+        """Release provider resources, if any."""
+
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):
             return response
@@ -341,8 +346,8 @@ class VLMFactory:
     """VLM factory class, creates corresponding VLM instance based on config"""
 
     @staticmethod
-    def create(config: Dict[str, Any]) -> VLMBase:
-        """Create VLM instance
+    def _create_provider(config: Dict[str, Any]) -> VLMBase:
+        """Create one concrete VLM provider without an outer retry decorator.
 
         Args:
             config: VLM config, must contain 'provider' field
@@ -385,6 +390,13 @@ class VLMFactory:
             from .backends.litellm_vlm import LiteLLMVLMProvider
 
             return LiteLLMVLMProvider(config)
+
+    @staticmethod
+    def create(config: Dict[str, Any]) -> VLMBase:
+        """Create one VLM target with the standard retry owner."""
+        from .retry_vlm import RetryVLM
+
+        return RetryVLM(VLMFactory._create_provider(config))
 
 
 def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
@@ -598,6 +610,7 @@ class FailoverVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -607,6 +620,7 @@ class FailoverVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            max_tokens=max_tokens,
         )
 
     def get_vision_completion(
@@ -748,8 +762,12 @@ class FailoverVLM(VLMBase):
         """Get combined token usage from both primary and backup instances."""
         from openviking.models.vlm.token_usage import TokenUsageTracker
 
+        primary_tracker = self.primary.token_tracker
+        backup_tracker = self.backup.token_tracker
+        if primary_tracker is backup_tracker:
+            return primary_tracker.to_dict()
         merged_tracker = TokenUsageTracker.merge(
-            self.primary.token_tracker, self.backup.token_tracker
+            primary_tracker, backup_tracker
         )
         return merged_tracker.to_dict()
 
@@ -757,6 +775,11 @@ class FailoverVLM(VLMBase):
         """Reset token usage for both primary and backup instances."""
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
+
+    def close(self) -> None:
+        """Close both provider instances."""
+        self.primary.close()
+        self.backup.close()
 
 
 class MultiCredentialVLM(VLMBase):
@@ -789,11 +812,24 @@ class MultiCredentialVLM(VLMBase):
         if len(vlm_instances) != len(credential_ids):
             raise ValueError("vlm_instances and credential_ids must have the same length")
 
-        # Use the first instance's config as base
+        # Expose the common runtime behavior expected by callers that inspect
+        # the wrapper as a VLMBase. Provider-specific identity remains on each
+        # credential instance.
         first = vlm_instances[0]
+        configured_token_limits = [
+            instance.max_tokens
+            for instance in vlm_instances
+            if isinstance(instance.max_tokens, int)
+        ]
         config = {
             "model": first.model,
             "provider": first.provider,
+            "temperature": first.temperature,
+            "max_retries": first.max_retries,
+            "timeout": first.timeout,
+            "max_tokens": (
+                min(configured_token_limits) if configured_token_limits else None
+            ),
             "thinking": first.thinking,
         }
         super().__init__(config)
@@ -844,17 +880,19 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure (400 / input too large / content
                     # safety): re-raise the original exception so callers can
                     # react to its type; trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -891,16 +929,18 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -936,13 +976,14 @@ class MultiCredentialVLM(VLMBase):
                 if emitted:
                     raise
 
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
-                if self._switcher.is_fail_fast(error_class):
+                kind = model_error_kind(exc)
+                if self._switcher.is_fail_fast(kind):
                     raise
-
+                aggregated_errors.append((credential_id, kind, exc, idx))
                 self._logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -972,6 +1013,7 @@ class MultiCredentialVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with multi-credential failover support."""
         return await self._get_completion_with_failover_async(
@@ -981,6 +1023,7 @@ class MultiCredentialVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            max_tokens=max_tokens,
         )
 
     def get_vision_completion(
@@ -1079,16 +1122,16 @@ class MultiCredentialVLM(VLMBase):
                 return result
             except Exception as error:
                 _annotate_vlm_error(error, vlm)
-                error_class = classify_api_error(error)
-                errors.append((credential_id, error_class, error, idx))
+                kind = model_error_kind(error)
                 if idx == start:
                     active_credential_failed = True
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     raise
+                errors.append((credential_id, kind, error, idx))
                 self._logger.warning(
                     "Credential %s failed media understanding with %s, trying next credential",
                     credential_id,
-                    error_class,
+                    kind.value,
                 )
 
         if attempted:
@@ -1112,9 +1155,11 @@ class MultiCredentialVLM(VLMBase):
         if not self._vlm_instances:
             return {}
 
-        merged_tracker = self._vlm_instances[0].token_tracker
-        for instance in self._vlm_instances[1:]:
-            merged_tracker = TokenUsageTracker.merge(merged_tracker, instance.token_tracker)
+        trackers = [instance.token_tracker for instance in self._vlm_instances]
+        if all(tracker is trackers[0] for tracker in trackers[1:]):
+            return trackers[0].to_dict()
+
+        merged_tracker = TokenUsageTracker.merge(*trackers)
 
         return merged_tracker.to_dict()
 
@@ -1122,3 +1167,8 @@ class MultiCredentialVLM(VLMBase):
         """Reset token usage for all credential instances."""
         for instance in self._vlm_instances:
             instance.reset_token_usage()
+
+    def close(self) -> None:
+        """Close all credential provider instances."""
+        for instance in self._vlm_instances:
+            instance.close()

@@ -40,7 +40,6 @@ ACCOUNT_DIMENSION_SUPPORTED_METRICS = frozenset(
         "openviking_retrieval_rerank_used_total",
         "openviking_retrieval_rerank_fallback_total",
         "openviking_session_lifecycle_total",
-        "openviking_session_contexts_used_total",
         "openviking_session_archive_total",
         "openviking_operation_requests_total",
         "openviking_operation_duration_seconds",

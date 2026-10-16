@@ -2,7 +2,11 @@
 
 The `cuvs` backend keeps OpenViking's embedded record store, scalar indexes, sparse retrieval, and recovery logic, while executing dense vector search with NVIDIA cuVS. cuVS 26.06 Python wheels require Python 3.11 or newer.
 
-Install the package matching the host CUDA major version:
+## Requirements and installation
+
+Use Linux x86_64 or aarch64 with a supported NVIDIA GPU and a compatible CUDA driver. Check the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) and [Python package guide](https://docs.nvidia.com/cuvs/installation/python) for the selected release. Current cuVS source builds require CUDA Toolkit 12.2 or newer and Ampere or newer GPUs; package requirements depend on the chosen release.
+
+From an OpenViking source checkout, activate your Python virtual environment and run **one** of the following installation options, matching the host CUDA major version:
 
 ```bash
 # CUDA 12
@@ -13,6 +17,8 @@ pip install cuvs-cu12 'cupy-cuda12x[ctk]' --extra-index-url=https://pypi.nvidia.
 pip install -e .
 pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.com
 ```
+
+## Configuration
 
 Start with exact brute-force search:
 
@@ -37,6 +43,28 @@ Start with exact brute-force search:
 ```
 
 Set `algorithm` to `cagra` for approximate graph search. `build_params` and `search_params` are passed to cuVS `cagra.IndexParams` and `cagra.SearchParams` respectively.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "cuvs",
+      "cuvs": {
+        "algorithm": "cagra",
+        "build_params": {
+          "graph_degree": 64,
+          "intermediate_graph_degree": 128,
+          "build_algo": "nn_descent"
+        },
+        "search_params": {
+          "itopk_size": 64,
+          "search_width": 1
+        }
+      }
+    }
+  }
+}
+```
 
 ### Memory-aware auto mode
 
@@ -90,10 +118,10 @@ Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
 mutations are coalesced for `auto_rebuild_debounce_ms`, and a worker builds the
 new immutable GPU snapshot without holding the cross-backend mutation lock.
 The 500 ms default avoids rebuilding most intermediate batches during normal
-interactive ingestion. For a known multi-call bulk load, wrap all writes in
+interactive ingestion. For code using the internal vector backend, wrap a known multi-call bulk load in
 `async with backend.bulk_ingest(ctx=ctx):`: native visibility and persistence
 still advance per call, while derived GPU maintenance is deferred until the
-outermost scope exits and then scheduled once. This scope is a maintenance hint,
+outermost scope exits and then scheduled once. This internal API is not exposed by the HTTP SDK. The scope is a maintenance hint,
 not a transaction or atomicity boundary; exiting it schedules the rebuild but
 does not itself wait for GPU readiness. The vector backend benchmark adds that
 explicit readiness wait before timing search. Changing the debounce remains
@@ -114,8 +142,7 @@ device payload to `N * dimension * 2` bytes. CAGRA additionally retains approxim
 `N * intermediate_graph_degree * 4` bytes while building. Each cached filter
 bitset costs approximately `ceil(N / 32) * 4` bytes.
 
-Prior index-only runs measured the following `cudaMemGetInfo` deltas from just
-before to just after build; each value is the median of five clean processes:
+The [historical index benchmark](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/PRELIMINARY_RESULTS.md) used an NVIDIA H20, cuVS 26.06, CuPy 14.1.1, and CUDA runtime 12.9, before request micro-batching was added. It measured the following `cudaMemGetInfo` deltas immediately before and after build; each value is the median of five clean processes. Use the [benchmark harness](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/README.md) to measure your own configuration:
 
 | Dataset | cuVS algorithm | Measured GPU delta |
 | --- | --- | ---: |
@@ -133,6 +160,8 @@ workloads can increase the peak. The delta also excludes the approximately
 This is why auto mode initializes the runtime first, reads the remaining free
 memory, and then applies a conservative safety factor and independent reserve
 rather than admitting from the vector payload alone.
+
+Cosine search L2-normalizes vectors before computing inner products. L2 scores use `1 - squared_l2`, so larger scores remain better matches.
 
 ## Data type and native-index behavior
 
@@ -156,8 +185,10 @@ presenting the comparison as equal-dtype or equal-memory. This separation is
 intentional for the initial opt-in
 integration and leaves existing CPU behavior unchanged. In auto mode, the
 filter candidate thresholds can select either representation per query, so
-applications that require one fixed numerical representation should use an
-explicit backend or disable the native-routing thresholds.
+applications that require one fixed representation for dense queries should select
+an explicit backend and dtype. Setting the routing thresholds to zero only removes
+candidate-count routing; auto mode can still fall back for memory pressure, GPU
+unavailability, or a dirty snapshot.
 
 Lower-precision GPU storage is explicit rather than an implicit cast. Setting
 `dtype: "float16"` casts both the cuVS dataset and every query to float16 for
@@ -256,8 +287,65 @@ store and repopulate cuVS after restart.
 The `[ctk]` CuPy extra installs the CUDA toolkit headers required by the cuVS
 Python interop path, even when the host provides a CUDA driver but no toolkit.
 
+## Minimal validation
+
 After installation, run `python examples/cuvs_smoke.py` for an exact
 GPU-backed write and filtered-search check, or
 `python examples/cuvs_smoke.py --algorithm cagra` to exercise the graph index.
 Add `--dtype float16` to either command to validate the lower-precision path.
 Neither command requires an embedding or VLM service.
+
+The core API calls are:
+
+```python
+from openviking.storage.vectordb.collection.local_collection import (
+    get_or_create_local_collection,
+)
+
+collection = get_or_create_local_collection(
+    meta_data={
+        "CollectionName": "cuvs_smoke",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "uri", "FieldType": "path"},
+        ],
+    },
+    config={
+        "dense_search": {
+            "backend": "cuvs",
+            "algorithm": "brute_force",
+            "fallback_to_native": True,
+        }
+    },
+)
+collection.create_index(
+    "default",
+    {
+        "IndexName": "default",
+        "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+        "ScalarIndex": ["account_id", "uri"],
+    },
+)
+collection.upsert_data(
+    [
+        {"id": "a", "vector": [1, 0, 0, 0], "account_id": "demo", "uri": "/docs/a"},
+        {"id": "b", "vector": [0, 1, 0, 0], "account_id": "demo", "uri": "/docs/b"},
+    ]
+)
+result = collection.search_by_vector(
+    "default",
+    dense_vector=[1, 0, 0, 0],
+    limit=2,
+    filters={"op": "must", "field": "account_id", "conds": ["demo"]},
+)
+assert [item.id for item in result.data] == ["a", "b"]
+collection.close()
+```
+
+## Current limits
+
+The native prefilter preserves scalar DSL, `date_time`, `geo_point`, and path-depth semantics. cuVS only handles pure dense queries; sparse/hybrid fallback and snapshot maintenance follow the behavior described above. Treat brute-force as the functional baseline. Tune CAGRA graph and search parameters against recall, throughput, latency, and GPU memory for your workload.
+
+The GPU index itself is not persisted. After a restart, OpenViking reconstructs it from locally stored vectors; inserts, updates, and deletes mark it dirty. By default, the next dense search rebuilds it. In memory-aware auto mode, `auto_background_rebuild` moves rebuilding to a background worker while queries use the native fallback until a usable GPU index is ready. Budget for rebuild latency after restarts and writes, even when the local vector store is persisted.

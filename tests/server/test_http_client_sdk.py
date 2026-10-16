@@ -66,7 +66,7 @@ async def test_sdk_add_resource(http_client):
         role=Role.ADMIN,
     )
     acl = await service.fs.get_acl(result["root_uri"], ctx=creator)
-    assert acl["acl_enabled"] is False
+    assert acl["acl_mode"] == "none"
     assert acl["direct_entries"] == []
 
 

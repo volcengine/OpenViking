@@ -15,8 +15,6 @@ class GitLocalConfig(BaseModel):
         "When empty, defaults to '{storage.path}/.ovgit'.",
     )
 
-    model_config = {"extra": "forbid"}
-
 
 class GitS3Config(BaseModel):
     """Configuration for the S3 git object/ref backend.
@@ -63,8 +61,6 @@ class GitS3Config(BaseModel):
         "false uses virtual-host style (TOS and some S3-compatible services).",
     )
 
-    model_config = {"extra": "forbid"}
-
 
 class GitConfig(BaseModel):
     """Git multi-version management configuration."""
@@ -100,8 +96,6 @@ class GitConfig(BaseModel):
         default=None,
         description="Configuration for the 's3' backend. Required when backend='s3'.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _validate_backend(self) -> "GitConfig":

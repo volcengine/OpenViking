@@ -19,7 +19,7 @@ from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.exceptions import AuthenticationFailedError, ConfigError
 from openviking.crypto.providers import VaultProvider, create_root_key_provider
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -319,7 +319,7 @@ class TestVikingFSEncryptionWithVault:
         await svc.initialize()
 
         # Create APIKeyManager using VikingFS to ensure system files are encrypted
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
+        api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()
 
         yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}

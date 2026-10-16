@@ -13,7 +13,6 @@ pub async fn add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: Option<f64>,
     strict: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
@@ -24,6 +23,7 @@ pub async fn add_resource(
     resource_args: Option<Map<String, Value>>,
     tags: Vec<String>,
     tag_mode: String,
+    acl: Option<serde_json::Value>,
     format: OutputFormat,
     compact: bool,
     show_progress: bool,
@@ -39,7 +39,6 @@ pub async fn add_resource(
             &reason,
             &instruction,
             wait,
-            timeout,
             strict,
             ignore_dirs,
             include,
@@ -50,6 +49,7 @@ pub async fn add_resource(
             resource_args,
             tags,
             tag_mode,
+            acl,
             show_progress,
             verbose,
         )
@@ -57,32 +57,6 @@ pub async fn add_resource(
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Resource is being processed in the background.");
-        eprintln!(
-            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
-        );
-    }
-
-    output_success(&result, format, compact);
-    Ok(())
-}
-
-pub async fn add_skill(
-    client: &HttpClient,
-    data: &str,
-    wait: bool,
-    timeout: Option<f64>,
-    parent: Option<&str>,
-    show_progress: bool,
-    verbose: bool,
-    format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let result = client
-        .add_skill(data, wait, timeout, show_progress, verbose, None, parent)
-        .await?;
-
-    if !wait && matches!(format, OutputFormat::Table) {
-        eprintln!("Note: Skill is being processed in the background.");
         eprintln!(
             "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
         );

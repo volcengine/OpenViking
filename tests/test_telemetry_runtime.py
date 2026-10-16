@@ -7,6 +7,7 @@ import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -21,7 +22,8 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.storage.collection_schemas import TextEmbeddingHandler
-from openviking.storage.queuefs.semantic_dag import DagStats
+from openviking.storage.queuefs.process_result import ProcessOutcome
+from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import (
@@ -728,44 +730,53 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
     telemetry = MemoryOperationTelemetry(operation="resources.add_resource", enabled=True)
     register_telemetry(telemetry)
 
-    processor = SemanticProcessor()
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    processor = SemanticProcessor(vlm_resolver=resolver)
 
     class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
         async def ls(self, uri, ctx=None):
             return []
 
-    class _FakeDagExecutor:
+    class _FakeTreeExecutor:
+        stale = False
+
         def __init__(self, **kwargs):
-            pass
+            assert kwargs["processor"]._vlm_resolver is resolver
+            assert kwargs["ctx"].account_id == "default"
 
         async def run(self, root_uri):
             assert get_current_telemetry() is telemetry
             get_current_telemetry().record_token_usage("llm", 11, 7)
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
-        lambda **kwargs: _FakeDagExecutor(**kwargs),
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        lambda **kwargs: _FakeTreeExecutor(**kwargs),
     )
 
     try:
-        await processor.on_dequeue(
+        outcome = await processor.on_dequeue(
             SemanticMsg(
                 uri="viking://resources/demo",
                 context_type="resource",
                 recursive=False,
+                propagate_to_parent=False,
                 telemetry_id=telemetry.telemetry_id,
             ).to_dict()
         )
     finally:
         unregister_telemetry(telemetry.telemetry_id)
 
+    assert outcome.outcome is ProcessOutcome.SUCCESS
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["total"] == 18
@@ -775,16 +786,23 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
 
 @pytest.mark.asyncio
 async def test_semantic_processor_binds_metric_account_context(monkeypatch):
-    processor = SemanticProcessor()
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    processor = SemanticProcessor(vlm_resolver=resolver)
     ran = {"value": False}
 
     class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
         async def ls(self, uri, ctx=None):
             return []
 
-    class _FakeDagExecutor:
+    class _FakeTreeExecutor:
+        stale = False
+
         def __init__(self, **kwargs):
-            pass
+            assert kwargs["processor"]._vlm_resolver is resolver
+            assert kwargs["ctx"].account_id == "acct-semantic"
 
         async def run(self, root_uri):
             ran["value"] = True
@@ -793,25 +811,27 @@ async def test_semantic_processor_binds_metric_account_context(monkeypatch):
             assert root_context.account_id == "acct-semantic"
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
-        lambda **kwargs: _FakeDagExecutor(**kwargs),
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        lambda **kwargs: _FakeTreeExecutor(**kwargs),
     )
 
-    await processor.on_dequeue(
+    outcome = await processor.on_dequeue(
         SemanticMsg(
             uri="viking://resources/demo",
             context_type="resource",
             recursive=False,
+            propagate_to_parent=False,
             account_id="acct-semantic",
         ).to_dict()
     )
+    assert outcome.outcome is ProcessOutcome.SUCCESS
     assert ran["value"] is True
 
 
@@ -833,32 +853,21 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
             return self.embed(text, is_query=is_query)
 
-    class _DummyConfig:
-        def __init__(self):
-            self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
-            self.embedding = SimpleNamespace(
-                dimension=2,
-                get_embedder=lambda: _TelemetryAwareEmbedder(),
-                circuit_breaker=SimpleNamespace(
-                    failure_threshold=5,
-                    reset_timeout=300.0,
-                    max_reset_timeout=300.0,
-                ),
-            )
-
     class _DummyVikingDB:
         is_closing = False
         uses_content_field = False
 
+        async def account_uses_content_field(self, account_id):
+            assert account_id == "default"
+            return False
+
         async def upsert(self, _data, *, ctx=None, options=None):
             return "rec-1"
 
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(),
+    provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
+    handler = TextEmbeddingHandler(
+        _DummyVikingDB(), embedding_provider=provider,
     )
-
-    handler = TextEmbeddingHandler(_DummyVikingDB())
     payload = {
         "data": json.dumps(
             {
@@ -876,10 +885,12 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     }
 
     try:
-        await handler.on_dequeue(payload)
+        outcome = await handler.on_dequeue(payload)
     finally:
         unregister_telemetry(telemetry.telemetry_id)
 
+    assert outcome.outcome is ProcessOutcome.SUCCESS
+    provider.bind.assert_called_once_with("default")
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["embedding"] == {"total": 9}

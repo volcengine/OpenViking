@@ -1,6 +1,7 @@
 # 系统状态
 
-OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多写后端同步状态。组件级观测和 Prometheus 指标分别提供独立文档。
+OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和后台处理状态。
+组件级观测和 Prometheus 指标分别提供独立文档。
 
 ## API 参考
 
@@ -8,11 +9,15 @@ OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多�
 
 #### 1. API 实现介绍
 
-基础健康检查端点，无需认证。返回服务版本号和健康状态。如果提供认证信息，还会返回认证模式和身份信息。
+基础存活检查，无需认证。返回版本号、健康状态和认证模式。提供凭据后会尝试解析身份，成功时补充身份字段；凭据无效时返回认证错误。
+
+Trusted 模式下，完整的 `X-OpenViking-Account` 和 `X-OpenViking-User` 请求头会触发身份解析，
+必须携带匹配的 root API key，localhost 也不例外。Trusted 模式的 `root_api_key_required`
+始终为 `true`，解析得到的 `role` 表示调用者权限。匿名健康探测返回基础存活信息，不包含身份字段。
 
 **代码入口**:
 - `openviking/server/routers/system.py:health_check` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.health` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -57,7 +62,7 @@ curl -G http://localhost:1933/health \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
@@ -130,7 +135,7 @@ ov --profile health
 
 #### 1. API 实现介绍
 
-部署环境使用的就绪探针。检查 AGFS、VectorDB、APIKeyManager 和 Ollama（如配置）的状态。当所有配置的子系统都准备完成时返回 200，否则返回 503。无需认证（专为 Kubernetes 探针设计）。
+部署环境使用的就绪探针。检查 AGFS、VectorDB、APIKeyManager、Embedding 和 Ollama（如配置）的状态。当所有配置的子系统都准备完成时返回 200，否则返回 503。无需认证（专为 Kubernetes 探针设计）。
 
 **代码入口**:
 - `openviking/server/routers/system.py:readiness_check` - HTTP 路由
@@ -140,9 +145,10 @@ ov --profile health
 无参数。
 
 **检查项说明**:
-- `agfs`: Viking 文件系统是否可访问
+- `agfs`: 包含文件系统访问和主备同步状态的嵌套检查结果
 - `vectordb`: 向量数据库是否健康
 - `api_key_manager`: API 密钥管理器是否已加载
+- `embedding`: 启动时 Embedding provider 是否已初始化；不发起模型请求
 - `ollama`: Ollama 服务是否可达（仅当配置时）
 
 #### 3. 使用示例
@@ -163,9 +169,10 @@ curl -X GET http://localhost:1933/ready
 {
   "status": "ready",
   "checks": {
-    "agfs": "ok",
+    "agfs": {"status": "ok", "checks": {"filesystem": "ok", "multiwrite_sync": "not_supported"}},
     "vectordb": "ok",
     "api_key_manager": "ok",
+    "embedding": "ok",
     "ollama": "not_configured"
   }
 }
@@ -181,7 +188,6 @@ curl -X GET http://localhost:1933/ready
 
 **代码入口**:
 - `openviking/server/routers/system.py:system_status` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -201,18 +207,7 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
-**Python SDK**
-
-```python
-status = client.get_status()
-print(status)
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getStatus());
-```
+公开 SDK 的 `get_status()` / `getStatus()` / `GetStatus()` 返回 Observer 汇总状态，不是本接口的身份信息。访问本接口使用 HTTP；这些 SDK 方法见[运行观测](18-observer.md)。
 
 **CLI**
 
@@ -228,8 +223,7 @@ ov system status
   "result": {
     "initialized": true,
     "user": "alice"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -245,7 +239,7 @@ ov system status
 
 **代码入口**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.check_consistency` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs:consistency` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -306,11 +300,11 @@ ov system consistency viking://resources/my-project
 {
   "status": "ok",
   "result": {
-	    "ok": false,
-	    "expected_count": 3,
-	    "missing_record_count": 1,
-	    "missing_records_truncated": false,
-	    "missing_records": [
+    "ok": false,
+    "expected_count": 3,
+    "missing_record_count": 1,
+    "missing_records_truncated": false,
+    "missing_records": [
       {
         "uri": "viking://resources/my-project/README.md",
         "path": "README.md",
@@ -328,20 +322,18 @@ ov system consistency viking://resources/my-project
 
 #### 1. API 实现介绍
 
-等待所有异步处理（embedding、语义生成）完成。该方法会阻塞直到所有队列中的任务处理完毕或超时。
+等待处理队列排空。该检查不限定为调用方刚提交的请求，也不覆盖所有异步 API。需检查返回的 `error_count` 和 `errors`，队列排空不代表所有操作成功。确认某次导入或 commit 的结果，应查询它的[任务 ID](17-tasks.md)。
 
 **代码入口**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.wait_processed` - SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 
 **参数**
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| timeout | float | 否 | None | 超时时间（秒），None 表示无限等待 |
+无参数。HTTP 请求超时使用客户端配置。
 
 #### 3. 使用示例
 
@@ -354,35 +346,27 @@ POST /api/v1/system/wait
 ```bash
 curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "timeout": 60.0
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **Python SDK**
 
 ```python
-# 添加资源
-client.add_resource(path="./docs/")
-
-# 等待所有处理完成
-status = client.wait_processed(timeout=60.0)
-print(f"Processing complete: {status}")
+# 等待当前处理队列排空
+status = client.wait_processed()
+print(status)  # 检查各队列的 error_count 和 errors
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.waitProcessed(60));
+console.log(await client.waitProcessed());
 ```
 
 **Go SDK**
 
 ```go
-status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(60),
-})
+status, err := client.WaitProcessed(ctx)
 if err != nil {
     return err
 }
@@ -392,7 +376,7 @@ fmt.Println(status)
 **CLI**
 
 ```bash
-ov system wait --timeout 60
+ov system wait
 ```
 
 **响应示例**
@@ -413,103 +397,9 @@ ov system wait --timeout 60
       "error_count": 0,
       "errors": []
     }
-  },
-  "time": 0.1
-}
-```
-
----
-
-### backend_sync_status()
-
-查询指定 Viking URI 子树在多写存储后端之间的同步状态。该接口要求 ROOT 或 ADMIN 权限。
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-status
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-也可以使用 URI 路径形式：
-
-```http
-GET /api/v1/system/sync/{sync_path}
-```
-
-**CLI**
-
-```bash
-ov system backend sync-status viking://resources
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "entry_count": 12
   }
 }
 ```
-
-`result` 由当前文件系统后端返回；`path` 标识查询范围，`entry_count` 表示该范围内的同步记录数。具体后端可能附加待同步、失败记录等诊断字段。
-
-### backend_sync_retry()
-
-重试指定 URI 子树中尚未完成的多写后端同步工作。该接口要求 ROOT 或 ADMIN 权限。
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-retry
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-URI 路径形式为：
-
-```http
-POST /api/v1/system/sync/{sync_path}/retry
-```
-
-**CLI**
-
-```bash
-ov system backend sync-retry viking://resources
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "retried": 2,
-    "failed": 0
-  }
-}
-```
-
-`retried` 是本次重新调度的记录数，`failed` 是重试调度失败的记录数；具体后端可能附加额外诊断字段。
-
-公共 Python、TypeScript 和 Go SDK 当前没有多写后端同步方法，因此以上小节只展示 HTTP 和 CLI Tab。
 
 ---
 

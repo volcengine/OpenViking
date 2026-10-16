@@ -41,11 +41,10 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             captured["storage"] = storage
             captured["embedder"] = embedder
             captured["rerank_config"] = rerank_config
-            captured["retrieval_config"] = retrieval_config
 
         async def retrieve(
             self,
@@ -56,6 +55,9 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            events_time_decay_protection=None,
+            request_now=None,
+            search_type="semantic",
         ):
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
@@ -64,6 +66,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             captured["score_threshold"] = score_threshold
             captured["scope_dsl"] = scope_dsl
             captured["level"] = level
+            captured["search_type"] = search_type
             return QueryResult(
                 query=typed_query,
                 matched_contexts=[
@@ -95,7 +98,6 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["storage"] is fs.vector_store
     assert captured["embedder"] is fs.query_embedder
     assert captured["rerank_config"] is None
-    assert captured["retrieval_config"] is None
     assert captured["typed_query"].query == "guide"
     assert captured["typed_query"].context_type is None
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
@@ -105,6 +107,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["score_threshold"] == 0.2
     assert captured["scope_dsl"] == {"category": "doc"}
     assert captured["level"] is None
+    assert captured["search_type"] == "semantic"
     fs._ensure_access.assert_called_once_with("viking://resources/docs", request_ctx)
 
 
@@ -114,7 +117,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             pass
 
         async def retrieve(
@@ -126,6 +129,9 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            events_time_decay_protection=None,
+            request_now=None,
+            search_type="semantic",
         ):
             captured["typed_query"] = typed_query
             captured["mode"] = mode
@@ -150,6 +156,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
         "",
         target_uri="viking://resources",
         image_url="data:image/png;base64,abc",
+        ctx=_ctx(),
     )
 
     assert result.total == 1
@@ -169,7 +176,7 @@ async def test_find_uses_quick_mode_with_rerank_config(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+        def __init__(self, storage, embedder, rerank_config):
             captured["rerank_config"] = rerank_config
 
         async def retrieve(self, typed_query, **kwargs):
@@ -188,6 +195,7 @@ async def test_find_uses_quick_mode_with_rerank_config(monkeypatch) -> None:
     result = await fs.find(
         "guide",
         target_uri="viking://resources/docs",
+        ctx=_ctx(),
     )
 
     assert result.total == 0

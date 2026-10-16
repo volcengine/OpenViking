@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
+
 
 def _make_mock_embedding(values):
     emb = MagicMock()
@@ -130,7 +132,7 @@ class TestGeminiDenseEmbedderEmbed:
         assert kwargs["config"].task_type == "RETRIEVAL_QUERY"
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_raises_runtime_error_on_api_error(self, mock_client_class):
+    def test_embed_raises_model_error_on_api_error(self, mock_client_class):
         from google.genai.errors import APIError
 
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -140,8 +142,39 @@ class TestGeminiDenseEmbedderEmbed:
         mock_response.status_code = 401
         mock_client.models.embed_content.side_effect = APIError(401, {}, response=mock_response)
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        with pytest.raises(RuntimeError, match="Gemini embedding failed"):
+        with pytest.raises(ModelError, match="Gemini embedding failed"):
             embedder.embed("hello")
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    def test_retry_embedder_retries_transient_429(self, mock_client_class, monkeypatch):
+        from google.genai.errors import APIError
+
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        from openviking.models.embedder.retry_embedder import RetryEmbedder
+
+        monkeypatch.setattr("openviking.utils.model_retry.time.sleep", lambda _delay: None)
+        mock_client = mock_client_class.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_client.models.embed_content.side_effect = [
+            APIError(
+                429,
+                {"error": {"message": "Rate limit exceeded. Please retry."}},
+                response=mock_response,
+            ),
+            _make_mock_result([[0.1, 0.2, 0.3]]),
+        ]
+        inner = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview",
+            api_key="key",
+            dimension=3,
+            config={"max_retries": 1},
+        )
+
+        result = RetryEmbedder(inner).embed("hello")
+
+        assert result.dense_vector == [0.1, 0.2, 0.3]
+        assert mock_client.models.embed_content.call_count == 2
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_embed_empty_string_returns_zero_vector(self, mock_client_class):
@@ -193,28 +226,32 @@ class TestGeminiValidation:
 
 class TestGeminiErrorMessages:
     @pytest.mark.parametrize(
-        "code,match",
+        "reason,expected_kind",
         [
-            (401, "Invalid API key"),
-            (403, "Permission denied"),
-            (404, "Model not found"),
-            (429, "Quota exceeded"),
-            (500, "service error"),
+            ("QUOTA_EXCEEDED", ModelErrorKind.QUOTA_EXHAUSTED),
+            ("RATE_LIMIT_EXCEEDED", ModelErrorKind.RATE_LIMIT_ERROR),
+            (None, ModelErrorKind.UNKNOWN),
         ],
     )
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_error_code_hint(self, mock_client, code, match):
-        from google.genai.errors import APIError
+    def test_resource_exhausted_uses_structured_reason(self, mock_client, reason, expected_kind):
+        from google.genai.errors import ClientError
 
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         mock = mock_client.return_value
-        mock_resp = MagicMock()
-        mock_resp.status_code = code
-        mock.models.embed_content.side_effect = APIError(code, {}, response=mock_resp)
+        error = ClientError(
+            429,
+            {"error": {"details": [] if reason is None else [{"reason": reason}]}},
+        )
+        mock.models.embed_content.side_effect = error
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="k")
-        with pytest.raises(RuntimeError, match=match):
+        with pytest.raises(ModelError, match="Resource exhausted") as raised:
             embedder.embed("hello")
+
+        assert raised.value.kind is expected_kind
+        assert raised.value.status_code == 429
+        assert raised.value.__cause__.__cause__ is error
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_error_message_includes_http_code(self, mock_client):
@@ -227,7 +264,7 @@ class TestGeminiErrorMessages:
         mock_resp.status_code = 404
         mock.models.embed_content.side_effect = APIError(404, {}, response=mock_resp)
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="k")
-        with pytest.raises(RuntimeError, match="HTTP 404"):
+        with pytest.raises(ModelError, match="HTTP 404"):
             embedder.embed("hello")
 
 

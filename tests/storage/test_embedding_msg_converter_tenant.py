@@ -1,12 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tenant-field backfill tests for EmbeddingMsgConverter."""
+"""Explicit account identity and URI owner tests for EmbeddingMsgConverter."""
 
 import pytest
 
 from openviking.core.context import Context, Vectorize
+from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -25,14 +27,13 @@ from openviking_cli.session.user_id import UserIdentifier
         ),
     ],
 )
-def test_embedding_msg_converter_backfills_account_and_owner_fields(
+def test_embedding_msg_converter_preserves_account_and_backfills_owner_fields(
     uri, expected_uri, expected_owner_user_id
 ):
     user = UserIdentifier("acme", "alice")
     context = Context(uri=uri, abstract="hello", user=user)
 
-    # Simulate legacy producer that forgot tenant fields.
-    context.account_id = ""
+    # URI ownership may be derived, but account identity must remain explicit.
     context.owner_user_id = None
 
     msg = EmbeddingMsgConverter.from_context(context)
@@ -45,6 +46,7 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
         expected_owner_user_id(user) if callable(expected_owner_user_id) else expected_owner_user_id
     )
     assert msg.context_data["owner_user_id"] == expected_user
+    assert msg.action is IndexAction.MERGE
 
 
 def test_embedding_msg_converter_keeps_only_embedding_input():
@@ -56,3 +58,15 @@ def test_embedding_msg_converter_keeps_only_embedding_input():
     assert msg is not None
     assert msg.message == "bounded embedding text"
     assert "content" not in msg.context_data
+    assert msg.action is IndexAction.MERGE
+
+
+def test_embedding_msg_converter_prefers_explicit_telemetry_id():
+    context = Context(uri="viking://resources/doc.md", abstract="summary")
+    ambient = OperationTelemetry(operation="ambient", enabled=False)
+
+    with bind_telemetry(ambient):
+        msg = EmbeddingMsgConverter.from_context(context, telemetry_id="request-telemetry-id")
+
+    assert msg is not None
+    assert msg.telemetry_id == "request-telemetry-id"

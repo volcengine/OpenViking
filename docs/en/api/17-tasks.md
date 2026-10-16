@@ -2,6 +2,8 @@
 
 The Task API tracks asynchronous resource imports, session commits, reindexing, snapshot restores, and similar operations.
 
+Submit an operation, save its `task_id`, and check status with separate requests. Receiving a task ID means the task was submitted; only `completed` means processing succeeded. `pending`, `running`, and `cancelling` are not terminal states. Stopping polling does not cancel the background task.
+
 ## API Reference
 
 ### get_task()
@@ -30,6 +32,7 @@ Task records are persisted in AGFS and can be queried after server restart, subj
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | task_id | str | Yes | - | Task ID returned by a background API |
+| include_events | bool | No | false | Include persisted execution events in the HTTP response |
 
 #### 3. Usage Examples
 
@@ -47,14 +50,29 @@ curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+import time
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+from openviking_sdk import SyncHTTPClient
 
-task = await client.get_task(task_id="uuid-xxx")
-print(f"Status: {task['status']}")
-await client.close()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
+
+try:
+    submitted = client.add_resource("https://example.com/guide.md")
+    task_id = submitted["task_id"]
+    print(f"Import task: {task_id}")
+    while True:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} is no longer available")
+        if task["status"] == "completed":
+            break
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
+        time.sleep(2)
+    print(task["result"])
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -98,6 +116,48 @@ ov task status uuid-xxx
 
 `stage` is nullable. Git repository resource import tasks may report `queued`, `fetching`, `parsing`, `finalizing`, or `processing_queue`; other task types may leave it as `null`. Live queue counters are intentionally not part of task status; use observer queue APIs for live counts, or read `result.queue_status` after completion.
 
+**Recorded execution events (HTTP)**
+
+Request `GET /api/v1/tasks/{task_id}?include_events=true` to also receive `result.execution_events`. The default detail response and task lists omit this field. Events use the same authorization and retention policy as the task record.
+
+```json
+{
+  "items": [
+    {
+      "seq": 1,
+      "recorded_at": "2026-09-09T01:00:00.123456+00:00",
+      "kind": "created",
+      "status": "pending",
+      "stage": null,
+      "operation": null,
+      "error": null
+    }
+  ],
+  "dropped_count": 0,
+  "started_mid_task": false
+}
+```
+
+| Kind | Recorded fact |
+|------|---------------|
+| `created` | TaskTracker created the task record |
+| `status_changed` | TaskTracker accepted a new status, including cancellation and terminal states |
+| `stage_changed` | An execution path reported a different stage while the task was active |
+| `error_recorded` | TaskTracker accepted the task's first sanitized error |
+| `waiting_for_descendants` | The wait path observed unfinished owned queue work, excluding its own work ID |
+
+`recorded_at` is the UTC time TaskTracker recorded the event, not browser polling time or necessarily when an underlying exception occurred. Events and task state are written together before publication. `seq` orders events within this task even when timestamps coincide. `stage` is the last reported task stage; parallel work can report errors from other stages. `operation`, when present, identifies the reporting work item. Errors use the existing sanitization and length limit; this history is not the complete component log or Python traceback.
+
+History retains at most 64 events and 32 KiB of serialized event data. Older entries are removed first, `dropped_count` counts removed entries, and retained sequence numbers are not reset. Events expire with the task. Legacy tasks return `execution_events: null`; if an active legacy task later emits an event, `started_mid_task` is true. No earlier events are reconstructed. An older server can omit the field even when requested. Studio explains these cases and retains task metadata, results and errors.
+
+::: details Extending events and downgrade compatibility
+
+To instrument another execution point, register its kind in `openviking/service/task_events.py`, add Studio translations, and call `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`. This internal API records a fact without changing status or stage; it accepts bounded operation identifiers, not arbitrary log payloads. Existing lifecycle methods automatically record their accepted transitions.
+
+Persisted task files now contain `execution_events`. Rolling back requires a version that preserves unknown task fields (commit `a5166386` or later); older readers may reject these files. Rolling back also stops event reporting, so history for tasks active during a downgrade may be incomplete.
+
+:::
+
 **Response Example (completed)**
 
 ```json
@@ -117,7 +177,6 @@ ov task status uuid-xxx
         "entities": 1,
         "cases": 1
       },
-      "active_count_updated": 2,
       "token_usage": {
         "llm": {
           "prompt_tokens": 5200,
@@ -150,6 +209,8 @@ Repeated cancellation of a task in `cancelling` or `cancelled` is idempotent.
 
 **Supported Task Types:**
 - `add_resource`
+- `add_skill`
+- `compile`
 - `session_commit`
 - `admin_reindex`
 - `snapshot_restore_reindex`
@@ -172,7 +233,7 @@ Only the current user who owns the task can cancel it. ROOT identities cannot ca
 **Python SDK**
 
 ```python
-task = await client.cancel_task(task_id="uuid-xxx")
+task = client.cancel_task(task_id="uuid-xxx")
 print(task["status"])
 ```
 
@@ -256,7 +317,12 @@ List background tasks visible to the current caller, supporting filtering by typ
 | status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | include_internal | bool | No | false | Include internal child tasks created by Connector imports |
-| limit | int | No | 50 | Maximum number of task records to return |
+| limit | int | No | 50 | Maximum records per response, 1–200 |
+| pagination | str | No | None | HTTP-only; `cursor` returns a paginated result object |
+| cursor | str | No | None | HTTP-only; continuation token from `next_cursor`, used with `pagination=cursor` |
+| q | str | No | None | HTTP-only, cursor mode; case-insensitive substring match on task ID and Compile request `skill`, `to`, and `from` |
+
+With `pagination=cursor`, `result` contains `items`, `has_more`, and `next_cursor` instead of an array. Pass `next_cursor` unchanged on the next request and keep the same filters and identity. Without cursor mode, `q` and `cursor` do not affect the result.
 
 By default, only user-visible tasks are returned. Pass `include_internal=true` when diagnosing a Connector import to include its internal `add_resource` child tasks.
 
@@ -276,19 +342,19 @@ curl -X GET "http://localhost:1933/api/v1/tasks?task_type=session_commit&status=
 **Python SDK**
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+from openviking_sdk import SyncHTTPClient
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
 
-tasks = await client.list_tasks(
+tasks = client.list_tasks(
     task_type="session_commit",
     status="running",
     limit=20,
 )
 for task in tasks:
     print(task["task_id"], task["status"])
-await client.close()
+client.close()
 ```
 
 **TypeScript SDK**

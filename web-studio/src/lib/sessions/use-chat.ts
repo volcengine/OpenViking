@@ -15,6 +15,7 @@ import { addMessage, sendChatStream, serializeParts } from './api'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
 import { createBrowserId } from '../browser-crypto'
+import { ovClient } from '#/lib/ov-client'
 
 function createUserMessage(content: string): Message {
   return {
@@ -69,6 +70,8 @@ function clonePart(part: MessagePart): MessagePart {
       } satisfies ToolPart
     case 'tool_result':
       return { ...part } satisfies ToolResultPart
+    case 'image_url':
+      return { ...part, image_url: { ...part.image_url } }
     case 'context':
       return { ...part } satisfies ContextPart
   }
@@ -185,6 +188,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const pendingInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   messagesRef.current = messages
 
+  const ownerRef = useRef(0)
+
+  // Cancel work when its session/identity owner changes or unmounts.
+  useEffect(() => {
+    ownerRef.current += 1
+    return () => {
+      ownerRef.current += 1
+      abortRef.current?.abort()
+    }
+  }, [identityScopeKey, sessionId])
+
   // Reset state when sessionId changes
   useEffect(() => {
     abortRef.current?.abort()
@@ -199,7 +213,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setStreamingReasoning('')
     setStreamingParts([])
     setIteration(0)
-  }, [sessionId])
+  }, [identityScopeKey, sessionId])
 
   // Sync initialMessages into state when they load or when switching sessions.
   useEffect(() => {
@@ -257,6 +271,16 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
       const controller = new AbortController()
       abortRef.current = controller
+      const owner = ownerRef.current
+      const connectionSnapshot = JSON.stringify([
+        ovClient.getOptions(),
+        ovClient.getConnection(),
+      ])
+      const isCurrent = () =>
+        owner === ownerRef.current &&
+        connectionSnapshot ===
+          JSON.stringify([ovClient.getOptions(), ovClient.getConnection()])
+      const canPersist = () => isCurrent() && !controller.signal.aborted
 
       // Accumulators (mutable for performance during streaming)
       let accContent = ''
@@ -503,6 +527,10 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
         }
 
+        if (!isCurrent()) return
+        if (controller.signal.aborted)
+          throw new DOMException('Aborted', 'AbortError')
+
         // Build assistant message and finalize
         finishCurrentReasoning()
         const assistantMsg = buildAssistantMessage(
@@ -518,10 +546,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         setMessages((prev) => [...prev, assistantMsg])
 
         // Persist to openviking session (bot doesn't do this automatically)
-        if (persistMessages) {
+        if (persistMessages && canPersist()) {
           try {
             // Sequential: user message must precede assistant message
             await addMessage(sessionId, 'user', displayMessage)
+            if (!canPersist()) return
             await addMessage(
               sessionId,
               'assistant',
@@ -534,7 +563,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
 
         // Generate session title on first exchange
-        if (sessionId && isFirstExchange) {
+        if (isCurrent() && sessionId && isFirstExchange) {
           // Immediate: use first user message as temp title
           setSessionTitle(
             identityScopeKey,
@@ -543,6 +572,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           )
         }
       } catch (err) {
+        if (!isCurrent()) return
         if (controller.signal.aborted) {
           // Aborted intentionally — still finalize any partial content
           if (accContent || accParts.length > 0) {
@@ -570,7 +600,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           setStatus('error')
         }
       } finally {
-        abortRef.current = null
+        if (abortRef.current === controller) abortRef.current = null
       }
     },
     [identityScopeKey, persistMessages, sessionId, status],

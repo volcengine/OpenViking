@@ -8,7 +8,7 @@ Use it when you want to:
 - inspect token or retrieval behavior
 - capture structured execution data in your own logs or observability pipeline
 
-For the broader observability entry points, including health checks, `ov tui`, and `OpenViking Console`, see [Observability & Diagnostics](05-observability.md).
+For the broader observability entry points, including health checks, `ov tui`, and `Web Studio`, see [Observability & Diagnostics](05-observability.md).
 
 ## How it works
 
@@ -50,7 +50,7 @@ Notes:
 - `telemetry.id` is an opaque correlation id
 - `telemetry.summary` is the structured payload intended for users
 - summary groups appear only when the operation produced them
-- numeric `0` values are omitted from the response
+- numeric zero values in optional groups are generally omitted; the cuVS memory estimates retain zero values
 
 ## Supported operations
 
@@ -66,10 +66,17 @@ Operation telemetry is currently available on these endpoints:
 - `POST /api/v1/sessions`
 - `POST /api/v1/sessions/{session_id}/messages`
 - `POST /api/v1/sessions/{session_id}/commit`
+- `POST /api/v1/sessions/{session_id}/messages/batch`
+- `PATCH /api/v1/sessions/{session_id}/config`
+- `POST /api/v1/content/write`
+- `POST /api/v1/content/batch-write`
+- `POST /api/v1/content/set_tags`
+- `POST /api/v1/skills/find`
+- `PUT /api/v1/skills/{skill_name}`
 
 ### Python SDK
 
-The same telemetry model is available from the Python clients for:
+The Python clients can request telemetry for the following operations. High-level return values do not necessarily expose the top-level HTTP telemetry object; see the Python example below:
 
 - `add_resource(...)`
 - `add_skill(...)`
@@ -144,7 +151,7 @@ If a group does not apply to the operation, it is omitted.
 
 ## Field reference
 
-Only fields that are actually produced by an operation are returned. Missing groups should be treated as "not applicable" rather than as zero.
+Only fields that are actually produced by an operation are returned. Missing groups may be inapplicable, uncollected, or pruned because their numeric values are zero. Do not interpret absence as a measured zero or as proof that a stage ran.
 
 ### Top-level telemetry fields
 
@@ -227,14 +234,21 @@ This group appears on resource ingestion operations such as `resources.add_resou
 
 | Field | Meaning |
 | --- | --- |
-| `summary.resource.request.duration_ms` | Total request-side duration for the add-resource flow |
-| `summary.resource.process.duration_ms` | Duration of the main resource-processing flow |
-| `summary.resource.process.parse.duration_ms` | Time spent parsing the resource |
-| `summary.resource.process.parse.warnings_count` | Number of parse warnings |
-| `summary.resource.process.finalize.duration_ms` | Time spent finalizing the resource tree |
-| `summary.resource.process.summarize.duration_ms` | Time spent on summarize/vectorize processing |
-| `summary.resource.wait.duration_ms` | Time spent waiting for downstream processing when `wait=true` |
-| `summary.resource.watch.duration_ms` | Time spent creating, updating, or removing watch tasks |
+| `summary.resource.total.duration_ms` | Total duration of the add-resource operation |
+| `summary.resource.source_execute.duration_ms` | Time spent executing the source operation |
+| `summary.resource.source_prepare.duration_ms` | Time spent preparing a durable source |
+| `summary.resource.parse_artifact.duration_ms` | Time spent producing the parser artifact |
+| `summary.resource.target_resolve.duration_ms` | Time spent resolving the final resource target |
+| `summary.resource.update_plan.duration_ms` | Total time spent building the incremental update plan |
+| `summary.resource.update_plan.artifact_inventory.duration_ms` | Time spent scanning and normalizing the parser artifact |
+| `summary.resource.update_plan.rnfv_snapshot.duration_ms` | Time spent reading the R/N/F/V snapshot |
+| `summary.resource.update_plan.diff_and_compile.duration_ms` | Time spent resolving the diff and compiling actions |
+| `summary.resource.content_commit.duration_ms` | Time spent applying content actions to the formal tree |
+| `summary.resource.derived_enqueue.duration_ms` | Time spent enqueueing semantic and index work |
+| `summary.resource.semantic.queue_wait.duration_ms` | Time semantic work spent waiting in QueueFS |
+| `summary.resource.semantic.execute.duration_ms` | Time spent executing semantic work |
+| `summary.resource.embedding.queue_wait.duration_ms` | Time embedding work spent waiting in QueueFS |
+| `summary.resource.embedding.execute.duration_ms` | Time spent executing embedding work |
 | `summary.resource.flags.wait` | Whether the request used `wait=true` |
 | `summary.resource.flags.build_index` | Whether the request enabled `build_index` |
 | `summary.resource.flags.summarize` | Whether the request explicitly enabled `summarize` |
@@ -247,33 +261,37 @@ This group appears when OpenViking waits for queue-backed work to complete.
 | Field | Meaning |
 | --- | --- |
 | `summary.queue.semantic.processed` | Number of semantic-queue messages processed |
+| `summary.queue.semantic.requeue_count` | Number of semantic messages re-enqueued for retry |
 | `summary.queue.semantic.error_count` | Number of semantic-queue errors |
 | `summary.queue.embedding.processed` | Number of embedding-queue messages processed |
+| `summary.queue.embedding.requeue_count` | Number of embedding messages re-enqueued for retry |
 | `summary.queue.embedding.error_count` | Number of embedding-queue errors |
 
 ### `summary.semantic_nodes`
 
 | Field | Meaning |
 | --- | --- |
-| `summary.semantic_nodes.total` | Total DAG or semantic-node count |
+| `summary.semantic_nodes.total` | Total semantic-tree node count |
 | `summary.semantic_nodes.done` | Number of completed nodes |
 | `summary.semantic_nodes.pending` | Number of pending nodes |
 | `summary.semantic_nodes.running` | Number of nodes still running |
 
 ### `summary.memory`
 
-This group appears on memory-extraction flows such as `session.commit`.
+This group describes collected memory-extraction metrics. The current commit response covers the synchronous archive/submission phase; background extraction can finish later. Legacy stage names below appear only if a code path records them; they are not a fixed sequence that every V3 extraction follows.
 
 | Field | Meaning |
 | --- | --- |
 | `summary.memory.extracted` | Final number of memories extracted by the operation |
 | `summary.memory.extract.duration_ms` | Total duration of the memory-extraction flow |
-| `summary.memory.extract.candidates.total` | Total extracted candidates before final actions |
+| `summary.memory.extract.candidates.total` | Current V3 count: newly written URIs plus edited URIs, rather than all proposed candidates |
 | `summary.memory.extract.candidates.standard` | Standard memory candidates |
 | `summary.memory.extract.actions.created` | Number of newly created memories |
 | `summary.memory.extract.actions.merged` | Number of merges into existing memories |
 | `summary.memory.extract.actions.deleted` | Number of deleted old memories |
-| `summary.memory.extract.actions.skipped` | Number of skipped candidates |
+| `summary.memory.extract.actions.skipped` | Number of skipped operations |
+| `summary.memory.extract.actions.failed` | Number of recorded extraction errors |
+| `summary.memory.extract.actions_by_type` | Action counts grouped by memory type |
 | `summary.memory.extract.stages.prepare_inputs_ms` | Time spent preparing extraction inputs |
 | `summary.memory.extract.stages.llm_extract_ms` | Time spent in the LLM extraction call |
 | `summary.memory.extract.stages.normalize_candidates_ms` | Time spent parsing and normalizing candidates |
@@ -324,27 +342,30 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
-    "path": "./docs/readme.md",
-    "reason": "telemetry demo",
+    "path": "https://raw.githubusercontent.com/volcengine/OpenViking/main/README.md",
     "wait": true,
+    "timeout": 120,
+    "reason": "telemetry demo",
     "telemetry": true
   }'
 ```
 
-### Python SDK
+### Python: read the complete HTTP response
+
+The SDK can send `options={"telemetry": True}`, but current high-level methods such as `find()` return only `result`, discarding the top-level telemetry object. Use an HTTP request when your application needs the summary:
 
 ```python
-from openviking_sdk import AsyncHTTPClient
+import httpx
 
-client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-await client.initialize()
-
-result = await client.find(
-    query="memory dedup",
-    options={"telemetry": True},
-)
-print(result["telemetry"]["summary"]["operation"])
-print(result["telemetry"]["summary"]["duration_ms"])
+with httpx.Client(base_url="http://localhost:1933", timeout=30) as client:
+    response = client.post(
+        "/api/v1/search/find",
+        headers={"X-API-Key": "your-user-key"},
+        json={"query": "memory dedup", "limit": 5, "telemetry": True},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    print(payload["telemetry"]["summary"])
 ```
 
 ## Limitations and behavior
@@ -352,8 +373,8 @@ print(result["telemetry"]["summary"]["duration_ms"])
 - OpenViking currently exposes summary-only telemetry to users
 - `{"telemetry": {"events": true}}` is not a supported public request shape
 - event-stream style selection is not part of the public API
-- `session.commit` supports telemetry only when `wait=true`
-- if you call `session.commit` with `wait=false` and request telemetry, the server returns `INVALID_ARGUMENT`
+- Current `session.commit` has no `wait` parameter. Its response telemetry covers archiving/submission, not the eventual completion of background extraction. Poll the returned task ID when present; see [Sessions](../api/05-sessions.md).
+- A resource import with `wait=false` may also finish after response telemetry is returned. Use wait mode when the summary should include processing completed within the request.
 - telemetry shape is stable at the top level, but optional summary groups vary by operation
 
 ## Related docs

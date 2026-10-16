@@ -198,6 +198,19 @@ class IMutiTableStore(ABC):
         """
         yield from self.read_all(table_name)
 
+    def iter_seek_to_end(
+        self, start_key: str, table_name: str
+    ) -> Iterator[Tuple[str, bytes]]:
+        """Lazily iterate a table from ``start_key`` to the end, with a
+        materializing compatibility fallback.
+
+        Store implementations with a cursor or paged range API should override
+        this method.  Keeping the default in terms of ``seek_to_end`` preserves
+        existing third-party and test-store behavior while still exposing the
+        materialization-free contract to callers.
+        """
+        yield from self.seek_to_end(start_key, table_name)
+
     @abstractmethod
     def seek_to_end(self, key: str, table_name: str) -> List[Tuple[str, bytes]]:
         """Retrieve all entries from a starting key to the end of the table.

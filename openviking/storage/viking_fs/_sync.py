@@ -94,9 +94,7 @@ class _SyncMixin:
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
-            entries = await self.ls(
-                dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
-            )
+            entries = await self.ls(dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx)
             for entry in entries:
                 name = entry.get("name", "")
                 if not name or name in [".", ".."]:
@@ -112,11 +110,15 @@ class _SyncMixin:
 
         async def default_is_changed(root_file: str, target_file: str) -> bool:
             try:
-                current_stat = await self.stat(root_file, ctx=ctx)
-                target_stat = await self.stat(target_file, ctx=ctx)
+                current_stat = await self.stat(root_file, ctx=ctx, skip_count=True)
+                target_stat = await self.stat(target_file, ctx=ctx, skip_count=True)
                 current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
                 target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
-                if current_size is not None and target_size is not None and current_size != target_size:
+                if (
+                    current_size is not None
+                    and target_size is not None
+                    and current_size != target_size
+                ):
                     return True
                 current_content = await self.read_file(root_file, ctx=ctx)
                 target_content = await self.read_file(target_file, ctx=ctx)

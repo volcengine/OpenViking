@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
@@ -39,7 +39,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_type_registry import create_default_registry
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import ExtractContext, write_stored_links
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
@@ -86,6 +86,9 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle, VLMResolver
 
 logger = get_logger(__name__)
 
@@ -165,21 +168,29 @@ def _report_extraction_telemetry(result: Any, operations: ResolvedOperations) ->
     types_by_uri = _memory_type_by_uri(operations)
     actions_by_type: dict[str, dict[str, int]] = {}
 
+    def memory_type_for_telemetry(uri: Any) -> str:
+        if memory_type := types_by_uri.get(str(uri)):
+            return str(memory_type)
+        try:
+            return str(MemoryUpdater.memory_type_from_uri(str(uri)) or "unknown")
+        except ValueError:
+            return "unknown"
+
     def add(memory_type: Any, action: str) -> None:
         normalized_type = str(memory_type or "unknown")
         type_actions = actions_by_type.setdefault(normalized_type, {})
         type_actions[action] = type_actions.get(action, 0) + 1
 
     for uri in result.written_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "created")
+        add(memory_type_for_telemetry(uri), "created")
     for uri in result.edited_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "merged")
+        add(memory_type_for_telemetry(uri), "merged")
     for uri in result.deleted_uris:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "deleted")
+        add(memory_type_for_telemetry(uri), "deleted")
     for operation in result.skipped_operations:
         add(getattr(operation, "memory_type", None), "skipped")
     for uri, _error in result.errors:
-        add(types_by_uri.get(str(uri), MemoryUpdater.memory_type_from_uri(uri)), "failed")
+        add(memory_type_for_telemetry(uri), "failed")
 
     for memory_type, actions in actions_by_type.items():
         for action, value in actions.items():
@@ -245,12 +256,15 @@ class SessionCompressorV3:
         rollout_analyzer: TrajectoryRolloutAnalyzer | Any | None = None,
         streaming_trainer_config: StreamingPolicyTrainerConfig | None = None,
         streaming_memory_updater_config: StreamingMemoryUpdaterConfig | None = None,
+        vlm_resolver: VLMResolver | None = None,
     ):
         self.vikingdb = vikingdb
         self.skill_processor = skill_processor
+        self.vlm_resolver = vlm_resolver
         self.rollout_analyzer = rollout_analyzer or TrajectoryRolloutAnalyzer(
             viking_fs=get_viking_fs(),
             vikingdb=vikingdb,
+            vlm_resolver=vlm_resolver,
         )
         self.streaming_trainer_config = streaming_trainer_config or StreamingPolicyTrainerConfig()
         self.streaming_memory_updater_config = (
@@ -265,9 +279,13 @@ class SessionCompressorV3:
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
         context_provider: Optional[SessionExtractContextProvider] = None,
+        vlm_config: VLMHandle | None = None,
     ) -> ExtractLoop:
-        config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
+        if vlm_config is None:
+            raise RuntimeError(
+                "SessionCompressorV3 requires an explicitly resolved VLM config"
+            )
+        vlm = vlm_config
         viking_fs = get_viking_fs()
         if context_provider is None:
             context_provider = SessionExtractContextProvider(
@@ -277,6 +295,7 @@ class SessionCompressorV3:
                 ctx=ctx,
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
+                vlm_config=vlm_config,
             )
         return ExtractLoop(
             vlm=vlm,
@@ -415,7 +434,7 @@ class SessionCompressorV3:
     ):
         if not agent_evolution_enabled:
             effective_types = (
-                set(create_default_registry().list_names(include_disabled=False))
+                set(get_default_registry().list_names(include_disabled=False))
                 if allowed_memory_types is None
                 else set(allowed_memory_types)
             )
@@ -574,7 +593,7 @@ class SessionCompressorV3:
         archive_uri: str,
     ) -> Any:
         viking_fs = get_viking_fs()
-        registry = create_default_registry()
+        registry = get_default_registry()
         schema = registry.get(_CASES_MEMORY_TYPE)
         if schema is None or not schema.enabled:
             raise RuntimeError("cases memory schema is not available")
@@ -670,13 +689,22 @@ class SessionCompressorV3:
             logger.warning("VikingFS unavailable, skipping v3 memory extraction", exc_info=True)
             return _V3ExtractionResult()
 
-        registry = create_default_registry()
+        from openviking.session.memory.account_templates import resolve_account_memory_registry
+
+        registry = await resolve_account_memory_registry(
+            viking_fs, ctx.account_id, get_default_registry()
+        )
         if allow_self_memory:
             await registry.initialize_memory_files(
                 ctx,
                 allowed_memory_types=allowed_memory_types,
             )
 
+        if self.vlm_resolver is None:
+            raise RuntimeError(
+                "SessionCompressorV3 requires a VLM resolver for account-owned work"
+            )
+        vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -684,6 +712,8 @@ class SessionCompressorV3:
             ctx=ctx,
             viking_fs=viking_fs,
             transaction_handle=None,
+            memory_registry=registry,
+            vlm_config=vlm_config,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -705,6 +735,7 @@ class SessionCompressorV3:
             isolation_handler=isolation_handler,
             transaction_handle=None,
             context_provider=context_provider,
+            vlm_config=vlm_config,
         )
         operations, _tools_used = await orchestrator.run()
         if operations is None:
@@ -723,6 +754,7 @@ class SessionCompressorV3:
             registry=registry,
             vikingdb=self.vikingdb,
             config=self.streaming_memory_updater_config,
+            vlm_resolver=self.vlm_resolver,
         )
         update_result = await updater.submit(
             MemoryUpdateRequest(
@@ -730,6 +762,7 @@ class SessionCompressorV3:
                 messages=list(messages),
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
+                memory_registry=registry,
                 isolation_options={
                     "allowed_memory_types": allowed_memory_types,
                     "allow_self": allow_self_memory,
@@ -881,6 +914,7 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 memory_type=SESSION_SKILL_MEMORY_TYPE,
                 memory_registry=load_skill_extract_registry(),
+                vlm_resolver=self.vlm_resolver,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
@@ -964,10 +998,12 @@ class SessionCompressorV3:
                 rollout_analyzer=self.rollout_analyzer,
                 gradient_estimator=ExperienceGradientEstimator(
                     viking_fs=viking_fs,
+                    vlm_resolver=self.vlm_resolver,
                 ),
                 policy_optimizer=PatchMergePolicyOptimizer(
                     viking_fs=viking_fs,
                     memory_type="experiences",
+                    vlm_resolver=self.vlm_resolver,
                 ),
                 policy_updater=MemoryFilePolicyUpdater(viking_fs=viking_fs, vikingdb=self.vikingdb),
                 context=PipelineContext(
@@ -1017,6 +1053,7 @@ class SessionCompressorV3:
                 if experiences_allowed:
                     exp_gradients = await ExperienceGradientEstimator(
                         viking_fs=viking_fs,
+                        vlm_resolver=self.vlm_resolver,
                     ).estimate(analysis, exp_trainer.policy_set, gradient_context)
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,
@@ -2014,7 +2051,7 @@ async def _render_case_links_from_template(
     if merged_links != mf.links:
         mf.links = merged_links
 
-    schema = create_default_registry().get(_CASES_MEMORY_TYPE)
+    schema = get_default_registry().get(_CASES_MEMORY_TYPE)
     content_template = schema.content_template if schema is not None else None
     await viking_fs.write_file(
         case_uri,
@@ -2154,7 +2191,7 @@ def _make_memory_diff(
     return {
         "archive_uri": archive_uri,
         "trace_id": tracer.get_trace_id() or None,
-        "extracted_at": datetime.utcnow().isoformat() + "Z",
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
         "operations": {
             "adds": list(adds),
             "updates": list(updates),

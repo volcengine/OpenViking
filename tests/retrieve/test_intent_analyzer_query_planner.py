@@ -89,13 +89,10 @@ def test_query_planner_prompt_mapping_targets_are_bundled():
 @pytest.mark.asyncio
 async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
     planner = RecordingModel(_query_plan_response("planned query"))
-    vlm = RecordingModel(_query_plan_response("vlm query"))
-    config = SimpleNamespace(get_query_planner=lambda: planner)
 
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=planner).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",
@@ -103,7 +100,6 @@ async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
 
     assert result.queries[0].query == "planned query"
     assert len(planner.prompts) == 1
-    assert vlm.prompts == []
 
 
 @pytest.mark.asyncio
@@ -121,12 +117,9 @@ async def test_intent_analyzer_normalizes_non_string_reasoning(monkeypatch):
           ]
         }"""
     )
-    config = SimpleNamespace(get_query_planner=lambda: planner)
-
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=planner).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",
@@ -147,12 +140,9 @@ async def test_intent_analyzer_handles_bare_array_response(monkeypatch):
           }
         ]"""
     )
-    config = SimpleNamespace(get_query_planner=lambda: planner)
-
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=planner).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",
@@ -164,22 +154,49 @@ async def test_intent_analyzer_handles_bare_array_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intent_analyzer_handles_compact_object_response(monkeypatch):
+    planner = RecordingModel(
+        """{
+          "queries": [
+            {
+              "query": "compact query",
+              "context_type": "resource",
+              "priority": 2
+            }
+          ]
+        }"""
+    )
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer(query_planner=planner).analyze(
+        compression_summary="",
+        messages=[],
+        current_message="find the relevant documentation",
+    )
+
+    assert len(result.queries) == 1
+    assert result.queries[0].query == "compact query"
+    assert result.queries[0].context_type.value == "resource"
+    assert result.queries[0].intent == ""
+    assert result.queries[0].priority == 2
+    assert result.reasoning == ""
+
+
+@pytest.mark.asyncio
 async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
     planner = RecordingModel(
         _query_plan_response("planned query"),
         model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
     )
-    config = SimpleNamespace(get_query_planner=lambda: planner)
     rendered: list[str] = []
 
     def fake_render_prompt(prompt_id, variables):
         rendered.append(prompt_id)
         return "rendered prompt"
 
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=planner).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",
@@ -193,17 +210,15 @@ async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
 @pytest.mark.asyncio
 async def test_intent_analyzer_keeps_default_prompt_for_unmapped_model(monkeypatch):
     planner = RecordingModel(_query_plan_response("planned query"), model="ollama/qwen3.5:4b")
-    config = SimpleNamespace(get_query_planner=lambda: planner)
     rendered: list[str] = []
 
     def fake_render_prompt(prompt_id, variables):
         rendered.append(prompt_id)
         return "rendered prompt"
 
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=planner).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",
@@ -214,14 +229,12 @@ async def test_intent_analyzer_keeps_default_prompt_for_unmapped_model(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_intent_analyzer_falls_back_to_vlm_without_query_planner(monkeypatch):
+async def test_intent_analyzer_accepts_resolved_vlm_as_query_planner(monkeypatch):
     vlm = RecordingModel(_query_plan_response("vlm query"))
-    config = SimpleNamespace(get_query_planner=lambda: vlm)
 
-    monkeypatch.setattr(intent_module, "get_openviking_config", lambda: config)
     monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
 
-    result = await IntentAnalyzer().analyze(
+    result = await IntentAnalyzer(query_planner=vlm).analyze(
         compression_summary="",
         messages=[],
         current_message="where is my preference?",

@@ -52,17 +52,22 @@ class RAGQueryPipeline:
     def _get_llm(self):
         """Lazy initialization of LLM for answer generation."""
         if self._llm is None:
-            from openviking_cli.utils.config import get_openviking_config
+            from openviking.config.vlm import ClusterVLMResolver
+            from openviking_cli.utils.config.open_viking_config import (
+                OpenVikingConfigSingleton,
+            )
 
-            config = get_openviking_config()
-            self._llm = config.vlm
+            config_path = Path(self.config_path).expanduser()
+            if not config_path.is_file():
+                raise FileNotFoundError(f"VLM config file does not exist: {config_path}")
+            config = OpenVikingConfigSingleton.initialize(config_path=str(config_path))
+            self._llm = ClusterVLMResolver(lambda: config).get_vlm_sync()
         return self._llm
 
     def add_documents(
         self,
         docs_dirs: List[Union[str, Path]],
         wait: bool = True,
-        timeout: float = 300,
     ) -> List[str]:
         """
         Add document directories/files to OpenViking.
@@ -70,7 +75,6 @@ class RAGQueryPipeline:
         Args:
             docs_dirs: List of document directory or file paths
             wait: Whether to wait for processing
-            timeout: Timeout for waiting
 
         Returns:
             List of root URIs for added resources
@@ -88,7 +92,6 @@ class RAGQueryPipeline:
             result = client.add_resource(
                 str(path),
                 wait=wait,
-                timeout=timeout,
             )
 
             if result and "root_uri" in result:
@@ -104,7 +107,6 @@ class RAGQueryPipeline:
         self,
         code_dirs: List[Union[str, Path]],
         wait: bool = True,
-        timeout: float = 300,
     ) -> List[str]:
         """
         Add code repositories to OpenViking.
@@ -112,12 +114,11 @@ class RAGQueryPipeline:
         Args:
             code_dirs: List of code repository paths (local or git URLs)
             wait: Whether to wait for processing
-            timeout: Timeout for waiting
 
         Returns:
             List of root URIs for added resources
         """
-        return self.add_documents(code_dirs, wait=wait, timeout=timeout)
+        return self.add_documents(code_dirs, wait=wait)
 
     def query(
         self,

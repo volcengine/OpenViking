@@ -2,10 +2,8 @@
  * Local digest compression through the host CLI.
  *
  * Running the rewrite here keeps the token cost on the user's own subscription
- * instead of the OpenViking deployment. Measured against a server-side rewrite
- * the latency is the same order as long as the reasoning budget is actually
- * clamped, which is why the default model/effort pair is Sonnet + low (Haiku
- * ignores the effort knob and its latency is unbounded).
+ * instead of the OpenViking deployment. The default model/effort pair is
+ * Haiku + low, which keeps the reasoning budget, and thus latency, clamped.
  *
  * Everything here is best-effort: a missing CLI, a timeout, or malformed output
  * means no digest, and the caller injects the unrewritten context block.
@@ -116,7 +114,7 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
     return null;
   }
 
-  const model = String(cfg.recallCompressModel || "sonnet");
+  const model = String(cfg.recallCompressModel || "haiku");
   const effort = String(cfg.recallCompressEffort || "low");
   const timeoutMs = Math.max(5000, Number(cfg.recallCompressTimeoutMs || 30000));
 

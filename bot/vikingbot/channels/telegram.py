@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import re
+from pathlib import Path
+
 from loguru import logger
 from telegram import BotCommand, Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import TelegramChannelConfig
 from vikingbot.channels.utils import extract_image_paths, read_image_file
+from vikingbot.config.schema import TelegramChannelConfig
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -101,13 +103,13 @@ class TelegramChannel(BaseChannel):
         self,
         config: TelegramChannelConfig,
         bus: MessageBus,
-        groq_api_key: str = "",
+        groq_api_key: str | None = None,
         workspace_path: Path | None = None,
         **kwargs,
     ):
         super().__init__(config, bus, workspace_path=workspace_path, **kwargs)
         self.config: TelegramChannelConfig = config
-        self.groq_api_key = groq_api_key
+        self.groq_api_key = config.groq_api_key if groq_api_key is None else groq_api_key
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
@@ -319,7 +321,6 @@ class TelegramChannel(BaseChannel):
                 ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
 
                 # Save to workspace/media/
-                from pathlib import Path
                 from vikingbot.utils.helpers import get_media_path
 
                 if self.workspace_path:

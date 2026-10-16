@@ -1,17 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { once } from "node:events";
-import { createWriteStream } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
-
-import { Zip, ZipDeflate } from "fflate";
-
 import { defaultHttpTransport, type HttpTransport } from "./adapters/http-transport.js";
 import {
   defaultResourcePackager,
   type ResourcePackager,
 } from "./adapters/resource-packager.js";
+import {
+  buildContextSearchBody,
+  contextRequestTimeoutMs,
+  normalizeContextEntry,
+} from "./shared/recall-core.mjs";
 
 export type FindResultItem = {
   uri: string;
@@ -28,6 +24,37 @@ export type FindResult = {
   resources?: FindResultItem[];
   skills?: FindResultItem[];
   total?: number;
+};
+
+export type SearchContextEntry = {
+  uri: string;
+  category?: string;
+  score?: number;
+  detail?: string;
+  text?: string;
+  origin?: string;
+};
+
+export type SearchContextResult = {
+  entries?: SearchContextEntry[];
+  rendered?: string;
+  digest?: string;
+  stats?: Record<string, unknown>;
+};
+
+export type SearchContextOptions = {
+  sessionId?: string;
+  limit?: number;
+  scoreThreshold?: number;
+  contextType?: string | string[];
+  queryExpansion?: "off" | "auto";
+  recallCompress?: "off" | "server" | "auto";
+  maxTokens?: number;
+  detail?: "abstract" | "overview" | "full";
+  dedupTurns?: number;
+  peerScope?: "actor" | "all";
+  actorPeerId?: string;
+  requestTimeoutMs?: number;
 };
 
 export type FsListEntry = string | Record<string, unknown>;
@@ -48,12 +75,14 @@ export type OpenVikingClientOptions = {
 };
 
 export type CommitSessionResult = {
+  effective_enable_working_memory?: boolean;
   session_id: string;
   /** "accepted" (async), "skipped" (no archive), "completed", "failed", or "timeout" (wait mode). */
   status: string;
   task_id?: string;
   archive_uri?: string;
   archived?: boolean;
+  reset_context?: boolean;
   /** Present when wait=true and extraction completed. Keyed by category. */
   memories_extracted?: Record<string, number>;
   error?: string;
@@ -178,7 +207,6 @@ export type AddResourceInput = {
   reason?: string;
   instruction?: string;
   wait?: boolean;
-  timeout?: number;
   strict?: boolean;
   ignoreDirs?: string;
   include?: string;
@@ -201,7 +229,6 @@ export type AddSkillInput = {
   path?: string;
   data?: unknown;
   wait?: boolean;
-  timeout?: number;
 };
 
 export type AddSkillResult = {
@@ -212,45 +239,10 @@ export type AddSkillResult = {
   queue_status?: unknown;
 };
 
-const DEFAULT_WAIT_REQUEST_TIMEOUT_MS = 120_000;
 export const DEFAULT_PHASE2_POLL_TIMEOUT_MS = 300_000;
-const WAIT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-const MEMORY_URI_PATTERNS = [
-  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
-];
-const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
-
-export function isMemoryUri(uri: string): boolean {
-  return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
-}
-
-function isRemoteResourceSource(source: string): boolean {
-  return REMOTE_RESOURCE_PREFIXES.some((prefix) => source.startsWith(prefix));
-}
-
-function toBlobPart(value: Buffer): ArrayBuffer {
-  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
-}
-
-function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSeconds?: number): number {
-  const requestedMs =
-    typeof waitTimeoutSeconds === "number" && Number.isFinite(waitTimeoutSeconds) && waitTimeoutSeconds > 0
-      ? Math.ceil(waitTimeoutSeconds * 1000) + WAIT_REQUEST_TIMEOUT_BUFFER_MS
-      : DEFAULT_WAIT_REQUEST_TIMEOUT_MS;
-  return Math.max(defaultTimeoutMs, requestedMs);
-}
-
-async function cleanupUploadTempPath(path?: string): Promise<void> {
-  if (!path) {
-    return;
-  }
-  await rm(path, { force: true }).catch(() => undefined);
-  await rm(dirname(path), { recursive: true, force: true }).catch(() => undefined);
 }
 
 export class OpenVikingClient {
@@ -375,7 +367,14 @@ export class OpenVikingClient {
         signal: controller.signal,
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
+      // Only a body that arrived whole but is not JSON falls back to `{}`. A
+      // body cut off by a timeout, reset or early close after the headers
+      // rejects, so a write is not reported as stored and a read is not
+      // reported as empty.
+      const payload = (await response.json().catch((error: unknown) => {
+        if (!(error instanceof SyntaxError)) throw error;
+        return {};
+      })) as {
         status?: string;
         result?: T;
         error?: { code?: string; message?: string; trace_id?: string };
@@ -488,11 +487,73 @@ export class OpenVikingClient {
     }, undefined, actorPeerId);
   }
 
-  async read(uri: string, actorPeerId?: string): Promise<string> {
+  async searchContext(
+    query: string,
+    options: SearchContextOptions = {},
+  ): Promise<SearchContextResult> {
+    const contractConfig = {
+      recallLimit: options.limit,
+      recallRewrite: options.recallCompress,
+      recallLimitConfigured: options.limit !== undefined,
+      recallMaxTokens: options.maxTokens,
+      recallMaxTokensConfigured: options.maxTokens !== undefined,
+      scoreThreshold: options.scoreThreshold,
+      recallQueryExpansion: options.queryExpansion,
+      recallQueryExpansionConfigured: options.queryExpansion !== undefined,
+      recallDedupTurns: options.dedupTurns,
+      recallPeerScope: options.peerScope,
+      recallContextTimeoutMs: options.requestTimeoutMs,
+      timeoutMs: this.timeoutMs,
+    };
+    const body = {
+      ...buildContextSearchBody(contractConfig, { sessionId: options.sessionId }),
+      ...(options.dedupTurns === 0 ? { dedup_turns: 0 } : {}),
+      query,
+      ...(options.contextType !== undefined ? { context_type: options.contextType } : {}),
+      ...(options.detail !== undefined ? { detail: options.detail } : {}),
+    };
+    const requestTimeoutMs = contextRequestTimeoutMs(contractConfig, body);
+    const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId);
+    const tenantHeaders = this.resolveTenantHeaders();
+    this.routingDebugLog?.(
+      `openviking: context search POST ${this.baseUrl}/api/v1/search/search ` +
+        JSON.stringify({
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
+          X_OpenViking_Actor_Peer: actorPeerId ?? null,
+          session_id: body.session_id ?? null,
+          query:
+            query.length > 4000
+              ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
+              : query,
+          purpose: body.purpose,
+          quotas: body.quotas ?? null,
+          score_threshold: body.score_threshold,
+          context_type: body.context_type ?? null,
+          query_expansion: body.query_expansion ?? null,
+          max_tokens: body.max_tokens ?? null,
+          detail: body.detail ?? null,
+          dedup_turns: body.dedup_turns ?? 0,
+          peer_scope: body.peer_scope ?? null,
+        }),
+    );
+    const result = await this.request<SearchContextResult>("/api/v1/search/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, requestTimeoutMs, actorPeerId);
+    return {
+      ...result,
+      entries: Array.isArray(result.entries)
+        ? result.entries.map((entry) => ({ ...entry, ...normalizeContextEntry(entry) }))
+        : result.entries,
+    };
+  }
+
+  async read(uri: string, actorPeerId?: string, requestTimeoutMs?: number): Promise<string> {
     return this.request<string>(
       `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
       {},
-      undefined,
+      requestTimeoutMs,
       actorPeerId,
     );
   }
@@ -590,63 +651,6 @@ export class OpenVikingClient {
     return result.temp_file_id;
   }
 
-  async zipDirectoryForUpload(dirPath: string): Promise<string> {
-    const rootStats = await stat(dirPath);
-    if (!rootStats.isDirectory()) {
-      throw new Error(`Not a directory: ${dirPath}`);
-    }
-
-    const zipDir = await mkdtemp(join(tmpdir(), "openviking-openclaw-upload-"));
-    const zipPath = join(zipDir, `${basename(dirPath).replace(/[^a-zA-Z0-9._-]/g, "_")}-${randomUUID()}.zip`);
-    const output = createWriteStream(zipPath);
-    const outputClosed = once(output, "close");
-    const outputErrored = once(output, "error").then(([err]) => Promise.reject(err));
-    const zip = new Zip((err, chunk, final) => {
-      if (err) {
-        output.destroy(err);
-        return;
-      }
-      if (chunk?.length) {
-        output.write(Buffer.from(chunk));
-      }
-      if (final) {
-        output.end();
-      }
-    });
-
-    const walk = async (currentDir: string) => {
-      const entries = await readdir(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = join(currentDir, entry.name);
-        if (entry.isDirectory()) {
-          await walk(fullPath);
-          continue;
-        }
-        if (!entry.isFile()) {
-          continue;
-        }
-        const relPath = relative(dirPath, fullPath).replace(/\\/g, "/");
-        if (!relPath || relPath.startsWith("../") || relPath.includes("/../")) {
-          throw new Error(`Unsafe relative path while zipping: ${relPath}`);
-        }
-        const file = new ZipDeflate(relPath);
-        zip.add(file);
-        file.push(new Uint8Array(await readFile(fullPath)), true);
-      }
-    };
-    try {
-      await walk(dirPath);
-      zip.end();
-      await Promise.race([outputClosed, outputErrored]);
-    } catch (err) {
-      zip.terminate();
-      output.destroy(err as Error);
-      await cleanupUploadTempPath(zipPath);
-      throw err;
-    }
-    return zipPath;
-  }
-
   async addResource(input: AddResourceInput, actorPeerId?: string): Promise<AddResourceResult> {
     const pathOrUrl = input.pathOrUrl.trim();
     if (!pathOrUrl) {
@@ -662,7 +666,6 @@ export class OpenVikingClient {
       reason: input.reason ?? "",
       instruction: input.instruction ?? "",
       wait: input.wait ?? false,
-      timeout: input.timeout,
       strict: input.strict ?? false,
       ignore_dirs: input.ignoreDirs,
       include: input.include,
@@ -673,8 +676,6 @@ export class OpenVikingClient {
     }
 
     let packagedSource: Awaited<ReturnType<ResourcePackager["prepareResourceSource"]>> | undefined;
-    const requestTimeoutMs =
-      input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       packagedSource = await this.resourcePackager.prepareResourceSource(pathOrUrl);
       if (packagedSource.kind === "remote") {
@@ -688,7 +689,7 @@ export class OpenVikingClient {
       return this.request<AddResourceResult>(
         "/api/v1/resources",
         { method: "POST", body: JSON.stringify(body) },
-        requestTimeoutMs,
+        undefined,
         actorPeerId,
       );
     } finally {
@@ -705,11 +706,8 @@ export class OpenVikingClient {
 
     const body: Record<string, unknown> = {
       wait: input.wait ?? false,
-      timeout: input.timeout,
     };
     let packagedSource: Awaited<ReturnType<ResourcePackager["prepareLocalUploadSource"]>> | undefined;
-    const requestTimeoutMs =
-      input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       if (hasPath) {
         const skillPath = input.path!.trim();
@@ -724,7 +722,7 @@ export class OpenVikingClient {
       return this.request<AddSkillResult>(
         "/api/v1/skills",
         { method: "POST", body: JSON.stringify(body) },
-        requestTimeoutMs,
+        undefined,
         actorPeerId,
       );
     } finally {
@@ -833,13 +831,17 @@ export class OpenVikingClient {
     sessionId: string,
     options?: {
       wait?: boolean;
-      timeoutMs?: number;
+      enableWorkingMemory?: boolean;
       /**
        * WM v2: number of most-recent messages to keep live after commit.
        * Forwarded as `keep_recent_count` in the POST body. 0 (default)
        * preserves the pre-v2 "archive everything" behavior.
       */
       keepRecentCount?: number;
+      /** Start empty context in the same session after archiving. */
+      resetContext?: boolean;
+      /** Opt in to the server's turn-aware defaults instead of message-count retention. */
+      retentionMode?: "turn_budget";
       agentId?: string;
     },
   ): Promise<CommitSessionResult> {
@@ -854,12 +856,21 @@ export class OpenVikingClient {
         sessionId,
         wait: options?.wait ?? false,
         keepRecentCount,
+        retentionMode: options?.retentionMode,
       },
       options?.agentId,
     );
     const body: Record<string, unknown> = {};
-    if (keepRecentCount > 0) {
+    if (options?.enableWorkingMemory !== undefined) {
+      body.enable_working_memory = options.enableWorkingMemory;
+    }
+    if (options?.retentionMode === "turn_budget") {
+      body.retention_mode = "turn_budget";
+    } else if (keepRecentCount > 0) {
       body.keep_recent_count = keepRecentCount;
+    }
+    if (options?.resetContext) {
+      body.reset_context = true;
     }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
@@ -868,12 +879,16 @@ export class OpenVikingClient {
       options?.agentId,
     );
 
+    if (options?.resetContext && result.reset_context !== true) {
+      throw new Error("OpenViking server did not confirm reset_context; upgrade the server with the plugin.");
+    }
+
     if (!options?.wait || !result.task_id) {
       return result;
     }
 
     // Client-side poll until Phase 2 finishes
-    const deadline = this.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
+    const deadline = this.now() + DEFAULT_PHASE2_POLL_TIMEOUT_MS;
     const pollInterval = 500;
     while (this.now() < deadline) {
       await this.sleep(pollInterval);

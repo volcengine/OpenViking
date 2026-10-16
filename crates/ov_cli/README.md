@@ -106,6 +106,8 @@ ov add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/hea
 ov ls viking://resources
 ov tree viking://resources -L 2
 ov read viking://resources/...
+# Read lines 11 through 15 (zero-based offset; limit -1 reads to the end)
+ov read viking://resources/... --offset 10 --limit 5
 
 # Retrieve context
 ov find "what is openviking"
@@ -130,10 +132,17 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `tree` - Show a hierarchical tree.
 - `mkdir` - Create a directory.
 - `rm` - Remove a resource or directory.
+- `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
 - `attrs` - Get logical extended attributes.
 - `get` - Download a file to a local path.
+
+```bash
+# The destination parent must exist. Existing files are overwritten; directories are merged.
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### Content Access
 
@@ -148,6 +157,8 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `search` - Context-aware retrieval. Experimental.
 - `grep` - Content pattern search.
 - `glob` - File glob pattern search.
+
+`search --mode list` (the default) returns ranked hits. `search --mode context` assembles context using server defaults and prints its text; use `-o json` to retain the complete `entries`, `rendered`, `digest`, and `stats` result. Context mode supports `--events-time-decay-protection`, but rejects `--uri` and `--read-content`; `--level` is ignored by the server. Context-specific options such as `max_tokens` and `detail` are not exposed as CLI flags yet.
 
 ### Sessions And Memory
 
@@ -247,11 +258,11 @@ Some command help may also show the long `--output json` form. `-o json` is the 
 
 ```bash
 # Add URL and wait for processing
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # Add a local directory with filters
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"
@@ -263,8 +274,19 @@ ov add-resource ./docs -p "viking://resources/docs/{calendar:today}" --wait
 ov find "API authentication" --threshold 0.7 --limit 5
 ov find "authentication" --uri viking://resources/project --level 0,1
 
+# Assemble context with event time decay, or inspect the complete JSON result
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+ov -o json search "authentication" --mode context
+
 # Recursive list
 ov ls viking://resources --recursive
+
+# Write caller-provided tags, then filter or project them
+ov write viking://resources/docs/api.md --content "# API" \
+  --tags team=search,env=prod
+ov ls viking://resources/docs --tags team=search,env=prod --fields tags
+ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
+ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
 
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
@@ -276,6 +298,7 @@ ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources -f tags
 
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')

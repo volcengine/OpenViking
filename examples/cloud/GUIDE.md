@@ -251,6 +251,7 @@ journalctl -u openviking -f          # 查看实时日志
 # -v  挂载宿主机文件到容器内，格式为 宿主机路径:容器内路径
 #     ov.conf 挂载是必填的，data 目录用于持久化数据（容器删除后不丢失）
 # --restart  进程崩溃或机器重启后自动拉起
+# 镜像推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 
 docker run -d \
   --name openviking \

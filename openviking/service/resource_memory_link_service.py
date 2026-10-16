@@ -8,12 +8,12 @@ files' MEMORY_FIELDS metadata.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonical_user_root,
@@ -127,7 +127,8 @@ class ResourceMemoryLinkService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_service = session_service
-        self._reason_session_lock = asyncio.Lock()
+        # Additions run on queue loops; deletions can run on the HTTP loop.
+        self._reason_session_lock = AsyncSemaphore()
 
     def set_dependencies(
         self,
@@ -151,7 +152,6 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         source_name: Optional[str] = None,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Bridge add-resource reason extraction through normal session commit."""
         reason = (reason or "").strip()
@@ -209,7 +209,6 @@ class ResourceMemoryLinkService:
             task_result = await self._wait_for_commit_task(
                 task_id=str(task_id),
                 ctx=ctx,
-                timeout=timeout,
             )
         return {
             "status": "success",
@@ -226,7 +225,6 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         memory_uris: Sequence[str],
         recursive: bool = False,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Bridge resource deletion through normal session commit for mutable memories."""
         if not resource_uri:
@@ -279,7 +277,6 @@ class ResourceMemoryLinkService:
             task_result = await self._wait_for_commit_task(
                 task_id=str(task_id),
                 ctx=ctx,
-                timeout=timeout,
             )
         return {
             "status": "success",
@@ -334,7 +331,6 @@ class ResourceMemoryLinkService:
         *,
         task_id: str,
         ctx: RequestContext,
-        timeout: Optional[float],
     ) -> Dict[str, Any]:
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
@@ -342,7 +338,7 @@ class ResourceMemoryLinkService:
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            timeout=(_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout),
+            timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
             poll_interval=0.1,
         )
         if task.status == TaskStatus.COMPLETED:

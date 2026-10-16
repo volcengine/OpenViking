@@ -1,18 +1,43 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { KNOB_BY_NAME } from "./lib/config-schema.mjs";
+import { buildProxyConnection, CONNECTION_ENV_VARS, resolveConnection } from "./lib/credentials.mjs";
 import {
   buildMcpProxyConfig,
   DEFAULT_PROXY_TIMEOUT_MS,
   defaultCredentialPaths,
+  forwardConnectionEnv,
+  MCP_PROXY_ENV_VARS,
   normalizeConfigPath,
+  parseExtraHeaders,
   resolveMcpActorPeerId,
+  toMcpProxyConfig,
   trimSlash,
 } from "./lib/mcp-proxy-config.mjs";
+import { createOpenVikingMcpProxy } from "./lib/mcp-proxy-core.mjs";
+import { ROOT } from "./sync.mjs";
+import { writeCredentialFiles } from "./testing/support.mjs";
 
 const OVCLI = join(homedir(), ".openviking", "ovcli.conf");
 const OV = join(homedir(), ".openviking", "ov.conf");
+
+// Every stdio MCP entrypoint in the tree, discovered rather than listed so a
+// new harness cannot ship a proxy that skips the shared shaping. The count is
+// pinned because a renamed directory would otherwise empty the loop and turn
+// the assertions below into a no-op.
+const MCP_PROXY_COUNT = 6;
+
+const MCP_PROXIES = [
+  ...readdirSync(join(ROOT, "examples"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `examples/${entry.name}/servers/mcp-proxy.mjs`)
+    .filter((rel) => existsSync(join(ROOT, rel))),
+  "agent-plugins/servers/mcp-proxy.mjs",
+].map((rel) => ({ rel, source: readFileSync(join(ROOT, rel), "utf-8") }));
 
 test("a base URL becomes the /mcp endpoint exactly once", () => {
   assert.equal(buildMcpProxyConfig({ baseUrl: "http://x:1933" }).mcpUrl, "http://x:1933/mcp");
@@ -72,15 +97,22 @@ test("broad MCP recall does not send an actor peer header", () => {
   assert.equal(resolveMcpActorPeerId({ peerId: "workspace-a" }), "");
 });
 
-test("actor-scoped MCP recall requires and trims an explicit peer", () => {
+test("actor-scoped MCP recall takes and trims an explicit peer", () => {
   assert.equal(
     resolveMcpActorPeerId({ peerId: " workspace-a ", recallPeerScope: "actor" }),
     "workspace-a",
   );
-  assert.throws(
-    () => resolveMcpActorPeerId({ recallPeerScope: "actor" }),
-    /requires an explicit peer ID/,
+});
+
+test("a missing actor peer warns and widens instead of taking the proxy down", () => {
+  const warnings = [];
+  assert.equal(
+    resolveMcpActorPeerId({ recallPeerScope: "actor", onWarn: (m) => warnings.push(m) }),
+    "",
+    "no header means broad recall, which is the default anyway",
   );
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /OPENVIKING_PEER_ID/, "the warning says how to fix it");
 });
 
 test("path and URL helpers stay exported for entrypoints that need them", () => {
@@ -89,4 +121,348 @@ test("path and URL helpers stay exported for entrypoints that need them", () => 
   assert.equal(normalizeConfigPath("~"), homedir());
   assert.equal(normalizeConfigPath("~/a"), join(homedir(), "a"));
   assert.equal(defaultCredentialPaths({}).length, 2);
+});
+
+test("the forwarded-env list names every variable a proxy's config reads", () => {
+  const knobEnv = ["recallPeerScope", "timeoutMs", "debug", "debugLogPath", "authMode"]
+    .map((name) => KNOB_BY_NAME.get(name).env);
+  const expected = new Set([
+    ...CONNECTION_ENV_VARS,
+    ...knobEnv,
+    "OPENVIKING_EXTRA_HEADERS",
+    "OPENVIKING_HOME",
+    "OPENVIKING_STATE_DIR",
+  ]);
+  assert.deepEqual(new Set(MCP_PROXY_ENV_VARS), expected);
+  assert.equal(MCP_PROXY_ENV_VARS.length, expected.size, "no name is listed twice");
+});
+
+test("a forwarded connection resolves back to itself, whatever the files hold", async () => {
+  const files = await writeCredentialFiles("ov-proxy-forward-", {
+    ovcli: { url: "https://cli.example.com", plugin: { codex: { accountId: "acct-plugin" } } },
+    ov: { server: { root_api_key: "root-key", auth_mode: "trusted" }, codex: { apiKey: "sk-ov" } },
+  });
+  const fields = (c) => ({
+    baseUrl: c.baseUrl,
+    mcpUrl: c.mcpUrl,
+    apiKey: c.apiKey,
+    account: c.account,
+    user: c.user,
+    authMode: c.authMode,
+  });
+  try {
+    for (const connection of [
+      resolveConnection("codex", { env: files.env }),
+      resolveConnection("codex", { env: { ...files.env, OPENVIKING_AUTH_MODE: "api_key" }, hostInput: { user: "host-user" } }),
+      resolveConnection("codex", { env: { ...files.env, OPENVIKING_MCP_URL: "https://mcp.example.com/x", OPENVIKING_API_KEY: "sk-env" } }),
+    ]) {
+      // Names a host lets a child inherit may not fill what the parent left empty.
+      const inherited = { ...files.env, OPENVIKING_ACCOUNT: "stale", OPENVIKING_USER: "stale", OPENVIKING_PEER_ID: "stale" };
+      const back = resolveConnection("codex", { env: { ...inherited, ...forwardConnectionEnv(connection) } });
+      assert.deepEqual(fields(back), fields(connection));
+      assert.equal(back.peerId, connection.peerId);
+    }
+  } finally {
+    await rm(files.dir, { recursive: true, force: true });
+  }
+});
+
+test("the shared mapper carries every connection field a loader resolved", () => {
+  const cfg = {
+    baseUrl: "https://ov.example.com",
+    mcpUrl: "https://ov.example.com/custom-mcp",
+    apiKey: "sk",
+    account: "acme",
+    user: "alice",
+    sendIdentityHeaders: true,
+    peerId: "workspace-a",
+    recallPeerScope: "all",
+    userAgent: "openviking-memory-codex/1.0.0",
+    timeoutMs: 30000,
+    debug: true,
+    debugLogPath: "/tmp/codex.log",
+    credentialSource: "ovcli",
+    credentialPath: "/cfg/ovcli.conf",
+    cliPath: "/cfg/ovcli.conf",
+    ovPath: "",
+  };
+  const proxy = toMcpProxyConfig(cfg, { env: {} });
+  assert.deepEqual(
+    { ...proxy, watchedPaths: proxy.watchedPaths.slice(0, 1) },
+    {
+      mcpUrl: "https://ov.example.com/custom-mcp",
+      apiKey: "sk",
+      account: "acme",
+      user: "alice",
+      sendIdentityHeaders: true,
+      peerId: "",
+      userAgent: "openviking-memory-codex/1.0.0",
+      timeoutMs: 30000,
+      debug: true,
+      debugLogPath: "/tmp/codex.log",
+      credentialSource: "ovcli",
+      credentialPath: "/cfg/ovcli.conf",
+      watchedPaths: ["/cfg/ovcli.conf"],
+      extraHeaders: {},
+    },
+  );
+
+  assert.equal(toMcpProxyConfig({ ...cfg, recallPeerScope: "actor" }, { env: {} }).peerId, "workspace-a");
+  assert.equal(toMcpProxyConfig(cfg, { env: {}, peerId: "from-parent" }).peerId, "from-parent");
+  const quiet = toMcpProxyConfig(cfg, { env: {}, debug: false, debugLogPath: "" });
+  assert.equal(quiet.debug, false);
+  assert.equal(quiet.debugLogPath, "");
+});
+
+test("every MCP proxy shapes its config through the shared mapper", () => {
+  assert.equal(
+    MCP_PROXIES.length,
+    MCP_PROXY_COUNT,
+    `expected ${MCP_PROXY_COUNT} proxies, found ${MCP_PROXIES.map((p) => p.rel).join(", ")}`,
+  );
+  for (const { rel, source } of MCP_PROXIES) {
+    assert.match(source, /toMcpProxyConfig\(/, `${rel} must map its config through toMcpProxyConfig`);
+    assert.doesNotMatch(source, /buildMcpProxyConfig\(/, `${rel} must not pick fields for the proxy by hand`);
+    assert.match(
+      source,
+      /export function readProxyConfig\(env = process\.env/,
+      `${rel} must export readProxyConfig(env) so the parity test can drive it`,
+    );
+  }
+});
+
+test("a proxy shipped beside hooks takes its connection from the hook loader", () => {
+  // A proxy that resolves the connection itself runs without the options its
+  // harness's loader passes — the host input, the root-key fallback — and
+  // would authenticate as someone other than the hooks. Only the portable
+  // package, which has no hook loader, reads credentials.mjs directly.
+  for (const { rel, source } of MCP_PROXIES) {
+    if (rel.startsWith("agent-plugins/")) continue;
+    assert.doesNotMatch(source, /credentials\.mjs/, `${rel} must not resolve credentials on its own`);
+  }
+});
+
+test("no MCP proxy derives its peer from the launch directory", () => {
+  // A proxy is long-lived and may start anywhere, so unlike a hook it cannot
+  // re-derive a peer per turn. Codex already had this rule; it holds for all.
+  for (const { rel, source } of MCP_PROXIES) {
+    assert.doesNotMatch(source, /resolveEffectivePeerId/, `${rel} must not derive a peer`);
+    assert.doesNotMatch(source, /cwd:\s*process\.cwd\(\)/, `${rel} must not key a peer off its cwd`);
+  }
+});
+
+test("the default peer scope puts no actor-peer header on the wire", async () => {
+  const sent = [];
+  const proxyFor = (harnessConfig) => createOpenVikingMcpProxy({
+    stdout: { write(_line, cb) { if (cb) cb(); return true; } },
+    fetchImpl: (_url, init) => {
+      sent.push(init.headers);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      });
+    },
+    readConfig: () => buildMcpProxyConfig({
+      mcpUrl: "http://127.0.0.1:1933/mcp",
+      peerId: resolveMcpActorPeerId(harnessConfig),
+    }),
+    loggerFactory: () => ({ log() {}, logError() {} }),
+  });
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: {} };
+
+  await proxyFor({ peerId: "workspace-a" }).handleMessage({ ...initialize });
+  assert.equal(
+    sent[0]["X-OpenViking-Actor-Peer"],
+    undefined,
+    "the default scope is broad recall, so pinning an actor would narrow it behind the user's back",
+  );
+
+  await proxyFor({ peerId: "workspace-a", recallPeerScope: "actor" }).handleMessage({ ...initialize });
+  assert.equal(sent[1]["X-OpenViking-Actor-Peer"], "workspace-a");
+});
+
+test("the identity headers follow the auth mode, not a resolved account", async () => {
+  const sent = [];
+  const proxyFor = (extra) => createOpenVikingMcpProxy({
+    stdout: { write(_line, cb) { if (cb) cb(); return true; } },
+    fetchImpl: (_url, init) => {
+      sent.push(init.headers);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      });
+    },
+    readConfig: () => buildMcpProxyConfig({
+      mcpUrl: "http://127.0.0.1:1933/mcp",
+      account: "acme",
+      user: "alice",
+      ...extra,
+    }),
+    loggerFactory: () => ({ log() {}, logError() {} }),
+  });
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: {} };
+
+  await proxyFor({}).handleMessage({ ...initialize });
+  assert.equal(
+    sent[0]["X-OpenViking-Account"],
+    undefined,
+    "an api_key server reads the identity out of the key and every proxy on the path would see it",
+  );
+  assert.equal(sent[0]["X-OpenViking-User"], undefined);
+
+  await proxyFor({ sendIdentityHeaders: true }).handleMessage({ ...initialize });
+  assert.equal(sent[1]["X-OpenViking-Account"], "acme");
+  assert.equal(sent[1]["X-OpenViking-User"], "alice");
+});
+
+// The portable bundle ships without an installer, so nobody moves a working
+// install's key out of ov.conf for it. ovcli.conf naming only a url pins the
+// credential chain to that file, and the chain has to keep going anyway.
+test("a portable proxy keeps the server key when ovcli.conf names only a url", async () => {
+  const files = await writeCredentialFiles("ov-proxy-rootkey-", {
+    ovcli: { url: "https://ov.example.com" },
+    ov: { server: { root_api_key: "root-key" } },
+  });
+  try {
+    const cfg = buildProxyConnection("agent-plugins", { env: files.env });
+    assert.equal(cfg.baseUrl, "https://ov.example.com");
+    assert.equal(cfg.mcpUrl, "https://ov.example.com/mcp");
+    assert.equal(cfg.apiKey, "root-key");
+    assert.equal(cfg.hasApiKey, true);
+    assert.equal(cfg.apiKeySource, "ov");
+    assert.equal(cfg.credentialPath, files.ovPath);
+    assert.equal(cfg.credentialSource, "ovcli", "the mode is still what the chain ran in");
+  } finally {
+    await rm(files.dir, { recursive: true, force: true });
+  }
+});
+
+test("a portable proxy reports the auth mode, its own log path, and the files to watch", async () => {
+  const files = await writeCredentialFiles("ov-proxy-shape-", {
+    ovcli: { url: "https://ov.example.com", api_key: "cli-key", account: "acme", user: "alice" },
+    ov: {},
+  });
+  try {
+    const cfg = buildProxyConnection("agent-plugins", { env: files.env, version: "1.2.3" });
+    assert.equal(cfg.apiKeySource, "ovcli");
+    assert.equal(cfg.authMode, "trusted", "a credential layer supplied an identity");
+    assert.equal(cfg.sendIdentityHeaders, true);
+    assert.equal(cfg.userAgent, "openviking-memory-agent-plugins/1.2.3");
+    assert.equal(cfg.timeoutMs, DEFAULT_PROXY_TIMEOUT_MS);
+    assert.equal(cfg.debug, false);
+    assert.equal(
+      cfg.debugLogPath,
+      join(homedir(), ".openviking", "logs", "agent-plugins.log"),
+    );
+    assert.deepEqual(
+      toMcpProxyConfig(cfg, { env: files.env }).watchedPaths,
+      [files.cliPath, files.ovPath, OVCLI, OV],
+    );
+
+    const named = buildProxyConnection("agent-plugins", {
+      env: { ...files.env, OPENVIKING_DEBUG: "1", OPENVIKING_DEBUG_LOG: "/tmp/ov.log", OPENVIKING_TIMEOUT_MS: "60000" },
+    });
+    assert.equal(named.debug, true);
+    assert.equal(named.debugLogPath, "/tmp/ov.log");
+    assert.equal(named.timeoutMs, 60000);
+  } finally {
+    await rm(files.dir, { recursive: true, force: true });
+  }
+});
+
+test("an api_key deployment keeps the operator's identity off the wire", async () => {
+  const files = await writeCredentialFiles("ov-proxy-apikey-", {
+    ovcli: { url: "https://ov.example.com", api_key: "cli-key", account: "acme" },
+    ov: { server: { auth_mode: "api_key" } },
+  });
+  try {
+    const cfg = buildProxyConnection("agent-plugins", { env: files.env });
+    assert.equal(cfg.authMode, "api_key");
+    assert.equal(cfg.sendIdentityHeaders, false);
+  } finally {
+    await rm(files.dir, { recursive: true, force: true });
+  }
+});
+
+test("OPENVIKING_EXTRA_HEADERS parses a JSON object of scalar values", () => {
+  const headers = parseExtraHeaders(
+    JSON.stringify({ "X-Tenant": "acme", "X-Region": "cn", "X-Retries": 3 }),
+  );
+  assert.deepEqual(headers, { "X-Tenant": "acme", "X-Region": "cn", "X-Retries": "3" });
+});
+
+test("OPENVIKING_EXTRA_HEADERS drops reserved names and warns rather than throwing", () => {
+  const warnings = [];
+  const headers = parseExtraHeaders(
+    JSON.stringify({
+      Authorization: "Bearer sneaky",
+      "content-type": "text/plain",
+      "MCP-Protocol-Version": "0000-00-00",
+      "X-Vault": "primary",
+    }),
+    { onWarn: (m) => warnings.push(m) },
+  );
+  assert.deepEqual(headers, { "X-Vault": "primary" });
+  assert.equal(warnings.length, 3);
+  for (const w of warnings) assert.match(w, /reserved header/);
+});
+
+test("OPENVIKING_EXTRA_HEADERS ignores malformed JSON without taking the proxy down", () => {
+  const warnings = [];
+  assert.deepEqual(parseExtraHeaders("not json", { onWarn: (m) => warnings.push(m) }), {});
+  assert.deepEqual(parseExtraHeaders("[1,2,3]", { onWarn: (m) => warnings.push(m) }), {});
+  assert.deepEqual(parseExtraHeaders("", { onWarn: (m) => warnings.push(m) }), {});
+  assert.equal(warnings.length, 2, "empty is silent, malformed and non-object each warn once");
+});
+
+test("buildMcpProxyConfig reads OPENVIKING_EXTRA_HEADERS from the env by default", () => {
+  const cfg = buildMcpProxyConfig({
+    env: { OPENVIKING_EXTRA_HEADERS: JSON.stringify({ "X-Tenant": "acme" }) },
+  });
+  assert.deepEqual(cfg.extraHeaders, { "X-Tenant": "acme" });
+});
+
+test("buildMcpProxyConfig lets an explicit extraHeaders override the env", () => {
+  const cfg = buildMcpProxyConfig({
+    extraHeaders: { "X-Explicit": "yes" },
+    env: { OPENVIKING_EXTRA_HEADERS: JSON.stringify({ "X-Tenant": "acme" }) },
+  });
+  assert.deepEqual(cfg.extraHeaders, { "X-Explicit": "yes" });
+});
+
+test("operator-supplied extras cannot override proxy-owned headers on the wire", async () => {
+  const sent = [];
+  const proxy = createOpenVikingMcpProxy({
+    stdout: { write(_line, cb) { if (cb) cb(); return true; } },
+    fetchImpl: (_url, init) => {
+      sent.push(init.headers);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      });
+    },
+    readConfig: () => buildMcpProxyConfig({
+      mcpUrl: "http://127.0.0.1:1933/mcp",
+      apiKey: "real-key",
+      extraHeaders: {
+        "X-Tenant": "acme",
+        "openviking_name": "primary",
+        Authorization: "Bearer stolen",
+      },
+    }),
+    loggerFactory: () => ({ log() {}, logError() {} }),
+  });
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  assert.equal(sent[0]["X-Tenant"], "acme");
+  assert.equal(sent[0]["openviking_name"], "primary");
+  assert.equal(sent[0].Authorization, "Bearer real-key", "the real api key still wins");
 });

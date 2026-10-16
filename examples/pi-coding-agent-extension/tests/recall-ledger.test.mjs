@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { RecallManager } from "../recall.ts";
-import { RecallLedger, ledgerKey } from "../shared/recall-ledger.mjs";
+import { RecallLedger, ledgerKey } from "../lib/recall-ledger.mjs";
 
 function config(overrides = {}) {
   return {

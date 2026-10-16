@@ -4,19 +4,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.vikingdb_clients import VIKINGDB_APIS, VikingDBClient
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 
-from .base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT, CollectionAdapter
+from .base import (
+    VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+    VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
+    CollectionAdapter,
+)
 
 
 class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     """Adapter for private VikingDB deployment."""
 
     _DATA_BATCH_SIZE = 100
+    _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
     USE_CONTENT_FIELD = True
 
@@ -119,3 +124,17 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        data_list = [self._normalize_record_for_write(item) for item in data_list]
+        result = self.get_collection().update_data(data_list)
+        if isinstance(result, dict):
+            for key in ("primary_keys", "ids"):
+                values = result.get(key)
+                if isinstance(values, list):
+                    return [str(item) for item in values if item is not None]
+            if result.get("updated") == 0:
+                return []
+        if isinstance(result, list):
+            return [str(item) for item in result if item is not None]
+        return [str(item["id"]) for item in data_list if item.get("id") is not None]

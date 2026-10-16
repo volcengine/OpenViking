@@ -1,0 +1,17 @@
+name: OpenViking Gateway
+on:
+  pull_request:
+    paths: ["openviking_gateway/**", "tests/gateway/**", "scripts/gateway_*", "tests/fixtures/gateway_upstream_urls.json", "openviking_cli/utils/config/openviking_gateway_config.py", "openviking_cli/utils/config/encryption_config.py", "openviking_cli/setup_wizard.py", "openviking/crypto/**", ".github/workflows/gateway.yml"]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # The gateway talks to OpenViking over HTTP and reuses only its pure-Python crypto
+      # module, so its tests run from the source tree without building the native wheel.
+      - run: pip install "aiohttp>=3.13.3" "async-timeout>=5.0.1" "orjson>=3.11.7" "packaging>=24.0" "fastapi>=0.128.0" "uvicorn>=0.39.0" "pydantic>=2.0.0" "httpx>=0.25.0" "cryptography>=48.0.1" "json-repair>=0.25.0" "loguru>=0.7.3" "mcp>=1.27,<2" pytest pytest-asyncio
+      - run: PYTHONPATH=. pytest tests/gateway --confcutdir=tests/gateway -o addopts=''
