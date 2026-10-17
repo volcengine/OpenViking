@@ -2840,7 +2840,11 @@ class Session:
 
         phase1 = await self._read_phase1_meta(predecessor_uri)
         if not phase1:
-            return False
+            # Archives created by older OpenViking versions have no Phase 1
+            # metadata and keep their previous processing contract, matching
+            # _ensure_phase1_ready(); no queue work can ever make them
+            # terminal, so treat the predecessor as resolved.
+            return True
         if phase1.get("status") != "ready":
             return not await self._ensure_phase1_ready(predecessor_uri)
 
