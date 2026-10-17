@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Check real Hermes subdirectory installation and dependency admission on POSIX."""
+"""Check real Hermes subdirectory installation and optional activation."""
 
 import argparse
 import errno
 import json
 import os
-import pty
 import select
 import signal
 import subprocess
@@ -17,6 +16,8 @@ from pathlib import Path
 
 def enable(command, *, host, env, log, timeout):
     """Give the CLI a terminal and accept consent for this repository's plugin."""
+    import pty
+
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(host)
@@ -56,7 +57,7 @@ def enable(command, *, host, env, log, timeout):
         log.write_bytes(output)
 
 
-def check(host, repository, root, timeout):
+def check(host, repository, root, timeout, *, install_only=False):
     home = root / "user" / ".hermes"
     home.mkdir(parents=True)
     env = {
@@ -102,10 +103,20 @@ def check(host, repository, root, timeout):
             "plugin.yaml",
             "pyproject.toml",
         ):
-            if (installed / name).read_bytes() != (
+            if (installed / name).read_text(encoding="utf-8") != (
                 repository / "examples/hermes-plugin" / name
-            ).read_bytes():
+            ).read_text(encoding="utf-8"):
                 raise RuntimeError("Installed plugin differs from the checked-out source: " + name)
+        if install_only:
+            evidence = {
+                "installed": True,
+                "enabled": False,
+                "home": str(home),
+                "source_ref": ref,
+            }
+            (root / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
+            print(json.dumps(evidence))
+            return
         enable(command, host=host, env=env, log=root / "enable.log", timeout=timeout)
         # PM can retire the original .venv after publishing. Read its selected
         # interpreter through the stdlib-only path module before the next command.
@@ -176,17 +187,22 @@ def main():
     parser.add_argument("--repository", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-dir", type=Path, help="Keep the isolated profile and logs here")
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--install-only",
+        action="store_true",
+        help="Stop after validating the installed files; this mode is portable to Windows",
+    )
     args = parser.parse_args()
     host, repository = args.hermes_root.resolve(), args.repository.resolve()
     if args.output_dir:
         root = args.output_dir.resolve()
         root.mkdir(parents=True, exist_ok=True)
-        check(host, repository, root, args.timeout)
+        check(host, repository, root, args.timeout, install_only=args.install_only)
     else:
         with tempfile.TemporaryDirectory(prefix="hermes-plugin-install-") as directory:
             root = Path(directory)
             try:
-                check(host, repository, root, args.timeout)
+                check(host, repository, root, args.timeout, install_only=args.install_only)
             except Exception:
                 for name in ("install.log", "enable.log", "validate.log"):
                     if (root / name).exists():
