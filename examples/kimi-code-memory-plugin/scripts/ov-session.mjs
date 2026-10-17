@@ -21,8 +21,11 @@
  * records.
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import { stableHash } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { dequeue, listPending } from "./shared/pending-queue.mjs";
 
 /** Stable dedup key for one shaped capture turn. */
 export function turnDedupKey(turn) {
@@ -82,6 +85,31 @@ export function planCapture(turns, acknowledged) {
  * through `onSent(n)`, so a running index maps confirmations back to the
  * exact plan entries they cover.
  */
+/**
+ * Remove queued copies of payloads the server just accepted. The shared send
+ * path enqueues on retryable failure and acknowledges only on HTTP success,
+ * so a turn queued by one stop and delivered live by the next would otherwise
+ * be replayed from the queue as a second copy — the server has no turn-id
+ * idempotency. Claimed (`.processing`) entries belong to their replayer and
+ * are never touched here.
+ */
+async function dropQueuedCopies(ovSessionId, payloads) {
+  if (payloads.length === 0) return 0;
+  let entries;
+  try {
+    entries = await listPending();
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const { filename, entry } of entries) {
+    if (entry?.sessionId !== ovSessionId || entry?.type !== "addMessage") continue;
+    if (!payloads.some((payload) => isDeepStrictEqual(payload, entry.payload))) continue;
+    if (await dequeue(filename)) removed += 1;
+  }
+  return removed;
+}
+
 export async function sendPlannedCapture(fetchJSON, ovSessionId, plan, { peerId = "", onSent } = {}) {
   if (plan.length === 0) {
     return { sent: 0, queued: 0, enqueueFailed: 0, failed: 0, retryable: false };
@@ -101,6 +129,8 @@ export async function sendPlannedCapture(fetchJSON, ovSessionId, plan, { peerId 
       await onSent?.({ confirmed, confirmedPayloads });
     },
   });
+  // Confirmations are a prefix: both send paths stop at the first failure.
+  await dropQueuedCopies(ovSessionId, payloads.slice(0, result.sent));
   return result;
 }
 
@@ -115,4 +145,47 @@ export function shouldCommit(event, cfg = {}, previousCaptured = 0, captured = 0
   if (event === "interrupt" || event === "session-end") return true;
   if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
   return Number(previousCaptured || 0) + captured >= Number(cfg.commitTurnThreshold || Infinity);
+}
+
+/**
+ * Commit-threshold progress counts payloads (one per turn), not ack keys.
+ * A multi-tool turn produces several keys, and counting those made "every N
+ * turns" fire roughly once per turn. States written before this rule hold key
+ * counts; the next commit resets them, so the drift is one early commit.
+ */
+export function advanceCapturedSinceCommit(previousCaptured, confirmedPayloads) {
+  return Number(previousCaptured || 0) + Math.max(0, Number(confirmedPayloads) || 0);
+}
+
+/**
+ * Whether a capture run may commit. A run is strand-free only when every
+ * planned payload was confirmed or safely persisted: `failed` payloads were
+ * rejected outright and exist nowhere, `queued` ones are still on disk, and
+ * an older queue entry for the same session means a commit now would archive
+ * across a message the earlier hook never delivered.
+ */
+export function canCommitCapture(result, {
+  event = "stop",
+  cfg = {},
+  previousCaptured = 0,
+  pendingCount = 0,
+} = {}) {
+  if (!result) return false;
+  if (result.failed > 0 || result.queued > 0 || result.enqueueFailed > 0) return false;
+  if (pendingCount > 0) return false;
+  return shouldCommit(event, cfg, previousCaptured, result.sent);
+}
+
+/**
+ * SessionEnd is the last chance to close a session. When messages are parked
+ * on disk, the commit must ride the same queue behind them: SessionStart
+ * replays addMessage entries before commitSession (§5.5). Payloads that were
+ * lost outright (`failed`, `enqueueFailed`) must never be archived across, so
+ * they suppress this rather than committing over the hole.
+ */
+export function shouldQueueSessionEndCommit(event, result = {}, pendingCount = 0) {
+  return event === "session-end"
+    && pendingCount > 0
+    && (result?.failed || 0) === 0
+    && (result?.enqueueFailed || 0) === 0;
 }

@@ -26,9 +26,16 @@ import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { buildKimicodeTurns } from "./kimicode-transcript.mjs";
 import { deriveOvSessionId, loadState, saveState, withSessionLock } from "./session-state.mjs";
-import { planCapture, sendPlannedCapture, shouldCommit } from "./ov-session.mjs";
+import {
+  planCapture,
+  sendPlannedCapture,
+  canCommitCapture,
+  advanceCapturedSinceCommit,
+  shouldQueueSessionEndCommit,
+} from "./ov-session.mjs";
 import { commitAgentSession, runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { extractCaptureTurns } from "./shared/capture-utils.mjs";
+import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -122,9 +129,9 @@ runHookStage(
       fitBudget(); // the send spends only what remains of the hook's budget
       const result = await sendPlannedCapture(fetchJSON, ovSessionId, plan, {
         peerId: effectivePeer.peerId,
-        onSent: async ({ confirmed }) => {
+        onSent: async ({ confirmed, confirmedPayloads }) => {
           for (const key of confirmed) acked.add(key);
-          capturedSinceCommit += confirmed.length;
+          capturedSinceCommit = advanceCapturedSinceCommit(previousCaptured, confirmedPayloads);
           // Persist as we go: a crash mid-send must not re-send confirmed turns.
           state.capturedTurnIds = [...acked];
           state.capturedSinceCommit = capturedSinceCommit;
@@ -165,14 +172,16 @@ runHookStage(
       }
       await saveState(stage.sessionId, state);
 
-      // Commit only when nothing is stranded: queued payloads are persisted
-      // but not yet on the server (the SessionStart replay delivers them), so
-      // committing now would archive without them; enqueueFailed payloads are
-      // not persisted anywhere and would vanish from the archive. A skipped
-      // commit keeps capturedSinceCommit, so a later event commits once the
-      // queue drains (§5.5: commit must not cross unreplayed messages).
-      const nothingStranded = result.queued === 0 && result.enqueueFailed === 0;
-      if (result.sent > 0 && nothingStranded && shouldCommit(EVENT, cfg, previousCaptured, result.sent)) {
+      // Commit only when nothing is stranded: `failed` payloads were rejected
+      // and exist nowhere, queued ones are still on disk, and an older queue
+      // entry for this session would be archived across. A skipped commit
+      // keeps capturedSinceCommit, so a later event commits once the queue
+      // drains (§5.5: commit must not cross unreplayed messages).
+      const pendingForSession = (await listPending())
+        .filter(({ entry }) => entry?.sessionId === ovSessionId);
+      const pendingCount = pendingForSession.length;
+      const stranded = result.failed > 0 || result.queued > 0 || result.enqueueFailed > 0;
+      if (canCommitCapture(result, { event: EVENT, cfg, previousCaptured, pendingCount })) {
         fitBudget(); // the commit gets the remainder, not a fresh timeout
         const committed = await commitAgentSession(fetchJSON, ovSessionId, log);
         if (committed.ok) {
@@ -182,8 +191,28 @@ runHookStage(
         } else {
           logError("commit_failed", `status=${committed.status || "unknown"}`);
         }
-      } else if (!nothingStranded && shouldCommit(EVENT, cfg, previousCaptured, result.sent)) {
-        log("commit_deferred", { event: EVENT, ovSessionId, queued: result.queued, enqueueFailed: result.enqueueFailed });
+      } else if (stranded || pendingCount > 0) {
+        log("commit_deferred", {
+          event: EVENT,
+          ovSessionId,
+          failed: result.failed,
+          queued: result.queued,
+          enqueueFailed: result.enqueueFailed,
+          pendingCount,
+        });
+        // SessionEnd is the last chance to close the session. With messages
+        // parked on disk, queue the commit behind them (the replay drains
+        // addMessage before commitSession); lost payloads suppress this.
+        if (shouldQueueSessionEndCommit(EVENT, result, pendingCount)) {
+          const lastCreatedAt = pendingForSession.reduce(
+            (max, { entry }) => Math.max(max, Number(entry.createdAt) || 0),
+            0,
+          );
+          const queuedCommit = await enqueue("commitSession", ovSessionId, {}, {
+            createdAt: lastCreatedAt + 1,
+          });
+          log("commit_queued", { ok: queuedCommit.ok, deduped: Boolean(queuedCommit.deduped) });
+        }
       }
     });
     if (locked === null) {
