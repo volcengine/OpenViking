@@ -383,6 +383,41 @@ def test_external_provider_dispatches_search_over_http(external_provider):
         worker.join(timeout=5)
 
 
+@pytest.mark.parametrize(
+    ("failed_suffix", "failure_stage", "message_status"),
+    [
+        ("/messages", "message", "unknown"),
+        ("/commit", "commit", "accepted"),
+    ],
+)
+def test_remember_names_empty_timeout_errors(
+    external_provider, failed_suffix, failure_stage, message_status
+):
+    _, provider, _, _ = external_provider(f"remember-timeout-{failure_stage}")
+
+    class Client:
+        _user = "alice"
+
+        def get(self, _path, **_kwargs):
+            return {"result": {"user": self._user}}
+
+        def post(self, path, _payload):
+            if path.endswith(failed_suffix):
+                raise TimeoutError()
+            return {"result": {}}
+
+    client = Client()
+    provider._ensure_client = lambda: client
+
+    result = json.loads(
+        provider.handle_tool_call("viking_remember", {"content": "Preferred shell is zsh"})
+    )
+
+    assert result["failure_stage"] == failure_stage
+    assert result["message_status"] == message_status
+    assert result["error"].endswith("TimeoutError")
+
+
 def test_cancelled_external_setup_keeps_existing_config(external_provider, monkeypatch):
     import hermes_cli.memory_setup as setup
 
