@@ -547,10 +547,9 @@ class VLMProviderAdapter(LLMProvider):
         response = await client.chat.completions.create(**kwargs)
         async for chunk in response:
             chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
-            if chunk_usage:
-                usage = chunk_usage
-
             choices = getattr(chunk, "choices", None) or []
+            if chunk_usage:
+                usage = self._merge_stream_usage(usage, chunk_usage) if choices else chunk_usage
             if not choices:
                 continue
             choice = choices[0]
@@ -687,6 +686,23 @@ class VLMProviderAdapter(LLMProvider):
         if reasoning:
             usage["reasoning_tokens"] = reasoning
         return usage
+
+    @staticmethod
+    def _merge_stream_usage(
+        accumulated: dict[str, int],
+        incoming: dict[str, int],
+    ) -> dict[str, int]:
+        """Merge usage deltas while preserving cumulative provider snapshots."""
+        if not accumulated:
+            return dict(incoming)
+
+        counters = ("prompt_tokens", "completion_tokens", "total_tokens")
+        if all(incoming.get(key, 0) >= accumulated.get(key, 0) for key in counters):
+            return accumulated | incoming
+
+        return {
+            key: accumulated.get(key, 0) + incoming.get(key, 0) for key in accumulated | incoming
+        }
 
     def _record_vlm_usage(
         self,
