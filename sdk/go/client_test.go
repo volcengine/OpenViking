@@ -177,13 +177,24 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "search_type", "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "search_type", "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri", "include_provenance", "read_content")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
 
 	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	for _, configured := range []bool{false, true} {
+		for _, key := range []string{"include_provenance", "read_content"} {
+			opts := &FindOptions{Extra: map[string]any{key: true}}
+			if configured {
+				opts.IncludeProvenance, opts.ReadContent = Bool(false), Bool(false)
+			}
+			if _, err := client.Find(context.Background(), "auth", opts); err == nil || err.Error() != fmt.Sprintf("openviking: extra cannot override %q", key) {
+				t.Fatalf("configured=%v, extra field=%s: expected conflict, got %v", configured, key, err)
+			}
+		}
 	}
 }
 
@@ -709,13 +720,24 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags", "agent_id", "agent_uri", "include_provenance", "read_content")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
 
 	if _, err := client.Search(context.Background(), "auth", &SearchOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	for _, configured := range []bool{false, true} {
+		for _, key := range []string{"include_provenance", "read_content"} {
+			opts := &SearchOptions{Extra: map[string]any{key: true}}
+			if configured {
+				opts.IncludeProvenance, opts.ReadContent = Bool(false), Bool(false)
+			}
+			if _, err := client.Search(context.Background(), "auth", opts); err == nil || err.Error() != fmt.Sprintf("openviking: extra cannot override %q", key) {
+				t.Fatalf("configured=%v, extra field=%s: expected conflict, got %v", configured, key, err)
+			}
+		}
 	}
 }
 
@@ -725,6 +747,13 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body,
+			"limit",
+			"node_limit",
+			"score_threshold",
+			"include_provenance",
+			"rewrite_max_bullets",
+		)
 		if body["mode"] != "context" || body["query"] != "continue refactor" {
 			t.Fatalf("body = %#v", body)
 		}
@@ -768,6 +797,71 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("expected mode conflict, got %v", err)
 	}
+	for _, configured := range []bool{false, true} {
+		for _, key := range []string{"limit", "node_limit", "score_threshold", "include_provenance", "max_tokens", "dedup_turns", "rewrite_max_bullets"} {
+			opts := &SearchContextOptions{Extra: map[string]any{key: 1}}
+			if configured {
+				opts.Limit, opts.NodeLimit = Int(10), Int(10)
+				opts.ScoreThreshold, opts.IncludeProvenance = Float64(0), Bool(false)
+				opts.MaxTokens, opts.DedupTurns, opts.RewriteMaxBullets = Int(1600), Int(0), Int(6)
+			}
+			if _, err := client.SearchContext(context.Background(), "query", opts); err == nil || err.Error() != fmt.Sprintf("openviking: extra cannot override %q", key) {
+				t.Fatalf("configured=%v, extra field=%s: expected conflict, got %v", configured, key, err)
+			}
+		}
+	}
+
+	t.Run("nil options", func(t *testing.T) {
+		client, closeServer := testClient(t, http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				body := readJSONBody(t, r)
+				requireBodyKeysAbsent(t, body,
+					"limit",
+					"node_limit",
+					"score_threshold",
+					"include_provenance",
+					"max_tokens",
+					"dedup_turns",
+					"rewrite_max_bullets",
+				)
+				writeOK(t, w, map[string]any{
+					"entries": []any{},
+				})
+			},
+		))
+		defer closeServer()
+
+		_, err := client.SearchContext(context.Background(), "auth", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("explicit zero values", func(t *testing.T) {
+		client, closeServer := testClient(t, http.HandlerFunc(
+			func(w http.ResponseWriter, r *http.Request) {
+				body := readJSONBody(t, r)
+
+				if value, exists := body["include_provenance"]; !exists || value != false {
+					t.Fatalf("include_provenance = %#v, present = %v", value, exists)
+				}
+				if value, exists := body["dedup_turns"]; !exists || value != float64(0) {
+					t.Fatalf("dedup_turns = %#v, present = %v", value, exists)
+				}
+
+				writeOK(t, w, map[string]any{"entries": []any{}})
+			},
+		))
+		defer closeServer()
+
+		_, err := client.SearchContext(context.Background(), "auth", &SearchContextOptions{
+			IncludeProvenance: Bool(false),
+			DedupTurns:        Int(0),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
