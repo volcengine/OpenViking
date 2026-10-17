@@ -1771,6 +1771,10 @@ class TestMemoryUpdater:
 
         mock_viking_fs.read_file = mock_read_file
         mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(
+            return_value={"lease_ref": "test-lease"}
+        )
+        mock_viking_fs._async_agfs.pathlock_release = AsyncMock()
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
