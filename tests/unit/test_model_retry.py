@@ -432,3 +432,64 @@ def test_numeric_status_code_with_compact_error_code_context_still_matches():
     assert classify_api_error(RuntimeError("Error code:413-Payload Too Large")) == (
         ERROR_CLASS_INPUT_TOO_LARGE
     )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Validation error: max_tokens=500 is too high",
+        "Validation error: token budget 500 is too high",
+        "Configured batch size: 502 items",
+        "The response limit is 504 tokens",
+    ],
+)
+def test_numeric_values_without_http_status_context_stay_unknown(message):
+    assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("500 Internal Server Error", ERROR_CLASS_TRANSIENT),
+        ("HTTP 500 Internal Server Error", ERROR_CLASS_TRANSIENT),
+        ("OpenAI API error (500): request failed", ERROR_CLASS_TRANSIENT),
+        ("Upstream returned 500 Internal Server Error", ERROR_CLASS_TRANSIENT),
+        ("API error: 502 Bad Gateway", ERROR_CLASS_TRANSIENT),
+        ("status code: 503 Service Unavailable", ERROR_CLASS_TRANSIENT),
+        ("code: 503", ERROR_CLASS_TRANSIENT),
+        ("504 status code", ERROR_CLASS_TRANSIENT),
+        ("413 Payload Too Large", ERROR_CLASS_INPUT_TOO_LARGE),
+        ("403 AccountQuotaExceeded", ERROR_CLASS_AUTH),
+        ("Error code: 400 - invalid parameter", ERROR_CLASS_PERMANENT),
+    ],
+)
+def test_numeric_http_status_context_still_classifies(message, expected):
+    assert classify_api_error(RuntimeError(message)) == expected
+
+
+@pytest.mark.parametrize("errno", ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"])
+def test_node_transport_errno_is_transient(errno):
+    assert classify_api_error(RuntimeError(f"connect {errno} upstream")) == ERROR_CLASS_TRANSIENT
+
+
+def test_retry_sync_uses_status_context_and_node_errno():
+    validation_attempts = {"count": 0}
+
+    def invalid_request():
+        validation_attempts["count"] += 1
+        raise RuntimeError("Validation error: max_tokens=500 is too high")
+
+    with pytest.raises(RuntimeError):
+        retry_sync(invalid_request, max_retries=3, base_delay=0, jitter=False)
+    assert validation_attempts["count"] == 1
+
+    transport_attempts = {"count": 0}
+
+    def transient_request():
+        transport_attempts["count"] += 1
+        if transport_attempts["count"] == 1:
+            raise RuntimeError("connect ECONNRESET upstream")
+        return "ok"
+
+    assert retry_sync(transient_request, max_retries=3, base_delay=0, jitter=False) == "ok"
+    assert transport_attempts["count"] == 2
