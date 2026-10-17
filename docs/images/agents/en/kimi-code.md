@@ -16,7 +16,7 @@
 ## Step 2: Verify
 
 1. Run `/reload` in Kimi Code, or start a new session.
-2. Confirm `~/.kimi-code/plugins/installed.json` contains the `openviking-memory` entry.
+2. Confirm `~/.kimi-code/plugins/installed.json` contains the `openviking-memory` entry, or that the plugin is enabled in the `/plugins` manager.
 3. In a new session, ask about something you mentioned earlier to confirm recall.
 
 ## Troubleshoot
@@ -26,9 +26,9 @@
 | Plugin is not loaded | Check that `~/.kimi-code/plugins/managed/openviking-memory/` exists; if not, re-run Install, then run `/reload` |
 | Wrong server / 401 | Check `~/.openviking/ovcli.conf` and the API key |
 | Need logs | `OPENVIKING_DEBUG=1` and `~/.openviking/logs/kimicode-hooks.log` |
-| Remove only this plugin | `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness kimicode` |
+| Remove only this plugin | `/plugins remove openviking-memory` (or remove it in the `/plugins` manager); for legacy curl-installer installs, run `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness kimicode` |
 
 ## Reference
 
-- Docs on Manual Settings: [Kimi Code](https://docs.openviking.net/en/agent-integrations/08-community-plugins)
-- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+- Docs on Manual Settings: [Kimi Code](https://docs.openviking.net/en/agent-integrations/08-community-plugins#kimi-code-memory-integration)
+- Code: [examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin) (legacy curl adapter: [examples/agent-hook-plugin/hosts/kimicode](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/hosts/kimicode))

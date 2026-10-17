@@ -42,16 +42,43 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## Kimi Code 记忆集成
 
-源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+源码：[examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin) | 文档：[README](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/README_CN.md)、[DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md)
 
-Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
+Kimi Code 集成是社区实现的原生 managed plugin，不是 Moonshot AI 或 Kimi Code 的官方插件。它复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
 
-- **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本。
-- **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI。
+- **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本；profile 与 skill 清单也在首次提问时经此事件注入，因为 Kimi 会丢弃 `SessionStart` 的 stdout。
+- **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI，引导模型改用 MCP 工具。
 - **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
+- **SessionStart** 有界重放此前发送失败的 pending 消息。
 - 原生插件 manifest 提供 OpenViking MCP server，不修改 Kimi 的旧式配置文件。
 
-### 安装
+已知局限：subagent 对话（`agents/<subagent>/wire.jsonl`）尚未捕获。
+
+### 安装（原生插件）
+
+前置条件：Kimi Code CLI ≥ 2.1.1（已在 2.2.0 上验证）、Node.js 18+、正在运行的 OpenViking 服务。在 Kimi TUI 里执行：
+
+```text
+/plugins install <本仓库 examples/kimi-code-memory-plugin 的绝对路径 | zip URL>
+```
+
+本插件位于 monorepo 子目录，而 kimi-code 的 GitHub URL 安装只支持 manifest 位于仓库根目录的仓库，所以用本地目录或 manifest 在压缩包根目录的 zip。安装后 `/reload` 或开新会话生效；升级用同一命令，卸载用 `/plugins remove openviking-memory`。配置项与完整开关清单见插件 README。
+
+### 验证与排查
+
+`node scripts/ov-memory-doctor.mjs --offline` 检查安装记录、配置与连接、近期活动；设置 `OPENVIKING_DEBUG=1` 后日志写入 `~/.openviking/logs/kimicode-hooks.log`。
+
+| 现象 | 可能原因 | 修复方法 |
+|------|----------|----------|
+| 插件已装但没有自动召回/捕获 | 插件被禁用，或会话未重载 | 在 `/plugins` 确认 `openviking-memory` 已启用，然后 `/reload` 或开新会话 |
+| 改了插件源码不生效 | CLI 始终运行托管副本，不看源码目录 | `/plugins install <同样的安装来源>` 重装后再验证 |
+| MCP 工具调用报认证错误 | 凭据缺失或过期 | 修正 `~/.openviking/ovcli.conf` 或 `OPENVIKING_*` 凭据后重开会话 |
+| MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
+| 不确定哪里出问题 | — | 运行上面的 doctor；`OPENVIKING_DEBUG=1` 查看日志 |
+
+### 安装（legacy / 备选）
+
+新用户请改用上面的原生插件路径。以下说明保留给仍在使用 curl 安装器的现有用户。
 
 前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
 

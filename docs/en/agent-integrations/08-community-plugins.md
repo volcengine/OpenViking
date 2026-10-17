@@ -42,18 +42,49 @@ Implementation details and currently verified ZCode assumptions are documented i
 
 ## Kimi Code memory integration
 
-Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+Source: [examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin) | Docs: [README](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/README.md), [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md)
 
-The Kimi Code integration is a native managed plugin. It reuses the shared
-OpenViking hook runtime and adds only Kimi-specific event mapping, wire
+The Kimi Code integration is a community implementation shipped as a native managed plugin, not an official plugin of
+Moonshot AI or Kimi Code. It reuses the shared OpenViking hook runtime and adds only Kimi-specific event mapping, wire
 transcript decoding, output formatting, and commit policy:
 
-- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
-- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
+- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject; the profile and skill list ride the same event on the first prompt, because Kimi discards `SessionStart` stdout.
+- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs and points the model at the MCP tools.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- **SessionStart** replays pending messages that failed to send earlier.
 - The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
 
-### Install
+Known gap: subagent transcripts (`agents/<subagent>/wire.jsonl`) are not captured yet.
+
+### Install (native plugin)
+
+Prerequisites: Kimi Code CLI ≥ 2.1.1 (verified on 2.2.0), Node.js 18+, and a running OpenViking server. In the Kimi TUI:
+
+```text
+/plugins install <absolute path to examples/kimi-code-memory-plugin in this repo | zip URL>
+```
+
+The plugin sits in a monorepo subdirectory, and Kimi's GitHub URL install only accepts repositories whose manifest is at
+the repository root, so use a local directory or a zip with the manifest at its root. `/reload` or a new session
+activates it; the same command upgrades, and `/plugins remove openviking-memory` uninstalls. Settings and the full
+switch list are in the plugin README.
+
+### Verify and troubleshoot
+
+`node scripts/ov-memory-doctor.mjs --offline` checks the install record, configuration and connection, and recent
+activity; with `OPENVIKING_DEBUG=1`, event logs go to `~/.openviking/logs/kimicode-hooks.log`.
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Installed but no recall or capture | Plugin disabled, or the session was not reloaded | Confirm `openviking-memory` is enabled in `/plugins`, then `/reload` or start a new session |
+| Source edits have no effect | The CLI always runs the managed copy, not your source directory | Reinstall with `/plugins install <same source>` and verify again |
+| MCP tool calls fail authentication | Credentials missing or expired | Fix `~/.openviking/ovcli.conf` or the `OPENVIKING_*` credential env vars, then restart the session |
+| MCP tool calls fail to connect | Server unreachable or the URL is wrong | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
+| Not sure what is wrong | — | Run the doctor above; set `OPENVIKING_DEBUG=1` and read the log |
+
+### Install (legacy / fallback)
+
+New users should pick the native plugin above instead. These instructions stay for existing users of the curl installer.
 
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 

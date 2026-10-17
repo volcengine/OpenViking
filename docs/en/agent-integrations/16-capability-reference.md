@@ -472,7 +472,7 @@ The session ID prefix tells you which integration wrote a session on the server.
 | Cursor | Unified installer; writes `~/.cursor/hooks.json` and `mcp.json` | `cu-<conversation id>` | Shared settings, `plugin.cursor` |
 | TRAE, TRAE CN | Unified installer; writes `~/.trae/` or `~/.trae-cn/` hooks and MCP files | `tr-` or `trcn-` | Shared settings, `plugin.trae` or `plugin.trae_cn` |
 | ZCode | Unified installer; merges into `~/.zcode/cli/config.json` and turns hooks on | `zc-<id>` | Shared settings, `plugin.zcode` |
-| Kimi Code | Unified installer; managed Kimi Code plugin | `kc-<id>` | Shared settings, `plugin.kimicode` |
+| Kimi Code | Native Kimi Code plugin (`/plugins install`), or the unified installer (legacy) | `kc-<id>` | Shared settings, `plugin.kimicode` |
 | OpenCode | Unified installer, npm (`@openviking/opencode-plugin`), or source | `oc-<id>`; subagents `oc-<parent>__subagent-<child>` | Shared settings, `plugin.opencode` |
 | DSH | Unified installer or `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | Shared settings, `plugin.dsh`, then the Cordis patch |
 | pi | Unified installer, into pi's extension directory | `pi-<id>` | Shared settings, `plugin.pi` |
@@ -770,7 +770,7 @@ Use a user or admin API key; the server reads the account and user from it. `X-O
 
 For automatic recall, capture, commits, and offline retries, reuse the existing code instead of writing it again:
 
-- **`examples/memory-plugin-shared/lib/`** (Node.js) holds the shared modules: recall with its fallbacks, session-start context, capture cleaning, the offline queue, batch sending, the MCP proxy, session IDs, and credentials. Hosts configured through hook files can add an adapter to `examples/agent-hook-plugin/hosts/`, as Cursor, TRAE, ZCode, and Kimi Code do.
+- **`examples/memory-plugin-shared/lib/`** (Node.js) holds the shared modules: recall with its fallbacks, session-start context, capture cleaning, the offline queue, batch sending, the MCP proxy, session IDs, and credentials. Hosts configured through hook files can add an adapter to `examples/agent-hook-plugin/hosts/`, as Cursor, TRAE, and ZCode do; the Kimi Code native plugin reuses the same modules and declares its hooks and MCP server in `kimi.plugin.json` instead.
 - **The Agent Plugins package** (`agent-plugins/`) is a portable `plugin.json`, `skills/`, and `mcp.json` with a stdio-to-HTTP proxy and no hooks. Its `plugin.test.mjs` checks conformance with the Agent Plugins specification and can serve as a lint baseline for your own package.
 
 The [plugin development guide](./18-plugin-development.md) covers module ownership, configuration, generated copies, installers, and tests. Whatever you build, keep three rules so it behaves like the existing integrations:
@@ -800,7 +800,7 @@ The comparisons above were checked against these locations. They help when you n
 - Write and delete checks: `openviking/storage/content_write.py` and `openviking/storage/viking_fs/_access.py`.
 - Server auto-commit: `openviking_cli/utils/config/memory_config.py` and `openviking/session/auto_commit_policy.py`.
 - Plugin settings and defaults: `examples/memory-plugin-shared/lib/config-schema.mjs`.
-- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
+- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, and ZCode; the Kimi Code native plugin lives in `examples/kimi-code-memory-plugin/`.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
 - Hermes: the bundled provider from earlier releases at the pinned commit linked

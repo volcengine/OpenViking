@@ -16,7 +16,7 @@
 ## 步骤2：验证
 
 1. 在 Kimi Code 中运行 `/reload`，或新建会话。
-2. 确认 `~/.kimi-code/plugins/installed.json` 中有 `openviking-memory` 条目。
+2. 确认 `~/.kimi-code/plugins/installed.json` 中有 `openviking-memory` 条目，或在 `/plugins` 管理器中确认插件已启用。
 3. 新开会话，询问之前提到过的信息，确认召回生效。
 
 ## 故障排查
@@ -26,9 +26,9 @@
 | 插件没加载 | 检查 `~/.kimi-code/plugins/managed/openviking-memory/` 是否存在；不存在就重新执行安装，再运行 `/reload` |
 | 连错服务 / 401 | 检查 `~/.openviking/ovcli.conf` 和 API Key |
 | 需要日志 | 设置 `OPENVIKING_DEBUG=1`，查看 `~/.openviking/logs/kimicode-hooks.log` |
-| 只卸载该插件 | `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness kimicode` |
+| 只卸载该插件 | `/plugins remove openviking-memory`（或在 `/plugins` 管理器中移除）；旧版 curl 安装器装的使用 `curl -fsSL https://openviking.ai/install \| bash -s -- --uninstall --yes --harness kimicode` |
 
 ## 参考
 
-- 手动配置文档：[Kimi Code](https://docs.openviking.net/zh/agent-integrations/08-community-plugins)
-- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+- 手动配置文档：[Kimi Code](https://docs.openviking.net/zh/agent-integrations/08-community-plugins#kimi-code-记忆集成)
+- 源码：[examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin)（旧版 curl 适配器：[examples/agent-hook-plugin/hosts/kimicode](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/hosts/kimicode)）

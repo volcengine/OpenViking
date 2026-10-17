@@ -9,6 +9,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
 | **Codex / TraeCode CLI 2.0** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
+| **Kimi Code** | [Kimi Code memory integration](./08-community-plugins.md#kimi-code-memory-integration) — native managed plugin (community implementation): hooks for auto-recall, `wire.jsonl` incremental capture, plus MCP tools |
 | **Cursor** | [Cursor Memory Integration](./12-cursor.md) — one command installs lifecycle hooks, MCP tools, rules, and skills |
 | **TRAE / TRAE CN** | [TRAE Memory Integration](./13-trae.md) — one installer configures prompt-time recall, turn capture, and OpenViking tools |
 | **DeepSeek Harness (`dsh`)** | [DeepSeek Harness Memory Bundle](./17-dsh.md) — in-process Cordis plugin with pre-step recall, event capture, and the OpenViking MCP tools |
