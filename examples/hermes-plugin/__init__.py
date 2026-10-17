@@ -2799,8 +2799,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if fcntl is not None:
                 steps.append(("unlock", lambda: fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)))
             steps.append(("close", lock_file.close))
-        if path is not None:
-            steps.append(("remove", lambda: path.unlink(missing_ok=True)))
+        # Keep the pathname stable: another recovery may already hold or be
+        # waiting on this inode when the lock is released.
         for verb, step in steps:
             try:
                 step()
@@ -2818,8 +2818,6 @@ class OpenVikingMemoryProvider(MemoryProvider):
             self._run_lock_file = self._flock_open(path)
             self._run_lock_path = path
         except Exception as e:
-            with suppress(Exception):
-                path.unlink(missing_ok=True)
             logger.debug("Could not acquire OpenViking run lock %s: %s", path, e)
 
     def _release_run_lock(self) -> None:
