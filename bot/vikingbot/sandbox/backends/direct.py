@@ -1,6 +1,7 @@
 """Direct backend implementation - executes commands directly on host without sandboxing."""
 
 import asyncio
+import codecs
 import os
 import signal
 from pathlib import Path
@@ -11,6 +12,73 @@ from loguru import logger
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend
+
+
+def _existing_text_format(path: Path) -> tuple[bytes, str, str | None]:
+    """Validate an existing text file and return its BOM, encoding, and newline style."""
+    with path.open("rb") as raw:
+        prefix = raw.read(4)
+        if prefix.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+            raise IOError("existing UTF-32 files are not supported by write_file")
+        if prefix.startswith(codecs.BOM_UTF8):
+            bom, encoding = codecs.BOM_UTF8, "utf-8"
+        elif prefix.startswith(codecs.BOM_UTF16_LE):
+            bom, encoding = codecs.BOM_UTF16_LE, "utf-16-le"
+        elif prefix.startswith(codecs.BOM_UTF16_BE):
+            bom, encoding = codecs.BOM_UTF16_BE, "utf-16-be"
+        else:
+            bom, encoding = b"", "utf-8"
+
+        raw.seek(len(bom))
+        newline_styles: set[str] = set()
+        pending_cr = False
+
+        def scan_newlines(text: str) -> None:
+            nonlocal pending_cr
+            if not bom and "\x00" in text:
+                raise IOError("existing file has an unsupported text encoding")
+            if pending_cr and text:
+                if text.startswith("\n"):
+                    newline_styles.add("\r\n")
+                    text = text[1:]
+                else:
+                    newline_styles.add("\r")
+                pending_cr = False
+            if text.endswith("\r"):
+                text = text[:-1]
+                pending_cr = True
+            if "\r\n" in text:
+                newline_styles.add("\r\n")
+            without_crlf = text.replace("\r\n", "")
+            if "\r" in without_crlf:
+                newline_styles.add("\r")
+            if "\n" in without_crlf:
+                newline_styles.add("\n")
+
+        try:
+            decoder = codecs.getincrementaldecoder(encoding)(errors="strict")
+            for chunk in iter(lambda: raw.read(64 * 1024), b""):
+                scan_newlines(decoder.decode(chunk))
+            scan_newlines(decoder.decode(b"", final=True))
+        except UnicodeDecodeError as exc:
+            raise IOError("existing file has an unsupported text encoding") from exc
+        if pending_cr:
+            newline_styles.add("\r")
+
+    newline = next(iter(newline_styles)) if len(newline_styles) == 1 else None
+    return bom, encoding, newline
+
+
+def _encode_existing_text(path: Path, content: str) -> bytes:
+    """Encode replacement text with the existing supported text representation."""
+    bom, encoding, newline = _existing_text_format(path)
+    if newline is not None:
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
+        content = content.replace("\n", newline)
+    try:
+        return bom + content.encode(encoding)
+    except UnicodeEncodeError as exc:
+        raise IOError(f"replacement text cannot be encoded as {encoding}") from exc
 
 
 @register_backend("direct")
@@ -148,7 +216,10 @@ class DirectBackend(SandboxBackend):
 
         self._check_path_restriction(sandbox_path)
         sandbox_path.parent.mkdir(parents=True, exist_ok=True)
-        sandbox_path.write_text(content, encoding="utf-8")
+        if sandbox_path.exists():
+            sandbox_path.write_bytes(_encode_existing_text(sandbox_path, content))
+        else:
+            sandbox_path.write_text(content, encoding="utf-8")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         sandbox_path = Path(path)
