@@ -121,10 +121,7 @@ class DirectBackend(SandboxBackend):
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
         self._check_path_restriction(sandbox_path)
-        if not sandbox_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        if not sandbox_path.is_file():
-            raise IOError(f"Not a file: {path}")
+        self._require_local_file(sandbox_path, path)
         return sandbox_path
 
     async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
