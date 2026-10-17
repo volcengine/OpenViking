@@ -126,15 +126,16 @@ runHookStage(
       return;
     }
 
-    const recalled = await recallForPrompt(fetchJSON, cfg, userPrompt, cwd, log, {
+    // recallForPrompt resolves to the rendered block (a string) or null.
+    const recallBlock = await recallForPrompt(fetchJSON, cfg, userPrompt, cwd, log, {
       sessionId: recallSessionId,
     });
-    log("recall_complete", { stage: recalled?.stage, chars: recalled?.block?.length || 0 });
+    log("recall_complete", { chars: recallBlock?.length || 0 });
 
     // Profile rides the FIRST successful prompt of a session: Kimi discards
     // SessionStart stdout (#2873), so the prompt hook is the only carrier.
     const parts = [];
-    if (recalled?.block) parts.push(recalled.block);
+    if (recallBlock) parts.push(recallBlock);
     const state = kimiSessionId ? await loadState(kimiSessionId) : {};
     if (kimiSessionId && !state.profileInjected) {
       const profile = await buildAgentProfile(fetchJSON, cfg, cwd);
