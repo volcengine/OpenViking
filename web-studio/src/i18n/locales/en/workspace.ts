@@ -503,6 +503,13 @@ const workspace = {
       noResultCancelledDescription:
         'This task was cancelled before it returned a result.',
     },
+    cancelDialog: {
+      title: 'Cancel this task?',
+      description:
+        "Request cancellation of task {{taskId}}. The task stops cooperatively at the next safe checkpoint, its queue slot is released, and the status becomes 'Cancelled'.",
+      confirm: 'Cancel task',
+      dismiss: 'Keep running',
+    },
     events: {
       title: 'Task execution log',
       description:
@@ -533,6 +540,7 @@ const workspace = {
       clear: 'Clear filters',
     },
     actions: {
+      cancelTask: 'Cancel task',
       retrigger: 'Re-trigger Task',
     },
     pipeline: {
