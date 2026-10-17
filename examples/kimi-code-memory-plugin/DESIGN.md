@@ -254,11 +254,16 @@ tool.result → { type: "function_call_output", call_id, output, isError?, durat
   `{ role, content }`; `turn_id` stamped when available; `peer_id` when a peer
   is resolved. Batched ≤100 per request.
 - Cursor: a **turnId acknowledgement set** (dedupKey `turnId:role`, tool parts
-  keyed by tool id), advanced only on server confirmation; failures go to the
-  pending queue with the cursor untouched. An index cursor was rejected
-  because journal truncation would drift it.
-- Commit: on `interrupt`/`session-end` always; on `pre-compact` unless
-  `autoCommitOnCompact=false`; otherwise at `commitTurnThreshold`.
+  keyed by tool id; a second entry that would collide gets a `#n` suffix),
+  advanced only on server confirmation; failures go to the pending queue with
+  the cursor untouched. An index cursor was rejected because journal
+  truncation would drift it.
+- Commit: only for a strand-free run — no `failed` payloads, nothing queued,
+  and no older queue entry for the session. Then `interrupt`/`session-end`
+  always, `pre-compact` unless `autoCommitOnCompact=false`, otherwise at
+  `commitTurnThreshold` counted in payloads (one per captured turn). A
+  SessionEnd that cannot commit because messages are parked queues a
+  `commitSession` behind them, so the replay commits after they drain.
 
 ## Recall design
 
