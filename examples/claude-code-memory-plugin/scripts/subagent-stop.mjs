@@ -129,11 +129,15 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   };
 }
 
+// Write-path hook: gated by autoCapture so that disabling capture also
+// suppresses the subagent transcript push + commit, and by
+// skipSubagentSessions so subagent turns can be kept out of memory entirely.
+const capturesSubagents = (cfg) => cfg.autoCapture && !cfg.skipSubagentSessions;
+
 async function main() {
-  // Write-path hook: gated by autoCapture so that disabling capture also
-  // suppresses the subagent transcript push + commit. This runs against the
-  // hook's own directory, before the payload names the session's.
-  if (!baseCfg.autoCapture) {
+  // Runs against the hook's own directory, before the payload names the
+  // session's.
+  if (!capturesSubagents(baseCfg)) {
     log("skip", { reason: "disabled" });
     approve();
     return;
@@ -144,7 +148,7 @@ async function main() {
   await runHookStage({
     loadConfig,
     input: { read: readHookStdin, tolerant: true },
-    gates: { enabled: (cfg) => cfg.autoCapture },
+    gates: { enabled: capturesSubagents },
     envelope: approve,
     onSkip: (reason) => log("skip", { reason }),
   }, async ({ cfg, input, cwd, sessionId }) => {
