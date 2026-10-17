@@ -267,6 +267,29 @@ def _status_code_from_error(error: Exception) -> Optional[int]:
     return getattr(getattr(error, "response", None), "status_code", None)
 
 
+def _probe_needs_credentials(status: Optional[int], *, has_gateway_headers: bool = False) -> bool:
+    """True when an anonymous probe's status authorizes a retry with credentials.
+
+    ``401``/``403`` are explicit challenges from the server itself: retrying with the key
+    is the documented path for a hosted OpenViking whose ``/health`` requires auth.
+
+    A ``3xx`` is a redirect, and a redirect on its own identifies nothing — an ordinary
+    3xx from an endpoint that has not been shown to be OpenViking must not receive
+    secrets. It is retried only when this connection carries gateway headers, because
+    those are the operator's explicit declaration that an authenticating gateway
+    (Cloudflare Access, oauth2-proxy, ...) sits in front of that endpoint.
+    """
+    if status is None:
+        return False
+    if status in (401, 403):
+        return True
+    return bool(has_gateway_headers) and 300 <= status < 400
+
+
+def _is_redirect(status: Optional[int]) -> bool:
+    return isinstance(status, int) and 300 <= status < 400
+
+
 def _format_openviking_exception(error: Exception) -> str:
     return _sanitize_openviking_error_message(str(error), _status_code_from_error(error))
 
@@ -452,12 +475,38 @@ class _VikingClient:
 
     def _anonymous_json(self, path: str) -> dict:
         """Probe server identity without disclosing credentials or tenant IDs."""
-        return self._parse_response(self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0))
+        resp = self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0)
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int) and 300 <= status < 400:
+            # An authenticating gateway answered the anonymous probe with a redirect to
+            # its own login page. Surface the status instead of parsing the HTML body
+            # into an empty dict, so callers can retry with credentials.
+            raise _OpenVikingHTTPError(f"HTTP {status}", status)
+        return self._parse_response(resp)
+
+    def _probe_retry_headers(self, status: Optional[int]) -> dict:
+        """The headers the retry may carry, limited to what that response authorizes.
+
+        ``401``/``403`` is the server itself asking for credentials, so the retry keeps the
+        set it always sent. A redirect only says a gateway wants its own headers: the
+        gateway support this plugin adds needs nothing else, so a ``3xx`` retry carries the
+        operator's gateway headers and no credential or peer identity.
+        """
+        if _is_redirect(status):
+            return dict(self._extra_headers)
+        return self._headers(include_tenant=False)
 
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
         Hosted OpenViking requires auth on /health: when an API key is configured and the
         anonymous call gets 401/403, retry once with the key (no tenant headers).
+
+        A 3xx is retried only when this connection carries gateway headers — the operator's
+        declaration that an authenticating gateway (Cloudflare Access, oauth2-proxy, ...)
+        fronts the endpoint — and that retry carries nothing but those gateway headers: the
+        key and the peer identity are not what a gateway asks for. An ordinary redirect from
+        an endpoint that has not been shown to be OpenViking is not authorization to resend
+        secrets, so it stays a failure.
 
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
@@ -465,9 +514,18 @@ class _VikingClient:
         try:
             return self._anonymous_json("/health")
         except _OpenVikingHTTPError as exc:
-            if not self._api_key or _status_code_from_error(exc) not in {401, 403}:
+            status = _status_code_from_error(exc)
+            if not self._api_key or not _probe_needs_credentials(
+                status, has_gateway_headers=bool(self._extra_headers)
+            ):
                 raise
-            return self._parse_response(self._httpx.get(f"{self._endpoint}/health", headers=self._headers(include_tenant=False), timeout=3.0))
+            return self._parse_response(
+                self._httpx.get(
+                    f"{self._endpoint}/health",
+                    headers=self._probe_retry_headers(status),
+                    timeout=3.0,
+                )
+            )
 
     def openapi_payload(self) -> dict:
         return self._anonymous_json("/openapi.json")

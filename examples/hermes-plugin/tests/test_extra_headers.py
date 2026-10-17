@@ -12,11 +12,40 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
-def _start_server(records, *, require_header=None):
+def _start_server(records, *, require_header=None, redirect_to=None, plain_redirect_to=None):
+    """Local stand-in for an OpenViking server.
+
+    ``redirect_to`` models an authenticating gateway that answers header-less requests
+    by redirecting to its own login page (Cloudflare Access, oauth2-proxy, ...) instead
+    of returning 401/403.
+
+    ``plain_redirect_to`` models an endpoint that simply redirects every request and
+    says nothing about being OpenViking — the ordinary 3xx that must never receive
+    credentials.
+    """
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             records.append(dict(self.headers))
+            if plain_redirect_to:
+                body = b"<html><head><title>302 Found</title></head><body></body></html>"
+                self.send_response(302)
+                self.send_header("Location", plain_redirect_to)
+                self.send_header("Content-Type", "text/html; charset=UTF-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if require_header and not self.headers.get(require_header):
+                if redirect_to:
+                    body = b"<html><head><title>302 Found</title></head><body></body></html>"
+                    self.send_response(302)
+                    self.send_header("Location", redirect_to)
+                    self.send_header("Content-Type", "text/html; charset=UTF-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 status, payload = 403, {"error": "blocked at edge"}
             else:
                 status, payload = 200, {"status": "ok", "healthy": True,
@@ -144,6 +173,95 @@ def test_startup_health_probe_carries_extra_headers(external_provider):
         )
         assert provider._client is not None, "provider dropped the client after a refused probe"
         assert provider._client._extra_headers == {"CF-Access-Client-Id": "id.access"}
+        # A 401/403 is the server itself asking for credentials: that retry keeps sending the
+        # key, exactly as it did before gateway support existed.
+        assert records[-1].get("X-API-Key") == "test-key", (
+            "the retry after 403 stopped carrying the key"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_startup_probe_retries_when_gateway_redirects_to_login(external_provider):
+    """A redirect to a login page means "credentials wanted", not "not OpenViking".
+
+    Cloudflare Access answers a header-less request with ``302`` and
+    ``Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>``. The
+    anonymous identity probe deliberately sends no credentials, so it cannot read that
+    HTML page; without a retry the provider reports a reachable server as "not valid
+    OpenViking" and drops the client, even though every authenticated request would work.
+    """
+    records = []
+    server, worker = _start_server(
+        records,
+        require_header="CF-Access-Client-Id",
+        redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
+    )
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        home, provider, _module, _settings = external_provider("extra-headers-redirect")
+        (home / ".env").write_text(
+            "OPENVIKING_ENDPOINT=%s\nOPENVIKING_API_KEY=test-key\nOPENVIKING_EXTRA_HEADERS=%s\n"
+            % (endpoint, json.dumps({"CF-Access-Client-Id": "id.access"})),
+            encoding="utf-8",
+        )
+        provider.initialize(session_id="gateway-redirect", hermes_home=str(home), platform="cli")
+        assert provider._client is not None, (
+            "provider dropped a reachable server because the anonymous probe was redirected"
+        )
+        assert records[-1].get("CF-Access-Client-Id") == "id.access", (
+            "the retry after the redirect went out without the resolved headers"
+        )
+        leaked = [
+            r for r in records[-1:]
+            if r.get("X-API-Key") or r.get("Authorization") or r.get("X-OpenViking-Actor-Peer")
+        ]
+        assert not leaked, (
+            "the retry after a redirect carried more than the gateway headers: %s"
+            % json.dumps(leaked[-1])
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_ordinary_redirect_receives_no_secrets(external_provider):
+    """An ordinary 3xx is not authorization to resend credentials.
+
+    Without gateway headers configured there is nothing identifying the endpoint as
+    OpenViking, so a redirect must not turn the probe into an authenticated request:
+    the API key (``X-API-Key``, ``Authorization``) has to stay unsent, and the endpoint
+    stays unusable exactly as it was before this change.
+    """
+    records = []
+    server, worker = _start_server(records, plain_redirect_to="https://example.com/moved")
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        home, provider, _module, _settings = external_provider("plain-redirect")
+        (home / ".env").write_text(
+            "OPENVIKING_ENDPOINT=%s\nOPENVIKING_API_KEY=test-key\n" % endpoint,
+            encoding="utf-8",
+        )
+        provider.initialize(session_id="plain-redirect", hermes_home=str(home), platform="cli")
+
+        assert records, "startup should have probed /health"
+        leaked = [
+            r for r in records
+            if r.get("X-API-Key") or r.get("Authorization") or r.get("X-OpenViking-Account")
+        ]
+        assert not leaked, (
+            "an ordinary redirect was answered with credentials: %s" % json.dumps(leaked[-1])
+        )
+        assert len(records) == 1, (
+            "the probe retried after an ordinary redirect instead of failing once: %d requests"
+            % len(records)
+        )
+        assert provider._client is None, (
+            "a redirecting non-OpenViking endpoint was accepted as a client"
+        )
     finally:
         server.shutdown()
         server.server_close()
