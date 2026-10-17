@@ -565,9 +565,11 @@ class LiteLLMVLMProvider(VLMBase):
         duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage from response."""
-        if hasattr(response, "usage") and response.usage:
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
+        usage = getattr(response, "usage", None)
+        self.record_token_usage_coverage(reported=usage is not None)
+        if usage:
+            prompt_tokens = usage.prompt_tokens
+            completion_tokens = usage.completion_tokens
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,

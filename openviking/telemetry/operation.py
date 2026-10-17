@@ -64,6 +64,8 @@ class TelemetrySummaryBuilder:
 
     _PRUNED = object()
     _PRESERVED_ZERO_METRIC_PATHS = {
+        ("tokens", "llm", "coverage", "missing_report_count"),
+        ("tokens", "llm", "coverage", "reported_response_count"),
         ("vector", "cuvs", "memory", "estimated_peak_bytes_max"),
         ("vector", "cuvs", "memory", "free_bytes_min"),
         ("vector", "cuvs", "memory", "usable_bytes_min"),
@@ -229,6 +231,14 @@ class TelemetrySummaryBuilder:
         llm_completion_reasoning_tokens = cls._i(counters.get("tokens.llm.completion_reasoning"), 0)
         embedding_total_tokens = cls._i(counters.get("tokens.embedding.total"), 0)
         rerank_total_tokens = cls._i(counters.get("tokens.rerank.total"), 0)
+        llm_successful_response_count = max(
+            cls._i(counters.get("tokens.llm.coverage.successful_responses"), 0),
+            0,
+        )
+        llm_reported_response_count = min(
+            max(cls._i(counters.get("tokens.llm.coverage.reported_responses"), 0), 0),
+            llm_successful_response_count,
+        )
         stage_token_summary = cls._build_stage_token_summary(counters)
         vector_candidates_scored = cls._i(counters.get("vector.scored"), 0)
         vectors_scanned = gauges.get("vector.scanned")
@@ -257,6 +267,20 @@ class TelemetrySummaryBuilder:
         }
         if stage_token_summary:
             summary["tokens"]["stages"] = stage_token_summary
+        if llm_successful_response_count > 0:
+            llm_missing_report_count = llm_successful_response_count - llm_reported_response_count
+            if llm_reported_response_count == llm_successful_response_count:
+                coverage_status = "complete"
+            elif llm_reported_response_count == 0:
+                coverage_status = "missing"
+            else:
+                coverage_status = "partial"
+            summary["tokens"]["llm"]["coverage"] = {
+                "status": coverage_status,
+                "successful_response_count": llm_successful_response_count,
+                "reported_response_count": llm_reported_response_count,
+                "missing_report_count": llm_missing_report_count,
+            }
 
         if cls._has_metric_prefix("queue", counters, gauges):
             summary["queue"] = {
@@ -715,6 +739,15 @@ class OperationTelemetry:
             prompt_cached_tokens=prompt_cached_tokens,
             completion_reasoning_tokens=completion_reasoning_tokens,
         )
+
+    def record_llm_token_usage_report(self, *, reported: bool) -> None:
+        """Record whether one successful LLM response included token usage."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self._counters["tokens.llm.coverage.successful_responses"] += 1
+            if reported:
+                self._counters["tokens.llm.coverage.reported_responses"] += 1
 
     def record_token_usage(
         self,

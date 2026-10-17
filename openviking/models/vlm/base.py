@@ -213,6 +213,23 @@ class VLMBase(ABC):
         return self.api_key is not None or self.api_base is not None
 
     # Token usage tracking methods
+    def record_token_usage_coverage(self, *, reported: bool) -> None:
+        """Record token-usage coverage for one successful provider response."""
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            get_current_telemetry().record_llm_token_usage_report(reported=reported)
+        except Exception as e:
+            # Telemetry must never break model inference.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm token-usage coverage emit failed provider=%s model_name=%s err=%s: %s",
+                    self.provider,
+                    self.model,
+                    type(e).__name__,
+                    e,
+                )
+
     def update_token_usage(
         self,
         model_name: str,
