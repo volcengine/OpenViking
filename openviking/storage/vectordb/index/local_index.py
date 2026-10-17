@@ -1444,6 +1444,8 @@ class PersistentIndex(LocalIndex):
         if cands_list is None:
             cands_list = ()
 
+        # close() persists while holding the same snapshot lifecycle lock.
+        self._persist_lock = threading.RLock()
         validate_name_str(name)
         self.index_dir = str(safe_join_name(path, name))
         os.makedirs(self.index_dir, exist_ok=True)
@@ -1521,23 +1523,24 @@ class PersistentIndex(LocalIndex):
         """
         self._stop_dense_rebuild_worker()
 
-        # 1. Persist latest data first
-        self.persist()
+        with self._persist_lock:
+            # 1. Persist latest data first
+            self.persist()
 
-        # 2. Release engine_proxy
-        if self.engine_proxy:
-            self.engine_proxy.drop()
-            self.engine_proxy = None
+            # 2. Release engine_proxy
+            if self.engine_proxy:
+                self.engine_proxy.drop()
+                self.engine_proxy = None
 
-        # 3. After engine is released, clean redundant index files, keeping only the latest version
-        try:
-            newest_version = self.get_newest_version()
-            if newest_version > 0:
-                self._clean_index([str(newest_version)])
-        except Exception as e:
-            logger.error(f"Failed to clean index files during close: {e}")
+            # 3. After engine is released, clean redundant index files, keeping only the latest version
+            try:
+                newest_version = self.get_newest_version()
+                if newest_version > 0:
+                    self._clean_index([str(newest_version)])
+            except Exception as e:
+                logger.error(f"Failed to clean index files during close: {e}")
 
-        super().close()
+            super().close()
 
     def persist(self) -> int:
         """Persist index data to disk as a new version.
@@ -1566,24 +1569,25 @@ class PersistentIndex(LocalIndex):
             This operation is expensive and should not be called too frequently.
             The collection layer schedules periodic persistence.
         """
-        if self.engine_proxy:
-            newest_version = int(self.get_newest_version())
-            update_ts = self.engine_proxy.get_update_ts()
-            if update_ts <= newest_version:
-                return 0
-            now_ns_ts = str(int(time.time_ns()))
-            index_path = str(safe_join(self.version_dir, now_ns_ts))
-            os.makedirs(index_path, exist_ok=True)
-            dump_version = self.engine_proxy.dump(index_path)
-            if dump_version < 0:
-                return 0
-            # todo get dump timestamp
-            dump_index_path = str(safe_join(self.version_dir, str(dump_version)))
-            shutil.move(index_path, dump_index_path)
-            Path(dump_index_path + ".write_done").touch()
-            self._clean_index([self.now_version, str(dump_version)])
-            return dump_version
-        return 0
+        with self._persist_lock:
+            if self.engine_proxy:
+                newest_version = int(self.get_newest_version())
+                update_ts = self.engine_proxy.get_update_ts()
+                if update_ts <= newest_version:
+                    return 0
+                now_ns_ts = str(int(time.time_ns()))
+                index_path = str(safe_join(self.version_dir, now_ns_ts))
+                os.makedirs(index_path, exist_ok=True)
+                dump_version = self.engine_proxy.dump(index_path)
+                if dump_version < 0:
+                    return 0
+                # todo get dump timestamp
+                dump_index_path = str(safe_join(self.version_dir, str(dump_version)))
+                shutil.move(index_path, dump_index_path)
+                Path(dump_index_path + ".write_done").touch()
+                self._clean_index([self.now_version, str(dump_version)])
+                return dump_version
+            return 0
 
     def _clean_index(self, not_clean: List[str]):
         """Remove old index version files from disk.
@@ -1677,9 +1681,10 @@ class PersistentIndex(LocalIndex):
         Warning:
             This operation is irreversible. All index data will be permanently lost.
         """
-        # Remove scheduling deletion logic
-        LocalIndex.drop(self)
-        shutil.rmtree(self.index_dir)
+        with self._persist_lock:
+            LocalIndex.drop(self)
+            self.engine_proxy = None
+            shutil.rmtree(self.index_dir)
 
     def need_rebuild(self) -> bool:
         """Determine if the index needs rebuilding.

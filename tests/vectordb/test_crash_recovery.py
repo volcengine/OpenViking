@@ -4,8 +4,11 @@ import multiprocessing
 import os
 import shutil
 import sys
+import tempfile
+import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
@@ -451,6 +454,73 @@ class TestTornSnapshotSelection(unittest.TestCase):
 
         reopened.close()
         print("[Main] Torn snapshot skipped, previous complete snapshot reloaded.")
+
+    def test_concurrent_snapshot_lifecycle_preserves_recoverable_state(self):
+        for phase in ("dump", "cleanup"):
+            for operation in ("persist", "close", "drop"):
+                with self.subTest(phase=phase, operation=operation):
+                    with tempfile.TemporaryDirectory() as path:
+                        self._check_concurrent_snapshot_lifecycle(path, phase, operation)
+
+    def _check_concurrent_snapshot_lifecycle(self, path, phase, operation):
+        col = setup_torn_snapshot_collection(path)
+        index = col.get_index("idx_torn")
+        col.upsert_data([{"id": 1, "vector": [0.1] * 4, "data": "first"}])
+        paused, release, competing_started = (threading.Event() for _ in range(3))
+        active_dump = []
+        original = index.engine_proxy.dump if phase == "dump" else index._clean_index
+
+        def pause_first_snapshot(argument):
+            if not paused.is_set():
+                if phase == "dump":
+                    version = original(argument)
+                    active_dump.append(Path(argument))
+                paused.set()
+                if not release.wait(10):
+                    raise TimeoutError("Snapshot test did not release the paused writer")
+                if phase == "dump":
+                    return version
+            return original(argument)
+
+        def compete():
+            competing_started.set()
+            return getattr(index, operation)()
+
+        target = index.engine_proxy if phase == "dump" else index
+        method = "dump" if phase == "dump" else "_clean_index"
+        try:
+            with patch.object(target, method, side_effect=pause_first_snapshot):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(index.persist)
+                    try:
+                        self.assertTrue(paused.wait(5))
+                        col.upsert_data([{"id": 2, "vector": [0.2] * 4, "data": "second"}])
+                        second = pool.submit(compete)
+                        self.assertTrue(competing_started.wait(5))
+                        # The competing lifecycle operation must wait for publication and cleanup.
+                        time.sleep(0.1)
+                        self.assertFalse(second.done())
+                        if active_dump:
+                            self.assertTrue(active_dump[0].is_dir())
+                    finally:
+                        release.set()
+                    first_version = first.result(timeout=5)
+                    second_result = second.result(timeout=5)
+            if operation == "drop":
+                self.assertFalse(Path(index.index_dir).exists())
+                self.assertEqual(index.persist(), 0)
+            else:
+                newest = index.get_newest_version()
+                self.assertGreater(newest, first_version)
+                if operation == "persist":
+                    self.assertEqual(second_result, newest)
+                col.close()
+                col = setup_torn_snapshot_collection(path)
+                self.assertEqual(int(col.get_index("idx_torn").now_version), newest)
+                result = col.search_by_vector("idx_torn", dense_vector=[0.1] * 4, limit=10)
+                self.assertEqual({item.id for item in result.data}, {1, 2})
+        finally:
+            col.close()
 
     def test_get_newest_version_ignores_missing_or_empty_meta(self):
         print("\n=== Test get_newest_version Ignores Torn Snapshots ===")
