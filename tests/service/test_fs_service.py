@@ -9,15 +9,22 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.abstract_overview import (
+    body_for_preview,
+    freshness_metadata,
+    render_abstract_overview,
+)
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.agfs_utils import RagfsBindingConfig, mount_agfs_backend
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 
 @pytest.fixture(autouse=True)
@@ -972,6 +979,50 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
 
     service._enqueue_delete_refresh.assert_awaited_once()
     assert result["semantic_status"] == "queued"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("directory", [False, True])
+async def test_resource_rm_does_not_defer_wide_parent_refresh(
+    tmp_path, request_context, monkeypatch, directory
+):
+    client_type, _ = get_binding_client()
+    config = RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
+    client = client_type(None, config=config.to_binding_dict())
+    mount_agfs_backend(client, config)
+    fs = VikingFS(agfs=client)
+    parent = "viking://resources/wide"
+    target = f"{parent}/deleted"
+    child = f"{target}/doc.md" if directory else target
+    await fs.write_file(child, "deleted content", ctx=request_context)
+    if directory:
+        for name in (".abstract.md", ".overview.md"):
+            await fs.write_file(f"{target}/{name}", "deleted content", ctx=request_context)
+    for index in range(39):
+        await fs.write_file(f"{parent}/keep-{index}.md", "keep", ctx=request_context)
+    metadata = {"freshness": freshness_metadata(40, 32)}
+    for level, name in ((0, ".abstract.md"), (1, ".overview.md")):
+        await fs.write_file(
+            f"{parent}/{name}",
+            render_abstract_overview(level, parent, "deleted content", metadata),
+            ctx=request_context,
+        )
+    queue = _FakeQueueManager()
+    monkeypatch.setattr("openviking.service.fs_service.get_queue_manager", lambda: queue)
+    monkeypatch.setattr(
+        "openviking.service.fs_service.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+
+    result = await FSService(viking_fs=fs).rm(
+        target, ctx=request_context, recursive=directory, wait=False
+    )
+
+    assert not await fs.exists(target, ctx=request_context)
+    assert await fs.read_file(f"{parent}/keep-0.md", ctx=request_context) == "keep"
+    assert result is not None
+    assert result["semantic_status"] == "queued"
+    assert [msg.changes for msg in queue.messages] == [{"deleted": [target]}]
 
 
 @pytest.mark.asyncio

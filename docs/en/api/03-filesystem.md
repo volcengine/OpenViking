@@ -587,6 +587,8 @@ ov mkdir viking://resources/new-project/ --description "API docs directory"
 
 Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
 
+Resource and skill deletions schedule a parent-summary refresh without waiting for the freshness threshold. If a refreshed L0 body changes, the deletion refresh also bypasses the threshold when propagating to ancestors. Use `wait=true` to wait for the requested parent refresh; upward propagation remains background work.
+
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
 Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or `queue` return `INVALID_URI`.
 
