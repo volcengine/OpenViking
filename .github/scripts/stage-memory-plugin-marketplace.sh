@@ -22,6 +22,7 @@ DIRS=(
   agent-hook-plugin
   opencode-plugin
   pi-coding-agent-extension
+  kimi-code-memory-plugin
   memory-plugin-shared
 )
 
