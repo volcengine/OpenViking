@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::PathBuf,
 };
 
@@ -246,8 +246,17 @@ fn delete_saved_config(store: &ConfigStore, args: ConfigDeleteArgs) -> AgentResu
     }))
 }
 
-pub(crate) fn print_success(output: AgentOutput, ctx: &CliContext) {
-    match ctx.output_format {
+pub(crate) fn print_success(output: AgentOutput, ctx: &CliContext) -> crate::error::Result<()> {
+    let mut stdout = io::stdout().lock();
+    write_success(&mut stdout, output, ctx.output_format)
+}
+
+fn write_success(
+    writer: &mut impl Write,
+    output: AgentOutput,
+    output_format: OutputFormat,
+) -> crate::error::Result<()> {
+    let result = match output_format {
         OutputFormat::Json => {
             let result = match output {
                 AgentOutput::AddEdit(result) => json!(result),
@@ -255,39 +264,49 @@ pub(crate) fn print_success(output: AgentOutput, ctx: &CliContext) {
                 AgentOutput::Delete(result) => json!(result),
                 AgentOutput::List(result) => json!(result),
             };
-            println!("{}", json!({ "status": "ok", "result": result }));
+            writeln!(writer, "{}", json!({ "status": "ok", "result": result }))
         }
         OutputFormat::Table => match output {
-            AgentOutput::AddEdit(result) => print_add_edit_result(&result),
+            AgentOutput::AddEdit(result) => write_add_edit_result(writer, &result),
             AgentOutput::Switch(result) => {
-                println!(
+                writeln!(
+                    writer,
                     "{} {}",
                     theme::success("✓").bold(),
                     theme::success(format!("Switched active config to '{}'.", result.name)).bold()
-                );
-                println!(
+                )?;
+                writeln!(
+                    writer,
                     "{} {}",
                     theme::muted("Active config:"),
                     theme::sky_value(result.active_path)
-                );
+                )
             }
             AgentOutput::Delete(result) => {
                 if result.already_absent {
-                    println!(
+                    writeln!(
+                        writer,
                         "{} {}",
                         theme::success("✓").bold(),
                         theme::muted(format!("Config '{}' was already absent.", result.name))
-                    );
+                    )
                 } else {
-                    println!(
+                    writeln!(
+                        writer,
                         "{} {}",
                         theme::success("✓").bold(),
                         theme::success(format!("Deleted config '{}'.", result.name)).bold()
-                    );
+                    )
                 }
             }
-            AgentOutput::List(entries) => print_list_result(&entries),
+            AgentOutput::List(entries) => write_list_result(writer, &entries),
         },
+    }
+    .and_then(|()| writer.flush());
+
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result.map_err(Into::into),
     }
 }
 
@@ -757,7 +776,7 @@ fn add_edit_result(
     }
 }
 
-fn print_add_edit_result(result: &AddEditResult) {
+fn write_add_edit_result(writer: &mut impl Write, result: &AddEditResult) -> io::Result<()> {
     let verb = if result.action == "add" {
         "Saved"
     } else {
@@ -768,30 +787,34 @@ fn print_add_edit_result(result: &AddEditResult) {
     } else {
         ""
     };
-    println!(
+    writeln!(
+        writer,
         "{} {}",
         theme::success("✓").bold(),
         theme::success(format!("{verb} config '{}'{}.", result.name, active_copy)).bold()
-    );
-    println!(
+    )?;
+    writeln!(
+        writer,
         "{} {}",
         theme::muted("Saved to:"),
         theme::sky_value(&result.saved_path)
-    );
+    )?;
     if let Some(active_path) = &result.active_path {
-        println!(
+        writeln!(
+            writer,
             "{} {}",
             theme::muted("Active config:"),
             theme::sky_value(active_path)
-        );
+        )?;
     } else if no_active_config() {
-        println!(
+        writeln!(
+            writer,
             "{} {}",
             theme::warning("Note:"),
             theme::muted(
                 "No active config is set. Run 'ov config switch <name>' or add with --activate."
             )
-        );
+        )?;
     }
     if result.root_key_only {
         eprintln!(
@@ -802,34 +825,37 @@ fn print_add_edit_result(result: &AddEditResult) {
             )
         );
     }
+    Ok(())
 }
 
-fn print_list_result(entries: &[ListEntry]) {
+fn write_list_result(writer: &mut impl Write, entries: &[ListEntry]) -> io::Result<()> {
     if entries.is_empty() {
-        println!("{}", theme::muted("No saved configs found."));
-        return;
+        return writeln!(writer, "{}", theme::muted("No saved configs found."));
     }
-    println!(
+    writeln!(
+        writer,
         "{:<24} {:<18} {:<42} {}",
         theme::heading("Name").bold(),
         theme::heading("Type").bold(),
         theme::heading("URL").bold(),
         theme::heading("Active").bold()
-    );
+    )?;
     for entry in entries {
         let active = if entry.active {
             theme::error("[Active]").bold().to_string()
         } else {
             String::new()
         };
-        println!(
+        writeln!(
+            writer,
             "{:<24} {:<18} {:<42} {}",
             theme::command(&entry.name).bold(),
             theme::muted(entry.kind),
             theme::sky_value(&entry.url),
             active
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn read_required_secret(input: SecretInput<'_>, label: &str) -> AgentResult<String> {
@@ -969,11 +995,35 @@ fn path_string(path: impl Into<PathBuf>) -> String {
 mod tests {
     use super::*;
     use crate::config_wizard::ConfigStore;
+    use std::io::{self, Write};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    struct FailingWriter {
+        fail_on_flush: bool,
+        kind: io::ErrorKind,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail_on_flush {
+                Ok(bytes.len())
+            } else {
+                Err(io::Error::new(self.kind, "output failed"))
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_on_flush {
+                Err(io::Error::new(self.kind, "output failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     fn unique_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -1084,6 +1134,41 @@ mod tests {
             .expect("name should generate");
         assert!(name.starts_with("custom-"));
         validate_config_name(&name).expect("generated name should be valid");
+    }
+
+    #[test]
+    fn config_success_treats_broken_pipe_as_success() {
+        for output_format in [OutputFormat::Table, OutputFormat::Json] {
+            for fail_on_flush in [false, true] {
+                let mut writer = FailingWriter {
+                    fail_on_flush,
+                    kind: io::ErrorKind::BrokenPipe,
+                };
+
+                write_success(&mut writer, AgentOutput::List(Vec::new()), output_format)
+                    .expect("broken pipe should be normal pipeline completion");
+            }
+        }
+    }
+
+    #[test]
+    fn config_success_preserves_other_output_errors() {
+        for output_format in [OutputFormat::Table, OutputFormat::Json] {
+            for fail_on_flush in [false, true] {
+                let mut writer = FailingWriter {
+                    fail_on_flush,
+                    kind: io::ErrorKind::PermissionDenied,
+                };
+
+                let error =
+                    write_success(&mut writer, AgentOutput::List(Vec::new()), output_format)
+                        .expect_err("non-broken output errors must fail");
+                let Error::Io(error) = error else {
+                    panic!("expected an IO error");
+                };
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            }
+        }
     }
 
     #[test]

@@ -1021,10 +1021,7 @@ fn handle_config_agent_result(
     ctx: &CliContext,
 ) -> Result<()> {
     match result {
-        Ok(output) => {
-            config_agent::print_success(output, ctx);
-            Ok(())
-        }
+        Ok(output) => config_agent::print_success(output, ctx),
         Err(error) => {
             let exit_code = error.exit_code();
             config_agent::print_error(&error, ctx);
