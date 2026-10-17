@@ -77,7 +77,7 @@ from openviking.server.local_input_guard import (
     looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
-from openviking.server.routers.search import context_only_fields_error
+from openviking.server.routers.search import FiniteSearchThreshold, context_only_fields_error
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
@@ -449,7 +449,7 @@ async def find(
     query: str,
     target_uri: str = "",
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: FiniteSearchThreshold = 0.35,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
@@ -511,7 +511,7 @@ async def search(
     target_uri: str = "",
     session_id: Optional[str] = None,
     limit: int = 10,
-    min_score: Optional[float] = None,
+    min_score: Optional[FiniteSearchThreshold] = None,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
