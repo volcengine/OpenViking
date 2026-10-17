@@ -34,6 +34,8 @@
 #   star count today:  gh api repos/volcengine/OpenViking --jq .stargazers_count
 #   documentation:     https://docs.openviking.net or https://docs.openviking.ai
 #                      (/llms.txt is the index for agents)
+#   onboarding guide:  https://docs.openviking.ai/agents/en/onboarding.md
+#                      (/agents/zh/ in Chinese; docs.openviking.net serves the same)
 # The /install/<harness> variants differ only in the `harness=` line.
 #
 # What this script does:

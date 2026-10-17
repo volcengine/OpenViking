@@ -152,7 +152,13 @@ CLAUDE_BINS_ARG="${OPENVIKING_CLAUDE_BINS:-${OPENVIKING_CLAUDE_BIN:-}}"
 CODEX_BINS_ARG="${OPENVIKING_CODEX_BINS:-${OPENVIKING_CODEX_BIN:-}}"
 DSH_PROFILE_ARG="${OPENVIKING_DSH_PROFILE:-}"
 DSH_PROFILE_DEFAULT="web"
+# dsh exports the running session's profile to the shells its agent starts.
+DSH_SESSION_PROFILE=""
+[ "${DSH_SHELL:-}" != "1" ] || DSH_SESSION_PROFILE="${DSH_PROFILE:-}"
 DSH_PROFILE=""
+# What was asked for but not done, one line each; repeated at the end of the
+# output, where an agent reading it looks first.
+NOT_DONE=""
 SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
@@ -181,6 +187,9 @@ else
 fi
 info()    { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$*"; }
 warn()    { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$*"; }
+# not_done <message>: warn now and list the message again under "Not done".
+not_done() { warn "$1"; NOT_DONE="${NOT_DONE}$1
+"; }
 err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
 heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
@@ -1134,13 +1143,14 @@ select_dsh_profile() {
     DSH_PROFILE="$DSH_PROFILE_ARG"
     return 0
   fi
-  DSH_PROFILE="$DSH_PROFILE_DEFAULT"
+  # Run from inside a dsh session, install into the profile that session uses.
+  DSH_PROFILE="${DSH_SESSION_PROFILE:-$DSH_PROFILE_DEFAULT}"
 }
 
 install_dsh() {
   step_heading "$(t 'DeepSeek Harness bundle' 'DeepSeek Harness 插件')"
   if ! command -v dsh >/dev/null 2>&1; then
-    warn "$(t 'dsh CLI not found; skipping DeepSeek Harness install.' '未找到 dsh 命令，跳过 DeepSeek Harness 安装。')"
+    not_done "$(t 'dsh CLI not found; skipping DeepSeek Harness install.' '未找到 dsh 命令，跳过 DeepSeek Harness 安装。')"
     return 0
   fi
   # `@latest` rather than a bare name: pnpm keeps an already-satisfying install
@@ -1168,7 +1178,7 @@ install_dsh() {
   if dsh plugin --profile "$profile" add "$spec" >/dev/null 2>&1; then
     info "$(t 'DeepSeek Harness bundle installed into profile:' 'DeepSeek Harness 插件已安装到 profile：') $profile ($(t 'source' '来源'): $origin)"
   else
-    warn "$(t 'dsh plugin add failed; run it manually:' 'dsh plugin add 失败；请手动执行：') dsh plugin --profile $profile add $spec"
+    not_done "$(t 'dsh plugin add failed; run it manually:' 'dsh plugin add 失败；请手动执行：') dsh plugin --profile $profile add $spec"
   fi
 }
 
@@ -1454,12 +1464,12 @@ check_server() {
         ;;
       unreachable)
         # Usual for a local server that has not been started yet.
-        warn "$(t "Cannot reach $CRED_URL. If the server is not running yet, start it before using the plugin." "无法连接 ${CRED_URL}。如果服务还没启动，请在使用插件前启动它。")"
+        not_done "$(t "Cannot reach $CRED_URL. If the server is not running yet, start it before using the plugin." "无法连接 ${CRED_URL}。如果服务还没启动，请在使用插件前启动它。")"
         def=1
         ;;
-      rejected) warn "$(t "The server rejected the API key (HTTP $PROBE_CODE)." "服务拒绝了该 API key（HTTP ${PROBE_CODE}）。")" ;;
-      key-required) warn "$(t "The server requires an API key (HTTP $PROBE_CODE)." "该服务需要 API key（HTTP ${PROBE_CODE}）。")" ;;
-      *) warn "$(t "The server status check returned HTTP $PROBE_CODE." "服务状态检查返回 HTTP ${PROBE_CODE}。")" ;;
+      rejected) not_done "$(t "The server rejected the API key (HTTP $PROBE_CODE)." "服务拒绝了该 API key（HTTP ${PROBE_CODE}）。")" ;;
+      key-required) not_done "$(t "The server requires an API key (HTTP $PROBE_CODE)." "该服务需要 API key（HTTP ${PROBE_CODE}）。")" ;;
+      *) not_done "$(t "The server status check returned HTTP $PROBE_CODE." "服务状态检查返回 HTTP ${PROBE_CODE}。")" ;;
     esac
     [ "$INTERACTIVE" -eq 1 ] || return 0
     tui_menu "$(t 'What next?' '接下来怎么做？')" "$def" \
@@ -2064,11 +2074,11 @@ claude_install_plugin() {
 install_claude() {
   step_heading "$(t 'Claude Code plugin' 'Claude Code 插件')"
   command -v "$CLAUDE_BIN" >/dev/null 2>&1 || {
-    warn "$(t 'Claude-format CLI not found; skipping:' '未找到 Claude 格式 CLI，跳过：') $CLAUDE_BIN"
+    not_done "$(t 'Claude-format CLI not found; skipping:' '未找到 Claude 格式 CLI，跳过：') $CLAUDE_BIN"
     return 0
   }
   if ! has_plugin_subcommand; then
-    warn "$(t "Skipping $CLAUDE_BIN: it has no 'plugin' command. The plugin needs Claude Code 2.0 or newer; upgrade it and re-run this installer." "跳过 ${CLAUDE_BIN}：它没有 plugin 子命令。插件需要 Claude Code 2.0 或更新版本，请升级后重跑本安装脚本。")"
+    not_done "$(t "Skipping $CLAUDE_BIN: it has no 'plugin' command. The plugin needs Claude Code 2.0 or newer; upgrade it and re-run this installer." "跳过 ${CLAUDE_BIN}：它没有 plugin 子命令。插件需要 Claude Code 2.0 或更新版本，请升级后重跑本安装脚本。")"
     return 0
   fi
   claude_remove_legacy
@@ -2266,7 +2276,7 @@ install_codex() {
     step_heading "$(codex_bin_label)"
   fi
   command -v "$CODEX_BIN" >/dev/null 2>&1 || {
-    warn "$(t 'Codex-format CLI not found; skipping:' '未找到 Codex 格式 CLI，跳过：') $CODEX_BIN"
+    not_done "$(t 'Codex-format CLI not found; skipping:' '未找到 Codex 格式 CLI，跳过：') $CODEX_BIN"
     return 0
   }
   codex_remove_legacy
@@ -2698,7 +2708,7 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
 install_opencode() {
   step_heading "$(t 'OpenCode plugin' 'OpenCode 插件')"
   if ! command -v opencode >/dev/null 2>&1; then
-    warn "$(t 'opencode CLI not found; skipping OpenCode install.' '未找到 opencode 命令，跳过 OpenCode 安装。')"
+    not_done "$(t 'opencode CLI not found; skipping OpenCode install.' '未找到 opencode 命令，跳过 OpenCode 安装。')"
     return 0
   fi
   local plugin_dir dest
@@ -2767,7 +2777,7 @@ sync_shared_runtime() {
 install_pi() {
   step_heading "$(t 'pi extension' 'pi 扩展')"
   if ! command -v pi >/dev/null 2>&1; then
-    warn "$(t 'pi CLI not found; skipping pi extension install.' '未找到 pi 命令，跳过 pi 扩展安装。')"
+    not_done "$(t 'pi CLI not found; skipping pi extension install.' '未找到 pi 命令，跳过 pi 扩展安装。')"
     return 0
   fi
   command -v npm >/dev/null 2>&1 || { err "pi: npm is required to install the MCP client"; return 1; }
@@ -3038,7 +3048,7 @@ cli_uninstall_command() {
 install_cli() {
   step_heading "CLI (ov)"
   if [ -z "$CLI_PREFIX" ]; then
-    warn "$(t "npm not found; skipped the CLI. Install it later with: npm install -g $CLI_PACKAGE" "未找到 npm，跳过 CLI。之后可以运行：npm install -g $CLI_PACKAGE")"
+    not_done "$(t "npm not found; skipped the CLI. Install it later with: npm install -g $CLI_PACKAGE" "未找到 npm，跳过 CLI。之后可以运行：npm install -g $CLI_PACKAGE")"
     return 0
   fi
   local ov="$CLI_PREFIX/bin/ov" found version args
@@ -3049,12 +3059,12 @@ install_cli() {
   # it prints, paths included.
   [ "$CLI_PREFIX" != "$HOME/.local" ] || args+=(--prefix "$CLI_PREFIX")
   if ! npm "${args[@]}"; then
-    warn "$(t "npm could not install the CLI. Try again later with: npm install -g $CLI_PACKAGE" "npm 安装 CLI 失败。之后可以重试：npm install -g $CLI_PACKAGE")"
+    not_done "$(t "npm could not install the CLI. Try again later with: npm install -g $CLI_PACKAGE" "npm 安装 CLI 失败。之后可以重试：npm install -g $CLI_PACKAGE")"
     return 0
   fi
   [ -f "$CLI_SETTINGS" ] || "$ov" language "$(t en zh-CN)" >/dev/null 2>&1 || true
   if ! version="$("$ov" --version 2>/dev/null)"; then
-    warn "$(t "The CLI was installed but $ov --version failed." "CLI 已安装，但 $ov --version 运行失败。")"
+    not_done "$(t "The CLI was installed but $ov --version failed." "CLI 已安装，但 $ov --version 运行失败。")"
     return 0
   fi
   CLI_INSTALLED=1
@@ -3270,8 +3280,22 @@ next_steps() { # next_steps <name> <next> <updates> <verify> <uninstall>
   printf '    %s %s\n' "$(t 'Uninstall:' '卸载：')" "$5"
 }
 
+# The agent onboarding guide on the docs host the downloads came from, so a
+# machine that reached only docs.openviking.net is not sent to .ai. Any other
+# download location falls back by language.
+onboarding_url() {
+  local host=docs.openviking.ai lang=en
+  [ "$UI_LANG" != "zh" ] || lang=zh
+  case "$DOWNLOAD_BASE" in
+    *://docs.openviking.net/*|*://docs.openviking.net) host=docs.openviking.net ;;
+    *://docs.openviking.ai/*|*://docs.openviking.ai) ;;
+    *) [ "$lang" != "zh" ] || host=docs.openviking.net ;;
+  esac
+  printf 'https://%s/agents/%s/onboarding.md\n' "$host" "$lang"
+}
+
 print_next_steps() {
-  local label updates rerun uninstall doctor client remove
+  local label updates rerun uninstall doctor client remove line
   rerun="$(t 're-run this installer' '重新运行本安装脚本')"
   uninstall="$INSTALL_COMMAND --uninstall --yes --harness"
   heading "$(t 'Done' '完成')"
@@ -3321,7 +3345,7 @@ EOF
     next_steps "$label" "$(t "restart $label" "重启 $label")" "$rerun" "$doctor" "$uninstall $client"
   done
   if contains_harness kimicode; then
-    next_steps "Kimi Code" "$(t 'run /reload or start a new session' '运行 /reload 或新建会话')" "$rerun" "" "$uninstall kimicode"
+    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
@@ -3331,13 +3355,23 @@ EOF
     next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then
-    next_steps "DeepSeek Harness" "$(t 'start a new dsh session' '新开一个 dsh 会话')" "$rerun" "" \
+    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" "" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
   fi
   if [ "$CLI_INSTALLED" -eq 1 ]; then
     next_steps "CLI (ov)" "$(t 'run ov health, which uses the same credentials' '运行 ov health，它使用同一份凭据')" "$rerun" "" \
       "$(cli_uninstall_command)"
   fi
+  printf '\n'
+  if [ -n "$NOT_DONE" ]; then
+    warn "$(t 'Not done:' '未完成：')"
+    while IFS= read -r line; do
+      [ -z "$line" ] || printf '      - %s\n' "$line"
+    done <<EOF
+$NOT_DONE
+EOF
+  fi
+  info "$(t 'Onboarding guide (for your agent):' '接入引导（给 Agent 看）：') $(onboarding_url)"
 }
 
 # ---------------------------------------------------------------------------

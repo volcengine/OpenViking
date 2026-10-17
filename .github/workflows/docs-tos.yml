@@ -208,6 +208,7 @@ jobs:
 
           upload memory-plugin-shared/install.sh "text/plain; charset=utf-8"
           upload memory-plugin-shared/bootstrap.sh "text/plain; charset=utf-8"
+          upload memory-plugin-shared/import-history.mjs "text/javascript; charset=utf-8"
           upload releases/latest/memory-plugin-marketplace.zip application/zip
           # The manifest and the refs go up after the files they point to.
           for zip in "${DL_DIR}"/plugins/claude/*.zip; do
