@@ -19,8 +19,10 @@ from .compaction import (
     active_cut,
     apply_cut,
     cut_hint,
+    cut_messages,
     cut_point,
     estimate,
+    growth_retry_threshold,
     opening_block,
     replacement_text,
     summary_instruction,
@@ -794,10 +796,24 @@ class MemoryKernel:
         The summary covers only what the cut replaces, so every branch continuing these
         replies can reuse the record. Failures forward the full history and back off.
         """
-        failed_at = request.observation.value.get("compaction", {}).get("failed_at", 0)
+        failure = request.observation.value.get("compaction", {})
+        failed_at = failure.get("failed_at", 0)
+        failed_tokens = failure.get("context_tokens")
+        growth = (
+            request.context_tokens - failed_tokens
+            if isinstance(failed_tokens, int) and not isinstance(failed_tokens, bool)
+            else 0
+        )
+        retry_after_growth = failure.get("growth_retryable") is True and growth >= (
+            growth_retry_threshold(request.context_window)
+        )
         cut = cut_point(request)
-        if cut <= active_cut(request) or time.time() - failed_at < BACKOFF_SECONDS:
+        if cut <= active_cut(request) or (
+            time.time() - failed_at < BACKOFF_SECONDS and not retry_after_growth
+        ):
             return
+        if retry_after_growth:
+            request.metrics["compaction_rearmed_after_growth"] = growth
         adapter = tool_protocol(request.protocol)
         body, kept = self.assembled(request), request.body[adapter.field][cut + 1 :]
         messages = body[adapter.field]
@@ -855,12 +871,26 @@ class MemoryKernel:
         # Later readers see the compacted context; the metric keeps the estimate that triggered it.
         request.context_tokens = await self.measure(request)
         if request.context_tokens >= policy.compaction_threshold * request.context_window:
-            # What a cut cannot remove fills the window, so summarizing again soon cannot help.
-            await self.compaction_failed(request, "still_over_threshold")
+            minimum = dict(body)
+            minimum[adapter.field] = cut_messages(messages, len(span) - 1, "")
+            minimum_tokens = await asyncio.to_thread(estimate, minimum)
+            await self.compaction_failed(
+                request,
+                "still_over_threshold",
+                growth_retryable=(
+                    minimum_tokens < policy.compaction_threshold * request.context_window
+                ),
+            )
 
-    async def compaction_failed(self, request, reason):
+    async def compaction_failed(self, request, reason, *, growth_retryable=False):
         request.metrics["compaction_failed"] = reason
-        failure = {"failed_at": time.time(), "reason": reason}
+        failure = {
+            "failed_at": time.time(),
+            "reason": reason,
+            "context_tokens": request.context_tokens,
+        }
+        if growth_retryable:
+            failure["growth_retryable"] = True
         await self.update_observation(request, lambda value: {**value, "compaction": failure})
 
     async def update_observation(self, request, change):
