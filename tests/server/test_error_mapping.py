@@ -21,6 +21,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -28,6 +29,7 @@ from openviking_cli.exceptions import (
     InvalidURIError,
     NotFoundError,
     ResourceExhaustedError,
+    UnavailableError,
 )
 
 
@@ -186,6 +188,64 @@ def test_upstream_text_status_maps_to_permission_denied():
     assert mapped is not None
     assert mapped.code == "PERMISSION_DENIED"
     assert mapped.details["upstream_status_code"] == 403
+
+
+def test_circuit_breaker_open_maps_to_unavailable_with_retry_after():
+    exc = CircuitBreakerOpen("Circuit breaker is OPEN, retry after 13s")
+    exc.retry_after = 13.0  # annotated by the embedding resource path
+    mapped = map_exception(exc)
+
+    assert isinstance(mapped, UnavailableError)
+    assert mapped.code == "UNAVAILABLE"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 503
+    assert mapped.details["service"] == "embedding provider"
+    assert mapped.details["reason"] == "Circuit breaker is OPEN, retry after 13s"
+    assert mapped.details["retry_after"] == 13.0
+    assert "retry after 13s" in mapped.message
+
+
+def test_bare_circuit_breaker_open_still_maps_to_unavailable():
+    mapped = map_exception(CircuitBreakerOpen("Circuit breaker is OPEN, retry after 13s"))
+
+    assert isinstance(mapped, UnavailableError)
+    assert mapped.code == "UNAVAILABLE"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 503
+    assert "retry_after" not in mapped.details
+
+
+def test_upstream_text_429_maps_to_resource_exhausted():
+    mapped = map_exception(
+        RuntimeError(
+            "Volcengine embedding failed: Error code: 429 - "
+            "{'error': {'code': 'AccountQuotaExceeded', 'type': 'TooManyRequests'}}"
+        )
+    )
+
+    assert mapped is not None
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 429
+    assert mapped.details["upstream_status_code"] == 429
+
+
+def test_litellm_connection_error_maps_to_unavailable():
+    from litellm.exceptions import APIConnectionError
+
+    exc = APIConnectionError(
+        message=(
+            "litellm.APIConnectionError: OllamaException - Cannot connect to host "
+            "localhost:11434 ssl:<ssl.SSLContext object> "
+            "[Errno 61] Connect call failed ('127.0.0.1', 11434)"
+        ),
+        llm_provider="ollama",
+        model="ov_intent_analysis",
+    )
+    mapped = map_exception(exc)
+
+    assert mapped is not None
+    assert mapped.code == "UNAVAILABLE"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 503
+    assert mapped.details["upstream_status_code"] == 500
+    assert mapped.details["upstream_error_type"] == "APIConnectionError"
 
 
 @pytest.mark.parametrize(
