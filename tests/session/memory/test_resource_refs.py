@@ -156,6 +156,14 @@ def test_sync_memory_resource_refs_keeps_bare_uri_clean_before_chinese_punctuati
             "> 2. [x] [handoff](viking://resources/a)",
         ),
         (
+            "1. step\n    - nested viking://resources/a",
+            "1. step\n    - [nested](viking://resources/a)",
+        ),
+        (
+            "- step\n\t- tabbed viking://resources/a",
+            "- step\n\t- [tabbed](viking://resources/a)",
+        ),
+        (
             "#5 release viking://resources/a",
             "[#5 release](viking://resources/a)",
         ),
