@@ -69,6 +69,23 @@ test("planCapture skips fully acked turns and re-sends partial ones", () => {
   assert.deepEqual(partial[0].keys, ["2:assistant:tc1:call", "2:assistant:tc2:call"]);
 });
 
+test("colliding text keys in one turn stay distinct", () => {
+  const first = { role: "assistant", text: "first", turnId: "7" };
+  const second = { role: "assistant", text: "second", turnId: "7" };
+  assert.equal(turnDedupKey(first), turnDedupKey(second));
+
+  const plan = planCapture([first, second], new Set());
+  assert.equal(plan.length, 2);
+  assert.notEqual(plan[0].keys[0], plan[1].keys[0]);
+  assert.equal(plan[0].keys[0], "7:assistant");
+  assert.equal(plan[1].keys[0], "7:assistant#2");
+
+  // Acking the first entry must not retire the second before it was sent.
+  const replan = planCapture([first, second], new Set(["7:assistant"]));
+  assert.equal(replan.length, 1);
+  assert.deepEqual(replan[0].keys, ["7:assistant#2"]);
+});
+
 test("payloads carry parts when present, content otherwise, plus ids", () => {
   const payloads = buildMessagePayloads(
     [

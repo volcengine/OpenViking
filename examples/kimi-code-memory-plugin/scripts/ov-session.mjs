@@ -62,17 +62,27 @@ export function buildMessagePayloads(turns, { peerId = "" } = {}) {
 }
 
 /**
- * Split shaped turns into (toSend, acked) against the acknowledgement set.
- * A turn is new unless every one of its dedup keys is already acked — a
- * multi-tool turn whose first call was acked but whose second was not is
- * re-sent as a whole, which the server's idempotent add-message tolerates
- * better than dropping half a turn.
+ * Split shaped turns into the payloads still to send. A turn is new unless
+ * every one of its dedup keys is already acked — a multi-tool turn whose
+ * first call was acked but whose second was not is re-sent as a whole, which
+ * the server's idempotent add-message tolerates better than dropping half a
+ * turn.
+ *
+ * Two entries can share `turnId:role` (two assistant text steps in one turn,
+ * or a rewritten turn reusing its id). The first keeps the plain key so an
+ * existing ack set stays valid; later collisions get `#n`, because otherwise
+ * acknowledging the first entry would silently retire the second.
  */
 export function planCapture(turns, acknowledged) {
   const acked = acknowledged instanceof Set ? acknowledged : new Set(acknowledged || []);
+  const seen = new Map();
   const toSend = [];
   for (const turn of turns) {
-    const keys = turnDedupKey(turn).split("|");
+    const keys = turnDedupKey(turn).split("|").map((key) => {
+      const occurrence = (seen.get(key) || 0) + 1;
+      seen.set(key, occurrence);
+      return occurrence === 1 ? key : `${key}#${occurrence}`;
+    });
     if (keys.length && keys.every((key) => acked.has(key))) continue;
     toSend.push({ turn, keys });
   }
