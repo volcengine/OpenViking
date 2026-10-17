@@ -191,6 +191,9 @@ vikingbot channels login
 vikingbot gateway
 ```
 
+VikingBot 会在机器人数据目录中创建私有 bridge token。两个命令会自动使用该
+token。Gateway 会先验证 bridge 身份，再发送 token，因此无需配置 token。
+
 </details>
 
 <details>

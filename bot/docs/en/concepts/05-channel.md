@@ -194,6 +194,10 @@ vikingbot channels login
 vikingbot gateway
 ```
 
+VikingBot creates a private bridge token in the bot data directory. Both commands use it
+automatically. The gateway verifies the bridge identity before it sends the token, so no token
+configuration is required.
+
 </details>
 
 <details>
