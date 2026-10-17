@@ -1,0 +1,93 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/session-start.mjs",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/auto-recall.mjs",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/auto-capture.mjs",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/pre-compact.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/session-end.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/subagent-start.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CODEBUDDY_PLUGIN_ROOT}/scripts/subagent-stop.mjs",
+            "timeout": 45
+          }
+        ]
+      }
+    ]
+  }
+}

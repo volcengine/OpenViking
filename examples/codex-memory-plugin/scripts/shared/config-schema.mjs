@@ -259,6 +259,7 @@ export const WORKSPACE_RANGES = Object.fromEntries(
  */
 export const HARNESS_KEYS = {
   claudeCode: "claude_code",
+  codebuddy: "codebuddy",
   codex: "codex",
   cursor: "cursor",
   kimicode: "kimicode",
