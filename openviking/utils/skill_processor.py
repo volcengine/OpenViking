@@ -704,6 +704,12 @@ class SkillProcessor:
                 rel_uri_path = rel_path.as_posix()
             else:
                 rel_uri_path = aux_file.name
+            # On POSIX a backslash is a legal filename character, so a zip
+            # entry written with Windows separators can surface here as a
+            # single name containing literal backslashes; as_posix() will not
+            # convert those. Normalize explicitly so the stored URI always
+            # uses forward slashes.
+            rel_uri_path = rel_uri_path.replace("\\", "/")
             aux_uri = safe_join_viking_uri(skill_dir_uri, rel_uri_path)
 
             file_bytes = aux_file.read_bytes()
