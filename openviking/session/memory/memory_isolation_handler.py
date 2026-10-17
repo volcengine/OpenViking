@@ -414,14 +414,19 @@ class MemoryIsolationHandler:
             else:
                 target_user_space = peer_user_space(user_space, target_id)
                 fields["peer_id"] = target_id
-            uris.add(
-                generate_uri(
+            try:
+                uri = generate_uri(
                     memory_type=memory_type_schema,
                     fields=fields,
                     user_space=target_user_space,
                     extract_context=extract_context,
                 )
-            )
+            except ValueError as exc:  # a field the path needs is missing: skip, don't write
+                operation.resolution_skip = MemoryOperationSkip(
+                    reason_code=MemoryOperationSkipCode.NO_WRITABLE_TARGET, reason=str(exc)
+                )
+                return []
+            uris.add(uri)
 
         if has_ranges:
             operation.memory_fields.pop("peer_id", None)

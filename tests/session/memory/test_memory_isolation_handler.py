@@ -1291,3 +1291,26 @@ class TestCalculateMemoryUris:
         assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.INVALID_PEER_ID
         assert "peer_id" not in operation.memory_fields
         mock_generate_uri.assert_not_called()
+
+
+def test_calculate_memory_uris_skips_missing_filtered_path_field():
+    """`{{ category|lower }}` with no category must skip the write, not create a literal path."""
+    from openviking.session.memory.dataclass import MemoryTypeSchema, ResolvedOperation
+
+    extract_ctx = create_mock_extract_context([create_message("user")])
+    handler = MemoryIsolationHandler(create_ctx(), extract_ctx)
+    schema = MemoryTypeSchema(
+        memory_type="entities",
+        directory="viking://user/{{ user_space }}/memories/entities",
+        filename_template="{{ category|lower }}/{{ name|lower }}.md",
+    )
+    operation = ResolvedOperation(
+        old_memory_file_content=None,
+        memory_fields={"name": "HKU"},
+        memory_type="entities",
+        uris=[],
+    )
+
+    assert handler.calculate_memory_uris(schema, operation, extract_ctx) == []
+    assert operation.resolution_skip.reason_code == MemoryOperationSkipCode.NO_WRITABLE_TARGET
+    assert "category" in operation.resolution_skip.reason
