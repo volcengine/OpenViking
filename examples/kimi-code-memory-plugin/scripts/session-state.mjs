@@ -19,12 +19,14 @@
  * State directory: $OPENVIKING_KIMICODE_STATE_DIR or ~/.openviking/kimicode-plugin-state
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 
 const DEFAULT_STATE_DIR = join(homedir(), ".openviking", "kimicode-plugin-state");
+const LOCK_OWNER_FILE = "owner";
 
 // Same acquisition contract as the shared withAgentHookLock
 // (memory-plugin-shared/lib/agent-hook-runtime.mjs): wait briefly, recover
@@ -79,7 +81,12 @@ export async function saveState(sessionId, value) {
  */
 export async function withSessionLock(sessionId, callback) {
   const dir = join(getStateDir(), `${safeId(sessionId)}.lock`);
+  // The lock can be the first thing a fresh install touches: auto-recall
+  // creates the state directory through loadState, but a short first prompt,
+  // or auto-recall disabled, reaches capture before that ever runs.
+  await mkdir(getStateDir(), { recursive: true });
   const deadline = Date.now() + LOCK_WAIT_MS;
+  const token = `${process.pid}-${randomUUID()}`;
   let acquired = false;
   while (true) {
     try {
@@ -99,8 +106,27 @@ export async function withSessionLock(sessionId, callback) {
     }
   }
   try {
+    // A stale reclaim can hand this directory to a new owner while the old
+    // holder is still inside its callback. The token is what lets that holder
+    // tell "my lock" from "someone else's" when it finally releases.
+    await writeFile(join(dir, LOCK_OWNER_FILE), token, { flag: "wx" });
     return await callback();
   } finally {
-    if (acquired) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    if (acquired) await releaseOwnedLock(dir, token);
+  }
+}
+
+/** Remove the lock only when this process still owns it. */
+async function releaseOwnedLock(dir, token) {
+  try {
+    if ((await readFile(join(dir, LOCK_OWNER_FILE), "utf-8")).trim() !== token) return false;
+  } catch {
+    return false;
+  }
+  try {
+    await rm(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
