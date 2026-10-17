@@ -35,6 +35,7 @@ from openviking.utils.git_auth import (
     parse_git_http_auth_config,
     raise_git_auth_error,
 )
+from openviking.utils.zip_safe import validate_zip_member_paths
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -500,7 +501,11 @@ class GitAccessor(DataAccessor):
         def _extract_zip():
             target = Path(extract_dir).resolve()
             with zipfile.ZipFile(zip_path, "r") as zf:
-                for info in zf.infolist():
+                members = zf.infolist()
+                validate_zip_member_paths(
+                    info for info in members if not stat.S_ISLNK(info.external_attr >> 16)
+                )
+                for info in members:
                     mode = info.external_attr >> 16
                     if info.is_dir() or stat.S_ISDIR(mode):
                         continue
@@ -593,7 +598,11 @@ class GitAccessor(DataAccessor):
         def _extract_zip():
             target = Path(extract_dir).resolve()
             with zipfile.ZipFile(zip_path, "r") as zf:
-                for info in zf.infolist():
+                members = zf.infolist()
+                validate_zip_member_paths(
+                    info for info in members if not stat.S_ISLNK(info.external_attr >> 16)
+                )
+                for info in members:
                     mode = info.external_attr >> 16
                     if info.is_dir() or stat.S_ISDIR(mode):
                         continue
@@ -653,7 +662,11 @@ class GitAccessor(DataAccessor):
         def _extract_zip_sync():
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 target = Path(target_dir).resolve()
-                for info in zip_ref.infolist():
+                members = zip_ref.infolist()
+                validate_zip_member_paths(
+                    info for info in members if not stat.S_ISLNK(info.external_attr >> 16)
+                )
+                for info in members:
                     mode = info.external_attr >> 16
                     # Skip directory entries
                     if info.is_dir() or stat.S_ISDIR(mode):
