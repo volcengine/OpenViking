@@ -342,6 +342,13 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
   const lastIndex = lastTurnId == null || lastTurnId === ""
     ? -1
     : order.indexOf(String(lastTurnId));
+  // Both views answer the same cursor: a turn already captured must not be
+  // decoded again, or every hook re-shapes the whole session into payloads.
+  const unseenTurnIds = new Set(order.slice(lastIndex + 1));
+  const unseenEntries = entries.filter((entry) => {
+    const turnId = entry?.payload?.turn_id;
+    return turnId == null || unseenTurnIds.has(String(turnId));
+  });
   const turns = [];
   for (const turnId of order.slice(lastIndex + 1)) {
     const turn = turnsById.get(turnId);
@@ -356,7 +363,7 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
   return {
     status: "ok",
     protocolVersion,
-    entries,
+    entries: unseenEntries,
     turns,
     unknownTypes: [...unknownTypes],
     unresolvedResults,

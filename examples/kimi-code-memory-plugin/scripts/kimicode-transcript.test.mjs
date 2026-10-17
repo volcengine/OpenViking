@@ -158,6 +158,10 @@ test("incremental decode resumes after lastTurnId", () => {
   const path = wireWith(rows);
   const r = extractUnseenKimicodeTurns(path, "0");
   assert.ok(r.turns.every((t) => t.turnId === "1"));
+  // The cursor must bound the entries too, or every hook reshapes the whole
+  // session just to have planCapture filter it back out.
+  assert.ok(r.entries.length > 0);
+  assert.ok(r.entries.every((entry) => entry.payload.turn_id === "1"));
   assert.ok(r.turns.some((t) => /第二轮/.test(t.content)));
 });
 

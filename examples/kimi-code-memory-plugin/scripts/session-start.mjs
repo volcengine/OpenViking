@@ -22,6 +22,7 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { boundFetch, createRemainingMs } from "./hook-budget.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
 import { replayAgentPending, runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
@@ -34,8 +35,19 @@ const { log, logError } = createLogger("session-start");
 // OPENVIKING_PENDING_REPLAY_LIMIT still overrides it.
 process.env.OPENVIKING_PENDING_REPLAY_LIMIT ||= "2";
 
+// Health plus a bounded replay must finish under the manifest's 30s; without
+// one shared clock each request would get the full 15s again (15 + 2×15 = 45s)
+// and a host kill would strand a claimed queue entry for ten minutes.
+const HOOK_BUDGET_MS = 20_000;
+const HEALTH_TIMEOUT_MS = 3_000;
+const remainingMs = createRemainingMs(HOOK_BUDGET_MS);
+
 let cfg = loadConfig();
-let fetchJSON = createOvHttp(cfg, { defaultTimeoutMs: cfg.timeoutMs });
+let fetchJSON = boundFetch(
+  createOvHttp(cfg, { defaultTimeoutMs: cfg.timeoutMs }),
+  remainingMs,
+  cfg.timeoutMs,
+);
 
 /**
  * Drain writes an earlier hook queued while the server was unreachable.
@@ -67,13 +79,13 @@ runHookStage(
   async (stage) => {
     const source = stage.input?.source || "startup";
     cfg = stage.cfg;
-    fetchJSON = createOvHttp(cfg, {
+    fetchJSON = boundFetch(createOvHttp(cfg, {
       defaultTimeoutMs: cfg.timeoutMs,
       requireJsonBody: true,
-    });
+    }), remainingMs, cfg.timeoutMs);
     log("start", { source, sessionId: stage.sessionId, ovSessionId: deriveOvSessionId(stage.sessionId) });
 
-    const health = await fetchJSON("/health");
+    const health = await fetchJSON("/health", {}, { timeoutMs: HEALTH_TIMEOUT_MS });
     if (!health.ok) {
       logError("health_check", "server unreachable; skipping pending replay");
       return;
