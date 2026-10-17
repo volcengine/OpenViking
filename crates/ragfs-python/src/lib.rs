@@ -173,6 +173,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
             })
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
+        PathLockError::InvalidPath(_) => new_py_err("AGFSInvalidPathError", err.to_string()),
         PathLockError::Io(_) | PathLockError::InvalidToken(_) | PathLockError::Internal(_) => {
             new_py_err("AGFSInternalError", err.to_string())
         }
@@ -3120,6 +3121,25 @@ mod tests {
                     };
                     assert!(error.is_instance(py, &internal_error_type));
                 }
+            }
+        });
+    }
+
+    #[test]
+    fn pathlock_invalid_path_preserves_public_error_type() {
+        Python::initialize();
+        Python::attach(|py| {
+            let invalid_path_type = get_exception(py, "AGFSInvalidPathError").unwrap();
+            for wrapped in [false, true] {
+                let error = PathLockError::InvalidPath(
+                    "path must match existing entry names exactly".to_string(),
+                );
+                let error = if wrapped {
+                    to_py_err(error.into())
+                } else {
+                    pathlock_err_to_py(error)
+                };
+                assert!(error.is_instance(py, &invalid_path_type));
             }
         });
     }

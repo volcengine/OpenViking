@@ -119,6 +119,9 @@ grep-searcher = "0.1.16"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+libc = "0.2"
+
 # Development dependencies
 [dev-dependencies]
 tempfile = "3.12"

@@ -188,6 +188,10 @@ pub enum PathLockError {
         operation: String,
     },
 
+    /// Invalid path while resolving lock storage.
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
     /// I/O error during lock operation.
     #[error("lock I/O error: {0}")]
     Io(String),

@@ -282,6 +282,10 @@ impl FilesystemPathLockProvider {
                     crate::core::Error::NotFound(_) | crate::core::Error::MountPointNotFound(_)
                 ) {
                     Ok(None)
+                } else if let crate::core::Error::InvalidPath(message) = e {
+                    Err(PathLockError::InvalidPath(format!(
+                        "failed to read lock token at '{lock_path}': {message}"
+                    )))
                 } else {
                     Err(PathLockError::Io(format!(
                         "failed to read lock token at '{lock_path}': {e}"
