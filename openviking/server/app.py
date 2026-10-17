@@ -4,6 +4,7 @@
 
 import asyncio
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.exceptions import ExceptionMiddleware
 
 from openviking.observability.http_error_context import capture_public_http_error
@@ -78,6 +80,17 @@ WORKER_HOST_ENV = "OPENVIKING_WORKER_HOST"
 WORKER_PORT_ENV = "OPENVIKING_WORKER_PORT"
 WORKER_WITH_BOT_ENV = "OPENVIKING_WORKER_WITH_BOT"
 WORKER_BOT_API_URL_ENV = "OPENVIKING_WORKER_BOT_API_URL"
+_LOOPBACK_ORIGIN = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$")
+
+
+class DevOriginGuardMiddleware(BaseHTTPMiddleware):
+    """Reject cross-origin HTTP requests before dev-mode routes run."""
+
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin")
+        if origin and not _LOOPBACK_ORIGIN.fullmatch(origin):
+            return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
+        return await call_next(request)
 
 
 def _configure_default_executor(config: ServerConfig) -> None:
@@ -599,14 +612,23 @@ def create_app(
     # those middleware own their response headers without special error paths.
     app.add_middleware(ExceptionMiddleware, handlers={Exception: general_error_handler})
     app.add_middleware(RequestIdMiddleware)
+    cors_origins = config.cors_origins
+    cors_origin_regex = None
+    if config.get_effective_auth_mode() == "dev":
+        cors_origins = []
+        cors_origin_regex = _LOOPBACK_ORIGIN.pattern
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=config.cors_origins,
+        allow_origins=cors_origins,
+        allow_origin_regex=cors_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=[REQUEST_ID_HEADER],
     )
+    if config.get_effective_auth_mode() == "dev":
+        app.add_middleware(DevOriginGuardMiddleware)
 
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
