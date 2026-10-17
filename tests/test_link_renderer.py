@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
@@ -533,6 +535,18 @@ class TestRenderLinks:
 
 
 class TestStripLinks:
+    @pytest.mark.parametrize(
+        ("content", "expected"),
+        [
+            ("[name [detail]](./target.md)", "name [detail]"),
+            (r"[name \[detail\]](./target.md)", r"name \[detail\]"),
+            (r"\[name](./target.md)", r"\[name](./target.md)"),
+            (r"\\[name](./target.md)", r"\\name"),
+        ],
+    )
+    def test_bracket_and_escape_boundaries(self, content, expected):
+        assert LinkRenderer.strip_links(content) == expected
+
     def test_strip_relative_link(self):
         content = "See [support](../entities/groups/lgbtq_support_group.md) for details."
         result = LinkRenderer.strip_links(content)
@@ -626,6 +640,30 @@ class TestStripLinks:
 
 
 class TestRoundTrip:
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"item": "name"},
+            {"items": ["name"]},
+            {"items": [["name"]]},
+            {"items": ["name", "other"]},
+        ],
+    )
+    def test_managed_links_preserve_json_structure(self, data):
+        source = "viking://user/u/memories/cases/source.md"
+        links = [
+            {"from_uri": source, "to_uri": source.replace("source", "target"), "match_text": "name"}
+        ]
+        original = json.dumps(data)
+        content = original
+        for _ in range(3):
+            rendered = LinkRenderer.render_links(content, source, links)
+            assert "[name](./target.md)" in rendered
+            assert LinkRenderer.render_links(rendered, source, links) == rendered
+            content = LinkRenderer.strip_managed_links(rendered, source, links)
+            assert content == original
+            assert json.loads(content) == data
+
     def test_render_then_strip(self):
         original = "Caroline attended a support group meeting."
         links = [
