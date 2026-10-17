@@ -784,14 +784,177 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
 
     assert result["case_count"] == 2
     assert result["submitted"] == 2
-    assert [rollout.case.name for rollout in seen_rollouts] == [
-        "duplicate_booking",
-        "case_b",
+    # Without an evaluator the whole-session analysis runs once for the commit;
+    # the analyzed rollout is bound to the first case and both cases are linked
+    # to the shared training result.
+    assert len(seen_rollouts) == 1
+    assert seen_rollouts[0].case.name == "duplicate_booking"
+    assert seen_rollouts[0].messages == rollout_messages
+
+
+@pytest.mark.asyncio
+async def test_train_from_extracted_multiple_cases_train_once_without_evaluator(monkeypatch):
+    """Without an evaluator every case sees byte-identical model input, so the
+    whole-session analyze/estimate runs once per commit and each extracted case
+    is linked to the shared training result."""
+    analyze_calls: list[str] = []
+    estimate_calls: list[str] = []
+
+    class FakeTrainer:
+        policy_set = ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        )
+
+    class FakeAnalyzer:
+        evaluator = None  # matches the analyzer SessionCompressorV3 builds by default
+
+        async def analyze(self, rollout, context):
+            del context
+            analyze_calls.append(rollout.case.name)
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[],
+                gradients=[],
+            )
+
+    async def fake_estimate_exp_gradients(self, *args, **kwargs):
+        estimate_calls.append("estimate")
+        return []
+
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        AsyncMock(return_value=FakeTrainer()),
+    )
+    monkeypatch.setattr(
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
+        fake_estimate_exp_gradients,
+    )
+
+    case_a = _training_case()
+    case_b = Case(
+        name="case_b",
+        task_signature="Handle a second extracted case.",
+        input={"summary": "second case"},
+        rubric=case_a.rubric,
+    )
+
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=FakeAnalyzer(),
+        streaming_trainer_config=StreamingPolicyTrainerConfig(
+            max_wait_seconds=60,
+            max_gradients_per_update=8,
+        ),
+    )
+    link_mock = AsyncMock()
+    compressor._link_case_to_training_outputs = link_mock
+
+    result = await compressor.train_from_extracted_cases(
+        cases=[case_a, case_b],
+        messages=_messages(),
+        ctx=_ctx(),
+        session_id="s1",
+        case_uri_by_name={
+            "duplicate_booking": "viking://user/u/memories/cases/case_a.md",
+            "case_b": "viking://user/u/memories/cases/case_b.md",
+        },
+    )
+
+    assert result["case_count"] == 2
+    assert result["submitted"] == 2
+    # One whole-session analysis per commit, not one per case.
+    assert analyze_calls == ["duplicate_booking"]
+    assert len(estimate_calls) == 1
+    # Every extracted case is linked to the shared training result.
+    assert link_mock.await_count == 2
+    assert [call.kwargs["case_uri"] for call in link_mock.await_args_list] == [
+        "viking://user/u/memories/cases/case_a.md",
+        "viking://user/u/memories/cases/case_b.md",
     ]
-    assert [rollout.messages for rollout in seen_rollouts] == [
-        rollout_messages,
-        rollout_messages,
-    ]
+
+
+@pytest.mark.asyncio
+async def test_train_from_extracted_multiple_cases_keeps_per_case_loop_with_evaluator(monkeypatch):
+    """With a rollout evaluator the per-case analysis is rubric-specific, so the
+    per-case loop is preserved."""
+    analyze_calls: list[str] = []
+
+    class FakeTrainer:
+        policy_set = ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        )
+
+    class FakeAnalyzer:
+        evaluator = SimpleNamespace(evaluate=AsyncMock(return_value=None))
+
+        async def analyze(self, rollout, context):
+            del context
+            analyze_calls.append(rollout.case.name)
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[],
+                gradients=[],
+            )
+
+    async def fake_estimate_exp_gradients(self, *args, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        AsyncMock(return_value=FakeTrainer()),
+    )
+    monkeypatch.setattr(
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
+        fake_estimate_exp_gradients,
+    )
+
+    case_a = _training_case()
+    case_b = Case(
+        name="case_b",
+        task_signature="Handle a second extracted case.",
+        input={"summary": "second case"},
+        rubric=case_a.rubric,
+    )
+
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=FakeAnalyzer(),
+        streaming_trainer_config=StreamingPolicyTrainerConfig(
+            max_wait_seconds=60,
+            max_gradients_per_update=8,
+        ),
+    )
+
+    result = await compressor.train_from_extracted_cases(
+        cases=[case_a, case_b],
+        messages=_messages(),
+        ctx=_ctx(),
+        session_id="s1",
+    )
+
+    assert result["case_count"] == 2
+    assert result["submitted"] == 2
+    assert analyze_calls == ["duplicate_booking", "case_b"]
 
 
 @pytest.mark.asyncio

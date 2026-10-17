@@ -1038,66 +1038,104 @@ class SessionCompressorV3:
 
             case_uri_map = dict(case_uri_by_name or {})
 
+            # Without a rollout evaluator the case never reaches the model: the
+            # analyzer only stamps case_name onto the extracted trajectories
+            # after extraction, so a per-case loop would rerun the identical
+            # whole-session extraction, gradient estimation and merge once per
+            # case.  In that case run the pipeline once for the first case and
+            # link every case to the shared result.  With an evaluator the
+            # per-case analysis is rubric-specific and the per-case loop is
+            # preserved.
+            share_training = getattr(self.rollout_analyzer, "evaluator", None) is None
+            shared_training: tuple[RolloutAnalysis, RolloutTrainingResult] | None = None
+
             for case in cases:
                 case_uri = _case_uri_for_case(case, case_uri_map)
-                rollout = Rollout(
-                    case=case,
-                    messages=list(messages),
-                    policy_snapshot_id=policy_snapshot_id,
-                )
-                # Analyze once — trajectories + skill patches co-extracted
-                analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
+                if share_training and shared_training is not None:
+                    reused_shared = True
+                    analysis, exp_training_result = shared_training
+                else:
+                    reused_shared = False
+                    rollout = Rollout(
+                        case=case,
+                        messages=list(messages),
+                        policy_snapshot_id=policy_snapshot_id,
+                    )
+                    # Analyze once — trajectories + skill patches co-extracted
+                    analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
 
-                # Experience path: estimate gradients, then submit to exp trainer
-                exp_gradients = []
-                if experiences_allowed:
-                    exp_gradients = await ExperienceGradientEstimator(
-                        viking_fs=viking_fs,
-                        vlm_resolver=self.vlm_resolver,
-                    ).estimate(analysis, exp_trainer.policy_set, gradient_context)
-                exp_training_result = _trajectory_only_training_result(
-                    analysis=analysis,
-                    rollout=rollout,
-                    policy_set=exp_trainer.policy_set,
-                )
-                if exp_gradients:
-                    fallback_trajectory_uris = {
-                        uri
-                        for trajectory in analysis.trajectories
-                        if (uri := str(getattr(trajectory, "uri", "") or ""))
-                    }
-
-                    async def commit_experience_batch(
-                        batch_result: RolloutTrainingResult,
-                        *,
-                        _fallback_trajectory_uris: set[str] = fallback_trajectory_uris,
-                    ) -> None:
-                        persisted_result = (
-                            getattr(batch_result, "batch_result", None) or batch_result
-                        )
-                        snapshot_apply_result, experience_trajectory_map = (
-                            _experience_snapshot_provenance(
-                                batch_result,
-                                fallback_trajectory_uris=_fallback_trajectory_uris,
-                            )
-                        )
-                        await _commit_experience_snapshot(
-                            viking_fs,
-                            ctx=ctx,
-                            experience_uris=_visible_experience_snapshot_uris(
-                                plan=persisted_result.plan,
-                                apply_result=snapshot_apply_result,
-                            ),
-                            archive_uri=archive_uri,
-                            experience_trajectory_map=experience_trajectory_map,
-                        )
-
-                    exp_training_result = await exp_trainer.submit_gradients(
-                        exp_gradients,
+                    # Experience path: estimate gradients, then submit to exp trainer
+                    exp_gradients = []
+                    if experiences_allowed:
+                        exp_gradients = await ExperienceGradientEstimator(
+                            viking_fs=viking_fs,
+                            vlm_resolver=self.vlm_resolver,
+                        ).estimate(analysis, exp_trainer.policy_set, gradient_context)
+                    exp_training_result = _trajectory_only_training_result(
                         analysis=analysis,
                         rollout=rollout,
-                        batch_finalizer=commit_experience_batch,
+                        policy_set=exp_trainer.policy_set,
                     )
+                    if exp_gradients:
+                        fallback_trajectory_uris = {
+                            uri
+                            for trajectory in analysis.trajectories
+                            if (uri := str(getattr(trajectory, "uri", "") or ""))
+                        }
+
+                        async def commit_experience_batch(
+                            batch_result: RolloutTrainingResult,
+                            *,
+                            _fallback_trajectory_uris: set[str] = fallback_trajectory_uris,
+                        ) -> None:
+                            persisted_result = (
+                                getattr(batch_result, "batch_result", None) or batch_result
+                            )
+                            snapshot_apply_result, experience_trajectory_map = (
+                                _experience_snapshot_provenance(
+                                    batch_result,
+                                    fallback_trajectory_uris=_fallback_trajectory_uris,
+                                )
+                            )
+                            await _commit_experience_snapshot(
+                                viking_fs,
+                                ctx=ctx,
+                                experience_uris=_visible_experience_snapshot_uris(
+                                    plan=persisted_result.plan,
+                                    apply_result=snapshot_apply_result,
+                                ),
+                                archive_uri=archive_uri,
+                                experience_trajectory_map=experience_trajectory_map,
+                            )
+
+                        exp_training_result = await exp_trainer.submit_gradients(
+                            exp_gradients,
+                            analysis=analysis,
+                            rollout=rollout,
+                            batch_finalizer=commit_experience_batch,
+                        )
+                    if share_training:
+                        shared_training = (analysis, exp_training_result)
+                    # Skill path: co-extracted skill gradients go directly to skill
+                    # trainer.  On the shared path this runs once per commit with
+                    # the single analysis; per-case analyses submit their own.
+                    if skill_trainer is not None and analysis.gradients:
+                        skill_gradients = [
+                            g for g in analysis.gradients if _gradient_memory_type(g) == "skills"
+                        ]
+                        if skill_gradients:
+                            skill_training_result = await skill_trainer.submit_gradients(
+                                skill_gradients,
+                                analysis=analysis,
+                                rollout=rollout,
+                            )
+                            skill_submitted += 1
+                            apply_result = getattr(skill_training_result, "apply_result", None)
+                            if apply_result is not None:
+                                for uri in getattr(apply_result, "written_uris", []) or []:
+                                    if uri:
+                                        skill_uris.append(str(uri))
+
                 if case_uri:
                     await self._link_case_to_training_outputs(
                         analysis=analysis,
@@ -1107,27 +1145,10 @@ class SessionCompressorV3:
                         ctx=ctx,
                         viking_fs=viking_fs,
                     )
-                # Skill path: co-extracted skill gradients go directly to skill trainer
-                if skill_trainer is not None and analysis.gradients:
-                    skill_gradients = [
-                        g for g in analysis.gradients if _gradient_memory_type(g) == "skills"
-                    ]
-                    if skill_gradients:
-                        skill_training_result = await skill_trainer.submit_gradients(
-                            skill_gradients,
-                            analysis=analysis,
-                            rollout=rollout,
-                        )
-                        skill_submitted += 1
-                        apply_result = getattr(skill_training_result, "apply_result", None)
-                        if apply_result is not None:
-                            for uri in getattr(apply_result, "written_uris", []) or []:
-                                if uri:
-                                    skill_uris.append(str(uri))
 
                 submitted += 1
 
-                if collect_memory_diff:
+                if collect_memory_diff and not reused_shared:
                     # Build diff from the strongly typed training result returned by
                     # submit_gradients.  Do not use exp_trainer.last_apply_result here:
                     # it is only a PolicyApplyResult and does not carry analyses/plan,
