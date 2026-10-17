@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor
 from openviking.parse.accessors.web_crawler import CrawlConfig, ScrapyWebCrawler
@@ -110,7 +110,10 @@ class WebImporter:
                 used_relpaths.add(relpath)
                 dest = self._safe_dest(temp_dir, relpath)
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(page.html or "", encoding="utf-8")
+                dest.write_text(
+                    _resolve_page_links(page.html or "", page_url),
+                    encoding="utf-8",
+                )
             downloaded_files = await self._write_downloads(
                 crawl_result.downloads,
                 temp_dir,
@@ -298,6 +301,25 @@ def _extract_page_title(html: str) -> Optional[str]:
         title = re.sub(r"<[^>]+>", "", match.group(1))
         return _clean_title(title)
     return None
+
+
+def _resolve_page_links(html: str, page_url: str) -> str:
+    """Resolve anchor destinations while the fetched page URL is available."""
+    if not html or not page_url:
+        return html
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        base = soup.find("base", href=True)
+        document_base = urljoin(page_url, str(base.get("href") or "")) if base else page_url
+        for anchor in soup.find_all("a", href=True):
+            href = anchor.get("href")
+            if isinstance(href, str):
+                anchor["href"] = urljoin(document_base, href.strip())
+        return str(soup)
+    except Exception:
+        return html
 
 
 def _clean_title(title: str) -> Optional[str]:
