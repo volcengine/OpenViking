@@ -1,3 +1,4 @@
+import builtins
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +19,51 @@ def _write_config(tmp_path, monkeypatch, data):
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
     return loader.load_config()
+
+
+def _force_cp936_default_open(monkeypatch):
+    original_open = builtins.open
+
+    def cp936_default_open(
+        file,
+        mode="r",
+        buffering=-1,
+        encoding=None,
+        errors=None,
+        newline=None,
+        closefd=True,
+        opener=None,
+    ):
+        if "b" not in mode and encoding is None:
+            encoding = "cp936"
+        return original_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+
+    monkeypatch.setattr(builtins, "open", cp936_default_open)
+
+
+def test_bot_config_preserves_utf8_text_with_cp936_default(tmp_path, monkeypatch):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspaceLabel": "记忆—配置",
+                "bot": {"hooks": ["记忆—hook"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    _force_cp936_default_open(monkeypatch)
+
+    config = loader.load_config()
+    loader.save_config(config, config_path)
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config.hooks == ["记忆—hook"]
+    assert saved["workspaceLabel"] == "记忆—配置"
+    assert saved["bot"]["hooks"] == ["记忆—hook"]
 
 
 def _credential_chain(prefix):

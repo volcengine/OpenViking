@@ -73,7 +73,7 @@ def _timeout_configured_outside_call() -> bool:
     if not path.exists():
         return False
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     return isinstance(raw, dict) and "timeout" in raw

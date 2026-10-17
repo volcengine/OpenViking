@@ -2,6 +2,7 @@
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +29,19 @@ def clean_environment(monkeypatch, tmp_path):
         cli, "DEFAULT_CONFIGS", (tmp_path / "home" / "gateway.conf", tmp_path / "etc.conf")
     )
     monkeypatch.setattr(cli, "USER_CONFIG", tmp_path / "home" / "gateway.conf")
+
+
+def force_cp936_default_path_reads(monkeypatch):
+    original_read_text = Path.read_text
+
+    def cp936_default_read_text(self, encoding=None, errors=None):
+        return original_read_text(
+            self,
+            encoding=encoding or "cp936",
+            errors=errors,
+        )
+
+    monkeypatch.setattr(Path, "read_text", cp936_default_read_text)
 
 
 def test_removed_fields_are_ignored_with_one_warning(caplog):
@@ -130,6 +144,26 @@ def test_standalone_config_file_and_env_precedence(tmp_path, monkeypatch):
     assert config.storage_path == str(tmp_path / "data")
 
 
+def test_standalone_loads_utf8_config_with_cp936_default(tmp_path, monkeypatch):
+    config_file = tmp_path / "gateway.conf"
+    config_file.write_text(
+        json.dumps(
+            {
+                "openviking_url": "https://example.test",
+                "storage_path": "C:/记忆—数据",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_GATEWAY_CONFIG_FILE", str(config_file))
+    force_cp936_default_path_reads(monkeypatch)
+
+    config = load_config()
+
+    assert config.storage_path == "C:/记忆—数据"
+
+
 def test_empty_environment_values_keep_file_values(tmp_path, monkeypatch):
     for field in StandaloneGatewayConfig.model_fields:
         monkeypatch.setenv("OPENVIKING_GATEWAY_" + field.upper(), "")
@@ -230,6 +264,28 @@ def test_init_writes_and_rewrites_gateway_conf(monkeypatch):
     answer(monkeypatch, "", "", "", "n")
     assert cli.init(path) == 0
     assert "management_key" not in json.loads(path.read_text())
+
+
+def test_init_preserves_utf8_config_with_cp936_default(monkeypatch):
+    path = cli.USER_CONFIG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "openviking_url": "$OV_URL",
+                "storage_path": "C:/记忆—数据",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    force_cp936_default_path_reads(monkeypatch)
+    answer(monkeypatch, "", "", "", "n")
+
+    assert cli.init(path) == 0
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["storage_path"] == "C:/记忆—数据"
 
 
 def test_init_keeps_env_reference_and_stops_without_terminal(monkeypatch):
