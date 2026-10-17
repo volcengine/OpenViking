@@ -123,11 +123,16 @@ function checkConfig(report, cfg, host) {
   report.info(`credential source: ${cfg.credentialSource} (auth mode ${cfg.authMode}; identity headers ${cfg.sendIdentityHeaders ? "sent" : "not sent"})`);
   const peer = reportPeer(report, cfg);
   reportTimeouts(report, cfg, host);
+  // Same source of truth as pending-queue.mjs: OPENVIKING_PENDING_REPLAY_LIMIT
+  // wins; SessionStart otherwise defaults the env to 2 in code (the shared
+  // fallback when no entry point sets it is 50).
+  const replayLimitEnv = parseInt(process.env.OPENVIKING_PENDING_REPLAY_LIMIT || "", 10);
+  const replayLimit = Number.isFinite(replayLimitEnv) && replayLimitEnv > 0 ? replayLimitEnv : 2;
   reportToggles(report, cfg, host, [
     `auto-recall ${cfg.autoRecall ? "on" : "OFF"}`,
     `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`,
     `commit every ${cfg.commitTurnThreshold || "∞"} captured turns`,
-    `pending replay limit ${cfg.pendingReplayLimit ?? 2}`,
+    `pending replay limit ${replayLimit}/session-start (env override; shared fallback 50)`,
   ]);
   return { keyInfo, peer, ovConf };
 }
