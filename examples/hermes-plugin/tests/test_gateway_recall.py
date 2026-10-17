@@ -124,7 +124,16 @@ class GatewayBackend:
 
 
 def initialize(
-    external_provider, monkeypatch, *, name="gateway", scope="peer", compress="off", **identity
+    external_provider,
+    monkeypatch,
+    *,
+    name="gateway",
+    scope="peer",
+    compress="off",
+    platform="telegram",
+    recall_disabled_platforms=None,
+    recall_disabled_platforms_env=None,
+    **identity,
 ):
     from agent.memory_manager import MemoryManager
 
@@ -141,9 +150,16 @@ def initialize(
         "recall_timeout_seconds": 10,
         "recall_request_timeout_seconds": 5,
     }
+    if recall_disabled_platforms is not None:
+        config["recall_disabled_platforms"] = recall_disabled_platforms
     (home / "config.yaml").write_text(
         yaml.safe_dump({"memory": {"provider": "openviking", "openviking": config}})
     )
+    if recall_disabled_platforms_env is not None:
+        (home / ".env").write_text(
+            f"OPENVIKING_RECALL_DISABLED_PLATFORMS={recall_disabled_platforms_env}\n",
+            encoding="utf-8",
+        )
     backend = GatewayBackend()
     client = httpx.Client(transport=httpx.MockTransport(backend))
     monkeypatch.setattr(module, "_get_httpx", lambda: client)
@@ -153,11 +169,67 @@ def initialize(
         manager.initialize_all(
             session_id="shared-group",
             hermes_home=str(home),
-            platform="telegram",
+            platform=platform,
             user_id="alice",
             **identity,
         )
     return home, provider, module, manager, backend
+
+
+@pytest.mark.parametrize(
+    "platform,disabled,disabled_env,recall_expected",
+    [
+        ("pocket", ["pocket"], None, False),
+        ("POCKET", " discord, pocket ", None, False),
+        ("discord", ["pocket"], None, True),
+        ("pocket", [], "pocket", False),
+        ("pocket", ["pocket"], "discord", True),
+    ],
+)
+def test_platform_recall_opt_out_keeps_capture_and_other_platforms(
+    external_provider, monkeypatch, platform, disabled, disabled_env, recall_expected
+):
+    home, provider, _, manager, backend = initialize(
+        external_provider,
+        monkeypatch,
+        platform=platform,
+        recall_disabled_platforms=disabled,
+        recall_disabled_platforms_env=disabled_env,
+    )
+    try:
+        with profile_scope(home):
+            manager.on_turn_start(1, "Extract this structured record", author_id="alice")
+            before = len(backend.requests)
+            recalled = provider.prefetch(
+                "Extract this structured record", session_id="shared-group"
+            )
+            recall_requests = backend.requests[before:]
+
+            if recall_expected:
+                assert "common" in recalled
+                assert any(
+                    request.url.path.startswith("/api/v1/search/")
+                    for request, _ in recall_requests
+                )
+            else:
+                assert recalled == ""
+                assert recall_requests == []
+
+            manager.sync_all(
+                "Extract this structured record",
+                "Captured",
+                session_id="shared-group",
+                turn_author={"id": "alice"},
+            )
+            assert manager.flush_pending(timeout=10)
+            assert provider._drain_writers("shared-group", timeout=10)
+            assert any(message["role"] == "user" for message in backend.pending)
+
+            searches_before_tool = len(backend.searches)
+            provider.handle_tool_call("viking_search", {"query": "structured record"})
+            assert len(backend.searches) == searches_before_tool + 1
+    finally:
+        manager.shutdown_all()
 
 
 @pytest.mark.parametrize("compress", ["off", "server"])
@@ -366,6 +438,14 @@ def test_recall_scope_default_and_environment_override(external_provider, monkey
     _, provider, module, _ = external_provider("config")
     schema = {field["key"]: field for field in provider.get_config_schema()}
     assert schema["recall_scope"]["choices"] == ["shared", "peer"]
+    assert schema["recall_disabled_platforms"]["env_var"] == (
+        "OPENVIKING_RECALL_DISABLED_PLATFORMS"
+    )
+    assert module._platform_names([" POCKET ", "discord", "pocket"]) == {
+        "pocket",
+        "discord",
+    }
+    assert module._platform_names(" POCKET, discord ") == {"pocket", "discord"}
     assert module.OpenVikingMemoryProvider._setting("recall_scope", {}) is None
     monkeypatch.setenv("OPENVIKING_RECALL_SCOPE", "peer")
     assert provider._setting("recall_scope", {"recall_scope": "shared"}) == "peer"
