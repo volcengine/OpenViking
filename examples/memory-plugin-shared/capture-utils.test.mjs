@@ -116,6 +116,29 @@ test("a host system reminder is not part of the conversation", () => {
   )
 })
 
+test("a kimi notification keeps its body and loses its wrapper", () => {
+  assert.equal(
+    sanitizeCapturedText(
+      'real question\n<notification id="task:x:completed" category="task">\n'
+        + "Title: Background process completed\nSeverity: info\n"
+        + '<output-file path="/tmp/out.log">Read the output file to retrieve the result</output-file>\n'
+        + "</notification>",
+    ),
+    "real question\n\nTitle: Background process completed\nSeverity: info",
+  )
+})
+
+test("a kimi shell or skill transport block goes whole", () => {
+  assert.equal(
+    sanitizeCapturedText("question\n<bash-stdout>a very long clone log</bash-stdout>"),
+    "question",
+  )
+  assert.equal(
+    sanitizeCapturedText('<skill-loaded name="gh"># Reference\n…</skill-loaded>'),
+    "",
+  )
+})
+
 test("a subagent context line is not part of the conversation", () => {
   assert.equal(
     sanitizeCapturedText("[Subagent Context] parent session cc-1\nthe real question"),

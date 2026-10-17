@@ -1,0 +1,74 @@
+{
+  "name": "openviking-memory",
+  "version": "0.1.0",
+  "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking. Recall on UserPromptSubmit, incremental capture (user text, assistant text, tool calls/results) on Stop/PreCompact/SessionEnd/Interrupt, pending replay on SessionStart, with a local stdio MCP proxy. Windows-safe: no detached background workers.",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "homepage": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": [
+    "memory",
+    "openviking",
+    "kimi-code",
+    "long-term-memory",
+    "semantic-search"
+  ],
+  "interface": {
+    "displayName": "OpenViking Memory",
+    "shortDescription": "Recall and capture long-term memory through OpenViking",
+    "longDescription": "Hooks Kimi Code's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit (raw stdout injection); decode the session wire.jsonl incrementally on Stop/PreCompact/SessionEnd/Interrupt and append user/assistant/tool messages to a long-lived OpenViking session keyed kc-<session-id>; commit on SessionEnd/PreCompact and by threshold; replay a bounded pending queue on SessionStart. Exposes OpenViking's MCP tools through a local stdio proxy. All hooks run synchronously (no detached workers) for Windows reliability."
+  },
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": ["./servers/mcp-proxy.mjs"],
+      "env": {
+        "OPENVIKING_HOOK_SOURCE": "kimicode"
+      }
+    }
+  },
+  "skills": "./skills/",
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "node ./scripts/session-start.mjs",
+      "timeout": 30,
+      "env": {
+        "OPENVIKING_PENDING_REPLAY_LIMIT": "2"
+      }
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "node ./scripts/auto-recall.mjs",
+      "timeout": 20
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Read|Glob|Grep",
+      "command": "node ./scripts/uri-guard.mjs",
+      "timeout": 5
+    },
+    {
+      "event": "Stop",
+      "command": "node ./scripts/auto-capture.mjs stop",
+      "timeout": 30
+    },
+    {
+      "event": "PreCompact",
+      "command": "node ./scripts/auto-capture.mjs pre-compact",
+      "timeout": 30
+    },
+    {
+      "event": "SessionEnd",
+      "command": "node ./scripts/auto-capture.mjs session-end",
+      "timeout": 30
+    },
+    {
+      "event": "Interrupt",
+      "command": "node ./scripts/auto-capture.mjs interrupt",
+      "timeout": 10
+    }
+  ]
+}

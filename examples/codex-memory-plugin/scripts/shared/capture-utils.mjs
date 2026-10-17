@@ -507,7 +507,17 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
 
     const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
     if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
-    turns.push({ role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts });
+    // Turn identity rides along when the host's entries carry it (the Kimi
+    // decoder stamps `turn_id` into each payload; Codex inherits it the same
+    // way). Hosts that cannot correlate turns keep the old shape and the
+    // adapters fall back to content hashing for their cursors.
+    const turnId = payload.turn_id ?? entry.turn_id ?? null;
+    turns.push({
+      role,
+      text: shaped.parts.length ? shaped.signalText : shaped.text,
+      parts: shaped.parts,
+      ...(turnId != null && String(turnId) !== "" ? { turnId: String(turnId) } : {}),
+    });
   }
   return turns;
 }
@@ -609,6 +619,36 @@ function stripInjectedDigestBlocks(text) {
 }
 
 /**
+ * Kimi Code's host-to-host envelopes, written as tagged blocks inside a
+ * user-role message. The adapter's origin filter drops most of these records
+ * at the source; these rules catch the same blocks reaching the sanitizer
+ * through any other path, so the split follows what each block carries:
+ *
+ *   `notification` keeps its body — a finished background task or a cron firing
+ *   is a real prompt (§5.3 captures it), and for a turn with no user input the
+ *   body is the whole turn. Only the wrapper goes.
+ *   `output-file` / `skill-loaded` / `bash-input` / `bash-stdout` /
+ *   `bash-stderr` carry machine transport — a path, a loaded skill, a shell
+ *   echo — with nothing the conversation authored, so the block goes whole.
+ */
+const HOST_ENVELOPE_BODY_TAGS = ["notification"];
+const HOST_ENVELOPE_BLOCK_TAGS = [
+  "output-file",
+  "skill-loaded",
+  "bash-input",
+  "bash-stdout",
+  "bash-stderr",
+];
+const HOST_ENVELOPE_BODY_RE = new RegExp(
+  `<(${HOST_ENVELOPE_BODY_TAGS.join("|")})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`,
+  "gi",
+);
+const HOST_ENVELOPE_BLOCK_RE = new RegExp(
+  `<(${HOST_ENVELOPE_BLOCK_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?<\\/\\1>`,
+  "gi",
+);
+
+/**
  * Drop everything in a turn that the conversation did not put there.
  *
  * Recall injects a context block into the prompt, and the host adds notes of
@@ -625,6 +665,8 @@ export function sanitizeCapturedText(text) {
     // Claude Code wraps its own out-of-band notes to the model in these two
     // shapes. They are the host talking to itself, not the conversation.
     .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi, " ")
+    .replace(HOST_ENVELOPE_BLOCK_RE, " ")
+    .replace(HOST_ENVELOPE_BODY_RE, " $2 ")
     .replace(/^[ \t]*\[Subagent Context\][^\n]*$/gim, " ")
     .replace(/^\s*Sender\s*\([^)]+\)\s*```[\s\S]*?```\s*/gim, " ")
     .replace(/^\s*Conversation (?:metadata|info):\s*```[\s\S]*?```\s*/gim, " ")
