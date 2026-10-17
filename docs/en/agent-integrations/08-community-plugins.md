@@ -53,7 +53,11 @@ transcript decoding, output formatting, and commit policy:
 - **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
 - The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
 
-### Install
+> **Recommended path**: Kimi Code now has a dedicated native managed plugin (installed with `/plugins install`) that supersedes the curl installer below. See [Kimi Code Memory Plugin](./20-kimi-code.md), source: [examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin).
+
+### Install (legacy / fallback)
+
+New users should pick the [native plugin](./20-kimi-code.md) instead. These instructions stay for existing users of the curl installer.
 
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 

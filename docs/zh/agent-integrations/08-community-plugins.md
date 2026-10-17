@@ -51,7 +51,11 @@ Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook �
 - **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
 - 原生插件 manifest 提供 OpenViking MCP server，不修改 Kimi 的旧式配置文件。
 
-### 安装
+> **推荐路径**：Kimi Code 现在有独立的原生 managed 插件（`/plugins install` 安装），已替代下面的 curl 安装器路径。详见 [Kimi Code 记忆插件](./20-kimi-code.md)，源码：[examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin)。
+
+### 安装（legacy / 备选）
+
+新用户请改用上面的 [原生插件路径](./20-kimi-code.md)。以下说明保留给仍在使用 curl 安装器的现有用户。
 
 前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
 

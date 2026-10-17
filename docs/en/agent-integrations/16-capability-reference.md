@@ -472,7 +472,7 @@ The session ID prefix tells you which integration wrote a session on the server.
 | Cursor | Unified installer; writes `~/.cursor/hooks.json` and `mcp.json` | `cu-<conversation id>` | Shared settings, `plugin.cursor` |
 | TRAE, TRAE CN | Unified installer; writes `~/.trae/` or `~/.trae-cn/` hooks and MCP files | `tr-` or `trcn-` | Shared settings, `plugin.trae` or `plugin.trae_cn` |
 | ZCode | Unified installer; merges into `~/.zcode/cli/config.json` and turns hooks on | `zc-<id>` | Shared settings, `plugin.zcode` |
-| Kimi Code | Unified installer; managed Kimi Code plugin | `kc-<id>` | Shared settings, `plugin.kimicode` |
+| Kimi Code | Native Kimi Code plugin (`/plugins install`), or the unified installer (legacy) | `kc-<id>` | Shared settings, `plugin.kimicode` |
 | OpenCode | Unified installer, npm (`@openviking/opencode-plugin`), or source | `oc-<id>`; subagents `oc-<parent>__subagent-<child>` | Shared settings, `plugin.opencode` |
 | DSH | Unified installer or `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | Shared settings, `plugin.dsh`, then the Cordis patch |
 | pi | Unified installer, into pi's extension directory | `pi-<id>` | Shared settings, `plugin.pi` |

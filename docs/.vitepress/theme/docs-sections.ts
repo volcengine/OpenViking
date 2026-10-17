@@ -90,6 +90,7 @@ export const sections: DocSection[] = [
       g('Coding tools', '编程工具', [
         p('agent-integrations/02-claude-code'),
         p('agent-integrations/04-codex'),
+        p('agent-integrations/20-kimi-code'),
         p('agent-integrations/12-cursor'),
         p('agent-integrations/13-trae'),
         p('agent-integrations/10-opencode'),

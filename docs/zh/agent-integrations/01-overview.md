@@ -9,6 +9,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **Claude Code** | [Claude Code 记忆插件](./02-claude-code.md) — 通过 hooks 实现自动召回与自动捕获 |
 | **OpenClaw** | [OpenClaw 插件](./03-openclaw.md) — 全生命周期一体化集成 |
 | **Codex / TraeCode CLI 2.0** | [Codex 记忆插件](./04-codex.md) — 生命周期 hooks 自动召回与增量捕获 |
+| **Kimi Code** | [Kimi Code 记忆插件](./20-kimi-code.md) — 原生 managed 插件：hooks 自动召回、`wire.jsonl` 增量捕获，外加 MCP 工具 |
 | **Cursor** | [Cursor 记忆集成](./12-cursor.md) — 一条命令安装生命周期 Hook、MCP 工具、Rules 与 Skills |
 | **TRAE / TRAE CN** | [TRAE 记忆集成](./13-trae.md) — 一个安装器完成 prompt 召回、回合捕获与 OpenViking 工具接入 |
 | **DeepSeek Harness（`dsh`）** | [DeepSeek Harness 记忆插件](./17-dsh.md) — 进程内 Cordis 插件，pre-step 召回、事件捕获与 OpenViking MCP 工具 |

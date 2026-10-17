@@ -471,7 +471,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 统一安装器；写入 `~/.cursor/hooks.json` 和 `mcp.json` | `cu-<conversation id>` | 共享配置，`plugin.cursor` |
 | TRAE、TRAE CN | 统一安装器；写入 `~/.trae/` 或 `~/.trae-cn/` 下的 hook 与 MCP 文件 | `tr-` 或 `trcn-` | 共享配置，`plugin.trae` 或 `plugin.trae_cn` |
 | ZCode | 统一安装器；合并进 `~/.zcode/cli/config.json` 并开启 hook | `zc-<id>` | 共享配置，`plugin.zcode` |
-| Kimi Code | 统一安装器；Kimi Code 托管插件 | `kc-<id>` | 共享配置，`plugin.kimicode` |
+| Kimi Code | Kimi Code 原生插件（`/plugins install`），或统一安装器（legacy） | `kc-<id>` | 共享配置，`plugin.kimicode` |
 | OpenCode | 统一安装器、npm（`@openviking/opencode-plugin`）或源码 | `oc-<id>`；子代理 `oc-<parent>__subagent-<child>` | 共享配置，`plugin.opencode` |
 | DSH | 统一安装器或 `dsh plugin add @openviking/dsh-memory-plugin` | `dsh-<id>` | 共享配置，`plugin.dsh`，然后是 Cordis patch |
 | pi | 统一安装器，装入 pi 的扩展目录 | `pi-<id>` | 共享配置，`plugin.pi` |
