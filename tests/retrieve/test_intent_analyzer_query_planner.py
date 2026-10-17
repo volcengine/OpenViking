@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.message import Message, TextPart
 from openviking.retrieve import intent_analyzer as intent_module
 from openviking.retrieve.intent_analyzer import IntentAnalyzer
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -84,6 +85,47 @@ def test_query_planner_prompt_mapping_targets_are_bundled():
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
     for prompt_id in intent_module.QUERY_PLANNER_PROMPT_BY_MODEL.values():
         assert manager.load_template(prompt_id).metadata.id == prompt_id
+
+
+def test_intent_analyzer_bounds_each_recent_message(monkeypatch):
+    planner = RecordingModel(_query_plan_response("planned query"))
+    rendered_variables: dict[str, str] = {}
+
+    def fake_render_prompt(prompt_id, variables):
+        del prompt_id
+        rendered_variables.update(variables)
+        return "rendered prompt"
+
+    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
+
+    messages = [
+        Message(
+            id=f"message-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            parts=[TextPart(f"message-{index}:" + "x" * 100_000)],
+        )
+        for index in range(4)
+    ]
+    messages.append(Message(id="message-4", role="user", parts=[TextPart("short message")]))
+    current_message = "current:" + "y" * 10_000
+
+    IntentAnalyzer(query_planner=planner)._build_context_prompt(
+        compression_summary="",
+        messages=messages,
+        current_message=current_message,
+    )
+
+    recent_messages = rendered_variables["recent_messages"]
+    role_prefix_chars = sum(len(f"[{message.role}]: ") for message in messages)
+    assert len(recent_messages) <= (
+        len(messages) * IntentAnalyzer.MAX_RECENT_MESSAGE_CHARS
+        + role_prefix_chars
+        + len(messages)
+        - 1
+    )
+    assert recent_messages.count("...(truncated)") == len(messages) - 1
+    assert recent_messages.endswith("[user]: short message")
+    assert rendered_variables["current_message"] == current_message
 
 
 @pytest.mark.asyncio
