@@ -38,6 +38,7 @@ class DirectBackend(SandboxBackend):
 
         logger.info("[Direct] Executing: {}", repr(command))
 
+        workspace_notice = self._restore_missing_workspace()
         cwd = kwargs.get("working_dir", str(self._workspace))
 
         try:
@@ -64,9 +65,10 @@ class DirectBackend(SandboxBackend):
                 await process.wait()
                 if isinstance(exc, asyncio.CancelledError):
                     raise
-                return f"Error: Command timed out after {timeout} seconds"
+                timeout_message = f"Error: Command timed out after {timeout} seconds"
+                return "\n".join(filter(None, (workspace_notice, timeout_message)))
 
-            output_parts = []
+            output_parts = [workspace_notice] if workspace_notice else []
 
             if stdout:
                 output_parts.append(stdout.decode("utf-8", errors="replace"))
@@ -96,6 +98,25 @@ class DirectBackend(SandboxBackend):
 
             logger.error(f"[Direct] Traceback:\n{traceback.format_exc()}")
             raise
+
+    def _restore_missing_workspace(self) -> str | None:
+        """Recreate a removed managed workspace before starting another shell."""
+        if self._workspace.is_dir():
+            return None
+        try:
+            self._workspace.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Direct backend workspace is unavailable: {self._workspace}"
+            ) from exc
+        if not self._workspace.is_dir():
+            raise RuntimeError(f"Direct backend workspace is not a directory: {self._workspace}")
+
+        logger.warning("[Direct] Recreated missing workspace: {}", self._workspace)
+        return (
+            f"Notice: Direct workspace {self._workspace} was missing and was recreated before "
+            "this command. Files from the previous workspace were not restored."
+        )
 
     async def stop(self) -> None:
         """Stop the backend (no-op for direct backend)."""
