@@ -62,6 +62,7 @@ def register_default_tools(
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
     tavily_api_key = config.tools.web.search.tavily_api_key if config.tools.web.search else None
+    search_backend = config.tools.web.search.backend if config.tools.web.search else "auto"
 
     # Get provider API key and base from config
 
@@ -86,7 +87,7 @@ def register_default_tools(
     # Web tools
     registry.register(
         WebSearchTool(
-            backend="auto",
+            backend=search_backend,
             brave_api_key=brave_api_key,
             exa_api_key=exa_api_key,
             tavily_api_key=tavily_api_key,
