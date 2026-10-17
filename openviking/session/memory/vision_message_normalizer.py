@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Normalize image messages into extraction-friendly text messages."""
 
+import base64
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Dict, List
 
 from openviking.message import Message
@@ -19,8 +21,28 @@ def message_has_image_part(message: Message) -> bool:
     return any(isinstance(part, ImagePart) for part in getattr(message, "parts", []))
 
 
+def _image_url_for_part(part: ImagePart) -> str:
+    url = part.url or ""
+    if url.startswith("file://"):
+        url = url[len("file://"):]
+    if url and not url.startswith(("http://", "https://", "data:")):
+        path = Path(url)
+        suffix = path.suffix.lower()
+        mime_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }.get(suffix, "image/png")
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:{mime_type};base64,{b64}"
+    return url
+
+
 def image_part_to_openai_content(part: ImagePart) -> Dict[str, Any]:
-    image_url: Dict[str, Any] = {"url": part.url}
+    image_url: Dict[str, Any] = {"url": _image_url_for_part(part)}
     if part.detail is not None:
         image_url["detail"] = part.detail
     return {"type": "image_url", "image_url": image_url}
