@@ -337,15 +337,20 @@ class HttpCollection(ICollection):
         fetch_result = FetchDataInCollectionResult()
 
         if isinstance(data, dict):
-            if "fetch" in data:
-                fetch = data.get("fetch", [])
-                fetch_result.items = [
-                    DataItem(
-                        id=item.get("id"),
-                        fields=item.get("fields"),
-                    )
-                    for item in fetch
-                ]
+            # The bundled FastAPI service serializes FetchDataInCollectionResult
+            # with dataclasses.asdict, which yields "items"; remote VikingDB
+            # peers return "fetch". Accept both so this client works against
+            # either, and so a response is never silently parsed as empty.
+            fetch = data.get("items")
+            if fetch is None:
+                fetch = data.get("fetch") or []
+            fetch_result.items = [
+                DataItem(
+                    id=item.get("id"),
+                    fields=item.get("fields"),
+                )
+                for item in fetch
+            ]
             if "ids_not_exist" in data:
                 fetch_result.ids_not_exist = data.get("ids_not_exist", [])
 

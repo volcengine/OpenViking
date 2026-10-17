@@ -1202,6 +1202,58 @@ def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):
     }
 
 
+def test_http_collection_fetch_data_reads_the_server_payload(monkeypatch):
+    """The bundled service serializes FetchDataInCollectionResult with ``asdict``.
+
+    That produces ``items`` / ``ids_not_exist``. The client only looked for
+    ``fetch`` (the remote VikingDB shape), so every successful fetch parsed as
+    empty and ``CollectionAdapter.get`` reported that no record existed.
+    """
+    import json
+    from dataclasses import asdict
+
+    from openviking.storage.vectordb.collection.http_collection import HttpCollection
+    from openviking.storage.vectordb.collection.result import (
+        DataItem,
+        FetchDataInCollectionResult,
+    )
+
+    # Build the body the way api_fastapi.fetch_data does:
+    #   success_response("fetch data success", asdict(collection.fetch_data(...)))
+    body = {
+        "code": 0,
+        "message": "fetch data success",
+        "data": asdict(
+            FetchDataInCollectionResult(
+                items=[DataItem(id="doc-1", fields={"uri": "viking://resources/a.md"})],
+                ids_not_exist=["doc-2"],
+            )
+        ),
+    }
+
+    class _Response:
+        status_code = 200
+        text = json.dumps(body)
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.http_collection.requests.get",
+        lambda *args, **kwargs: _Response(),
+    )
+
+    collection = HttpCollection(
+        ip="127.0.0.1",
+        port=1933,
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+
+    result = collection.fetch_data(["doc-1", "doc-2"])
+
+    assert [(item.id, item.fields) for item in result.items] == [
+        ("doc-1", {"uri": "viking://resources/a.md"})
+    ]
+    assert result.ids_not_exist == ["doc-2"]
+
+
 def test_http_adapter_strict_count_propagates_http_failure(monkeypatch):
     from openviking.storage.vectordb.collection.collection import Collection
     from openviking.storage.vectordb.collection.http_collection import HttpCollection
