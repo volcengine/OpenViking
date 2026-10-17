@@ -160,6 +160,12 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
+It runs for text queries in `search(mode="list")`, not for `find()` or
+`search(mode="context")`. Automatic recall using context mode therefore does not
+call the reranker. Its `threshold` still supplies the retriever's default score
+cutoff, including for QUICK retrieval without reranking; a request's
+`score_threshold` overrides it. See [Reranking by request mode](../api/06-retrieval.md#reranking-by-request-mode).
+
 `jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
@@ -178,7 +184,7 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 |---|---|---|---|
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
 
-Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.
+Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search. Model reranking applies only to text queries in `search(mode="list")` with a usable `rerank` provider; context mode does not rerank.
 
 ## Storage Settings
 
