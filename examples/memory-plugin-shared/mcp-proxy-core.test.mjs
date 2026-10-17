@@ -493,3 +493,77 @@ test("a genuine connection failure still maps to -32001", async () => {
   assert.equal(res.error.code, -32001);
   assert.match(res.error.message, /reachable/);
 });
+
+test("retries initialize after connection failures", async () => {
+  let attempts = 0;
+  const { proxy, messages } = makeProxy({
+    url: "http://127.0.0.1:1933/mcp",
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts < 3) throw new TypeError("fetch failed");
+      return new Response(JSON.stringify(jsonRpc(1, { protocolVersion: "2025-06-18" })), {
+        status: 200,
+        headers: { "content-type": "application/json", "mcp-session-id": "sid-retry" },
+      });
+    },
+  });
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  assert.equal(attempts, 3);
+  const [res] = await messages();
+  assert.equal(res.id, 1);
+});
+
+test("gives up after the bounded initialize retries", async () => {
+  let attempts = 0;
+  const { proxy, messages } = makeProxy({
+    url: "http://127.0.0.1:1933/mcp",
+    fetchImpl: () => {
+      attempts += 1;
+      throw new TypeError("fetch failed");
+    },
+  });
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 9, method: "initialize", params: {} });
+  assert.equal(attempts, 3);
+  const [res] = await messages();
+  assert.equal(res.error.code, -32001);
+});
+
+test("reloads changed credentials before a passthrough request", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "openviking-mcp-reload-"));
+  const credentialPath = join(dir, "ovcli.conf");
+  writeFileSync(credentialPath, "old-key", "utf-8");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  let apiKey = "old-key";
+  const auth = [];
+  const readConfig = () => ({
+    mcpUrl: "http://127.0.0.1:1/mcp",
+    apiKey,
+    account: "default",
+    user: "zeus",
+    peerId: "peer-a",
+    timeoutMs: 5000,
+    debug: false,
+    debugLogPath: "",
+    credentialSource: "ovcli",
+    credentialPath,
+    watchedPaths: [credentialPath],
+  });
+  const { proxy } = makeProxy({
+    readConfig,
+    fetchImpl: async (_url, init = {}) => {
+      auth.push(init.headers?.Authorization || init.headers?.authorization);
+      return new Response(JSON.stringify(jsonRpc(2, { tools: [] })), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  apiKey = "new-key";
+  writeFileSync(credentialPath, "new-key-with-different-size", "utf-8");
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+
+  assert.equal(auth.at(-1), "Bearer new-key");
+});

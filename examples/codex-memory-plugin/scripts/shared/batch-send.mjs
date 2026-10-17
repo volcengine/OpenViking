@@ -4,6 +4,10 @@ import { isRetryableFailure } from "./retryable.mjs";
 
 export const BATCH_LIMIT = 100;
 
+// Serial isolation stops after this many rejections in a row: a batch the
+// server refuses wholesale must not turn into a hundred doomed requests.
+const MAX_CONSECUTIVE_REJECTIONS = 3;
+
 export function isRetryableSendFailure(res) {
   return isRetryableFailure(res);
 }
@@ -49,6 +53,7 @@ async function enqueueRemainder(sessionId, payloads, startIndex, result, retryab
 async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, result) {
   result.usedBatch = false;
   const encodedSid = encodeURIComponent(sessionId);
+  let consecutiveRejects = 0;
   for (let i = startIndex; i < payloads.length; i++) {
     const res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
       method: "POST",
@@ -56,18 +61,36 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
     });
     if (res?.ok) {
       result.sent++;
+      consecutiveRejects = 0;
+      await opts.onConfirmed?.([payloads[i]]);
       await opts.onSent?.(1);
       continue;
     }
 
     const retryable = isRetryableSendFailure(res);
-    if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, payloads, i, result, retryable, res?.error ?? res);
+    if (retryable) {
+      if (opts.enqueueOnRetryable) {
+        return enqueueRemainder(sessionId, payloads, i, result, retryable, res?.error ?? res);
+      }
+      result.retryable = true;
+      result.lastError = res?.error ?? res ?? null;
+      result.failed += payloads.length - i;
+      return result;
     }
-    result.retryable = retryable;
+
+    // One payload the server refuses outright must not block its neighbours:
+    // count it, hand it to the caller, and keep going. The commit gate treats
+    // result.failed as stranded, so nothing archives over the rejection.
+    result.failed++;
+    consecutiveRejects += 1;
     result.lastError = res?.error ?? res ?? null;
-    result.failed += payloads.length - i;
-    return result;
+    await opts.onRejected?.(payloads[i], res);
+    if (consecutiveRejects >= MAX_CONSECUTIVE_REJECTIONS) {
+      // The batch looks rejected as a whole (schema, size), not one bad entry:
+      // stop spending requests and count the rest as failed.
+      result.failed += payloads.length - i - 1;
+      return result;
+    }
   }
   return result;
 }
@@ -81,6 +104,8 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
+ * @param {Function} opts.onConfirmed - called with an array of the payloads the server durably accepted (batch: the chunk, serial: one element)
+ * @param {Function} opts.onRejected - called with a payload the server refused outright, which does not stop the run
  * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
  */
 export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts = {}) {
@@ -98,16 +123,19 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
 
     if (res?.ok) {
       result.sent += chunk.length;
+      await opts.onConfirmed?.(chunk);
       await opts.onSent?.(chunk.length);
       continue;
     }
 
     const status = Number(res?.status || 0);
-    if (status === 404 || status === 405) {
+    const retryable = isRetryableSendFailure(res);
+    // 404/405 mean the batch route is absent; any other refusal is the batch
+    // being rejected, and serial is how one bad payload is isolated from its
+    // neighbours instead of poisoning the whole remainder.
+    if (status === 404 || status === 405 || !retryable) {
       return sendSerial(fetchJSON, sessionId, messages, start, opts, result);
     }
-
-    const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
       return enqueueRemainder(sessionId, messages, start, result, retryable, res?.error ?? res);
     }

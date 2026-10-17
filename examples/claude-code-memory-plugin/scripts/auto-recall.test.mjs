@@ -250,7 +250,7 @@ test("the client-ranked fallback degrades past the budget to URI hints", async (
   const first = "x".repeat(500);
   const second = "y".repeat(500);
   const { stdout, state } = await recallTurn({
-    env: { OPENVIKING_RECALL_TOKEN_BUDGET: "200" },
+    env: { OPENVIKING_RECALL_TOKEN_BUDGET: "320" },
     routes: {
       ...NO_SERVER_ASSEMBLY,
       "POST /api/v1/search/find": () => ({
@@ -269,15 +269,15 @@ test("the client-ranked fallback degrades past the budget to URI hints", async (
   });
 
   const block = injectedContext(stdout);
-  assert.ok(block.includes(`- [memory 90%] ${first}`));
-  assert.ok(block.includes("- [memory 90%] viking://user/default/memories/entities/b.md"));
+  assert.ok(block.includes(`<memory uri="viking://user/default/memories/entities/a.md" type="memory" score="0.90" detail="abstract">\n${first}\n</memory>`));
+  assert.ok(block.includes('<memory uri="viking://user/default/memories/entities/b.md" type="memory" score="0.90" detail="uri" />'));
   assert.equal(state.reason, "ok");
   assert.equal(state.count, 2);
   assert.equal(state.content_items, 1);
   assert.equal(state.hint_items, 1);
   assert.equal(state.tokens_used, Math.ceil(block.length / 4));
   assert.ok(state.tokens_used <= state.tokens_budget);
-  assert.equal(state.tokens_budget, 200);
+  assert.equal(state.tokens_budget, 320);
 });
 
 // The ranking pipeline lives in the shared recall core and the transcript walk
