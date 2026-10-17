@@ -1,0 +1,26 @@
+bot/tests/test_bot_provider_thinking.py
+  h_b34c679d17e2ac 2,187-189
+bot/tests/test_compile_execution.py
+  h_b34c679d17e2ac 83,87-88,92-93,99,105-106
+bot/vikingbot/compile/entry.py
+  h_b34c679d17e2ac 10,61-64
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 109-112,235-240,244,283,289-291,306-314,337-338,362-375,434,482-483,525-535,537-539
+openviking/models/vlm/backends/volcengine_vlm.py
+  h_b34c679d17e2ac 203,219-220
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  h_b34c679d17e2ac 411,436-438,440-441,445-446,449
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6538cab007012955f5f421a95fe64f24f40d10de",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

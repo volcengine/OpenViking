@@ -1,0 +1,40 @@
+bot/tests/test_bot_vlm_credentials.py
+  h_b34c679d17e2ac 13,153,166,174,254,271,361-362
+bot/tests/test_bot_vlm_streaming.py
+  h_b34c679d17e2ac 6,116-118,125,133-134,158,188-191,215
+bot/tests/test_compile_execution.py
+  h_b34c679d17e2ac 1-103
+bot/vikingbot/compile/entry.py
+  h_b34c679d17e2ac 7,59-64
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 106,233-234,277-279,293-299,323,347,406,454,485,490-494,496-498,500-501,553
+bot/vikingbot/compile/review.py
+  h_b34c679d17e2ac 5,9-10,181,246-249,252-259
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 196,204,209,245,637-638,644-645,669-673,693,1367
+bot/vikingbot/config/loader.py
+  h_b34c679d17e2ac 160-161
+bot/vikingbot/providers/vlm_adapter.py
+  h_b34c679d17e2ac 13,20,22,299-306,350-358,437-448,450-465,574-576
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 946-947
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 940-941
+openviking/models/vlm/backends/volcengine_vlm.py
+  h_b34c679d17e2ac 248,250-251
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  h_b34c679d17e2ac 8,25,84-85,103-113,118-120,124,127-128,211-212,223,240,247-274,307,406-410,431-432,442,447-448
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0dfd4e3462c23c27e58ca76229a92b2c23785bcf",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
