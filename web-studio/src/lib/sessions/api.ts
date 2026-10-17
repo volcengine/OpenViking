@@ -135,6 +135,7 @@ function deduplicateMessages(messages: Message[]): Message[] {
 }
 
 const SESSION_ARCHIVE_CONCURRENCY = 4
+const COMPLETE_SESSION_HISTORY_TOKEN_BUDGET = Number.MAX_SAFE_INTEGER
 
 async function mapWithConcurrency<T, TResult>(
   items: T[],
@@ -177,6 +178,7 @@ export async function fetchSessionMessages(
   const context = await getOvResult<SessionContextResult>(
     getSessionIdContext({
       path: { session_id: sessionId },
+      query: { token_budget: COMPLETE_SESSION_HISTORY_TOKEN_BUDGET },
     }),
   )
 
