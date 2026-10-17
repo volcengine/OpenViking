@@ -11,6 +11,12 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from openviking.parse.mode import ParseMode
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    register_parser_network_adapter,
+    reset_parser_network_adapter,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
@@ -18,6 +24,20 @@ from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+
+
+class _PreflightNetworkAdapter:
+    def supports(self, context: ParserNetworkContext) -> bool:
+        return context.operation is ParserNetworkOperation.GIT_COMMAND
+
+    def create_httpx_transport(self, context: ParserNetworkContext):
+        return None
+
+    def create_urllib_opener(self, context: ParserNetworkContext):
+        return None
+
+    def subprocess_env_overlay(self, context: ParserNetworkContext):
+        return {"HTTPS_PROXY": "http://proxy.example:8118"}
 
 
 async def test_account_github_token_is_used_for_repository_preflight(monkeypatch):
@@ -159,3 +179,46 @@ async def test_git_preflight_cancellation_kills_process_group_and_bounds_reap(mo
         wait_timeouts,
     ) == (True, [call(process.pid, signal.SIGKILL)], [10.0, 1.0])
     process.kill.assert_not_called()
+
+
+async def test_git_preflight_merges_adapter_env_with_http_auth(monkeypatch):
+    process = Mock(returncode=0)
+    process.communicate = AsyncMock(return_value=(b"refs/heads/main\n", b""))
+    captured = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        resource_service_module,
+        "parse_code_hosting_url",
+        lambda _source: "org/private",
+    )
+    register_parser_network_adapter(_PreflightNetworkAdapter())
+    try:
+        await ResourceService()._preflight_git_source(
+            "https://github.com/org/private",
+            auth_config=resource_service_module.GitHttpAuthConfig(
+                username="oauth2",
+                token="secret-token",
+            ),
+        )
+    finally:
+        reset_parser_network_adapter()
+
+    assert captured["args"][:3] == ("git", "ls-remote", "--heads")
+    env = captured["env"]
+    assert env["HTTPS_PROXY"] == "http://proxy.example:8118"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "Never"
+    entries = {
+        env[f"GIT_CONFIG_KEY_{index}"]: env[f"GIT_CONFIG_VALUE_{index}"]
+        for index in range(int(env["GIT_CONFIG_COUNT"]))
+    }
+    assert entries["credential.helper"] == ""
+    assert entries["http.https://github.com/org/private.extraHeader"].startswith(
+        "Authorization: Basic "
+    )

@@ -24,13 +24,18 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
-from openviking.parse.temp import get_parser_download_temp_dir
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+)
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
@@ -215,8 +220,13 @@ class URLTypeDetector:
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                response = await client.head(url, headers=headers)
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
+                response = await active_client.head(url, headers=headers)
 
                 meta["status_code"] = response.status_code
                 if not (200 <= response.status_code < 300):
@@ -584,10 +594,15 @@ class HTTPAccessor(DataAccessor):
                 client_kwargs["event_hooks"] = event_hooks
                 client_kwargs["trust_env"] = False
 
-            async with httpx.AsyncClient(**client_kwargs) as client:
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
                 headers = self._request_headers(tos_signature, tos_access)
                 try:
-                    response = await client.get(url, headers=headers)
+                    response = await active_client.get(url, headers=headers)
                     response.raise_for_status()
                 except httpx.ConnectError as e:
                     cause: BaseException | None = e
