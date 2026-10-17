@@ -19,6 +19,16 @@ curl -fsSL https://openviking.ai/install | bash
 1. 启动 `dsh --profile web` 并打开新会话，确认会话顶部显示“上下文注入 · openviking-memory”。
 2. 确认模型具有 `mcp__openviking__*` 工具，并能够在会话中正常调用。
 
+## 步骤3：开始使用
+
+在 DeepSeek Harness 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 现象 | 排查方向 |

@@ -207,8 +207,9 @@ curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
 サンドボックスの外で実行する許可を私に求めること。
 
 完了したら、どのツールにインストールしたかと、
-それぞれの次の手順を伝えること。そのうえで、
-ほかのツールにも入れるか私に確認すること。
+それぞれの次の手順を伝えること。その後、OpenViking 公式の
+オンボーディングガイドに沿って続けること：
+https://docs.openviking.ai/agents/en/onboarding.md
 ```
 
 サーバーのアドレスを用意しておいてください。認証が有効なら API キーも必要です。

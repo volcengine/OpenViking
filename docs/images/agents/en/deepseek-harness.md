@@ -19,6 +19,16 @@ The installer asks for the harness and OpenViking credentials:
 1. Run `dsh --profile web` and open a new conversation. Confirm that “context injection · openviking-memory” appears at the top.
 2. Confirm that the model has `mcp__openviking__*` tools and can call them.
 
+## Step 3: Start using
+
+Start a new DeepSeek Harness session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshooting
 
 | Issue | What to check |

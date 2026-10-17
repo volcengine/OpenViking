@@ -206,7 +206,8 @@ The script needs network access and writes to my home directory; if a sandbox
 blocks it, ask me to approve running it outside the sandbox.
 
 When it finishes, tell me which tools it installed into and the next steps for
-each, then ask whether I want it in any other tool.
+each. Then continue with the official OpenViking onboarding guide:
+https://docs.openviking.ai/agents/en/onboarding.md
 ```
 
 Have your server's address ready, plus its API key if it has auth turned on.

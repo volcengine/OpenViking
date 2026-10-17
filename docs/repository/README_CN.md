@@ -201,7 +201,8 @@ curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
 
 脚本需要联网并写入主目录，如果被沙箱拦住，请求我批准后在沙箱外运行。
 
-装完告诉我装进了哪些工具、各自的后续步骤，再问我要不要给其他工具也装。
+装完告诉我装进了哪些工具、各自的后续步骤。然后按 OpenViking 官方接入引导继续：
+https://docs.openviking.net/agents/zh/onboarding.md
 ```
 
 准备好服务地址；服务开了鉴权的话，还要它的 API key。

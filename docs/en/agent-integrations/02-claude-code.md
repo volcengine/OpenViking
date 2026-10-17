@@ -45,6 +45,8 @@ If you prefer to set it up manually:
 
 </details>
 
+Once installed, start a new Claude Code session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [Connect your agent with one prompt](../getting-started/07-agent-onboarding.md).
+
 ## Verify
 
 Launch `claude`, then:

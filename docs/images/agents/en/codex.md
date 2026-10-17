@@ -39,6 +39,16 @@
 
    An empty new account may have no profile or relevant memories to inject. See the full guide for lifecycle commits and a complete memory check.
 
+## Step 3: Start using
+
+Start a new Codex session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |
