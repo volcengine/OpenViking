@@ -31,14 +31,24 @@ class AddResourceQueueWorkerConfig(QueueWorkerConfig):
     )
 
 
+class SessionCommitQueueWorkerConfig(QueueWorkerConfig):
+    """Runtime limits for session-commit queue workers."""
+
+    stalled_predecessor_timeout_seconds: float = Field(
+        default=1800.0,
+        ge=0,
+        description="Maximum seconds a session commit may make no progress before cancellation; 0 disables the watchdog",
+    )
+
+
 class QueueWorkersConfig(BaseModel):
     """Runtime limits for QueueFS consumers."""
 
     external_parse: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
     add_resource: AddResourceQueueWorkerConfig = Field(default_factory=AddResourceQueueWorkerConfig)
     reindex: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
-    session_commit: QueueWorkerConfig = Field(
-        default_factory=lambda: QueueWorkerConfig(max_concurrent=8)
+    session_commit: SessionCommitQueueWorkerConfig = Field(
+        default_factory=lambda: SessionCommitQueueWorkerConfig(max_concurrent=8)
     )
     external_task: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=10)

@@ -251,6 +251,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | 同时消费的 SessionCommit 作业数，必须大于 `0`；修改后需重启服务 |
+| `stalled_predecessor_timeout_seconds` | number | `1800` | 连续无进展达到该时长后取消运行中的提交，即使队列中没有后继任务也会监视；设为 `0` 可关闭 watchdog；修改后需重启服务 |
+
+成功的模型响应和完成的 Phase 2 步骤均视为进展。超时通过任务生命周期取消提交，以释放 worker 槽并将 archive 标记为失败。
 
 ### `queue_workers.external_task`
 
