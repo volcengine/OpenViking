@@ -1350,6 +1350,55 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_operations_does_not_write_stale_snapshot_when_read_fails(self):
+        uri = "viking://user/u/memories/entities/person/阿珍.md"
+        schema = MemoryTypeSchema(
+            memory_type="entities",
+            directory="viking://user/{{ user_space }}/memories/entities",
+            filename_template="{{ category }}/{{ name }}.md",
+            fields=[
+                MemoryField(name="category", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="name", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+                MemoryField(name="content", field_type=FieldType.STRING, merge_op=MergeOp.REPLACE),
+            ],
+        )
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.register(schema)
+        # Prefetched when the model read the card; the card may have changed since.
+        snapshot = MemoryFile(
+            uri=uri,
+            memory_type="entities",
+            content="snapshot",
+            extra_fields={"category": "person", "name": "阿珍"},
+        )
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=OSError("transient read failure"))
+        mock_viking_fs.write_file = AsyncMock()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    old_memory_file_content=snapshot,
+                    memory_fields={"category": "person", "name": "阿珍", "content": "updated"},
+                    memory_type="entities",
+                    uris=[uri],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, MagicMock())
+
+        assert any(error_uri == uri for error_uri, _error in result.errors)
+        assert result.written_uris == []
+        mock_viking_fs.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_apply_operations_explicit_merge_to_existing_target_is_allowed(self):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
         target_uri = "viking://user/u/memories/entities/person/陈静娴.md"

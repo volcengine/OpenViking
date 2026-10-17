@@ -1401,12 +1401,8 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError):
                 # File doesn't exist yet, that's okay
                 pass
-            except Exception:
-                if is_uri_migration:
-                    raise
-                # Preserve the legacy in-place update fallback to the prefetched
-                # snapshot when a fresh disk read is unavailable.
-                pass
+            # Any other read error propagates: the prefetched snapshot may be older
+            # than the file, so writing a result built on it could lose a newer update.
             if is_uri_migration:
                 try:
                     source_raw = await viking_fs.read_file(source_content.uri, ctx=ctx)
