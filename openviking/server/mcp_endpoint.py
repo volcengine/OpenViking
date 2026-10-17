@@ -83,6 +83,7 @@ from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
+from openviking.telemetry.tracer import record_exception as record_trace_exception
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
@@ -320,6 +321,13 @@ def _mcp_error_results(*, structured_output: bool = True):
                 result = await func(*args, **kwargs)
             except OpenVikingError as exc:
                 result = _mcp_failure(exc)
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected MCP tool failure",
+                    extra={"mcp_tool": registered_tool.name},
+                )
+                record_trace_exception(exc)
+                raise
             if not isinstance(result, _MCPToolFailure):
                 return result
 
