@@ -294,7 +294,7 @@ class SemanticProcessor(DequeueHandlerBase):
         if queue_manager is not None:
             semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
             if enqueue is None:
-                await semantic_queue.enqueue(msg)
+                await semantic_queue.enqueue(msg, force=True)
             else:
                 await enqueue(semantic_queue, msg)
             logger.info(f"Re-enqueued semantic message: {msg.uri}")
@@ -317,7 +317,7 @@ class SemanticProcessor(DequeueHandlerBase):
             handed_off = True
             scope._owned = False
             msg.lock_handoff = handoff
-            await queue.enqueue(msg)
+            await queue.enqueue(msg, force=True)
         except BaseException:
             if handed_off:
                 scope.lock = await agfs.pathlock_adopt(handoff)

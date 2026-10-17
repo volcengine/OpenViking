@@ -42,9 +42,14 @@ class SemanticQueue(NamedQueue):
     def _memory_parent_semantic_key(msg: SemanticMsg) -> str:
         return f"{msg.account_id}|{msg.user_id}|{msg.peer_id}|{msg.uri}"
 
-    async def enqueue(self, msg: SemanticMsg) -> str:
-        """Serialize SemanticMsg object and store in queue."""
-        if msg.context_type == "memory" and not msg.coalesce_key:
+    async def enqueue(self, msg: SemanticMsg, *, force: bool = False) -> str:
+        """Serialize SemanticMsg object and store in queue.
+
+        ``force`` bypasses the memory-parent dedupe window. A retry of a message
+        that already left the queue is not a duplicate: coalescing it away would
+        drop the only copy of that work.
+        """
+        if not force and msg.context_type == "memory" and not msg.coalesce_key:
             key = self._memory_parent_semantic_key(msg)
             now = time.monotonic()
             with self._memory_parent_semantic_lock:

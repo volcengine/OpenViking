@@ -371,3 +371,38 @@ async def test_memory_directory_skips_vectorization_when_visible_semantics_are_u
 
     assert vectorize_file.await_count == 2
     vectorize_directory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_semantic_retry_is_not_deduplicated_away(monkeypatch):
+    """A retry of a memory message must survive the parent dedupe window.
+
+    The window coalesces *new* enqueues for the same parent (#769). A message
+    that already left the queue and then failed is not a duplicate: dropping it
+    ACKs the delivery with no replacement, so the work is lost.
+    """
+    processor = _processor()
+    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
+        named_enqueue.return_value = "queued-id"
+        queue = SemanticQueue(MagicMock(), "/queue", "semantic")
+        msg = SemanticMsg(
+            uri="viking://user/default/memories/entities",
+            context_type="memory",
+            account_id="acc",
+            user_id="u1",
+            peer_id="p1",
+        )
+
+        assert await queue.enqueue(msg) == "queued-id"
+        assert named_enqueue.await_count == 1
+
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.get_queue_manager",
+            lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
+        )
+
+        await SemanticProcessor._reenqueue_semantic_msg(processor, msg)
+
+        # The retry must have reached the queue; deduplicating it here would
+        # leave the original delivery acknowledged with no replacement.
+        assert named_enqueue.await_count == 2

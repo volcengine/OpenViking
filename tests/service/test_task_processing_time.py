@@ -160,7 +160,7 @@ async def test_semantic_retry_cooldown_counts_full_worker_occupied_time(
         now[0] += delay
         assert (await tracker.get("task", **OWNER)).processing_seconds == 33
 
-    async def enqueue(msg):
+    async def enqueue(msg, *, force=False):
         assert msg is message
         now[0] += 2
         enqueued.append(msg)

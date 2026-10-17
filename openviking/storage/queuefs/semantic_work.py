@@ -99,7 +99,7 @@ class SemanticMessageWork:
             if self.scope is not None and self.scope.lock is not None and self.scope._owned:
                 await self.processor._enqueue_semantic_retry(queue, msg, self.scope)
             else:
-                await queue.enqueue(msg)
+                await queue.enqueue(msg, force=True)
 
         await self.processor._reenqueue_semantic_msg(self.msg, enqueue=enqueue)
 
@@ -198,7 +198,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
                     lambda: self.processor._enqueue_skill_retry(queue, msg, self.scope)
                 )
             else:
-                await run_to_completion(lambda: queue.enqueue(msg))
+                await run_to_completion(lambda: queue.enqueue(msg, force=True))
 
         # The shared circuit-breaker delay remains interruptible. Only the
         # actual lock handoff and enqueue operation must finish once started.
