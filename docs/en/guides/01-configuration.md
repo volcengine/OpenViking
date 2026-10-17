@@ -1089,7 +1089,7 @@ All size, timeout, and polling values must be greater than zero.
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere,
-OpenAI-compatible APIs, LiteLLM, and Jev.
+OpenAI-compatible APIs, LiteLLM, Jev, and TEI.
 
 **Volcengine (VikingDB):**
 
@@ -1179,6 +1179,31 @@ absolute score filtering. When enabling Choice, set `"threshold": 0`. The MCP `f
 and `search` `min_score` argument overrides that setting, so pass `min_score=0` when
 using Choice through MCP.
 
+**Hugging Face Text Embeddings Inference (TEI):**
+
+```json
+{
+  "rerank": {
+    "provider": "tei",
+    "api_base": "http://localhost:8080",
+    "model": "BAAI/bge-reranker-v2-m3",
+    "batch_size": 32,
+    "timeout": 30.0
+  }
+}
+```
+
+The model is hosted by TEI; `model` is only an optional usage-tracking label.
+Each synchronous request sends up to `batch_size` documents and maps TEI's
+chunk-local indices back to input order. If any chunk fails, reranking returns
+`None` so retrieval can fall back, rather than use a partial result. The timeout
+applies to each HTTP request, not to the complete multi-chunk operation.
+
+For TEI, `api_base` accepts the server base URL or full `/rerank` endpoint. Authentication is optional; with `api_key`, set `"provider": "tei"` explicitly. A bare `api_base` auto-detects TEI only after the existing Jev,
+OpenAI, Cohere, and VikingDB detection rules. `api_key` plus `api_base` still
+auto-detects OpenAI for compatibility. `extra_headers` can override generated
+headers, including Authorization.
+
 **Parameters**
 
 | Parameter | Type | Description |
@@ -1187,15 +1212,16 @@ using Choice through MCP.
 | `ak` | str | VikingDB Access Key (vikingdb provider only) |
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
-| `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
-| `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
+| `api_key` | str | API key (for `openai`, `cohere`, or `jev`; optional for `tei`) |
+| `api_base` | str | Endpoint URL (required for `openai` and `tei`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers; optional usage label for TEI |
 | `mode` | `"noul"`, `"choice"`, or `null` | Jev rerank mode. `null` and omission use `"noul"` |
-| `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
+| `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev and TEI. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
 | `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
+| `batch_size` | int | Maximum documents per TEI request (positive integer, default `32`); other providers ignore it. |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
-| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible or TEI providers, optional) |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
@@ -1203,6 +1229,7 @@ using Choice through MCP.
 - `openai`: OpenAI-compatible Rerank API
 - `litellm`: LiteLLM Rerank API
 - `jev`: Jev (TypeSafe System One) structured-decision API with Choice comparison and independent Noul scoring
+- `tei`: Hugging Face Text Embeddings Inference rerank API
 
 If rerank is not configured, search uses vector similarity only.
 
@@ -2334,7 +2361,7 @@ This illustrates the main sections, not a complete runnable configuration or JSO
     "extra_request_body": {}
   },
   "rerank": {
-    "provider": "vikingdb|cohere|openai|litellm|jev",
+    "provider": "vikingdb|cohere|openai|litellm|jev|tei",
     "api_key": "string",
     "model": "string",
     "api_base": "string",
