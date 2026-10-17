@@ -549,7 +549,7 @@ class _GrepMixin:
             except Exception:
                 continue
 
-            lines = content.splitlines()
+            lines = content.split("\n")
             for line_index, line in enumerate(lines):
                 if compiled.search(line):
                     results.append(

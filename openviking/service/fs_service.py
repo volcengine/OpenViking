@@ -29,6 +29,7 @@ from openviking.service.task_tracker import get_task_tracker, run_tracked_operat
 from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.session.memory.utils.line_numbers import slice_lines_keepends
 from openviking.storage.abstract_overview import (
     mark_abstract_overview_pending,
     plan_abstract_overview_refresh,
@@ -1104,11 +1105,7 @@ class FSService:
             if current:
                 content = restore_skill_content(content, skill_name, current.values)
 
-        if offset == 0 and limit == -1:
-            return content
-        lines = content.splitlines(keepends=True)
-        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
-        return "".join(sliced)
+        return slice_lines_keepends(content, offset, limit)
 
     async def read_visible(
         self,
