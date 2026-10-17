@@ -389,6 +389,25 @@ export function createOpenVikingMcpProxy({
     return reinitializeInFlight;
   }
 
+  // A server that is still starting up is the common local failure. One
+  // initialize attempt would leave the proxy dead for the whole session, so
+  // connection-class failures and 5xx retry briefly; tool calls never do.
+  const INITIALIZE_RETRY_DELAYS_MS = [200, 500];
+
+  async function initializeWithRetry(message) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await postToMcp(message, { includeSession: false });
+      } catch (err) {
+        const status = err instanceof HttpStatusError ? Number(err.status) : 0;
+        const transient = !(err instanceof HttpStatusError) || status === 0 || status >= 500;
+        if (!transient || attempt >= INITIALIZE_RETRY_DELAYS_MS.length) throw err;
+        logError("initialize_retry", err);
+        await new Promise((resolve) => setTimeout(resolve, INITIALIZE_RETRY_DELAYS_MS[attempt]));
+      }
+    }
+  }
+
   async function sendWithRetry(message, { expectsResponse }) {
     if (message.method !== "initialize" && initializeInFlight) {
       await initializeInFlight.catch(() => {});
@@ -396,7 +415,9 @@ export function createOpenVikingMcpProxy({
 
     const failedSessionId = sessionId;
     try {
-      return await postToMcp(message, { includeSession: message.method !== "initialize" });
+      return await (message.method === "initialize"
+        ? initializeWithRetry(message)
+        : postToMcp(message, { includeSession: true }));
     } catch (err) {
       if (err instanceof HttpStatusError && (err.status === 401 || err.status === 403)) {
         if (reloadIfCredentialFilesChanged("auth_failure")) {
@@ -427,6 +448,13 @@ export function createOpenVikingMcpProxy({
     if (!message || typeof message !== "object" || message.jsonrpc !== "2.0") {
       await writeMessage(errorResponse(null, -32600, "Invalid JSON-RPC message"));
       return;
+    }
+
+    // `ov config switch` (or a hand-edited ovcli.conf) must move the next
+    // request to the new server. Waiting for a 401 only helps when the old
+    // server is still reachable and rejects the old key.
+    if (message.method !== "initialize" && reloadIfCredentialFilesChanged("request")) {
+      sessionId = "";
     }
 
     const expectsResponse = isRequest(message);

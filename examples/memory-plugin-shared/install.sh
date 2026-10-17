@@ -2624,6 +2624,36 @@ install_zcode() {
 install_kimicode() {
   step_heading "$(t 'Kimi Code CLI integration' 'Kimi Code CLI 集成')"
   local bundle kimi_home install_lib persisted_dir persisted_tmp persisted_backup root
+  kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+
+  # Kimi Code's OpenViking integration is the native plugin now
+  # (docs/agent-integrations/08-community-plugins.md). This installer still
+  # carries the legacy adapter for old setups, and writing it over the native
+  # copy would silently downgrade the plugin under the same id. A native install
+  # records where it came from (`originalSource`); the legacy helper deletes that
+  # field, so a legacy install still upgrades by re-running this installer.
+  local kimi_existing="none"
+  kimi_existing="$($NODE_BIN - "$kimi_home/plugins/installed.json" <<'NODE'
+const fs = require("node:fs");
+try {
+  const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  const record = Array.isArray(value.plugins)
+    ? value.plugins.find((plugin) => plugin?.id === "openviking-memory")
+    : null;
+  if (!record) process.stdout.write("none");
+  else process.stdout.write(
+    typeof record.originalSource === "string" && record.originalSource ? "native" : "legacy",
+  );
+} catch {
+  process.stdout.write("none");
+}
+NODE
+)"
+  if [ "$kimi_existing" = "native" ] || { [ "$kimi_existing" = "none" ] && [ -e "$kimi_home/plugins/managed/openviking-memory" ]; }; then
+    warn "$(t 'Kimi Code already has the OpenViking plugin; leaving it untouched. Upgrade with /plugins install <path-or-zip>.' 'Kimi Code 已安装 OpenViking 插件，保持不动；升级请用 /plugins install <路径或 zip>。')"
+    return 0
+  fi
+
   ensure_bundle
   bundle="$OV_HOME/agent-integrations/kimicode-bundle.$$"
   rm -rf "$bundle"
@@ -2650,7 +2680,6 @@ install_kimicode() {
     esac
   done
   rm -rf "$root/hosts/kimicode"
-  kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
   install_lib="$(require_install_lib_dir)" || { rm -rf "$bundle"; return 1; }
   persisted_dir="$OV_HOME/agent-integrations/kimicode/lib/install"
   persisted_tmp="$persisted_dir.tmp.$$"
