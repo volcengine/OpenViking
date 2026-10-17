@@ -2,10 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+from types import SimpleNamespace
+from typing import cast
+
+import pytest
+
+from openviking.ingest import poller as poller_module
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
+from openviking.ingest.poller import IngestPoller
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.base import LogSource
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config.ingest_config import CommitPolicy, IngestHarnessConfig
 
 
 class _FakeSDK:
@@ -238,3 +247,74 @@ async def test_commit_if_needed_still_recovers_after_crash(tmp_path):
     replayer = SessionReplayer(fake, store)
     assert await replayer.commit_if_needed("claude_code", ref) is True
     assert fake.committed == ["import__claude_code__s1"]
+
+
+@pytest.mark.parametrize(
+    "restarted,new_activity,fail_once,pending,expected_times",
+    [
+        (False, False, False, 500, [10]),
+        (True, False, False, 500, [10]),
+        (False, True, False, 500, [15]),
+        (False, False, True, 500, [10, 20]),
+        (False, False, False, 6000, [0]),
+    ],
+    ids=["idle", "restart", "new-message", "commit-retry", "token-threshold"],
+)
+async def test_watch_commits_pending_messages(
+    tmp_path, monkeypatch, restarted, new_activity, fail_once, pending, expected_times
+):
+    """Unchanged polls must not defer idle commits, including after a restart."""
+    now = 0
+    attempts = []
+    messages = _msgs()
+    ref = _ref()
+    store = CursorStore(tmp_path)
+    fake = _FakeReplay(pending=pending)
+    replayer = SessionReplayer(cast(ConversationReplayClient, fake), store)
+    if restarted:
+        await replayer.append_batch(
+            "claude_code",
+            ref,
+            messages,
+            Cursor.zero(BYTE_OFFSET),
+            Cursor(BYTE_OFFSET, {"offset": len(messages)}),
+        )
+        replayer = SessionReplayer(cast(ConversationReplayClient, fake), store)
+
+    async def commit(sid, keep_recent_count=0):
+        attempts.append(now)
+        if fail_once and len(attempts) == 1:
+            raise OSError("temporarily unavailable")
+        fake.committed.append(sid)
+
+    monkeypatch.setattr(fake, "commit", commit)
+    source = SimpleNamespace(
+        cursor_kind=BYTE_OFFSET,
+        discover_sessions=lambda: [ref],
+        read_messages=lambda ref, cursor, limit: (
+            messages[(cursor or Cursor.zero(BYTE_OFFSET)).offset :],
+            Cursor(BYTE_OFFSET, {"offset": len(messages)}),
+        ),
+    )
+    cfg = IngestHarnessConfig(poll_interval_seconds=5, commit=CommitPolicy(commit_idle_seconds=10))
+    poller = IngestPoller([("claude_code", cfg, cast(LogSource, source))], replayer)
+
+    async def advance(waiter, timeout):
+        nonlocal now
+        waiter.close()
+        now += timeout
+        if new_activity and now == 5:
+            messages.append(NormalizedMessage(role="user", text="one more message"))
+        if now >= 30:
+            poller.stop()
+        raise TimeoutError
+
+    monkeypatch.setattr(poller_module, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(poller_module.asyncio, "wait_for", advance)
+    await poller.run()
+
+    assert attempts == expected_times
+    assert fake.committed == ["import__claude_code__s1"]
+    record = store.get("claude_code", "s1")
+    assert record is not None
+    assert record.needs_commit is False
