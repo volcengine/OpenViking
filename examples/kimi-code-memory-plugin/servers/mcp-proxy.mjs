@@ -11,8 +11,6 @@
  * The proxy is what makes the bundled skills useful: openviking-memory and
  * openviking-skills teach the model to call find/read/remember/add_skill,
  * and those calls land here.
- *
- * SCAFFOLD: mirrors examples/codex-memory-plugin/servers/mcp-proxy.mjs.
  */
 
 import { realpathSync } from "node:fs";

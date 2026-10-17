@@ -17,9 +17,6 @@
  *
  * The stdio MCP proxy builds its connection from this same loadConfig(), so
  * hooks and MCP calls cannot drift apart on identity.
- *
- * SCAFFOLD: mirrors examples/codex-memory-plugin/scripts/config.mjs.
- * Implementation: DESIGN.md §4 / handoff doc §10.
  */
 
 import { buildPluginConfig } from "./shared/plugin-config.mjs";

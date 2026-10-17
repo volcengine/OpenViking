@@ -10,8 +10,9 @@ OpenViking 的 MCP 工具，让模型主动检索、记忆、导入。以 Kimi �
 
 ## 安装
 
-前置条件：Kimi Code CLI ≥ 2.1.1、Node.js ≥ 18、一个可达的 OpenViking 服务
-（本地 `127.0.0.1:1933` 无需凭据）。
+前置条件：Kimi Code CLI ≥ 2.1.1（已在 2.2.0 上验证）、Node.js ≥ 18、一个可达的
+OpenViking 服务（本地 `127.0.0.1:1933` 无需凭据）。插件版本：**0.2.1**
+（见 `kimi.plugin.json`）。
 
 ```text
 /plugins install <本目录路径或 git URL>
@@ -20,8 +21,21 @@ OpenViking 的 MCP 工具，让模型主动检索、记忆、导入。以 Kimi �
 然后 `/reload`（或开新会话）。验证：
 
 ```bash
-node scripts/ov-memory-doctor.mjs kimicode --offline
+node scripts/ov-memory-doctor.mjs --offline
 ```
+
+## 升级与卸载
+
+CLI 始终运行托管副本（`$KIMI_CODE_HOME/plugins/managed/openviking-memory/`），
+而不是本源码目录——直接改源码在重装之前不生效。
+
+```text
+/plugins install <同样的安装来源>   # 升级：替换托管副本
+/plugins remove openviking-memory   # 卸载：hook、MCP 与 skill 一并移除
+```
+
+重装与卸载都不会触碰 OpenViking 服务端、记忆、凭据和
+`~/.openviking/kimicode-plugin-state`；变更的只是插件文件及其在 Kimi 中的注册。
 
 ## 行为
 
@@ -41,11 +55,26 @@ MCP 工具（`find`、`search`、`grep`、`read`、`remember`、`add_resource`�
 
 ## 配置
 
-所有开关都在共享 schema 中声明；解析顺序：`OPENVIKING_*` 环境变量 → 工作区
+开关在共享 schema 中只声明一次；解析顺序：`OPENVIKING_*` 环境变量 → 工作区
 `.openviking/config*.json` → 本机 registry → `ovcli.conf` 的
 `plugin.kimicode` → `plugin` → 默认值。连接与凭据来自环境变量或当前
-`ovcli.conf`（`ov config switch` 会同时切换 hook 与 MCP）。完整宿主契约与设计
-记录见 `DESIGN.md`。
+`ovcli.conf`（`ov config switch` 会同时切换 hook 与 MCP）。最常用的开关：
+
+| 开关（环境变量） | 默认值 | 作用 |
+|---|---|---|
+| `OPENVIKING_AUTO_RECALL` | 开 | 每次 prompt 时召回并注入 profile/记忆 |
+| `OPENVIKING_AUTO_CAPTURE` | 开 | 在 Stop/PreCompact/SessionEnd/Interrupt 上增量捕获 |
+| `OPENVIKING_COMMIT_TURN_THRESHOLD` | 8 | 阈值提交之间捕获的轮数 |
+| `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | 开 | 压缩前提交 |
+| `OPENVIKING_RECALL_LIMIT` / `OPENVIKING_SCORE_THRESHOLD` | 10 / 0.35 | 召回条数与分数阈值 |
+| `OPENVIKING_RECALL_PEER_SCOPE` | `all` | `actor` 时只检索本工作区 peer 的记忆 |
+| `OPENVIKING_PENDING_REPLAY_LIMIT` | 2（manifest 设置） | 每次 SessionStart 重放的 pending 条数 |
+
+完整开关清单见
+[`memory-plugin-shared`](https://github.com/volcengine/OpenViking/tree/main/examples/memory-plugin-shared)
+（`lib/config-schema.mjs`）。Kimi 插件的状态文件在
+`~/.openviking/kimicode-plugin-state`（可用 `OPENVIKING_KIMICODE_STATE_DIR`
+迁移）。完整宿主契约与设计记录见 `DESIGN.md`。
 
 ## 开发
 
@@ -61,5 +90,6 @@ node --test scripts/*.test.mjs
 
 ## 状态
 
-Beta。已在 Windows 上对照 Kimi Code CLI 2.2.0 验证。已知缺口（subagent 内容
-捕获、doctor 安装检查）见 `DESIGN.md`。
+Beta。插件版本 0.2.1，已在 Windows 上对照 Kimi Code CLI 2.2.0 验证（macOS/Linux
+预期可用但尚未实测）。已知缺口：subagent 对话（`agents/<subagent>/wire.jsonl`）
+尚未捕获（v2），详见 `DESIGN.md`。

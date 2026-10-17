@@ -1,9 +1,7 @@
 /**
  * Kimi Code wire.jsonl decoder for the OpenViking memory plugin.
  *
- * Migrated and extended from the previous adapter
- * (examples/agent-hook-plugin/hosts/kimicode-turns.mjs) with the changes
- * DESIGN.md §5/§6 require:
+ * Design record: DESIGN.md §5/§6. In short:
  *
  *   1. Origin filter over the full 12-kind taxonomy (wire-manifest.d.ts):
  *      capture `user` (and undefined); capture-but-mark `system_trigger` /

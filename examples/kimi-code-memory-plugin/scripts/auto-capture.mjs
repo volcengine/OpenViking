@@ -20,8 +20,6 @@
  *
  * Stop's payload carries no assistant text (kimi-code issue #952, open) —
  * the wire.jsonl decode is the only source of the assistant side.
- *
- * Structure mirrors examples/codex-memory-plugin/scripts/auto-capture.mjs.
  */
 
 import { loadConfig } from "./config.mjs";
@@ -64,7 +62,23 @@ runHookStage(
 
     const ovSessionId = deriveOvSessionId(stage.sessionId);
 
-    await withSessionLock(stage.sessionId, async () => {
+    // Overall synchronous budget (spec §5.5): lock wait, message backfill and
+    // commit share one deadline, and every OV request below uses the REMAINING
+    // time instead of each taking the full per-request timeout. Interrupt gets
+    // a tighter budget than its 10s host timeout because the user is waiting
+    // on the prompt; overflow parks in the pending queue for SessionStart.
+    const BUDGET_MS = EVENT === "interrupt" ? 2000 : 8000;
+    const deadline = Date.now() + BUDGET_MS;
+    const remainingMs = () => Math.max(250, deadline - Date.now());
+    const fitBudget = () => {
+      fetchJSON = createOvHttp(cfg, {
+        defaultTimeoutMs: Math.min(cfg.timeoutMs, remainingMs()),
+        resolveActorPeerId: () => effectivePeer.peerId,
+        requireJsonBody: true,
+      });
+    };
+
+    const locked = await withSessionLock(stage.sessionId, async () => {
       const state = await loadState(stage.sessionId);
 
       const decoded = buildKimicodeTurns(input, state);
@@ -105,6 +119,7 @@ runHookStage(
       const previousCaptured = Number(state.capturedSinceCommit || 0);
       let capturedSinceCommit = previousCaptured;
 
+      fitBudget(); // the send spends only what remains of the hook's budget
       const result = await sendPlannedCapture(fetchJSON, ovSessionId, plan, {
         peerId: effectivePeer.peerId,
         onSent: async ({ confirmed }) => {
@@ -131,12 +146,34 @@ runHookStage(
       // leaves the rest for the pending queue and the next hook.
       state.capturedTurnIds = [...acked];
       state.capturedSinceCommit = capturedSinceCommit;
-      if (decoded.turns.length) {
-        state.lastTurnId = decoded.turns[decoded.turns.length - 1].turnId ?? state.lastTurnId;
+      // lastTurnId gates the NEXT decode (kimicode-transcript skips turns at
+      // or before it), so it may only anchor at the last turn whose keys are
+      // all acked. Anchoring past an unacked turn would silence it: it is
+      // neither in the ack set nor decoded again.
+      {
+        const keysByTurnId = new Map(
+          plan.map((item) => [String(item.turn.turnId ?? ""), item.keys]),
+        );
+        let advanceTo = null;
+        for (const turn of decoded.turns) {
+          if (turn.turnId == null) continue;
+          const keys = keysByTurnId.get(String(turn.turnId));
+          if (keys && !keys.every((key) => acked.has(key))) break;
+          advanceTo = turn.turnId;
+        }
+        if (advanceTo != null) state.lastTurnId = advanceTo;
       }
       await saveState(stage.sessionId, state);
 
-      if (result.sent > 0 && shouldCommit(EVENT, cfg, previousCaptured, result.sent)) {
+      // Commit only when nothing is stranded: queued payloads are persisted
+      // but not yet on the server (the SessionStart replay delivers them), so
+      // committing now would archive without them; enqueueFailed payloads are
+      // not persisted anywhere and would vanish from the archive. A skipped
+      // commit keeps capturedSinceCommit, so a later event commits once the
+      // queue drains (§5.5: commit must not cross unreplayed messages).
+      const nothingStranded = result.queued === 0 && result.enqueueFailed === 0;
+      if (result.sent > 0 && nothingStranded && shouldCommit(EVENT, cfg, previousCaptured, result.sent)) {
+        fitBudget(); // the commit gets the remainder, not a fresh timeout
         const committed = await commitAgentSession(fetchJSON, ovSessionId, log);
         if (committed.ok) {
           state.capturedSinceCommit = 0;
@@ -145,8 +182,14 @@ runHookStage(
         } else {
           logError("commit_failed", `status=${committed.status || "unknown"}`);
         }
+      } else if (!nothingStranded && shouldCommit(EVENT, cfg, previousCaptured, result.sent)) {
+        log("commit_deferred", { event: EVENT, ovSessionId, queued: result.queued, enqueueFailed: result.enqueueFailed });
       }
     });
+    if (locked === null) {
+      // Lock never came: this hook did nothing. Fail open, the next event retries.
+      logError("lock_timeout", { event: EVENT, sessionId: stage.sessionId });
+    }
   },
 ).catch((error) => {
   logError(`auto-capture:${EVENT}`, error?.message || String(error));

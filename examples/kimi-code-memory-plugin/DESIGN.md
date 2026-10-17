@@ -8,9 +8,15 @@ marked ✅ verified / ⚠️ degraded / ❌ unsupported, with the version it was
 verified against. Do not fill gaps with another agent's behavior — verify
 against the Kimi source or a real run.
 
-**Verified against: Kimi Code CLI 2.2.0, Windows, Node.js 24.** Hook code paths
-are unchanged since 0.43.1 (the version the previous adapter was verified
-against; confirmed by issue #5673's reporter across 0.43.1 and 2.1.1).
+**Verified against: Kimi Code CLI 2.2.0 (main @ 2026-10-17), Windows, Node.js 24.**
+The hook protocol core (`runHook.ts` spawn/exit-code/JSON-parse, stable since
+the #2805 refactor of 2026-08-19) is unchanged from what the previous adapter
+verified, but the hook chain is NOT frozen — two behavior changes landed
+recently and are reflected in this plugin: **#4081** folds UserPromptSubmit
+hook output into the prompt message as a `<hook_result hook_event="...">`
+text part (the shared sanitizer strips the wrapper — verified in
+`capture-utils.test.mjs`), and **#4242** passes the agent cwd to agent-level
+hooks (irrelevant here: plugin hooks always run with cwd = plugin root).
 
 ## Form choice (spec §2.1)
 
@@ -34,16 +40,28 @@ could not be installed on Windows (its `install.sh` gates on
 ### Installation ✅
 
 - `/plugins install <local dir | zip URL | GitHub URL>` copies the plugin to
-  `$KIMI_CODE_HOME/plugins/managed/openviking-memory/`; the CLI always runs
-  from that managed copy (editing the source dir requires reinstall).
-- Manifest: `kimi.plugin.json` at the plugin root (`name` must match
-  `PLUGIN_NAME_REGEX`). Supported declarations used here: `hooks` (inline
+  `$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (local-dir sources must
+  be absolute paths); the CLI always runs from that managed copy (editing the
+  source dir requires reinstall).
+- Manifest: `kimi.plugin.json` at the plugin root. `name` must match
+  `/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:@[A-Za-z0-9_-]+)?$/` (lowercased
+  to the install id). Supported declarations used here: `hooks` (inline
   array), `mcpServers` (inline object), `skills` (directory). Unsupported
-  runtime fields (`tools`, `apps`, `inject`, `configFile`, `bootstrap`) are
-  rejected by the loader.
+  fields (`tools`, `apps`, `inject`, `configFile`, `bootstrap`) are ignored
+  with an info-level diagnostic — the manifest still loads.
+- **Hook entries are strict**: only `event`/`matcher`/`command`/`timeout`
+  (timeout int 1–600s, default 30). Any other field — including `env` — gets
+  the WHOLE hook dropped with a warn diagnostic. The pending-replay bound
+  therefore cannot be declared in the manifest; session-start.mjs defaults
+  `OPENVIKING_PENDING_REPLAY_LIMIT` to 2 in code.
+- `installed.json` records carry `id/root/source/enabled/installedAt` — no
+  `state` (computed from load diagnostics) and no embedded manifest (re-parsed
+  from `root` on every load). `/plugins remove` deletes only the record; the
+  managed directory is left behind as an orphan (safe to delete manually).
 - Changes take effect after `/reload` or `/new`. Plugins are per-user, not
   per-project; project scoping is the peer mechanism (§Identity), not the
-  installer.
+  installer. Hooks of the same event across plugins run concurrently
+  (`Promise.all`), deduped by cwd+command; the first block result wins.
 
 ### Events ✅
 
@@ -52,13 +70,13 @@ block. This plugin registers 7:
 
 | Event | Timeout | Purpose |
 |---|---|---|
-| `SessionStart` | 30s | bounded pending-queue replay; clears stale end markers. **Stdout is discarded** (kimi-code #2873, open) — never injects. |
+| `SessionStart` | 30s | bounded pending-queue replay. **Stdout is discarded** (kimi-code #2873, open) — never injects. |
 | `UserPromptSubmit` | 20s | recall injection via **raw stdout text** |
 | `PreToolUse` (matcher `Read\|Glob\|Grep`) | 5s | deny local file tools on `viking://` URIs |
 | `Stop` | 30s | capture + threshold commit |
 | `PreCompact` | 30s | commit before context compaction |
-| `SessionEnd` | 30s | final capture + commit |
-| `Interrupt` | 10s | synchronous capture; all OV requests share a 2s budget |
+| `SessionEnd` | 30s | final capture + commit. Fires only when the session closes with reason `exit` or `archive` — a killed process or `/clear` does NOT fire it; the pending queue + ack-set cursor own that recovery. |
+| `Interrupt` | 10s | synchronous capture; all OV requests share a 2s budget. **Fire-and-forget**: the host does not await it (unlike Stop/PreCompact/SessionEnd), so there is no ordering guarantee — the session lock in session-state is what serializes it against a following SessionEnd. |
 
 ### Input ✅
 
@@ -90,26 +108,46 @@ The authoritative transcript is the session's `agents/main/wire.jsonl`, located
 via `~/.kimi-code/session_index.jsonl`. Structural facts verified in the Kimi
 source (`packages/agent-core-v2/src/wire/`):
 
-1. **Text is complete; media is not.** The write-time dehydrator rewrites only
-   media containers (image URLs) into blob references; text parts land
-   verbatim.
+1. **Text is complete; media is not.** The write-time dehydrator rewrites
+   `data:` URIs (base64 payload ≥ 4KB) in any object carrying a `url` key
+   into `blobref:<mime>;<sha256>` references; plain http(s) image URLs are
+   NOT rewritten. Text parts land verbatim.
 2. **The wire is a branch tree.** After undo/rewind, the abandoned branch's
    records remain in the file; the official reader (`wireService.read` →
-   `tree.activeChain`) yields only the active chain. **TODO: port activeChain**
-   — until then, undo is a known capture-fidelity gap (see §Open issues).
-3. **Subagent conversations live in `agents/<subagent>/wire.jsonl`**, not in
-   main. Main carries only `subagent.spawned/completed` lifecycle mirrors. v1
-   captures main plus those mirrors as assistant steps; full subagent capture
-   is v2.
-4. **The journal can lose its tail.** `repairWireJournal` truncates a corrupted
-   journal to its valid prefix (original kept as `.bak`). The cursor tolerates
-   a shrinking file (§Cursor).
-5. `llm.request` records are metadata only (hashes, counts, projection flags) —
+   `tree.activeChain`) yields only the active chain. This plugin reads through
+   wire-tree.mjs, a port of `tree.activeChain`, so undone turns are not
+   captured; a corrupt tree is a skip status, never a guess. (Two tolerated
+   port deviations: a corrupt line mid-file is skipped-and-continued rather
+   than triggering truncate+repair, and `restorableChain` is not ported —
+   read-only capture does not need it.)
+3. **The Stop hook runs BEFORE `turn.ended` lands.** Stop fires in
+   `onDidFinishStep` (after the last step's records, before `endTurn`), so at
+   Stop time the current turn is still unclosed and the decoder emits nothing
+   for it — its capture lands at the NEXT trigger (Stop/PreCompact/
+   SessionEnd). `endTurn` awaits `drainPersisted`, so `turn.ended` — and
+   everything before it — is on disk before SessionEnd; final completeness is
+   guaranteed by the SessionEnd trigger, intermediate Stop captures are
+   merely one turn behind. Records also reach the file by a queueMicrotask
+   batch flush rather than synchronous appends, so the cursor re-reads file
+   content instead of trusting event arrival.
+4. **Subagent conversations live in `agents/<subagent>/wire.jsonl`**, not in
+   main. Main carries only `subagent.spawned/completed` lifecycle mirrors
+   (which carry no turnId/stepUuid — and their `parentToolCallId` uses a
+   different namespace than main's `toolCallId`, so v2 attribution must join
+   via `parentToolCallUuid` or re-measure). v1 captures main plus those
+   mirrors as assistant steps; full subagent capture is v2.
+5. **The journal can lose its tail.** `repairWireJournal` truncates a corrupted
+   journal to its valid prefix (the first failure's original is kept as
+   `.bak`; a later repair does not overwrite an existing `.bak`). The cursor
+   tolerates a shrinking file (§Cursor).
+6. `llm.request` records are metadata only (hashes, counts, projection flags) —
    never a content source.
-6. Loop events are a closed set of five: `step.begin`, `step.end`,
-   `content.part`, `tool.call`, `tool.result`. Unknown types are logged and
-   skipped.
-7. `metadata.protocol_version` (currently 1.5) is checked at decode time; a
+7. Loop events are a closed set of five: `step.begin`, `step.end`,
+   `content.part`, `tool.call`, `tool.result`. (`turn.prompt`/`turn.ended`/
+   `metadata`/`subagent.*` are separate record types, and human-event records
+   exist outside the manifest's index; the decoder filters by `row.type`.)
+   Unknown event types are logged and skipped.
+8. `metadata.protocol_version` (currently 1.5) is checked at decode time; a
    newer version warns and skips capture rather than mis-parsing.
 
 ### Process model ⚠️ (Windows degradation)
@@ -118,8 +156,23 @@ Kimi's docs describe hook process groups and timeout signals for **non-Windows**
 platforms only. The previous adapter detached background writers on
 Stop/PreCompact/SessionEnd; on Windows a detached worker would die with its
 parent. This plugin therefore runs **everything synchronously** inside the hook
-timeout with a short internal OV budget (~8s for capture), overflowing to the
-pending queue for SessionStart replay.
+timeout with a short internal OV budget (~8s for capture; Interrupt 2s),
+overflowing to the pending queue for SessionStart replay. Two host facts shape
+this: the host kills a timed-out hook without a usable grace period on Windows
+(runHook sends SIGTERM then SIGKILL after 100ms — SIGTERM terminates
+immediately on Windows), and Interrupt is fire-and-forget, so a slow Interrupt
+capture is serialized against a following SessionEnd only by the session lock,
+not by host ordering.
+
+**Subagent scopes share the session_id.** Every agent scope (main + each
+subagent) instantiates its own agent-level hooks, but the payload's
+`session_id` is the session-level id everywhere — Stop fires per scope, so a
+subagent finishing triggers this plugin's capture with the main session's id.
+This is safe by construction: capture only ever decodes `agents/main/wire.jsonl`
+(a subagent-scope Stop is an early, partial, deduplicated no-op), the session
+lock serializes concurrent writers, and the ack set makes any repeat a no-op.
+It does mean session state must never assume one hook process per session at a
+time — the lock exists precisely because that assumption is false.
 
 ### cwd ✅ (verified in source)
 
@@ -244,13 +297,11 @@ context, never actively use the MCP tools.
 1. **Subagent content** — `agents/<subagent>/wire.jsonl` is not captured; the
    main wire's `subagent.spawned/completed` mirrors are not yet turned into
    assistant steps either (v2).
-2. **Doctor install checks** — `ov-memory-doctor.mjs` has placeholder
-   install/config/activity checks for the Kimi managed-plugin layout.
-3. **Step-level message grouping** — an assistant step's text and its tool
+2. **Step-level message grouping** — an assistant step's text and its tool
    calls are separate messages (text closes the turn) rather than one mixed
    message. The server's retention handles both; grouping is a fidelity
    nice-to-have, not a correctness issue.
-4. **System-origin marking** — `system_trigger`/`task`/`cron_job` prompts are
+3. **System-origin marking** — `system_trigger`/`task`/`cron_job` prompts are
    captured but the marker convention on the OV side (how extraction tells
    them apart from typed input) is not agreed yet.
 

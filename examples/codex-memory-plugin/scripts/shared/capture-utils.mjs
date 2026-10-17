@@ -665,6 +665,10 @@ export function sanitizeCapturedText(text) {
     // Claude Code wraps its own out-of-band notes to the model in these two
     // shapes. They are the host talking to itself, not the conversation.
     .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi, " ")
+    // kimi-code (#4081) folds hook stdout into the prompt message as a
+    // `<hook_result hook_event="...">` text part; the wrapper is host
+    // transport, and any recall block inside it is stripped above.
+    .replace(/<hook_result\b[^>]*>[\s\S]*?<\/hook_result>/gi, " ")
     .replace(HOST_ENVELOPE_BLOCK_RE, " ")
     .replace(HOST_ENVELOPE_BODY_RE, " $2 ")
     .replace(/^[ \t]*\[Subagent Context\][^\n]*$/gim, " ")

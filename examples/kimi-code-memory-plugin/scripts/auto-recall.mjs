@@ -22,8 +22,6 @@
  *
  * Prompt shape: Kimi sends `prompt` as a string OR a ContentPart[] array
  * (kimi-code issue #917) — both are handled.
- *
- * Structure mirrors examples/codex-memory-plugin/scripts/auto-recall.mjs.
  */
 
 import { loadConfig } from "./config.mjs";

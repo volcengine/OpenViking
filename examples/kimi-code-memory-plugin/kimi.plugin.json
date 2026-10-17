@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking. Recall on UserPromptSubmit, incremental capture (user text, assistant text, tool calls/results) on Stop/PreCompact/SessionEnd/Interrupt, pending replay on SessionStart, with a local stdio MCP proxy. Windows-safe: no detached background workers.",
   "author": {
     "name": "OpenViking",
@@ -23,10 +23,7 @@
   "mcpServers": {
     "openviking": {
       "command": "node",
-      "args": ["./servers/mcp-proxy.mjs"],
-      "env": {
-        "OPENVIKING_HOOK_SOURCE": "kimicode"
-      }
+      "args": ["./servers/mcp-proxy.mjs"]
     }
   },
   "skills": "./skills/",
@@ -34,10 +31,7 @@
     {
       "event": "SessionStart",
       "command": "node ./scripts/session-start.mjs",
-      "timeout": 30,
-      "env": {
-        "OPENVIKING_PENDING_REPLAY_LIMIT": "2"
-      }
+      "timeout": 30
     },
     {
       "event": "UserPromptSubmit",

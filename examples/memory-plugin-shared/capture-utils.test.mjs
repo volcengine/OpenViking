@@ -116,6 +116,20 @@ test("a host system reminder is not part of the conversation", () => {
   )
 })
 
+test("a kimi hook_result wrapper goes whole even around a recall block", () => {
+  // kimi-code #4081 folds UserPromptSubmit stdout into the prompt message as a
+  // <hook_result> text part; both the wrapper and the recall block inside it
+  // are host transport, not conversation.
+  assert.equal(
+    sanitizeCapturedText(
+      'real question\n<hook_result hook_event="UserPromptSubmit">\n'
+        + "<openviking-context>relevant memory</openviking-context>\n"
+        + "</hook_result>",
+    ),
+    "real question",
+  )
+})
+
 test("a kimi notification keeps its body and loses its wrapper", () => {
   assert.equal(
     sanitizeCapturedText(

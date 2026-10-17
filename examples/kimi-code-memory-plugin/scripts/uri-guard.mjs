@@ -12,8 +12,6 @@
  * matched file tools only. It never grows into a general command interceptor,
  * and shell commands that merely mention a viking:// URI as data are left
  * alone (they run normally).
- *
- * SCAFFOLD: mirrors examples/codex-memory-plugin/scripts/uri-guard.mjs.
  */
 
 import { preToolUseOutput, runUriGuardHook } from "./shared/uri-guard.mjs";
