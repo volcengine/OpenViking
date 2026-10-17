@@ -157,6 +157,8 @@ def load_config() -> Config:
                     vlm_data,
                     inherit_model=not bot_vlm_explicit,
                 )
+                if not bot_vlm_explicit:
+                    bot_data["agents"].setdefault("thinking", root_vlm_config.thinking)
 
             server_managed = _is_truthy_env(VIKINGBOT_WITH_OPENVIKING_SERVER_ENV)
             configured_bot_server = bot_data.get("ov_server", {})

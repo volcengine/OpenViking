@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
+
+from loguru import logger
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.compile import file_ops
@@ -175,12 +178,7 @@ class StageOutputReader(Tool):
 
 
 async def run(runtime, node, outputs, remaining_plan, completed_names, revisions, prompt, context):
-    """Return an accepted decision and parsed suffix, or None to retain the existing plan.
-
-    Only future configurations may change; output format and scope meanings remain fixed.
-    Invalid decisions get up to three repairs per review; exhausted or model/read failures
-    are recorded. Cancellation and diagnostic-write failures propagate; the contract stays fixed.
-    """
+    """Return a validated revision or None; cancellation propagates."""
     record = {}
     accepted = None
     try:
@@ -245,8 +243,18 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
         )
         record["decision"] = decision.model_dump(exclude_none=True)
         record["status"] = "accepted" if accepted else "continued"
-    except (OSError, ValueError, TypeError) as exc:
+    except Exception as exc:
+        if asyncio.current_task().cancelling():
+            raise asyncio.CancelledError() from exc
+        accepted = None
         record.update(status="rejected", error=str(exc)[:800])
         runtime.metrics["review_rejections"] += 1
-    await runtime.files.put(f"reviews/{node.name}", record)
+        logger.warning("Compile stage review {} failed: {}", node.name, exc)
+    try:
+        await runtime.files.put(f"reviews/{node.name}", record)
+    except Exception as exc:
+        if asyncio.current_task().cancelling():
+            raise asyncio.CancelledError() from exc
+        logger.warning("Compile stage review {} record write failed: {}", node.name, exc)
+        return None
     return accepted
