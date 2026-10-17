@@ -610,6 +610,18 @@ class AgentLoop:
                                         event_type=OutboundEventType.REASONING_DELTA,
                                     )
                                 )
+                    elif event.type == "provider_recovery":
+                        # Ephemeral, sanitized failover status. Never assistant
+                        # content: it must not enter the durable transcript.
+                        if publish_events:
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    session_key=session_key,
+                                    content="",
+                                    event_type=OutboundEventType.PROVIDER_RECOVERY,
+                                    metadata={"recovery": dict(event.recovery or {})},
+                                )
+                            )
                     elif event.type == "response":
                         response = event.response
 

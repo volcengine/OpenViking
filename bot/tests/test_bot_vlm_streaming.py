@@ -3,7 +3,18 @@ from types import SimpleNamespace
 import pytest
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, OpenAIVLM, VolcEngineVLM
+
+
+def rate_limit_error() -> ModelError:
+    """Structured rate-limit error both failover wrappers advance on.
+
+    A plain RuntimeError classifies as unknown, which the multi-credential
+    wrapper intentionally fails fast on — that combination previously left
+    this suite's credential-failover case retrying in the adapter forever.
+    """
+    return ModelError(kind=ModelErrorKind.RATE_LIMIT_ERROR, message="rate limited")
 
 
 class FakeCompletions:
@@ -112,7 +123,7 @@ async def test_vlm_adapter_streams_openai_content_deltas():
 
 @pytest.mark.asyncio
 async def test_vlm_adapter_streams_with_credential_failover_before_first_delta():
-    primary_completions = FakeCompletions(error=RuntimeError("status 429: rate limit"))
+    primary_completions = FakeCompletions(error=rate_limit_error())
     backup_completions = FakeCompletions(chunks=[stream_chunk("backup", finish_reason="stop")])
     primary = VolcEngineVLM(
         {
@@ -144,8 +155,11 @@ async def test_vlm_adapter_streams_with_credential_failover_before_first_delta()
         )
     ]
 
-    assert [event.type for event in events] == ["content_delta", "response"]
-    assert events[0].content == "backup"
+    assert [event.type for event in events] == ["provider_recovery", "content_delta", "response"]
+    # One sanitized recovery notice before backup output; no secrets.
+    assert events[0].recovery["reason"] == "credential_failed"
+    assert events[0].recovery["error_kind"] == "rate_limit_error"
+    assert events[1].content == "backup"
     assert events[-1].response.content == "backup"
     assert len(primary_completions.calls) == 1
     assert backup_completions.calls[0]["model"] == "backup-model"
@@ -170,7 +184,9 @@ async def test_vlm_adapter_streams_with_legacy_primary_backup_failover():
         )
     ]
 
-    assert [event.type for event in events] == ["content_delta", "response"]
+    assert [event.type for event in events] == ["provider_recovery", "content_delta", "response"]
+    assert events[0].recovery["reason"] == "primary_failed"
+    assert events[0].recovery == {"reason": "primary_failed", "error_kind": None}
     assert events[-1].response.content == "backup"
     assert failover.is_using_backup is True
 

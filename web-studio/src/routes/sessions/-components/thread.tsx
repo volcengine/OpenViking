@@ -202,6 +202,14 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           {t('chat.sendFailed', { error: creationError || chat.error })}
         </div>
       )}
+      {isStreaming && chat.providerRecovery ? (
+        <div
+          role="status"
+          className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-muted-foreground"
+        >
+          {t('chat.providerRecovering')}
+        </div>
+      ) : null}
       {canChat ? (
         <div className="relative z-10">
           <Composer

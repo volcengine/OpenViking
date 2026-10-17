@@ -95,6 +95,7 @@ class EventType(str, Enum):
     CONTENT_DELTA = "content_delta"
     REASONING_DELTA = "reasoning_delta"
     ITERATION = "iteration"
+    PROVIDER_RECOVERY = "provider_recovery"
 
 
 class FeedbackType(str, Enum):

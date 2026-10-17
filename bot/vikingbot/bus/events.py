@@ -19,6 +19,7 @@ class OutboundEventType(str, Enum):
     CONTENT_DELTA = "content_delta"  # Streaming response text delta
     REASONING_DELTA = "reasoning_delta"  # Streaming reasoning text delta
     ITERATION = "iteration"  # Iteration marker
+    PROVIDER_RECOVERY = "provider_recovery"  # Ephemeral provider failover status
     NO_REPLY = "no_reply"  # No reply required
     RESPONSE_COMPLETED = "response_completed"  # Analytics-only response fact
     FEEDBACK_SUBMITTED = "feedback_submitted"  # Analytics-only explicit feedback fact

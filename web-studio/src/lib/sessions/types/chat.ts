@@ -16,3 +16,12 @@ export interface StreamToolCall {
   iteration?: number
   result?: string
 }
+
+/**
+ * Sanitized provider failover status streamed before backup output.
+ * Ephemeral: rendered as transient status, never persisted as content.
+ */
+export interface ProviderRecoveryStatus {
+  reason: string
+  error_kind?: string | null
+}

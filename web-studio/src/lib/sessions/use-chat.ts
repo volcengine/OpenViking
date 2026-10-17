@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ChatStatus, StreamToolCall } from './types/chat'
+import type {
+  ChatStatus,
+  ProviderRecoveryStatus,
+  StreamToolCall,
+} from './types/chat'
 import type {
   Message,
   MessagePart,
@@ -59,6 +63,10 @@ function dedupeToolCalls(toolCalls: StreamToolCall[]): StreamToolCall[] {
 
 function isToolErrorResult(result?: string): boolean {
   return Boolean(result?.trimStart().toLowerCase().startsWith('error'))
+}
+
+function isRecordData(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function clonePart(part: MessagePart): MessagePart {
@@ -176,6 +184,8 @@ export interface UseChatReturn {
   streamingParts: MessagePart[]
   streamingInsertIndex: number | undefined
   iteration: number
+  /** Transient provider failover status; null when recovery is not active. */
+  providerRecovery: ProviderRecoveryStatus | null
   send: (message: string, options?: SendOptions) => Promise<void>
   abort: (options?: AbortOptions) => void
   reset: () => void
@@ -203,6 +213,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     number | undefined
   >(undefined)
   const [iteration, setIteration] = useState(0)
+  // Ephemeral provider failover status (issue #6145). Never part of the
+  // message timeline: cleared as soon as real output or a final response
+  // arrives.
+  const [providerRecovery, setProviderRecovery] =
+    useState<ProviderRecoveryStatus | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   const activeSessionRef = useRef<string | null>(null)
@@ -493,6 +508,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       const clearStreamingState = () => {
         clearStreamingSegmentView()
         setStreamingInsertIndex(undefined)
+        setProviderRecovery(null)
       }
 
       const finishActiveRequest = () => {
@@ -734,8 +750,27 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               const delta = streamEventDataToText(event.data)
               accContent += delta
               setStreamingContent(accContent)
+              setProviderRecovery(null)
               appendText(delta)
               await yieldToRenderer()
+              break
+            }
+
+            case 'provider_recovery': {
+              // Transient failover status (issue #6145): shown while the
+              // agent recovers, never added to content or the transcript.
+              if (isRecordData(event.data)) {
+                setProviderRecovery({
+                  reason:
+                    typeof event.data.reason === 'string'
+                      ? event.data.reason
+                      : 'primary_failed',
+                  error_kind:
+                    typeof event.data.error_kind === 'string'
+                      ? event.data.error_kind
+                      : null,
+                })
+              }
               break
             }
 
@@ -936,6 +971,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       } finally {
         discardPartialControllersRef.current.delete(controller)
         interruptedControllersRef.current.delete(controller)
+        setProviderRecovery(null)
         if (abortRef.current === controller) {
           abortRef.current = null
           activeSessionRef.current = null
@@ -957,6 +993,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamingParts,
     streamingInsertIndex,
     iteration,
+    providerRecovery,
     send,
     abort,
     reset,
