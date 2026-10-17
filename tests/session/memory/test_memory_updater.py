@@ -1316,6 +1316,42 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_operations_preserves_file_when_same_uri_upsert_fails(self):
+        # Regression test: a failed same-batch upsert must not cause the original
+        # file to be deleted when the URI is also scheduled for deletion.
+        uri = "viking://user/u/memories/experiences/task_rule.md"
+        old_file = MemoryFile(uri=uri, memory_type="experiences", content="old content")
+        mock_viking_fs = MagicMock()
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+        updater._apply_upsert = AsyncMock(side_effect=OSError("write failed"))
+        updater._apply_delete = AsyncMock()
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_type="experiences",
+                    uris=[uri],
+                    memory_fields={"content": "replacement content"},
+                )
+            ],
+            delete_file_contents=[old_file],
+            delete_replacements={},
+            errors=[],
+        )
+
+        result = await updater.apply_operations(operations, MagicMock())
+
+        assert any(uri == uri for uri, error in result.errors if isinstance(error, OSError))
+        assert any(
+            uri == uri and "same-batch upsert failed" in str(error) for uri, error in result.errors
+        )
+        assert result.deleted_uris == []
+        updater._apply_delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_apply_operations_keeps_source_when_locked_target_read_fails(self):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
         target_uri = "viking://user/u/memories/entities/person/陈静娴.md"

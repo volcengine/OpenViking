@@ -1027,6 +1027,9 @@ class MemoryUpdater:
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
         upserted_uri_keys = {_same_batch_delete_conflict_key(uri) for uri in upserted_uris}
+        failed_upsert_uri_keys = {
+            _same_batch_delete_conflict_key(uri) for uri in failed_upsert_uris
+        }
         for file_content in operations.delete_file_contents:
             delete_uri = file_content.uri
             if has_unresolved_upserts:
@@ -1047,6 +1050,23 @@ class MemoryUpdater:
             if replacement_uri in failed_upsert_uris:
                 delete_error = ValueError(
                     f"Skipped delete because replacement write failed: {replacement_uri}"
+                )
+                result.add_error(delete_uri, delete_error)
+                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                continue
+            if delete_uri in failed_upsert_uris:
+                # A same-batch upsert for this URI failed, so the original file was
+                # not replaced (pre-mutation failure) — deleting it now would lose
+                # the original content. Preserve the existing file.
+                delete_error = ValueError(
+                    f"Skipped delete because same-batch upsert failed: {delete_uri}"
+                )
+                result.add_error(delete_uri, delete_error)
+                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                continue
+            if _same_batch_delete_conflict_key(delete_uri) in failed_upsert_uri_keys:
+                delete_error = ValueError(
+                    f"Skipped delete because same-batch upsert failed: {delete_uri}"
                 )
                 result.add_error(delete_uri, delete_error)
                 tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
