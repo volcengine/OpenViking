@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking. Recall on UserPromptSubmit, incremental capture (user text, assistant text, tool calls/results) on Stop/PreCompact/SessionEnd/Interrupt, pending replay on SessionStart, with a local stdio MCP proxy. Windows-safe: no detached background workers.",
   "author": {
     "name": "OpenViking",
