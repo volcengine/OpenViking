@@ -1149,3 +1149,67 @@ async def test_full_buckets_keep_their_quotas_when_one_bucket_scores_highest():
     )
 
     assert Counter(entry.category for entry in result.entries) == quotas
+
+
+async def test_one_resource_tree_takes_one_slot():
+    doc = "viking://resources/agent-artifacts/cc/s1/handoff.md"
+    other = "viking://resources/agent-artifacts/cc/s2/notes.md"
+    hits = [
+        _hit(f"{doc}/handoff.md", 0.74, "handoff file"),
+        _hit(f"{doc}/.abstract.md", 0.73, "handoff dir"),
+        _hit(other, 0.70, "other doc"),
+    ]
+    service = _bucket_service({"viking://resources": hits})
+
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="q", quotas={"resources": 3}, peer_scope="actor"),
+    )
+
+    # the directory sits above the better-ranked file; its slot is left to other buckets
+    assert [entry.uri for entry in result.entries] == [f"{doc}/handoff.md", other]
+
+
+async def test_resource_tree_slot_shows_the_most_specific_hit():
+    doc = "viking://resources/entity-archive/run/LocalBridge"
+    other = "viking://resources/agent-artifacts/cc/s2/notes.md"
+    hits = [
+        _hit(f"{doc}/.abstract.md", 0.75, "archive dir"),
+        _hit(f"{doc}/routing/routing_1.md", 0.74, "routing section"),
+        _hit(f"{doc}/status/status_1.md", 0.73, "status section"),
+        _hit(other, 0.70, "other doc"),
+    ]
+    service = _bucket_service({"viking://resources": hits})
+
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="q", quotas={"resources": 4}, peer_scope="actor"),
+    )
+
+    # the section replaces its directory's abstract; its sibling section keeps its own slot
+    assert [entry.uri for entry in result.entries] == [
+        f"{doc}/routing/routing_1.md",
+        f"{doc}/status/status_1.md",
+        other,
+    ]
+
+
+def test_resource_tree_slots_do_not_depend_on_ranking_order():
+    from itertools import permutations
+    from types import SimpleNamespace
+
+    from openviking.retrieve.context_assembler.gather import _drop_nested
+
+    doc = "viking://resources/doc"
+
+    def res(path, is_directory=False):
+        return SimpleNamespace(base_uri=doc + path, category="resources", is_directory=is_directory)
+
+    hits = [res("", True), res("/a.md", True), res("/a.md/s1"), res("/b.md")]
+    for ranked in permutations(hits):
+        assert sorted(c.base_uri for c in _drop_nested(ranked)) == [
+            f"{doc}/a.md/s1",
+            f"{doc}/b.md",
+        ], [c.base_uri for c in ranked]
