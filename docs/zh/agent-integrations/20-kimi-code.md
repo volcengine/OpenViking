@@ -11,10 +11,12 @@
 在 Kimi TUI 里执行：
 
 ```text
-/plugins install <本地目录 | zip URL | GitHub URL>
+/plugins install <本地目录的绝对路径 | zip URL>
 ```
 
-安装来源可以是本仓库的 `examples/kimi-code-memory-plugin` 目录、对应的 zip 包或其 GitHub URL。**不需要 curl 安装器**。安装完成后 `/reload` 或开新会话即可生效。
+安装来源可以是本仓库的 `examples/kimi-code-memory-plugin` 目录（绝对路径），或把该目录打包成的 zip（manifest 必须在压缩包根目录）。**不需要 curl 安装器**。安装完成后 `/reload` 或开新会话即可生效。
+
+注意：kimi-code 的 GitHub URL 安装只支持 manifest 位于仓库根目录的仓库（不支持子目录），而本插件位于 monorepo 的 `examples/` 子目录，所以 GitHub URL 方式不适用——用本地目录或 zip。
 
 CLI 会托管插件副本，并在首次提问时注入 profile 与 skill 清单、之后逐 prompt 召回——没有需要信任的 hook 审阅步骤。
 

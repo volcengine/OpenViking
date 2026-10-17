@@ -15,8 +15,12 @@ reachable OpenViking server (a local `127.0.0.1:1933` needs no credentials).
 Plugin version: **0.2.1** (`kimi.plugin.json`).
 
 ```text
-/plugins install <path-to-this-directory-or-a-git-url>
+/plugins install <absolute-path-to-this-directory-or-a-zip-url>
 ```
+
+The plugin lives in a monorepo subdirectory, so the GitHub-URL form does not
+apply (kimi-code installs from the repo root only); use the local directory
+or a zip with the manifest at the archive root.
 
 Then `/reload` (or start a new session). Verify with:
 

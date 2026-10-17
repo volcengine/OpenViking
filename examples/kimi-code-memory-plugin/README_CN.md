@@ -15,8 +15,11 @@ OpenViking 服务（本地 `127.0.0.1:1933` 无需凭据）。插件版本：**0
 （见 `kimi.plugin.json`）。
 
 ```text
-/plugins install <本目录路径或 git URL>
+/plugins install <本目录绝对路径或 zip URL>
 ```
+
+本插件位于 monorepo 子目录，GitHub URL 方式不适用（kimi-code 只从仓库根
+目录安装）；用本地目录或 manifest 位于压缩包根目录的 zip。
 
 然后 `/reload`（或开新会话）。验证：
 

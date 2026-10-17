@@ -11,10 +11,12 @@ Prerequisites: Kimi Code CLI ≥ 2.1.1 (verified on 2.2.0), Node.js ≥ 18, and 
 In the Kimi TUI, run:
 
 ```text
-/plugins install <local directory | zip URL | GitHub URL>
+/plugins install <absolute local directory | zip URL>
 ```
 
-The source can be the `examples/kimi-code-memory-plugin` directory in this repository, its zip archive, or its GitHub URL. **No curl installer needed**. After installing, `/reload` or start a new session.
+The source can be the `examples/kimi-code-memory-plugin` directory in this repository (absolute path), or a zip of that directory with the manifest at the archive root. **No curl installer needed**. After installing, `/reload` or start a new session.
+
+Note: kimi-code's GitHub URL install only supports repositories with the manifest at the repo root (no subdirectory support). This plugin lives under `examples/` in a monorepo, so the GitHub URL form does not apply — use the local directory or a zip.
 
 The CLI manages the plugin for you: the profile and skill catalog are injected on the first prompt, and every prompt is recalled against — there is no hook-trust review step.
 
