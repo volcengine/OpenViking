@@ -21,6 +21,7 @@ from openviking.service.task_work_index import (
 )
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking.utils.log_correlation import log_correlation
 from tests.test_task_tracker import _FakeAgfs
@@ -277,3 +278,113 @@ async def test_cancelled_task_uses_handler_cancellation_path(tracked_queue):
     assert calls == [message]
     task = await tracker.get("task-1", **OWNER)
     assert task is not None and task.status is TaskStatus.CANCELLED
+
+
+async def test_stalled_head_session_commit_is_cancelled_without_a_successor(
+    tracked_queue, monkeypatch
+):
+    queue, tracker, transport = tracked_queue
+    from openviking.storage.queuefs import session_commit_processor as processor_module
+    from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+    from openviking_cli.session.user_id import UserIdentifier
+
+    monkeypatch.setattr(
+        processor_module,
+        "_session_commit_stall_timeout_seconds",
+        lambda: 0.05,
+        raising=False,
+    )
+    started, unwound = asyncio.Event(), asyncio.Event()
+    task_id = "stalled-head"
+    await tracker.create("session_commit", task_id=task_id, **OWNER)
+
+    class Session:
+        async def exists(self):
+            return True
+
+        async def load(self):
+            pass
+
+        async def resume_queued_commit(self, _msg):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                unwound.set()
+
+    class Service:
+        def session(self, ctx, session_id, session_uri=None):
+            return Session()
+
+    msg = SessionCommitMsg(
+        task_id=task_id,
+        session_id="session-1",
+        session_uri="viking://session/session-1",
+        archive_uri="viking://session/session-1/history/archive-1",
+        user=UserIdentifier("account", "user").to_dict(),
+    )
+    with bind_task_context(task_id, OWNER["account_id"], OWNER["user_id"]):
+        await queue.enqueue(msg.to_dict())
+    message = {"id": "message-1", "data": transport.write.await_args.args[1].decode()}
+    queue.set_dequeue_handler(SessionCommitProcessor(Service()))
+
+    result = await asyncio.wait_for(queue.process_dequeued(message), timeout=1)
+
+    assert started.is_set()
+    assert unwound.is_set()
+    assert result.outcome is ProcessOutcome.CANCELLED
+
+
+async def test_session_commit_progress_heartbeats_prevent_stall_cancellation(
+    tracked_queue, monkeypatch
+):
+    queue, tracker, transport = tracked_queue
+    from openviking.service.task_tracker import report_task_progress
+    from openviking.storage.queuefs import session_commit_processor as processor_module
+    from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+    from openviking_cli.session.user_id import UserIdentifier
+
+    monkeypatch.setattr(
+        processor_module,
+        "_session_commit_stall_timeout_seconds",
+        lambda: 0.06,
+        raising=False,
+    )
+    task_id = "progressing-commit"
+    await tracker.create("session_commit", task_id=task_id, **OWNER)
+
+    class Session:
+        async def exists(self):
+            return True
+
+        async def load(self):
+            pass
+
+        async def resume_queued_commit(self, _msg):
+            for _ in range(5):
+                await asyncio.sleep(0.02)
+                report_task_progress()
+            await tracker.complete(task_id, {}, **OWNER)
+            return True
+
+    class Service:
+        def session(self, ctx, session_id, session_uri=None):
+            return Session()
+
+    msg = SessionCommitMsg(
+        task_id=task_id,
+        session_id="session-1",
+        session_uri="viking://session/session-1",
+        archive_uri="viking://session/session-1/history/archive-1",
+        user=UserIdentifier("account", "user").to_dict(),
+    )
+    with bind_task_context(task_id, OWNER["account_id"], OWNER["user_id"]):
+        await queue.enqueue(msg.to_dict())
+    message = {"id": "message-1", "data": transport.write.await_args.args[1].decode()}
+    queue.set_dequeue_handler(SessionCommitProcessor(Service()))
+
+    result = await asyncio.wait_for(queue.process_dequeued(message), timeout=1)
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    task = await tracker.get(task_id, **OWNER)
+    assert task.status is TaskStatus.COMPLETED
