@@ -20,6 +20,12 @@ _WINDOWS_RESERVED_STEMS = frozenset(
         "PRN",
         "AUX",
         "NUL",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
         *(f"COM{index}" for index in range(1, 10)),
         *(f"LPT{index}" for index in range(1, 10)),
     }
@@ -280,7 +286,8 @@ class VikingURI:
         safe = re.sub(r"_+", "_", safe)
         # Strip leading/trailing underscores and dots, limit length
         safe = safe.strip("_.")[:50]
-        # Defuse Win32 reserved device names (CON/PRN/NUL/AUX/COM1../LPT9..)
+        # Defuse Win32 reserved device names (CON/PRN/NUL/AUX/COM1../LPT9..,
+        # including the COM/LPT superscript-digit aliases)
         # so the segment is a valid path component on Windows, mirroring PR
         # #4517's guard on the memory path.
         if _windows_reserved_stem(safe) in _WINDOWS_RESERVED_STEMS:
