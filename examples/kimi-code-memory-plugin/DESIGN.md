@@ -192,9 +192,12 @@ field. (CLI 2.2.0 additionally predates the agent-hook cwd fix `c1459a61`.)
   `kimicode` is a registered harness key, so `ov config` overrides apply.
 - OV session id: `kc-<kimi-session-id>` (prefix kept from the previous adapter
   for data compatibility).
-- Peer (project memory scope) resolves via shared `workspace-peer` from Git
-  identity; non-Git directories get no peer. Peer is a memory scope, not an
-  authorization boundary.
+- Peer (project memory scope): hooks resolve it via shared `workspace-peer`
+  from Git identity; non-Git directories get no peer. The MCP proxy does not
+  follow that rule — `toMcpProxyConfig` sends no peer unless
+  `recallPeerScope` is `"actor"`, so `remember`/`add_resource` calls through
+  MCP land in the user-level space while captured turns land under the
+  project peer. Peer is a memory scope, not an authorization boundary.
 
 ### Recovery ⚠️
 
