@@ -11,7 +11,7 @@ import orjson
 from .capture import CapturePipeline
 from .compaction import cut_messages
 from .notices import tool_tail
-from .protocols import SSEDecoder, replays_reasoning, usage_of
+from .protocols import SSEDecoder, reasoning_route, replays_reasoning, usage_of
 from .records import RecordKind as K
 from .tool_catalog import notice_head
 from .tool_protocols import reply_chain, tool_protocol
@@ -204,6 +204,7 @@ class HiddenToolLoop:
                 "messages": self.transcript,
                 "visible_count": len(visible),
                 "upstream_id": self.prepared.root["upstream_id"],
+                "reasoning_route": reasoning_route(self.prepared.body, self.prepared.upstream),
             }
             await self.store.replay.put(
                 self.prepared.scope, self.prepared.session, K.HIDDEN, anchor, value

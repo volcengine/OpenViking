@@ -66,7 +66,13 @@ class ChatProtocol(ToolProtocol):
 
     @staticmethod
     def restore_reasoning(previous, message, value):
-        if message.get("role") != "assistant" or message.get("reasoning_content"):
+        # Some compatible endpoints alias ``reasoning`` to ``reasoning_content``
+        # and reject a message carrying both fields.
+        if (
+            message.get("role") != "assistant"
+            or message.get("reasoning_content")
+            or "reasoning" in message
+        ):
             return [message]
         return [{**message, **value}]
 
