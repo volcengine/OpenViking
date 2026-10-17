@@ -2,8 +2,38 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Human-readable formatting for LLM message lists (shared by memory and VLM layers)."""
 
+import hashlib
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+OPENAI_TOOL_CALL_ID_MAX_LENGTH = 40
+
+
+def _tool_call_id(item: Dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _replacement_tool_call_id(
+    original: str,
+    occurrence: int,
+    used_ids: set[str],
+) -> str:
+    collision = 0
+    while True:
+        occurrence_material = original if occurrence == 0 else f"{original}\0{occurrence}"
+        material = (
+            occurrence_material
+            if collision == 0
+            else f"{occurrence_material}\0collision\0{collision}"
+        )
+        candidate = f"call_{hashlib.sha256(material.encode('utf-8')).hexdigest()[:35]}"
+        if candidate not in used_ids:
+            return candidate
+        collision += 1
 
 
 def sanitize_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -29,6 +59,108 @@ def sanitize_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, A
                 continue
         sanitized.append(copied)
     return sanitized
+
+
+def normalize_openai_tool_call_ids(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Make paired tool-call IDs valid for one OpenAI-family request.
+
+    Some providers embed opaque signatures in tool-call IDs. Those IDs can be
+    longer than the OpenAI limit or reused across turns when persisted history
+    is replayed across providers. Rewrite only oversized or later reused call
+    occurrences at the target request boundary. Pair results in call order.
+    """
+    used_ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, dict):
+                    continue
+                for key in ("id", "call_id"):
+                    tool_call_id = tool_call.get(key)
+                    if (
+                        isinstance(tool_call_id, str)
+                        and len(tool_call_id) <= OPENAI_TOOL_CALL_ID_MAX_LENGTH
+                    ):
+                        used_ids.add(tool_call_id)
+        elif message.get("role") == "tool":
+            for key in ("tool_call_id", "call_id"):
+                tool_call_id = message.get(key)
+                if (
+                    isinstance(tool_call_id, str)
+                    and len(tool_call_id) <= OPENAI_TOOL_CALL_ID_MAX_LENGTH
+                ):
+                    used_ids.add(tool_call_id)
+
+    occurrences: Dict[str, int] = {}
+    pending: Dict[str, List[str]] = {}
+    consumed: Dict[str, int] = {}
+    normalized: List[Dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            normalized.append(message)
+            continue
+        copied = message
+        if message.get("role") == "assistant" and isinstance(message.get("tool_calls"), list):
+            tool_calls = []
+            changed = False
+            for tool_call in message["tool_calls"]:
+                if not isinstance(tool_call, dict):
+                    tool_calls.append(tool_call)
+                    continue
+
+                original = _tool_call_id(tool_call, ("id", "call_id"))
+                if original is None:
+                    tool_calls.append(tool_call)
+                    continue
+
+                occurrence = occurrences.get(original, 0)
+                occurrences[original] = occurrence + 1
+                replacement = original
+                if len(original) > OPENAI_TOOL_CALL_ID_MAX_LENGTH or occurrence > 0:
+                    replacement = _replacement_tool_call_id(original, occurrence, used_ids)
+                    used_ids.add(replacement)
+                pending.setdefault(original, []).append(replacement)
+
+                if replacement == original:
+                    tool_calls.append(tool_call)
+                    continue
+
+                copied_tool_call = dict(tool_call)
+                for key in ("id", "call_id"):
+                    if tool_call.get(key) == original:
+                        copied_tool_call[key] = replacement
+                tool_calls.append(copied_tool_call)
+                changed = True
+            if changed:
+                copied = dict(message)
+                copied["tool_calls"] = tool_calls
+        elif message.get("role") == "tool":
+            original = _tool_call_id(message, ("tool_call_id", "call_id"))
+            if original is None:
+                normalized.append(copied)
+                continue
+            result_index = consumed.get(original, 0)
+            call_ids = pending.get(original, [])
+            if result_index >= len(call_ids):
+                normalized.append(copied)
+                continue
+            consumed[original] = result_index + 1
+            replacement = call_ids[result_index]
+            if replacement == original:
+                normalized.append(copied)
+                continue
+            for key in ("tool_call_id", "call_id"):
+                if message.get(key) != original:
+                    continue
+                if copied is message:
+                    copied = dict(message)
+                copied[key] = replacement
+        normalized.append(copied)
+    return normalized
 
 
 def _has_message_content(content: Any) -> bool:
