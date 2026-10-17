@@ -182,6 +182,7 @@ class MemoryOperationSkipCode(str, Enum):
     AMBIGUOUS_TARGET = "ambiguous_target"
     NO_WRITABLE_TARGET = "no_writable_target"
     PAGE_ID_TYPE_MISMATCH = "page_id_type_mismatch"
+    SAME_URI_BATCH_FOLD = "same_uri_batch_fold"
 
 
 class MemoryOperationSkip(BaseModel):
