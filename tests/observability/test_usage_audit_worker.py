@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
 import pytest
@@ -32,6 +33,12 @@ class SlowFirstFlushStore:
             self.started.set()
             await asyncio.sleep(0.05)
         self.batches.append(list(events))
+
+
+def enqueue_from_foreign_thread(worker: UsageAuditWorker, event: ObservabilityEvent) -> None:
+    """Return after enqueue schedules its owner-loop callback, without yielding that loop."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(worker.enqueue, event).result(timeout=1.0)
 
 
 @pytest.mark.asyncio
@@ -68,3 +75,41 @@ async def test_usage_audit_worker_close_waits_for_inflight_batch_after_timeout()
 
     assert store.calls == 1
     assert [[event.event_name for event in batch] for batch in store.batches] == [["demo"]]
+
+
+@pytest.mark.asyncio
+async def test_usage_audit_worker_flush_waits_for_pending_cross_thread_enqueue():
+    store = FakeStore()
+    worker = UsageAuditWorker(store, flush_interval_seconds=1.0)
+    await worker.start()
+    try:
+        enqueue_from_foreign_thread(
+            worker,
+            ObservabilityEvent(event_name="cross-thread-flush", payload={}),
+        )
+
+        await worker.flush()
+
+        assert [[event.event_name for event in batch] for batch in store.batches] == [
+            ["cross-thread-flush"]
+        ]
+    finally:
+        await worker.close(timeout_seconds=0.2)
+
+
+@pytest.mark.asyncio
+async def test_usage_audit_worker_close_flushes_pending_cross_thread_enqueue():
+    store = FakeStore()
+    worker = UsageAuditWorker(store, flush_interval_seconds=1.0)
+    await worker.start()
+    enqueue_from_foreign_thread(
+        worker,
+        ObservabilityEvent(event_name="cross-thread-close", payload={}),
+    )
+
+    await worker.close(timeout_seconds=0.2)
+
+    assert worker.dropped_count == 0
+    assert [[event.event_name for event in batch] for batch in store.batches] == [
+        ["cross-thread-close"]
+    ]
