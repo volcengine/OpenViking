@@ -130,6 +130,12 @@ class FeishuChannel(BaseChannel):
         self._CHAT_MEMBER_FETCH_PAGE_SIZE = 100
         self._CHAT_MEMBER_FETCH_MAX_PAGES = 500
 
+    async def _get_bot_config(self) -> Config:
+        """Return the startup config without blocking the event loop."""
+        if self._bot_config is None:
+            self._bot_config = await asyncio.to_thread(load_config)
+        return self._bot_config
+
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
         now = time.time()
@@ -826,7 +832,7 @@ class FeishuChannel(BaseChannel):
             # 模式2：话题群仅首条消息不需要@，后续回复需要@
             if chat_mode == "thread":
                 is_topic_starter = message.root_id == message.message_id or not message.root_id
-                config = load_config()
+                config = await self._get_bot_config()
                 if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
                     return False
             # 普通群不需要@，直接处理
@@ -1019,7 +1025,7 @@ class FeishuChannel(BaseChannel):
 
             # 7. 添加已读表情
             if should_process:
-                config = load_config()
+                config = await self._get_bot_config()
                 if config.mode != BotMode.DEBUG:
                     await self._add_reaction(message_id, "MeMeMe")
 
@@ -1107,7 +1113,7 @@ class FeishuChannel(BaseChannel):
         if not isinstance(sender_id, str) or not sender_id.strip():
             raise ValueError("OpenViking image delivery requires the original sender identity")
 
-        config = self._bot_config or load_config()
+        config = await self._get_bot_config()
         client = await VikingClient.create(
             workspace_name(msg.session_key, config.sandbox.mode, portable=False),
             actor_peer_id=sender_id,
