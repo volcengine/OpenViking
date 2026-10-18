@@ -164,6 +164,7 @@ Typical usage:
 | `openviking_retrieval_zero_result_total` | Counter | `account_id, context_type` | retrieval zero-result count |
 | `openviking_retrieval_rerank_used_total` | Counter | `account_id` | number of retrievals that used rerank |
 | `openviking_retrieval_rerank_fallback_total` | Counter | `account_id` | retrieval rerank fallback count |
+| `openviking_resource_imports_total` | Counter | `account_id, pipeline, source_type` | accepted resource import tasks; Connector imports use `pipeline="connector"` and `source_type="repository"` or `"document"` |
 | `openviking_resource_stage_total` | Counter | `account_id, stage, status` | count of resource ingestion stages |
 | `openviking_resource_stage_duration_seconds` | Histogram | `account_id, stage, status` | duration distribution of ingestion stages |
 | `openviking_resource_wait_duration_seconds` | Histogram | `account_id, operation` | resource ingestion wait duration distribution (for example queue waiting) |
@@ -205,6 +206,7 @@ The telemetry bridge also recognizes legacy summary keys for `request`, `process
 | `openviking_vlm_tokens_input_total` | Counter | `account_id, provider, model_name` | VLM input tokens |
 | `openviking_vlm_tokens_output_total` | Counter | `account_id, provider, model_name` | VLM output tokens |
 | `openviking_vlm_tokens_total` | Counter | `account_id, provider, model_name` | VLM total tokens |
+| `openviking_vlm_ingestion_tokens_total` | Counter | `account_id, source_type` | VLM total tokens during resource ingestion; `source_type` is `repository` or `document` |
 | `openviking_vlm_call_duration_seconds` | Histogram | `account_id, provider, model_name` | VLM call duration distribution |
 | `openviking_embedding_requests_total` | Counter | `account_id, status` | embedding request count |
 | `openviking_embedding_latency_seconds` | Histogram | `account_id, status` | embedding latency distribution |
@@ -214,6 +216,7 @@ The telemetry bridge also recognizes legacy summary keys for `request`, `process
 | `openviking_embedding_tokens_input_total` | Counter | `account_id, provider, model_name` | embedding input tokens (per-call aggregate) |
 | `openviking_embedding_tokens_output_total` | Counter | `account_id, provider, model_name` | embedding output tokens (per-call aggregate; may not appear if always 0) |
 | `openviking_embedding_tokens_total` | Counter | `account_id, provider, model_name` | embedding total tokens (per-call aggregate) |
+| `openviking_embedding_ingestion_tokens_total` | Counter | `account_id, source_type` | embedding total tokens during resource ingestion; `source_type` is `repository` or `document` |
 | `openviking_rerank_calls_total` | Counter | `account_id, provider, model_name` | rerank provider call count (per-call) |
 | `openviking_rerank_call_duration_seconds` | Histogram | `account_id, provider, model_name` | rerank provider call duration distribution (per-call) |
 | `openviking_rerank_tokens_input_total` | Counter | `account_id, provider, model_name` | rerank input tokens (per-call aggregate) |

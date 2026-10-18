@@ -42,7 +42,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     normalize_upsert_options,
 )
-from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
     CircuitBreakerOpen,
@@ -744,11 +744,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        result = await embed_compat(
-                            embedder,
-                            embedding_msg.message,
-                            is_query=False,
-                        )
+                        with bind_ingestion_source_type(embedding_msg.source_type):
+                            result = await embed_compat(
+                                embedder,
+                                embedding_msg.message,
+                                is_query=False,
+                            )
                         self._breaker_open_last_log_at.pop(account_id, None)
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
