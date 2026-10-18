@@ -30,6 +30,7 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
     error_kind: ModelErrorKind | None = None
+    thinking_blocks: list[dict[str, Any]] | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -106,6 +107,7 @@ def build_stream_response(
     finish_reason: str,
     usage: dict[str, int] | None = None,
     token_counter: Callable[[str, str], int] | None = None,
+    thinking_blocks: list[dict[str, Any]] | None = None,
 ) -> LLMResponse:
     tool_calls: list[ToolCallRequest] = []
     for index in sorted(raw_tool_calls):
@@ -131,6 +133,7 @@ def build_stream_response(
         finish_reason=finish_reason,
         usage=usage or {},
         reasoning_content=reasoning_content or None,
+        thinking_blocks=thinking_blocks or None,
     )
 
 

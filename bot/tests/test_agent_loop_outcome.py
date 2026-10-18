@@ -258,6 +258,33 @@ def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
     ]
 
 
+def test_context_keeps_signed_thinking_blocks_on_assistant_message(temp_dir: Path):
+    context = ContextBuilder(workspace=temp_dir / "workspace")
+    thinking_blocks = [
+        {
+            "type": "thinking",
+            "thinking": "check weather",
+            "signature": "opaque-signature",
+        }
+    ]
+
+    messages = context.add_assistant_message(
+        [],
+        "Checking.",
+        [
+            {
+                "id": "call-weather",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{}"},
+            }
+        ],
+        reasoning_content="check weather",
+        thinking_blocks=thinking_blocks,
+    )
+
+    assert messages[0]["thinking_blocks"] == thinking_blocks
+
+
 @pytest.mark.asyncio
 async def test_context_build_messages_can_skip_system_prompt(temp_dir: Path):
     context = ContextBuilder(workspace=temp_dir / "workspace", eval=True)
@@ -307,6 +334,57 @@ async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, support
         assert tool_message["content"].startswith("Image resource.")
         assert "does not support media in tool results" in tool_message["content"]
     assert tools_used[0]["result"] == "Image resource."
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_replays_signed_thinking_blocks_before_tool_result(make_loop):
+    thinking_blocks = [
+        {"type": "redacted_thinking", "data": "opaque-redacted"},
+        {
+            "type": "thinking",
+            "thinking": "check weather",
+            "signature": "opaque-signature",
+        },
+    ]
+
+    class ThinkingProvider(_FakeProvider):
+        def __init__(self):
+            self.calls = []
+
+        async def chat(self, messages, **_kwargs):
+            self.calls.append(copy.deepcopy(messages))
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content="Checking.",
+                    reasoning_content="check weather",
+                    thinking_blocks=thinking_blocks,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-weather",
+                            name="read_image",
+                            arguments={},
+                            tokens=1,
+                        )
+                    ],
+                )
+            return LLMResponse(content="It is sunny.")
+
+    provider = ThinkingProvider()
+    loop = make_loop(provider=provider, max_iterations=2)
+
+    final, *_ = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="thinking-replay"),
+        publish_events=False,
+        tool_registry=_ImageRegistry(content="sunny"),
+    )
+
+    assert final == "It is sunny."
+    assistant_message = next(
+        message for message in provider.calls[1] if message["role"] == "assistant"
+    )
+    assert assistant_message["thinking_blocks"] == thinking_blocks
+    assert assistant_message["tool_calls"][0]["id"] == "call-weather"
 
 
 @pytest.mark.asyncio

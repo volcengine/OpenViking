@@ -416,6 +416,8 @@ class LiteLLMVLMProvider(VLMBase):
                 tool_calls=self._parse_tool_calls(message),
                 finish_reason=choice.finish_reason or "stop",
                 usage=usage,
+                reasoning_content=getattr(message, "reasoning_content", None),
+                thinking_blocks=getattr(message, "thinking_blocks", None),
             )
         return message.content or ""
 

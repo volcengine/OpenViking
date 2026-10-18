@@ -549,6 +549,7 @@ IMPORTANT:
         content: str | None,
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
+        thinking_blocks: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Add an assistant message to the message list.
@@ -558,6 +559,7 @@ IMPORTANT:
             content: Message content.
             tool_calls: Optional tool calls.
             reasoning_content: Thinking output (Kimi, DeepSeek-R1, etc.).
+            thinking_blocks: Provider-native thinking blocks required for replay.
 
         Returns:
             Updated message list.
@@ -573,6 +575,9 @@ IMPORTANT:
         # Thinking models reject history without this
         if reasoning_content:
             msg["reasoning_content"] = reasoning_content
+
+        if thinking_blocks:
+            msg["thinking_blocks"] = thinking_blocks
 
         messages.append(msg)
         return messages

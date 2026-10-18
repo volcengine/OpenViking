@@ -152,6 +152,140 @@ async def test_vlm_adapter_routes_litellm_thinking_parameters(
 
 
 @pytest.mark.asyncio
+async def test_vlm_adapter_preserves_litellm_signed_thinking_blocks(monkeypatch):
+    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+
+    thinking_blocks = [
+        {"type": "redacted_thinking", "data": "opaque-redacted"},
+        {
+            "type": "thinking",
+            "thinking": "check weather",
+            "signature": "opaque-signature",
+        },
+    ]
+
+    async def fake_acompletion(**_kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="Checking.",
+                        reasoning_content="check weather",
+                        thinking_blocks=thinking_blocks,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-weather",
+                                function=SimpleNamespace(
+                                    name="get_weather",
+                                    arguments='{"city":"Singapore"}',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "openviking.models.vlm.backends.litellm_vlm.acompletion",
+        fake_acompletion,
+    )
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "model": "anthropic/claude-sonnet-4-5",
+        }
+    )
+    provider = VLMProviderAdapter(
+        vlm,
+        default_model="anthropic/claude-sonnet-4-5",
+        langfuse_client=SimpleNamespace(enabled=False, _client=None),
+    )
+
+    response = await provider.chat(
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather"}}],
+    )
+
+    assert response.reasoning_content == "check weather"
+    assert response.thinking_blocks == thinking_blocks
+
+
+@pytest.mark.asyncio
+async def test_vlm_adapter_merges_streamed_thinking_and_signature_blocks():
+    thinking_deltas = [
+        {"type": "redacted_thinking", "data": "opaque-redacted"},
+        {"type": "thinking", "thinking": "check ", "signature": ""},
+        {"type": "thinking", "thinking": "weather", "signature": ""},
+        {"type": "thinking", "thinking": "", "signature": "opaque-signature"},
+    ]
+
+    def chunk(*, thinking_block=None, reasoning=None, content=None, finish_reason=None):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason=finish_reason,
+                    delta=SimpleNamespace(
+                        thinking_blocks=[thinking_block] if thinking_block else None,
+                        reasoning_content=reasoning,
+                        content=content,
+                        tool_calls=[],
+                    ),
+                )
+            ],
+            usage=None,
+        )
+
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            async def chunks():
+                yield chunk(thinking_block=thinking_deltas[0])
+                yield chunk(thinking_block=thinking_deltas[1], reasoning="check ")
+                yield chunk(thinking_block=thinking_deltas[2], reasoning="weather")
+                yield chunk(thinking_block=thinking_deltas[3])
+                yield chunk(content="Checking.", finish_reason="tool_calls")
+
+            return chunks()
+
+    vlm = SimpleNamespace(
+        provider="openai",
+        model="anthropic/claude-sonnet-4-5",
+        max_tokens=None,
+        thinking=True,
+        _build_text_kwargs=lambda **_kwargs: {},
+        get_async_client=lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions())
+        ),
+    )
+    provider = VLMProviderAdapter(
+        vlm,
+        default_model=vlm.model,
+        langfuse_client=SimpleNamespace(enabled=False, _client=None),
+    )
+
+    events = [
+        event
+        async for event in provider.chat_stream(
+            messages=[{"role": "user", "content": "What is the weather?"}],
+        )
+    ]
+
+    response = events[-1].response
+    assert response is not None
+    assert response.reasoning_content == "check weather"
+    assert response.thinking_blocks == [
+        thinking_deltas[0],
+        {
+            "type": "thinking",
+            "thinking": "check weather",
+            "signature": "opaque-signature",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("configured_max_tokens", "expected_max_tokens"),
     [(None, None), (8192, 8192)],

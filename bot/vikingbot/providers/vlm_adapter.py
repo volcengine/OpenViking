@@ -71,6 +71,44 @@ _SERVER_TRACE_ID_HEADERS = (
 )
 
 
+def _merge_stream_thinking_blocks(
+    accumulated: list[dict[str, Any]],
+    delta_blocks: Any,
+    *,
+    continue_current: bool,
+) -> bool:
+    """Merge LiteLLM thinking and signature deltas into replayable blocks."""
+    if not isinstance(delta_blocks, list):
+        return False
+
+    received = False
+    for raw_block in delta_blocks:
+        if not isinstance(raw_block, Mapping):
+            continue
+        received = True
+        block = dict(raw_block)
+        block_type = block.get("type")
+        if (
+            block_type == "thinking"
+            and continue_current
+            and accumulated
+            and accumulated[-1].get("type") == "thinking"
+        ):
+            current = accumulated[-1]
+            for key in ("thinking", "signature"):
+                value = block.get(key)
+                if isinstance(value, str):
+                    current[key] = str(current.get(key) or "") + value
+            for key, value in block.items():
+                if key not in {"thinking", "signature"}:
+                    current[key] = value
+        else:
+            accumulated.append(block)
+        continue_current = block_type == "thinking"
+
+    return continue_current if received else False
+
+
 def _safe_exception_attribute(error: BaseException, name: str) -> Any:
     try:
         return getattr(error, name, None)
@@ -538,6 +576,8 @@ class VLMProviderAdapter(LLMProvider):
         )
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
+        thinking_blocks: list[dict[str, Any]] = []
+        thinking_block_open = False
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
         usage: dict[str, int] = {}
@@ -560,6 +600,13 @@ class VLMProviderAdapter(LLMProvider):
             if delta is None:
                 continue
 
+            delta_thinking_blocks = getattr(delta, "thinking_blocks", None)
+            thinking_block_open = _merge_stream_thinking_blocks(
+                thinking_blocks,
+                delta_thinking_blocks,
+                continue_current=thinking_block_open,
+            )
+
             reasoning_delta = stream_delta_value(delta, "reasoning_content")
             if reasoning_delta:
                 reasoning_parts.append(reasoning_delta)
@@ -570,14 +617,15 @@ class VLMProviderAdapter(LLMProvider):
                 content_parts.append(content_delta)
                 yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-            for fallback_index, delta_tool_call in enumerate(
-                getattr(delta, "tool_calls", None) or []
-            ):
+            delta_tool_calls = getattr(delta, "tool_calls", None) or []
+            for fallback_index, delta_tool_call in enumerate(delta_tool_calls):
                 merge_stream_tool_call_delta(
                     tool_calls,
                     delta_tool_call,
                     fallback_index=fallback_index,
                 )
+            if content_delta or delta_tool_calls:
+                thinking_block_open = False
 
         if usage:
             self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
@@ -590,6 +638,7 @@ class VLMProviderAdapter(LLMProvider):
                 raw_tool_calls=tool_calls,
                 finish_reason=finish_reason,
                 usage=usage,
+                thinking_blocks=thinking_blocks,
             ),
         )
 
@@ -737,6 +786,7 @@ class VLMProviderAdapter(LLMProvider):
             }
             | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
+            thinking_blocks=getattr(result, "thinking_blocks", None),
         )
 
     def get_default_model(self) -> str:

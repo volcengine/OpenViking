@@ -1985,6 +1985,7 @@ class AgentLoop:
                     response.content,
                     tool_call_dicts,
                     reasoning_content=response.reasoning_content,
+                    thinking_blocks=response.thinking_blocks,
                 )
 
                 # Stage 2: activate Skills first, then execute remaining tools.
@@ -2302,6 +2303,7 @@ class AgentLoop:
                         response.content,
                         [],
                         reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
                     )
                     active_turn.history_items.append(
                         _AssistantBoundary(
