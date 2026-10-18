@@ -31,6 +31,8 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op.base import StrPatch
+from openviking.session.memory.merge_op.patch_handler import unescape_markers
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
@@ -1399,8 +1401,10 @@ class MemoryUpdater:
             except ConflictError:
                 raise
             except (NotFoundError, FileNotFoundError):
-                # File doesn't exist yet, that's okay
-                pass
+                if source_content is not None and not is_uri_migration:
+                    raise ConflictError(
+                        f"Memory update target no longer exists: {uri}", resource=uri
+                    ) from None
             except Exception:
                 if is_uri_migration:
                     raise
@@ -1453,16 +1457,47 @@ class MemoryUpdater:
                     # Use merge_op to process field value
                     merge_op = MergeOpFactory.from_field(field)
                     try:
+                        previous_value = None
+                        if source_content is not None:
+                            previous_value = (
+                                source_content.plain_content()
+                                if field.name == "content"
+                                else source_content.extra_fields.get(field.name)
+                            )
+                        if (
+                            source_content is not None
+                            and previous_value != current_value
+                            and (
+                                isinstance(patch_value, StrPatch)
+                                or isinstance(patch_value, dict)
+                                and "blocks" in patch_value
+                            )
+                        ):
+                            # Do not fuzzy-apply an old patch over a concurrent writer's changes.
+                            blocks = (
+                                patch_value
+                                if isinstance(patch_value, StrPatch)
+                                else StrPatch.model_validate(patch_value)
+                            ).blocks
+                            remaining = current_value
+                            for block in blocks:
+                                search = unescape_markers(block.search)
+                                replacement = unescape_markers(block.replace)
+                                if search == replacement:
+                                    continue
+                                if (
+                                    not isinstance(remaining, str)
+                                    or not search
+                                    or remaining.count(search) != 1
+                                ):
+                                    raise ValueError("Stale patch must still match exactly once")
+                                remaining = remaining.replace(search, replacement, 1)
                         new_value = await merge_op.apply(current_value, patch_value)
                     except Exception as e:
-                        tracer.info(
-                            f"[memory_updater] Skipping field update after merge_op failure: uri={uri}, field={field.name}, error={e}"
-                        )
-                        if current_value is None:
-                            metadata.pop(field.name, None)
-                        else:
-                            metadata[field.name] = current_value
-                        continue
+                        raise ConflictError(
+                            f"Memory field update could not be applied: {uri} field={field.name}",
+                            resource=uri,
+                        ) from e
                     metadata[field.name] = new_value
 
             # Preserve system-managed metadata from the old file that is not

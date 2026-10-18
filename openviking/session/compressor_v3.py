@@ -1098,6 +1098,11 @@ class SessionCompressorV3:
                         rollout=rollout,
                         batch_finalizer=commit_experience_batch,
                     )
+                    if strict_extract_errors and exp_training_result.apply_result.errors:
+                        raise RuntimeError(
+                            "Experience write failed: "
+                            + "; ".join(exp_training_result.apply_result.errors)
+                        )
                 if case_uri:
                     await self._link_case_to_training_outputs(
                         analysis=analysis,
@@ -1121,6 +1126,10 @@ class SessionCompressorV3:
                         skill_submitted += 1
                         apply_result = getattr(skill_training_result, "apply_result", None)
                         if apply_result is not None:
+                            if strict_extract_errors and apply_result.errors:
+                                raise RuntimeError(
+                                    "Skill write failed: " + "; ".join(apply_result.errors)
+                                )
                             for uri in getattr(apply_result, "written_uris", []) or []:
                                 if uri:
                                     skill_uris.append(str(uri))
