@@ -47,6 +47,16 @@ def stream_chunk(
     return SimpleNamespace(choices=choices, usage=usage)
 
 
+def stream_usage(prompt_tokens: int, completion_tokens: int):
+    return SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=None,
+        completion_tokens_details=None,
+    )
+
+
 def attach_client(vlm, completions: FakeCompletions) -> None:
     vlm.get_async_client = lambda: SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
@@ -108,6 +118,66 @@ async def test_vlm_adapter_streams_openai_content_deltas():
     assert completions.calls[0]["stream"] is True
     assert completions.calls[0]["stream_options"] == {"include_usage": True}
     assert "thinking" not in completions.calls[0]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [
+                stream_chunk("hel", usage=stream_usage(10, 1)),
+                stream_chunk("lo", finish_reason="stop", usage=stream_usage(0, 3)),
+            ],
+            id="incremental",
+        ),
+        pytest.param(
+            [
+                stream_chunk("hel", usage=stream_usage(10, 1)),
+                stream_chunk("lo", finish_reason="stop", usage=stream_usage(10, 4)),
+            ],
+            id="cumulative",
+        ),
+        pytest.param(
+            [
+                stream_chunk("hel", usage=stream_usage(10, 1)),
+                stream_chunk("lo", finish_reason="stop", usage=stream_usage(0, 3)),
+                stream_chunk(usage=stream_usage(10, 4)),
+            ],
+            id="incremental-with-final-snapshot",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vlm_adapter_reconciles_usage_bearing_content_chunks(chunks):
+    completions = FakeCompletions(chunks=chunks)
+    vlm = OpenAIVLM(
+        {
+            "provider": "openai",
+            "model": "gpt-test",
+            "api_key": "test-key",
+        }
+    )
+    attach_client(vlm, completions)
+    provider = make_adapter(vlm, "gpt-test")
+
+    events = [
+        event
+        async for event in provider.chat_stream(
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    ]
+
+    expected = {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
+    assert events[-1].response is not None
+    assert events[-1].response.content == "hello"
+    assert events[-1].response.usage == expected
+    tracked = vlm.get_token_usage()["total_usage"]
+    assert {key: tracked[key] for key in expected} == expected
+    assert tracked["call_count"] == 1
 
 
 @pytest.mark.asyncio
