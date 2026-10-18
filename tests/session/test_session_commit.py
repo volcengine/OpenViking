@@ -9,10 +9,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from openviking.message import TextPart
+from openviking.scheduling.expiry import (
+    CallbackRequest,
+    CallbackStatus,
+    ExpiryScheduler,
+    ItemIdentity,
+)
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.utils.time_utils import parse_iso_datetime
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -67,53 +74,61 @@ class TestCommit:
             if part["type"] == "text"
         }
 
-    async def test_commit_extracts_memories(
+    async def test_idle_callback_commits_current_backlog_without_activity_recheck(
         self,
         wm_session_with_messages: Session,
         service: OpenVikingService,
+        monkeypatch,
     ):
-        """Test commit kicks off background memory extraction"""
-
-        async def extract_long_term_memories(**kwargs):
-            archive_uri = kwargs["archive_uri"]
-            await wm_session_with_messages._viking_fs.write_file(
-                uri=f"{archive_uri}/memory_diff.json",
-                content=json.dumps({"archive_uri": archive_uri}),
-                ctx=wm_session_with_messages.ctx,
-            )
-            return []
-
-        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
-            side_effect=extract_long_term_memories
+        """An expiry callback archives the latest lock-protected snapshot."""
+        session = wm_session_with_messages
+        await session.update_config(
+            auto_commit_policy={"idle_timeout_seconds": 300, "keep_recent_count": 2},
+            update_auto_commit_policy=True,
         )
-        if hasattr(wm_session_with_messages._session_compressor, "extract_execution_memories"):
-            wm_session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
-                return_value={"contexts": [], "session_skills": []}
-            )
-
-        result = await wm_session_with_messages.commit_async()
-        task_id = result["task_id"]
-
-        # Wait for background memory extraction to complete
-        task_result = await _wait_for_task(task_id)
-        assert task_result["status"] == "completed"
-        assert (
-            task_result["result"]["memory_diff_uri"]
-            == f"{task_result['result']['archive_uri']}/memory_diff.json"
+        session.meta.keep_recent_count = 2
+        await session._save_meta()
+        scheduler = MagicMock(spec=ExpiryScheduler)
+        service.sessions.configure_expiry(scheduler)
+        handler = scheduler.register_handler.call_args.args[1]
+        session = await service.sessions.get(session.session_id, session.ctx)
+        await session.add_message_async("user", [TextPart("latest activity")])
+        report = scheduler.report.await_args.args[0]
+        last_message_at = parse_iso_datetime(session.meta.last_message_at)
+        assert report.identity == ItemIdentity(
+            "session", session.ctx.account_id, session.ctx.user.user_id, session.session_id
         )
-        memory_diff = json.loads(
-            await wm_session_with_messages._viking_fs.read_file(
-                task_result["result"]["memory_diff_uri"],
-                ctx=wm_session_with_messages.ctx,
-            )
-        )
-        assert memory_diff["archive_uri"] == task_result["result"]["archive_uri"]
-        assert "memories_extracted" in task_result["result"]
-        memory_counts = task_result["result"]["memories_extracted"]
-        assert isinstance(memory_counts, dict)
+        assert report.due_at_ms == int(last_message_at.timestamp() * 1000) + 300_000
 
-        # The extraction stub emits no semantic or embedding work. Its task
-        # completion above is the relevant processing boundary for this test.
+        original_commit = Session.commit_async
+        commit_results = []
+
+        async def append_before_commit(loaded_session, **kwargs):
+            scheduler.report.side_effect = RuntimeError("expiry unavailable")
+            await loaded_session.add_message_async("user", [TextPart("append after idle check")])
+            result = await original_commit(loaded_session, **kwargs)
+            commit_results.append(result)
+            return result
+
+        monkeypatch.setattr(Session, "commit_async", append_before_commit)
+        callback = await handler.handle(CallbackRequest(report.identity))
+        assert callback.status is CallbackStatus.COMPLETED
+        assert callback.reason == "accepted"
+        assert scheduler.report.await_count == 2
+        result = commit_results[0]
+        assert result["status"] == "accepted"
+        archive_content = await session._viking_fs.read_file(
+            f"{result['archive_uri']}/messages.jsonl", ctx=session.ctx
+        )
+        archived_messages = [json.loads(line) for line in archive_content.split("\n") if line]
+        assert len(archived_messages) == 6
+        assert archived_messages[-1]["parts"][0]["text"] == "append after idle check"
+        persisted = await service.sessions.get(session.session_id, session.ctx)
+        assert persisted.messages == []
+        assert persisted.meta.keep_recent_count == 2
+        assert persisted.meta.last_idle_commit_accepted_at
+        phase1 = await persisted._read_phase1_meta(result["archive_uri"])
+        assert phase1["status"] == "ready"
 
     async def test_phase2_splits_with_the_committed_auto_commit_policy(
         self,

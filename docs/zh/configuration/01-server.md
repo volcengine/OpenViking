@@ -312,7 +312,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `with_bot` | boolean | `false` | 是否启用 VikingBot API 代理 |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI 地址 |
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
-| `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
+| `upload_signed_ttl_seconds` | integer | `600` | 签名上传、下载 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
 
 ### 文件加密与 API Key 哈希

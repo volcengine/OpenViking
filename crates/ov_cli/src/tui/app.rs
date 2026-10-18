@@ -624,7 +624,7 @@ impl App {
             }
         };
 
-        match client.rm(&selected_uri, is_dir, false, None).await {
+        match client.rm(&selected_uri, is_dir, false).await {
             Ok(_) => {
                 self.set_status_message(format!("Deleted: {}", selected_uri));
 

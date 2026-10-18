@@ -218,7 +218,7 @@ def _merge_vlm_model_config(
 
     agents = bot_data.get("agents", {})
     if vlm_data and "timeout" not in agents:
-        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 600.0
 
     if not inherit_model:
         return
@@ -381,10 +381,11 @@ def _ov_server_is_server_managed(ov_server: Any) -> bool:
     return bool(getattr(ov_server, "_server_managed", False))
 
 
-def _ov_server_trusted_api_key(ov_server: Any) -> str:
-    if _normalize_api_key_type(getattr(ov_server, "api_key_type", "")) == "root":
-        return str(getattr(ov_server, "api_key", "") or "").strip()
-    return ""
+def _require_trusted_api_key(ov_server: Any) -> str:
+    api_key = str(getattr(ov_server, "api_key", "") or "").strip()
+    if not api_key or _normalize_api_key_type(getattr(ov_server, "api_key_type", "")) != "root":
+        _raise_trusted_mode_requires_root_key(ov_server)
+    return api_key
 
 
 @dataclass
@@ -685,17 +686,14 @@ def _validate_api_key_mode_key(ov_server: Any, server_url: str) -> None:
 
 
 def _validate_trusted_mode_key(ov_server: Any, server_url: str) -> None:
-    root_api_key = _ov_server_trusted_api_key(ov_server)
-    if not root_api_key:
-        _raise_trusted_mode_requires_root_key(ov_server)
+    root_api_key = _require_trusted_api_key(ov_server)
     account_id = str(getattr(ov_server, "account_id", "") or "default").strip()
     user_id = str(getattr(ov_server, "admin_user_id", "") or "default").strip()
     headers = {
+        "X-API-Key": root_api_key,
         "X-OpenViking-Account": account_id,
         "X-OpenViking-User": user_id,
     }
-    if root_api_key:
-        headers["X-API-Key"] = root_api_key
 
     result = _request_openviking_json(server_url, "/api/v1/system/status", headers=headers)
     if result.ok:
@@ -726,6 +724,8 @@ def validate_openviking_auth(config: Config) -> None:
         return
 
     auth_mode = _ov_server_auth_mode(ov_server)
+    if auth_mode == "trusted":
+        _require_trusted_api_key(ov_server)
 
     # Build headers with API key if configured
     # Public gateways like Volcengine VikingDB require X-API-Key on every request

@@ -9,6 +9,10 @@ worker binds the committing account/user (so tokens are not attributed to
 """
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from openviking.observability.context import get_root_observability_context
 from openviking.server.identity import RequestContext, Role
@@ -37,15 +41,6 @@ class _FakeSession:
         return self._processed
 
 
-class _FakeSessionService:
-    def __init__(self, captured: dict, processed: bool = True) -> None:
-        self._captured = captured
-        self._processed = processed
-
-    def session(self, ctx, session_id, session_uri=None):
-        return _FakeSession(self._captured, self._processed)
-
-
 class _MemoryVikingFS:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
@@ -55,14 +50,6 @@ class _MemoryVikingFS:
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
-
-
-class _SingleSessionService:
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def session(self, ctx, session_id, session_uri=None):
-        return self._session
 
 
 def _make_msg() -> SessionCommitMsg:
@@ -75,18 +62,26 @@ def _make_msg() -> SessionCommitMsg:
     )
 
 
-async def test_process_binds_committing_identity_to_root_context():
+async def test_process_binds_committing_identity_to_root_context(monkeypatch):
     captured: dict = {}
-    processor = SessionCommitProcessor(
-        _FakeSessionService(captured),
+    session = _FakeSession(captured)
+    processor = SessionCommitProcessor(SimpleNamespace(session=Mock(return_value=session)))
+    tracker = SimpleNamespace(create=AsyncMock(side_effect=OSError("store unavailable")))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.session_commit_processor.get_task_tracker", lambda: tracker
     )
-    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-    result = await processor._process(_make_msg(), ctx)
-
-    assert result is True
-    assert captured["account_id"] == "acme"
-    assert captured["user_id"] == "alice"
+    message = {"data": _make_msg().to_dict()}
+    with pytest.raises(OSError, match="store unavailable"):
+        await processor.on_dequeue(message)
+    tracker.create.side_effect = None
+    session.load = AsyncMock(side_effect=ValueError("invalid session message"))
+    result = await processor.on_dequeue(message)
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == "invalid session message"
+    session.load.side_effect = None
+    assert (await processor.on_dequeue(message)).outcome is ProcessOutcome.SUCCESS
+    assert captured == {"account_id": "acme", "user_id": "alice"}
+    assert get_root_observability_context() is None
 
 
 async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypatch):
@@ -97,7 +92,7 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
             queued.append((queue_name, data))
 
     processor = SessionCommitProcessor(
-        _FakeSessionService({}, processed=False),
+        SimpleNamespace(session=Mock(return_value=_FakeSession({}, processed=False))),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
@@ -121,15 +116,13 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_returning()
         session_uri=msg.session_uri,
     )
     processor = SessionCommitProcessor(
-        _SingleSessionService(session),
+        SimpleNamespace(session=Mock(return_value=session)),
     )
     marker_uri = f"{msg.archive_uri}/.failed.json"
 
     result = await processor.on_cancelled({"data": json.dumps(msg.to_dict())})
 
     assert result.outcome is ProcessOutcome.CANCELLED
-    assert result.value is None
-    assert result.error is None
     marker = json.loads(viking_fs.files[marker_uri])
     assert marker["stage"] == "cancelled"
     assert marker["error"] == "session commit cancelled"

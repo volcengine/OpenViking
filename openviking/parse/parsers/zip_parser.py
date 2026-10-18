@@ -17,6 +17,7 @@ from typing import List, Optional, Union
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.zip_safe import safe_extract_zip
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,20 +63,16 @@ class ZipParser(BaseParser):
         if not path.exists():
             raise FileNotFoundError(f"ZIP file not found: {path}")
 
-        # Check if it's a valid ZIP file (non-blocking)
-        def _is_zipfile() -> bool:
-            return zipfile.is_zipfile(path)
-
-        if not await asyncio.to_thread(_is_zipfile):
-            raise ValueError(f"Not a valid ZIP file: {path}")
-
         # Extract ZIP to temporary directory (non-blocking)
         temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
         try:
             # Extract zip (non-blocking)
             def _extract_zip():
-                with zipfile.ZipFile(path, "r") as zipf:
-                    safe_extract_zip(zipf, temp_dir)
+                try:
+                    with zipfile.ZipFile(path, "r") as zipf:
+                        safe_extract_zip(zipf, temp_dir)
+                except zipfile.BadZipFile as exc:
+                    raise InvalidArgumentError(f"Not a valid ZIP file: {path.name}") from exc
 
             await asyncio.to_thread(_extract_zip)
 

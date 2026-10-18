@@ -106,7 +106,7 @@ async def assemble_context(
         dedup_turns=params.dedup_turns,
     )
     cooled = ledger.cooled_uris() if ledger else set()
-    excluded = normalize_exclude_uris(params.exclude_uris) | cooled
+    excluded = normalize_exclude_uris(params.exclude_uris)
 
     # The fan-out below embeds each planned query once per (query, target)
     # find, so wrap it in the request-scoped query embedding cache: sibling
@@ -126,6 +126,7 @@ async def assemble_context(
             peer_scope=params.peer_scope,
             penalties=penalties,
             excluded=excluded,
+            cooled=cooled,
         )
 
     # Read only the candidates whose planned tier actually needs a body: with

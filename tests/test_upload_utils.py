@@ -405,6 +405,21 @@ class TestSanitizeRelPath:
 
 class TestUploadDirectoryEdgeCases:
     @pytest.mark.asyncio
+    async def test_unsafe_path_is_skipped_without_warning_result(self, tmp_path: Path) -> None:
+        (tmp_path / "ok.py").write_text("print(1)", encoding="utf-8")
+        (tmp_path / "%2F.txt").write_text("fixture", encoding="utf-8")
+        store = _RecordingStore()
+
+        count, warnings = await upload_directory(
+            tmp_path, "repository", store=store, artifact_ref=object()
+        )
+
+        assert count == 1
+        assert warnings == []
+        assert "repository/ok.py" in store.writes
+        assert all("%2F.txt" not in path for path in store.writes)
+
+    @pytest.mark.asyncio
     async def test_writes_content_md5_manifest(self, tmp_dir: Path) -> None:
         import hashlib
         import json

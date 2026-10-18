@@ -12,9 +12,11 @@ const workspace = {
       users: 'Users & Permissions',
     },
     header: {
+      backToConfig: 'Back to workspace setup',
+      chooseWorkspace: 'Choose workspace',
       currentUser: {
-        account: 'Account',
-        accountSummary: 'Account · {{account}}',
+        account: 'Space',
+        accountSummary: 'Space · {{account}}',
         keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
@@ -92,6 +94,7 @@ const workspace = {
     loading: 'Loading monitoring data...',
     loadFailed: 'Could not load monitoring data',
     health: {
+      unknown: 'No data',
       healthy: 'Healthy',
       unhealthy: 'Unhealthy',
     },
@@ -349,6 +352,34 @@ const workspace = {
     title: 'Skills',
     description:
       'View Agent skills available to the current user and workspace.',
+    add: {
+      title: 'Add Skill',
+      description:
+        'Import a SKILL.md for agents to find and read. Execution is controlled by the agent using it.',
+      scope: 'Add to',
+      scopeDescription: {
+        user: 'Available only to the current user',
+        agent: 'Shared with this account; requires permission',
+      },
+      content: 'SKILL.md content',
+      placeholder:
+        '---\nname: my-skill\ndescription: What this skill does\n---\n\n# My skill',
+      contentHint:
+        'Paste the complete content or select a local SKILL.md file. This imports one file only.',
+      upload: 'Choose SKILL.md',
+      removeFile: 'Remove file {{fileName}}',
+      warnings: 'Validation notes',
+      failed: 'Could not add Skill',
+      processingFailed: 'Background processing failed',
+      processing: 'Submitted and processing in the background',
+      completed: 'Skill added and processing completed',
+      taskId: 'Task ID',
+      close: 'Close',
+      another: 'Add another',
+      validating: 'Validating…',
+      adding: 'Submitting…',
+      submit: 'Add Skill',
+    },
     refresh: 'Refresh',
     loading: 'Loading skills...',
     empty: 'No skills available',
@@ -396,7 +427,7 @@ const workspace = {
       totalDuration: 'Total Time',
       processingNotStarted: 'Not started',
       processingDurationHelp:
-        'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+        'Processing time is wall-clock time after at least one Work is claimed by a worker, including model calls, I/O, downstream waits, and backoff; overlapping workers count once. Waiting time is total time minus processing time, mainly queue and scheduling gaps.',
       processingDuration: 'Processing Time',
       waitingDuration: 'Waiting Time',
       timingUnavailable: 'Not recorded',
@@ -654,6 +685,20 @@ const workspace = {
   },
   accountSwitcher: {
     create: 'Create account',
+    connections: {
+      add: 'Add connection',
+      savedOnly: 'Connections saved in Connection Settings',
+      switch: 'Switch connection',
+      title: 'Saved connections',
+    },
+    serverAccountsTitle: 'Server accounts',
+    provider: {
+      hosted: 'Volcengine hosted',
+      opensource: 'Open source',
+    },
+    hosted: {
+      currentWorkspace: 'Current space',
+    },
     dialog: {
       accountLabel: 'Account',
       accountPlaceholder: 'team-account',
@@ -782,6 +827,22 @@ const workspace = {
     },
   },
   settings: {
+    gatewayConnection: {
+      title: 'Sign in to OpenViking Gateway',
+      openvikingUrl: 'This gateway uses OpenViking at {{url}}',
+      apiKey: 'OpenViking API key',
+      keyHint: 'A user, account admin or root API key all work.',
+      wrongKey:
+        "Gateway keys (ovgw_) and gateway management keys (ovgm_) can't be used to sign in. Enter an OpenViking API key.",
+      invalidKey:
+        'OpenViking rejected this API key. Check the key and try again.',
+      unreachable:
+        "The gateway can't reach OpenViking ({{url}}). Make sure OpenViking is running and the gateway's openviking_url (in gateway.conf or OPENVIKING_GATEWAY_OPENVIKING_URL) points to it, then try again.",
+      gatewayUnreachable:
+        "Can't reach this gateway. Make sure it is running, then try again.",
+      connect: 'Sign in',
+      connecting: 'Signing in…',
+    },
     pageTitle: 'Settings',
     tabs: { connection: 'Connection', configuration: 'Server configuration' },
     models: {
@@ -1174,9 +1235,9 @@ const workspace = {
         learnMore: 'Learn how to get an API Key',
         trusted: {
           primary:
-            'This trusted server enforces Root Key validation. The browser needs the same Root API Key for management and tenant data requests.',
+            "Trusted mode requires a Root API Key, including on localhost. Enter the server's root key in the “Root or Admin API Key” field above.",
           secondary:
-            'Request the Root Key from the deployment admin; it is stored at server.root_api_key in the server-side ov.conf. Trusted-mode data identity comes from Account/User assertions and does not need a User API Key.',
+            'Request the key from the deployment admin. If the server has no key yet, set a non-empty server.root_api_key in its ov.conf, restart the server, and enter the same value here. No separate User API Key is needed.',
           title: 'This trusted server requires a Root API Key',
         },
       },
@@ -1188,6 +1249,10 @@ const workspace = {
         primary: 'This server is configured with {{mode}} authentication.',
         title: 'Unsupported authentication mode',
       },
+      trustedRootHint:
+        'Use server.root_api_key from the server-side ov.conf for both management and data access in trusted mode.',
+      trustedUserHint:
+        'Trusted mode needs no separate User API Key; Account and User identify whose data to access.',
       userHint: 'Used by the Filesystem and tenant data APIs.',
     },
     connectionPage: {
@@ -1260,6 +1325,8 @@ const workspace = {
         dataKeyRequired: 'A user or account-admin API key is required',
         rootAvailable: 'Root admin control available',
         tenantDataAvailable: 'Tenant data access available',
+        trustedKeyRequired:
+          'A Root API Key is required. Use server.root_api_key from the server-side ov.conf',
         trustedIdentityRequired:
           'Trusted mode data access requires account and user',
       },

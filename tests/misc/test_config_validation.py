@@ -191,8 +191,11 @@ def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
 
 
 def test_top_level_cache_provider_params_build_redis_binding_config():
+    assert OpenVikingConfig.from_dict({}).service_name == "openviking-server"
+
     config = OpenVikingConfig.from_dict(
         {
+            "service_name": "tenant-a",
             "cache": {
                 "provider": "redis",
                 "params": {
@@ -207,7 +210,7 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
             },
             "storage": {
                 "workspace": "/tmp/ov-test",
-                "agfs": {"cachefs": {"backend": "cache", "namespace": "tenant-a"}},
+                "agfs": {"cachefs": {"backend": "cache"}},
             },
         }
     )
@@ -215,14 +218,15 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert config.cache.provider == "redis"
     assert config.cache.params["mode"] == "sentinel"
+    assert binding["service_name"] == "tenant-a"
     assert binding["cache"]["enabled"] is True
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["cache"]["provider"] == "redis"
-    assert binding["cache"]["namespace"] == "tenant-a"
     assert binding["cache"]["redis"]["mode"] == "sentinel"
     assert binding["cache"]["redis"]["master_name"] == "mymaster"
 
@@ -230,6 +234,7 @@ def test_top_level_cache_provider_params_build_redis_binding_config():
 def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
     config = OpenVikingConfig.model_validate(
         {
+            "service_name": "queue-runtime",
             "cache": {
                 "provider": "redis",
                 "params": {"endpoints": ["redis://redis:6379"]},
@@ -238,10 +243,7 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
                 "workspace": "/tmp/ov-test",
                 "agfs": {
                     "cachefs": {"backend": "local"},
-                    "queuefs": {
-                        "backend": "cache",
-                        "cache_key_prefix": "queue-runtime",
-                    },
+                    "queuefs": {"backend": "cache"},
                 },
             },
         }
@@ -250,11 +252,19 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["cache"]["redis"]["endpoints"] == ["redis://redis:6379"]
+
+    plugins = _generate_plugin_config(
+        config.storage.agfs,
+        Path("/tmp/ov-test"),
+        service_name=config.service_name,
+    )
+    assert plugins["queuefs"]["config"]["service_name"] == "queue-runtime"
 
 
 def test_top_level_cache_params_ignore_removed_replica_read_config():
@@ -440,59 +450,62 @@ def test_generate_plugin_config_forwards_queuefs_runtime_options():
     assert plugins["queuefs"]["config"]["busy_timeout_ms"] == 1234
 
 
-def test_agfs_redirects_require_backups():
-    """Single-backend mode must reject redirect policies during config validation."""
-    with pytest.raises(ValueError, match="redirects requires backups"):
-        AGFSConfig(
-            path="/tmp/ov-test",
-            backend="local",
-            redirects=[
-                {
-                    "type": "FileExtensionPolicy",
-                    "extensions": ["(md)"],
-                    "target": ["s3-backup"],
-                }
-            ],
-        )
-
-
-def test_generate_plugin_config_rejects_redirects_without_backups(tmp_path):
-    """Runtime plugin config generation must also reject redirect-only configs."""
-    config = type(
-        "RedirectOnlyConfig",
-        (),
+def test_agfs_redirects_without_backups_are_parse_only():
+    """Legacy redirects must remain constructible without enabling multi-write."""
+    redirects = [
         {
-            "backend": "local",
-            "s3": None,
-            "backups": None,
-            "redirects": [
-                type(
-                    "RedirectPolicy",
-                    (),
-                    {
-                        "type": "FileExtensionPolicy",
-                        "extensions": ["(md)"],
-                        "target": ["s3-backup"],
-                    },
-                )()
-            ],
-            "queuefs": type(
-                "QueueConfig",
-                (),
-                {
-                    "mode": "shared",
-                    "backend": "sqlite",
-                    "db_path": None,
-                    "recover_stale_sec": 0,
-                    "busy_timeout_ms": 5000,
-                },
-            )(),
-            "queue_db_path": None,
-        },
-    )()
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
 
-    with pytest.raises(ValueError, match="redirects requires backups"):
-        _generate_plugin_config(config, tmp_path)
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        redirects=redirects,
+    )
+
+    assert config.redirects == redirects
+
+
+def test_generate_plugin_config_ignores_redirects_without_backups(tmp_path):
+    """Legacy redirects must not alter a single-backend mount config."""
+    redirects = [
+        {
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
+    config = AGFSConfig(path=str(tmp_path), backend="local", redirects=redirects)
+    plain_config = AGFSConfig(path=str(tmp_path), backend="local")
+
+    mount_config = _generate_plugin_config(config, tmp_path)["localfs"]["config"]
+    plain_mount_config = _generate_plugin_config(plain_config, tmp_path)["localfs"]["config"]
+
+    assert mount_config == plain_mount_config
+
+
+def test_generate_plugin_config_ignores_redirects_with_backups(tmp_path):
+    """Legacy redirects must remain accepted without reaching Rust."""
+    redirects = [
+        {
+            "type": "FileExtensionPolicy",
+            "extensions": ["(md)"],
+            "target": ["missing-backup"],
+        }
+    ]
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={"items": [{"name": "mem-backup", "backend": "memory"}]},
+        redirects=redirects,
+    )
+
+    mount_config = _generate_plugin_config(config, tmp_path)["localfs"]["config"]
+
+    assert "primary_redirects" not in mount_config
 
 
 def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
@@ -517,20 +530,85 @@ def test_generate_plugin_config_passes_multiwrite_encryption_flag(tmp_path):
     assert mount_config["primary_encryption_enabled"] is True
 
 
-def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
-    """Plugin config generation should normalize backup params while preserving top-level multi-write fields."""
+def test_generate_plugin_config_preserves_v2_backups_without_sync_type(tmp_path):
+    """V2 backup fields must pass through without injecting a V1 sync mode."""
+    config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={
+            "initial_partitions": 32,
+            "checkpoint_interval_secs": 120,
+            "provider": "filesystem",
+            "items": [{"name": "mem-backup", "backend": "memory"}],
+        },
+    )
+
+    backups = _generate_plugin_config(config, tmp_path)["localfs"]["config"]["backups"]
+
+    assert backups["initial_partitions"] == 32
+    assert backups["checkpoint_interval_secs"] == 120
+    assert backups["provider"] == "filesystem"
+    assert "sync_type" not in backups
+
+
+@pytest.mark.parametrize("provider", ["filesystem", "cache"])
+def test_agfs_config_accepts_supported_v2_backup_providers(provider):
+    """AGFS config must accept each specified metadata provider."""
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        backups={"provider": provider, "items": []},
+    )
+
+    assert config.backups["provider"] == provider
+
+
+@pytest.mark.parametrize(
+    ("backups", "expected"),
+    [
+        ({"initial_partitions": 0, "items": []}, "initial_partitions"),
+        ({"initial_partitions": 1025, "items": []}, "initial_partitions"),
+        ({"checkpoint_interval_secs": 59, "items": []}, "checkpoint_interval_secs"),
+        ({"provider": "memory", "items": []}, "provider"),
+        ({"provider": "redis", "items": []}, "provider"),
+        ({"items": [{"name": " ", "backend": "memory"}]}, "name"),
+        ({"items": [{"name": "primary", "backend": "memory"}]}, "primary"),
+        (
+            {
+                "items": [
+                    {"name": "backup-a", "backend": "memory"},
+                    {"name": "backup-a", "backend": "memory"},
+                ]
+            },
+            "unique",
+        ),
+    ],
+)
+def test_agfs_config_rejects_invalid_v2_backups(backups, expected):
+    """AGFS config must reject invalid V2 backup fields before Rust startup."""
+    with pytest.raises(ValueError, match=expected):
+        AGFSConfig(path="/tmp/ov-test", backend="local", backups=backups)
+
+
+def test_generate_plugin_config_strips_legacy_multiwrite_fields(tmp_path):
+    """Plugin config generation should strip legacy fields before calling Rust."""
     explicit_backup_dir = tmp_path / "backup-local-no-mkdir"
     config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
         backups={
-            "retry_interval_ms": 1234,
-            "retry_backoff_base_ms": 55,
+            "sync_type": "async",
+            "write_ack_count": 1,
+            "write_ack_timeout_ms": 1000,
+            "write_concurrency": 2,
             "items": [
                 {
                     "name": "local-explicit",
                     "backend": "local",
-                    "local": {"workspace": str(explicit_backup_dir)},
+                    "params": {"workspace": str(explicit_backup_dir)},
+                    "timeout": 10,
+                    "operations": [{"operation": "write", "priority": 1}],
+                    "excludes": [{"type": "FileExtensionPolicy", "extensions": [".tmp"]}],
                 },
                 {
                     "name": "local-default",
@@ -558,12 +636,17 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
     plugins = _generate_plugin_config(config, tmp_path)
 
     mount_backups = plugins["localfs"]["config"]["backups"]
-    assert mount_backups["retry_interval_ms"] == 1234
-    assert mount_backups["retry_backoff_base_ms"] == 55
+    assert {
+        "sync_type",
+        "write_ack_count",
+        "write_ack_timeout_ms",
+        "write_concurrency",
+    }.isdisjoint(mount_backups)
 
     explicit_local, default_local, s3_backup = mount_backups["items"]
     assert explicit_local["backend"] == "localfs"
     assert explicit_local["params"]["local_dir"] == str(explicit_backup_dir)
+    assert {"timeout", "operations", "excludes"}.isdisjoint(explicit_local)
     assert not explicit_backup_dir.exists()
 
     assert default_local["backend"] == "localfs"
@@ -663,7 +746,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
-        cachefs={"backend": "cache", "namespace": "runtime-cache"},
+        cachefs={"backend": "cache"},
     )
 
     config = RagfsBindingConfig(
@@ -671,6 +754,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
         cache=CacheConfig(provider="redis", params={}),
         root_key=b"\x01" * 32,
         provider_type=7,
+        service_name="runtime-cache",
     )
 
     binding = config.to_binding_dict()
@@ -681,7 +765,7 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
     }
     assert binding["cache"]["enabled"] is True
     assert binding["cache"]["runtime_enabled"] is True
-    assert binding["cache"]["namespace"] == "runtime-cache"
+    assert binding["service_name"] == "runtime-cache"
     assert binding["pathlock"] == {
         "provider": "filesystem",
         "lock_expire_secs": 30.0,
@@ -693,41 +777,59 @@ def test_ragfs_binding_enables_runtime_for_queuefs_cache_backend(tmp_path):
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
-        queuefs={"backend": "cache", "cache_key_prefix": "queue-runtime"},
+        queuefs={"backend": "cache"},
     )
 
     binding = RagfsBindingConfig(
         agfs=agfs_config,
         cache=CacheConfig(provider="redis", params={}),
+        service_name="queue-runtime",
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
 
 
+def test_ragfs_binding_enables_runtime_for_multiwrite_cache_provider(tmp_path):
+    """Multi-write cache metadata should enable Runtime without CacheFS."""
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        backups={"provider": "cache", "items": []},
+    )
+
+    binding = RagfsBindingConfig(
+        agfs=agfs_config,
+        cache=CacheConfig(provider="redis", params={}),
+        service_name="mw-runtime",
+    ).to_binding_dict()
+
+    assert binding["service_name"] == "mw-runtime"
+    assert binding["cache"]["enabled"] is False
+    assert binding["cache"]["runtime_enabled"] is True
+
+    backups = _generate_plugin_config(
+        agfs_config,
+        tmp_path,
+        service_name="mw-runtime",
+    )["localfs"]["config"]["backups"]
+    assert backups["service_name"] == "mw-runtime"
+
+
 def test_agfs_pathlock_config_validates_provider_and_expiry(tmp_path):
-    """PathLock config validates Redis namespace and expiry boundaries."""
+    """PathLock config validates provider and expiry boundaries."""
     config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
         pathlock={
             "provider": "cache",
-            "namespace": "prod-a",
             "lock_expire_secs": 60.0,
         },
     )
 
     assert config.pathlock.provider == "cache"
-    assert config.pathlock.namespace == "prod-a"
     assert config.pathlock.lock_expire_secs == 60.0
 
-    with pytest.raises(ValueError, match="namespace"):
-        AGFSConfig(path=str(tmp_path), pathlock={"provider": "cache"})
-    with pytest.raises(ValueError, match="namespace"):
-        AGFSConfig(
-            path=str(tmp_path),
-            pathlock={"provider": "cache", "namespace": "bad{name}"},
-        )
     with pytest.raises(ValueError, match="lock_expire_secs"):
         AGFSConfig(path=str(tmp_path), pathlock={"lock_expire_secs": 0.0})
 
@@ -742,36 +844,33 @@ def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
             },
             "storage": {
                 "workspace": str(tmp_path),
-                "agfs": {
-                    "pathlock": {
-                        "provider": "cache",
-                        "namespace": "prod-a",
-                    }
-                },
+                "agfs": {"pathlock": {"provider": "cache"}},
             },
+            "service_name": "prod-a",
         }
     )
 
     binding = RagfsBindingConfig(
         agfs=config.storage.agfs,
         cache=config.cache,
+        service_name=config.service_name,
     ).to_binding_dict()
 
     assert binding["cache"]["enabled"] is False
     assert binding["cache"]["runtime_enabled"] is True
     assert binding["pathlock"] == {
         "provider": "cache",
-        "namespace": "prod-a",
         "lock_expire_secs": 30.0,
         "lock_timeout_secs": 0.0,
     }
+    assert binding["service_name"] == "prod-a"
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
     agfs_config = AGFSConfig(
         path=str(tmp_path),
         backend="memory",
-        cachefs={"backend": "cache", "namespace": "runtime-cache"},
+        cachefs={"backend": "cache"},
     )
 
     def _fake_get_binding_client():
@@ -782,12 +881,13 @@ def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_p
     config = RagfsBindingConfig(
         agfs=agfs_config,
         cache=CacheConfig(provider="redis", params={}),
+        service_name="runtime-cache",
     )
     client = create_agfs_client(config)
 
     assert isinstance(client, _FakeBindingClient)
+    assert client.config["service_name"] == "runtime-cache"
     assert client.config["cache"]["enabled"] is True
-    assert client.config["cache"]["namespace"] == "runtime-cache"
     assert any(call[0] == "memfs" for call in client.mount_calls)
 
 

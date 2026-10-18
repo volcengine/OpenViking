@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import re
+import sys
 import time
 
 import pytest
@@ -13,6 +14,10 @@ from openviking_gateway.client import VikingError
 from openviking_gateway.kernel import token_estimate
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import (
+    AUXILIARY_PATTERNS,
+    LOWERED_AUXILIARY,
+    REI_CASE_EXCEPTIONS,
+    auxiliary,
     classify,
     client_openviking_tools,
     normalize,
@@ -301,6 +306,25 @@ async def test_recall_uses_server_rendered_and_uri_only_entries(
     assert uri in viking.recalls[-1][2]
 
 
+async def test_served_directory_is_echoed_as_its_level_files(setup_kernel, credential, policy):
+    """exclude_uris matches a subtree, so a served directory is echoed as its own node only."""
+    kernel, _, viking, _ = setup_kernel
+    folder = "viking://user/alice/memories/preferences"
+    viking.entries[:] = [{"uri": f"{folder}/kestrel-theme.md"}, {"uri": folder}]
+    body = {"messages": [{"role": "user", "content": "Which theme do I like?"}]}
+    await prepare(kernel, body, credential, policy)
+    body["messages"] += [
+        {"role": "assistant", "content": "Kestrel"},
+        {"role": "user", "content": "And my region?"},
+    ]
+    await prepare(kernel, body, credential, policy)
+    assert viking.recalls[-1][2] == [
+        f"{folder}/kestrel-theme.md",
+        f"{folder}/.abstract.md",
+        f"{folder}/.overview.md",
+    ]
+
+
 async def test_empty_server_rendered_does_not_fall_back_to_entries(
     setup_kernel, credential, policy
 ):
@@ -561,6 +585,45 @@ def test_classification_and_plugin_namespaces():
     assert client_openviking_tools(namespaces, OV_NAMES)
 
 
+def test_lowercase_agrees_with_case_insensitive_matching():
+    assert LOWERED_AUXILIARY
+    ascii_any_case = re.compile(r"[\x00-\x7f]", re.I)
+    differing = set()
+    for code in range(sys.maxunicode + 1):
+        char = chr(code)
+        lower = char.lower()
+        if len(lower) != 1:
+            differing.add(char)
+        elif lower.isascii() or ascii_any_case.fullmatch(char):
+            for c in map(chr, range(128)):
+                if bool(re.fullmatch(re.escape(c), char, re.I)) != (lower == c.lower()):
+                    differing.add(char)
+    assert differing == set(REI_CASE_EXCEPTIONS)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Please provide a detailed summary of the conversation", True),
+        ("[{'text': 'PLEASE PROVIDE A DETAILED SUMMARY OF THE CONVERSATION'}]", True),
+        ("Generate a concise" + "-" * 40 + "title", True),
+        ("Generate a concise" + "-" * 41 + "title", False),
+        ("Generate a concise\ntitle", False),
+        ("Create a short" + "Σ" * 40 + "Title", True),
+        ("You are a permıssion classifier", True),
+        ("Your taſk is to create a detailed summary of the conversation", True),
+        ("Generate a concise" + "İ" * 40 + "title", True),
+        ("Please provİde a detailed summary of the conversation", True),
+        ("Your tas\u212a is to create a detailed summary of the conversation", True),
+        ("请 generate a concise 标题 title", True),
+        ("Deploy please", False),
+    ],
+)
+def test_auxiliary_matches_patterns_ignoring_case(text, expected):
+    assert any(re.search(p, text, re.I) for p in AUXILIARY_PATTERNS) == expected
+    assert auxiliary(text) == expected
+
+
 OV_NAMES = ["read", "ls", "glob", "find", "search", "add_resource"]
 
 
@@ -663,6 +726,7 @@ def test_sse_chunk_boundaries_and_anthropic_usage():
     for byte in raw:
         frames += decoder.feed(bytes([byte]))
     assert b"".join(frames) == raw
+    assert SSEDecoder().feed(raw) == frames
     capture = ResponseCapture("anthropic")
     capture.event(
         {

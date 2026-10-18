@@ -202,7 +202,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
         formatted = self._format_text(text, is_query=is_query)
 
         try:
-            result = self._run_with_retry(
+            result = self._run_once(
                 lambda: self._embed_formatted_text(formatted),
                 logger=logger,
                 operation_name="local embedding",

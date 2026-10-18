@@ -124,6 +124,10 @@ export function RetrievalControls({
         ))}
       </div>
 
+      <p className="text-xs leading-5 text-muted-foreground" aria-live="polite">
+        {t(`modeDescriptions.${mode}`)}
+      </p>
+
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={String(options.resultCount)}

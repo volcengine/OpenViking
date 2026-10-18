@@ -16,6 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from '#/components/ui/card'
+import { useAppConnection } from '#/hooks/use-app-connection'
 
 import type { ConnectionInfo, Upstream } from '../-lib/api'
 import {
@@ -103,6 +104,7 @@ export function ConnectPage() {
 
 function AddressCard({ info }: { info: ConnectionInfo }) {
   const { t } = useTranslation('gateway')
+  const { isGatewayHost } = useAppConnection()
   const base = info.base_url.replace(/\/+$/, '')
   const warning = isLoopbackUrl(base)
     ? 'loopback'
@@ -131,7 +133,11 @@ function AddressCard({ info }: { info: ConnectionInfo }) {
         {warning ? (
           <Notice tone="warning" title={t(`connect.address.${warning}.title`)}>
             <p>
-              <CodeText text={t(`connect.address.${warning}.description`)} />
+              <CodeText
+                text={t(
+                  `connect.address.${warning}.${isGatewayHost ? 'standalone' : 'embedded'}`,
+                )}
+              />
             </p>
           </Notice>
         ) : null}

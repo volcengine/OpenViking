@@ -20,7 +20,7 @@ import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
 import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
 import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
-import { trackPageView } from './track'
+import { trackEvent, trackPageView } from './track'
 import { startDocsAttribution } from './attribution'
 import './custom.css'
 import './reading.css'
@@ -295,6 +295,12 @@ export default {
       }
     }
     trackPageView(window.location.pathname)
+    document.addEventListener('click', (event) => {
+      const block = (event.target as Element).closest?.('.vp-doc div[class*="language-"] > button.copy')?.parentElement
+      if (!block) return
+      const language = [...block.classList].find(name => name.startsWith('language-'))?.slice('language-'.length) ?? ''
+      trackEvent('copy-code', { language })
+    })
     initVikingBotWidget()
 
     const previousHook = router.onAfterRouteChanged

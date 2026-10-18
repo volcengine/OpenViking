@@ -1,3 +1,4 @@
+import { useReadOnly } from './read-only'
 import type * as React from 'react'
 
 import { Label } from '#/components/ui/label'
@@ -28,6 +29,7 @@ export function ToggleRow({
   invalid = false,
   children,
 }: ToggleRowProps) {
+  const readOnly = useReadOnly()
   return (
     <div className="grid rounded-lg border">
       <div className="flex items-start justify-between gap-4 px-4 py-3">
@@ -41,6 +43,7 @@ export function ToggleRow({
           </p>
         </div>
         <Switch
+          disabled={readOnly}
           id={id}
           checked={checked}
           aria-label={label}

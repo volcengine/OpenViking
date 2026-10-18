@@ -1,6 +1,7 @@
 """Studio task pagination and submission retry contracts."""
 
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,20 +20,20 @@ from tests.test_task_tracker import _FakeAgfs
 
 @pytest.mark.asyncio
 async def test_page_reads_past_200_and_isolates_owner():
-    store = PersistentTaskStore(_FakeAgfs())
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     owner = {"account_id": "acme", "user_id": "alice"}
     for index in range(205):
-        record = await tracker.create(
+        await tracker.create(
             "compile",
             task_id=f"cmp_{index:03}",
             meta={"request": {"to": "viking://resources/wiki"}},
             **owner,
         )
-        record.created_at = 100.0
-        await store.update(record)
     await tracker.create("compile", task_id="foreign", account_id="acme", user_id="bob")
     # Empty cache: pagination must read durable records without repopulating all tasks.
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     filters = {
         "task_type": "compile",
@@ -44,7 +45,7 @@ async def test_page_reads_past_200_and_isolates_owner():
     seen = []
     before = None
     while True:
-        page = await tracker.list_page(**owner, limit=30, before=before, **filters)
+        page = await tracker.list_tasks(**owner, limit=30, before=before, **filters)
         if not page:
             break
         seen.extend(task.task_id for task in page)
@@ -52,7 +53,6 @@ async def test_page_reads_past_200_and_isolates_owner():
     assert len(seen) == len(set(seen)) == 205
     assert seen[0] == "cmp_204"
     assert "foreign" not in seen
-    assert not tracker._tasks
 
 
 def test_cursor_is_bound_to_identity_and_filters():
@@ -69,7 +69,8 @@ def test_cursor_is_bound_to_identity_and_filters():
 async def test_concurrent_submission_retry_and_restart(monkeypatch):
     import openviking.service.external_task_service as module
 
-    store = PersistentTaskStore(_FakeAgfs())
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     monkeypatch.setattr(module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(module, "get_queue_manager", lambda: SimpleNamespace(enqueue=AsyncMock()))
@@ -109,7 +110,8 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
     from openviking_cli.exceptions import OpenVikingError
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
-    store = PersistentTaskStore(_FakeAgfs())
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     monkeypatch.setattr(external, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(task_router, "get_task_tracker", lambda: tracker)
@@ -189,6 +191,7 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         assert retry_after_cancel.json()["result"]["task_id"] == task_id
         assert "submission_hash" not in retry_after_cancel.json()["result"]["meta"]
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ROOT)
+        store = PersistentTaskStore(agfs)
         tracker = TaskTracker(store)
         root_page = await client.get(
             "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile"}
@@ -224,7 +227,8 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cursor_prunes_cold_expired_records_without_loading_cache():
-    store = PersistentTaskStore(_FakeAgfs())
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     owner = {"account_id": "acme", "user_id": "alice"}
     for task_id, status, days in [
@@ -235,12 +239,16 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
         ("active", TaskStatus.RUNNING, 8),
     ]:
         task = await tracker.create("compile", task_id=task_id, **owner)
-        task.status = status
-        task.updated_at = time.time() - days * 86400
-        await store.update(task)
+        path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
+        payload = json.loads(agfs.files[path])
+        payload["status"] = status.value
+        payload["updated_at"] = time.time() - days * 86400
+        agfs.files[path] = json.dumps(payload).encode()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store, max_concurrent_store_io=1)
+    await tracker.delete_expired()
     page = await asyncio.wait_for(
-        tracker.list_page(
+        tracker.list_tasks(
             **owner,
             limit=30,
             task_type="compile",
@@ -252,49 +260,41 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
         timeout=3,
     )
     assert {task.task_id for task in page} == {"recent-failed", "active"}
-    assert tracker.count() == 0
-    assert {task["task_id"] for task in await store.list("acme", user_id="alice")} == {
+    assert {task.task_id for task in await store.list("acme", user_id="alice")} == {
         "recent-failed",
         "active",
     }
 
 
 @pytest.mark.asyncio
-async def test_cursor_cleanup_rechecks_task_updated_after_scan(monkeypatch):
-    store = PersistentTaskStore(_FakeAgfs())
+async def test_cursor_cleanup_rechecks_task_updated_after_scan():
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store, max_concurrent_store_io=1)
     owner = {"account_id": "acme", "user_id": "alice"}
     task = await tracker.create("compile", task_id="updated-after-scan", **owner)
-    task.status = TaskStatus.COMPLETED
-    task.updated_at = time.time() - 2 * 86400
-    await store.update(task)
+    path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
+    payload = json.loads(agfs.files[path])
+    payload["status"] = TaskStatus.COMPLETED.value
+    payload["updated_at"] = time.time() - 2 * 86400
+    agfs.files[path] = json.dumps(payload).encode()
+    store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store, max_concurrent_store_io=1)
-    prune = tracker._prune_persisted_expired
-    scanned = asyncio.Event()
-
-    async def signal_before_prune(payload):
-        scanned.set()
-        return await prune(payload)
-
-    monkeypatch.setattr(tracker, "_prune_persisted_expired", signal_before_prune)
-    async with tracker._task_locks.acquire(task.task_id):
-        reading = asyncio.create_task(
-            tracker.list_page(
-                **owner,
-                limit=30,
-                task_type="compile",
-                status=None,
-                resource_id=None,
-                include_internal=False,
-                q=None,
-            )
-        )
-        await asyncio.wait_for(scanned.wait(), timeout=3)
-        task.updated_at = time.time()
-        # A scan waiting for this task lock must not hold the sole I/O slot.
-        await asyncio.wait_for(
-            tracker._store_io.run("update", lambda: store.update(task)), timeout=3
-        )
-    page = await asyncio.wait_for(reading, timeout=3)
+    record_lock = ("acme", "alice", task.task_id)
+    async with store._record_locks.acquire(record_lock):
+        cleanup = asyncio.create_task(tracker.delete_expired())
+        await asyncio.sleep(0)
+        payload["updated_at"] = time.time()
+        agfs.files[path] = json.dumps(payload).encode()
+    await asyncio.wait_for(cleanup, timeout=3)
+    page = await tracker.list_tasks(
+        **owner,
+        limit=30,
+        task_type="compile",
+        status=None,
+        resource_id=None,
+        include_internal=False,
+        q=None,
+    )
     assert [record.task_id for record in page] == [task.task_id]
-    assert await store.get(task.task_id, **owner) is not None
+    assert await store.get_task(task.task_id, **owner) is not None

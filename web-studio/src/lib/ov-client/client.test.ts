@@ -20,7 +20,7 @@ function readRequestHeader(config: AxiosRequestConfig, name: string): string {
   return typeof value === 'string' ? value : ''
 }
 
-function createRecordingClient() {
+function createRecordingClient(baseUrl = 'http://openviking.test') {
   const requests: AxiosRequestConfig[] = []
   const instance = axios.create({
     adapter: async (config) => {
@@ -36,11 +36,44 @@ function createRecordingClient() {
   })
   const client = createOvClient({
     axios: instance,
-    baseUrl: 'http://openviking.test',
+    baseUrl,
     bindSdkClient: false,
   })
   return { client, requests }
 }
+
+it('uses the documented hosted Bearer credential and returns to source headers after switching', async () => {
+  const { client, requests } = createRecordingClient(
+    'https://api.vikingdb.cn-beijing.volces.com/openviking',
+  )
+  client.setConnection({ apiKey: 'user-key' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[0], 'Authorization')).toBe(
+    'Bearer user-key',
+  )
+  expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('')
+  client.setOptions({
+    baseUrl: 'https://proxy.example/openviking',
+    apiKeyAuth: 'bearer',
+  })
+  await client.instance.get('/health', {
+    headers: { Authorization: 'Bearer candidate-key' },
+  })
+  expect(readRequestHeader(requests[1], 'Authorization')).toBe(
+    'Bearer candidate-key',
+  )
+  client.setOptions({ baseUrl: 'http://localhost:19340' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[2], 'X-API-Key')).toBe('user-key')
+  expect(readRequestHeader(requests[2], 'Authorization')).toBe('')
+  client.setOptions({
+    baseUrl: 'https://api.vikingdb.cn-beijing.volces.com/openviking',
+  })
+  client.setConnection({ apiKey: '', adminApiKey: 'source-control-key' })
+  await client.instance.get('/api/v1/fs/ls')
+  expect(readRequestHeader(requests[3], 'Authorization')).toBe('')
+  expect(readRequestHeader(requests[3], 'X-API-Key')).toBe('')
+})
 
 describe('createOvClient API key selection', () => {
   it('uses the data API key for dashboard metrics when both keys are configured', async () => {

@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   Dialog,
@@ -95,8 +96,9 @@ export const Route = createFileRoute('/filesystem')({
 })
 
 function FilesystemRoute() {
+  const { provider } = useStudioService()
   return (
-    <ResourceUploadProvider>
+    <ResourceUploadProvider enabled={provider === 'opensource'}>
       <FilesystemWorkbench />
     </ResourceUploadProvider>
   )
@@ -104,6 +106,8 @@ function FilesystemRoute() {
 
 function FilesystemWorkbench() {
   const { t } = useTranslation(['filesystem', 'resources'])
+  const { provider } = useStudioService()
+  const canUseLocalTools = provider === 'opensource'
   const { identityScopeKey } = useAppConnection()
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
@@ -560,10 +564,12 @@ function FilesystemWorkbench() {
           <ContextExplorerHeader
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
-            hasTasks={tasks.length > 0}
+            hasTasks={canUseLocalTools && tasks.length > 0}
             isRefreshing={listQuery.isFetching}
             isRefreshingTasks={isRefreshingTasks}
-            onAddResource={() => setUploadDialogOpen(true)}
+            onAddResource={
+              canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
+            }
             onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
             onRefresh={() => void handleRefreshContextTree()}
@@ -614,29 +620,31 @@ function FilesystemWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
-            <div className="flex shrink-0 items-center gap-1 lg:hidden">
-              <Button
-                type="button"
-                size="icon-sm"
-                variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
-                title={t('tabs.terminal')}
-                aria-label={t('tabs.terminal')}
-                onClick={() => handleOpenActionPanel('terminal')}
-              >
-                <TerminalIcon className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
-                title={t('tabs.agent')}
-                aria-label={t('tabs.agent')}
-                onClick={() => handleOpenActionPanel('agent')}
-              >
-                <BotIcon className="size-4" />
-              </Button>
-            </div>
-            {rightCollapsed ? (
+            {canUseLocalTools ? (
+              <div className="flex shrink-0 items-center gap-1 lg:hidden">
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
+                  title={t('tabs.terminal')}
+                  aria-label={t('tabs.terminal')}
+                  onClick={() => handleOpenActionPanel('terminal')}
+                >
+                  <TerminalIcon className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
+                  title={t('tabs.agent')}
+                  aria-label={t('tabs.agent')}
+                  onClick={() => handleOpenActionPanel('agent')}
+                >
+                  <BotIcon className="size-4" />
+                </Button>
+              </div>
+            ) : null}
+            {canUseLocalTools && rightCollapsed ? (
               <Button
                 type="button"
                 size="icon-sm"
@@ -652,6 +660,7 @@ function FilesystemWorkbench() {
           </div>
           <div className="min-h-0 flex-1">
             <LazyFilePreview
+              defaultReadLimit={canUseLocalTools ? -1 : 10000}
               file={selectedFile}
               hideDirectoryHeader
               onClose={() => setSelectedFile(null)}
@@ -660,7 +669,7 @@ function FilesystemWorkbench() {
             />
           </div>
         </main>
-        {!rightCollapsed ? (
+        {canUseLocalTools && !rightCollapsed ? (
           <FilesystemResizeHandle
             active={resizingPane === 'action'}
             label={t('resizeAction')}
@@ -668,7 +677,7 @@ function FilesystemWorkbench() {
           />
         ) : null}
 
-        {!isCompactLayout && !rightCollapsed ? (
+        {!isCompactLayout && canUseLocalTools && !rightCollapsed ? (
           <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--filesystem-right-width)] lg:min-w-[var(--filesystem-right-width)]">
             <FilesystemActionPanel
               activePanel={activePanel}
@@ -688,7 +697,7 @@ function FilesystemWorkbench() {
         ) : null}
       </div>
 
-      {isCompactLayout ? (
+      {canUseLocalTools && isCompactLayout ? (
         <FilesystemMobileActionScreen
           activePanel={activePanel}
           currentUri={currentUri}
@@ -704,35 +713,39 @@ function FilesystemWorkbench() {
         />
       ) : null}
 
-      <Dialog
-        open={uploadDialogOpen}
-        onOpenChange={handleUploadDialogOpenChange}
-      >
-        <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
-          <DialogHeader className="border-b px-6 py-5">
-            <DialogTitle className="text-xl">
-              {t('addResource.title')}
-            </DialogTitle>
-            <DialogDescription>
-              {t('addResource.description')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
-            <AddResourceForm
-              onSubmitted={() => {
-                handleUploadDialogOpenChange(false)
-                void invalidateList()
-                toast.success(t('addResource.submitted'))
-              }}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
-      <UploadTaskDialog
-        open={taskDialogOpen}
-        onOpenChange={setTaskDialogOpen}
-        tasks={tasks}
-      />
+      {canUseLocalTools ? (
+        <>
+          <Dialog
+            open={uploadDialogOpen}
+            onOpenChange={handleUploadDialogOpenChange}
+          >
+            <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
+              <DialogHeader className="border-b px-6 py-5">
+                <DialogTitle className="text-xl">
+                  {t('addResource.title')}
+                </DialogTitle>
+                <DialogDescription>
+                  {t('addResource.description')}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
+                <AddResourceForm
+                  onSubmitted={() => {
+                    handleUploadDialogOpenChange(false)
+                    void invalidateList()
+                    toast.success(t('addResource.submitted'))
+                  }}
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
+          <UploadTaskDialog
+            open={taskDialogOpen}
+            onOpenChange={setTaskDialogOpen}
+            tasks={tasks}
+          />
+        </>
+      ) : null}
       <FindPalette
         open={findPaletteOpen}
         onClose={() => setFindPaletteOpen(false)}

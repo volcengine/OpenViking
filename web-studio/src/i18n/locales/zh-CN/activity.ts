@@ -23,6 +23,7 @@ const activity = {
       shortcut: '⌘ N 新建会话',
     },
     chat: {
+      emptyReadDescription: '当前会话暂无消息。',
       historyLoadFailed: '会话记录加载失败：{{error}}',
       sendFailed: '消息发送失败：{{error}}',
       copy: '复制',
@@ -30,6 +31,7 @@ const activity = {
       placeholder: '输入消息...',
       emptyState: '选择或创建一个会话开始聊天。',
       thinking: '思考中...',
+      generating: '生成中',
       reasoning: '思考过程',
       iteration: '第 {{count}} 轮',
       toolCall: '工具调用',
@@ -231,7 +233,7 @@ const activity = {
         '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
       addResourceTitle: '添加资源',
       sessionUsage:
-        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
+        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: '用法：/session delete <session_id>',
       sessionMissing:
         '当前没有会话，请先打开 Agent 面板创建会话，或指定 session_id。',
@@ -287,7 +289,7 @@ const activity = {
         sessionAction: {
           name: '子命令',
           description:
-            'current、list、create、switch、get、context、messages、archive、commit、extract、message、tool-results、tool-result、tool-search、delete。',
+            'current、list、create、switch、get、context、messages、archive、commit、message、tool-results、tool-result、tool-search、delete。',
         },
         sessionId: {
           name: 'session_id',
@@ -436,10 +438,6 @@ const activity = {
           commit: {
             code: '/session commit [session_id] --keep-recent 10',
             description: '归档并触发记忆提取',
-          },
-          extract: {
-            code: '/session extract [session_id]',
-            description: '从会话中提取记忆',
           },
           message: {
             code: '/session message [session_id] user hello',

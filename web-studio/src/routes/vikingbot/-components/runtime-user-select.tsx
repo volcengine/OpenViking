@@ -6,11 +6,11 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { getBotUsers } from '../-api'
 
 export function useRuntimeUserSelection(enabled: boolean) {
-  const { identityScopeKey } = useAppConnection()
+  const { identityScopeKey, serverMode } = useAppConnection()
   const [userId, setUserId] = useState('')
   const users = useQuery({
-    queryKey: ['vikingbot', identityScopeKey, 'users'],
-    queryFn: getBotUsers,
+    queryKey: ['vikingbot', identityScopeKey, serverMode, 'users'],
+    queryFn: () => getBotUsers(serverMode),
     enabled,
     retry: false,
   })

@@ -29,7 +29,11 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "openviking-sdk>=0.1.14",
+    "aiohttp>=3.13.3",
+    "async-timeout>=5.0.1",
+    "orjson>=3.11.7",
+    "packaging>=24.0",
+    "openviking-sdk>=0.1.15",
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
@@ -39,6 +43,7 @@ dependencies = [
     "trafilatura>=1.12.0",
     "feedparser>=6.0.0",
     "defusedxml>=0.7.1",
+    "cairosvg>=2.9.1",
     "openai>=1.0.0",
     "requests>=2.33.0",
     "charset-normalizer>=3.4,<4",
@@ -89,17 +94,25 @@ dependencies = [
 
 
 [project.optional-dependencies]
-gateway = [
-    "aiohttp>=3.13.3",
-    "async-timeout>=5.0.1",
-    "orjson>=3.11.7",
-    "packaging>=24.0",
+expiry = [
+  "redis>=5,<7",
 ]
 gateway-fast = [
     "uvloop>=0.21; sys_platform != 'win32'",
     "httptools>=0.6",
 ]
+mysql = [
+  "aiomysql>=0.2.0,<1",
+  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
+redis-mysql = [
+  "aiomysql>=0.2.0,<1",
+  "redis>=5.0,<7",
+  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+]
 test = [
+  "SQLAlchemy[asyncio]>=2.0,<2.1",
+  "redis>=5.0,<7",
   "pytest>=7.0.0",
   "pytest-asyncio>=0.21.0",
   "pytest-xdist>=3.5.0",
@@ -229,6 +242,7 @@ exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
 openviking_gateway = ["client-rules.json"]
+"openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
 openviking = [
     "prompts/templates/**/*.yaml",

@@ -12,8 +12,9 @@ strings keyed by their SHA-256 hash, so this module contains no cryptography.
 
 from __future__ import annotations
 
+import inspect
 import secrets
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -97,7 +98,7 @@ class OpenVikingOAuthProvider(
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
         authorize_page_path: str = DEFAULT_AUTHORIZE_PAGE,
-        role_resolver: Optional[Callable[[str, str], "Role"]] = None,
+        role_resolver: Optional[Callable[[str, str], Role | Awaitable[Role]]] = None,
     ) -> None:
         self._store = store
         self._issuer = issuer.rstrip("/")
@@ -294,17 +295,14 @@ class OpenVikingOAuthProvider(
         if self._role_resolver is not None:
             try:
                 token_role = Role(refresh_token.role)
-                current_role = Role(
-                    self._role_resolver(refresh_token.account_id, refresh_token.user_id)
-                )
-            except (ValueError, Exception):  # noqa: BLE001
-                token_role = None
-                current_role = None
-            if (
-                token_role is not None
-                and current_role is not None
-                and token_role.rank > current_role.rank
-            ):
+                resolved = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                current_role = Role(await resolved if inspect.isawaitable(resolved) else resolved)
+            except Exception as exc:
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="Unable to validate current identity; re-authorize the client",
+                ) from exc
+            if token_role.rank > current_role.rank:
                 raise TokenError(
                     error="invalid_grant",
                     error_description=(

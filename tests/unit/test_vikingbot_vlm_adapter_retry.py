@@ -1,8 +1,11 @@
+from collections import Counter
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import vikingbot.providers.vlm_adapter as vlm_adapter
+from vikingbot.compile.pipeline_io import JsonModel, ModelCallError
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from volcenginesdkarkruntime._exceptions import (
     ArkAPITimeoutError,
@@ -10,6 +13,7 @@ from volcenginesdkarkruntime._exceptions import (
     ArkRateLimitError,
 )
 
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_kind
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import (
     VOLCENGINE_CLIENT_REQUEST_ID,
@@ -121,19 +125,28 @@ async def test_chat_retries_rate_limit_until_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch):
+async def test_chat_preserves_input_error_for_compile_without_retry(monkeypatch):
     async def _sleep(_delay: float):
         raise AssertionError("non-retryable errors must not sleep/retry")
 
     monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
 
-    fake_vlm = _FakeVLM([RuntimeError("AuthenticationError Unauthorized")])
+    fake_vlm = _FakeVLM([ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Input rejected")])
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
+    model = JsonModel(
+        adapter,
+        "test-model",
+        0.0,
+        SimpleNamespace(put=AsyncMock()),
+        SimpleNamespace(merge_input_chars=16_000, pipeline_call_seconds=5),
+        {},
+        Counter(),
+    )
 
-    response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
+    with pytest.raises(ModelCallError) as raised:
+        await model.call("reduce", [{"role": "user", "content": "hello"}], [], max_tokens=128)
 
-    assert response.finish_reason == "error"
-    assert "AuthenticationError" in response.content
+    assert model_error_kind(raised.value) is ModelErrorKind.INPUT_TOO_LARGE
     assert fake_vlm.calls == 1
 
 

@@ -13,6 +13,7 @@ class SessionCommitMsg:
     session_uri: str
     archive_uri: str
     user: Dict[str, str]
+    _task_work_id: str = ""
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     # When True, Phase 2's final meta merge also clears the auto-commit error
     # fields and stamps last_auto_commit_at. Defaults keep old producers working.

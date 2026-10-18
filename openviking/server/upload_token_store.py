@@ -4,7 +4,7 @@
 
 Issued by the MCP ``add_resource`` tool when a caller passes a local-file path; consumed by
 ``POST /api/v1/resources/temp_upload`` when the request carries a ``?token=`` instead of an
-API key. Tokens are 6-character base62 strings indexed in a process-local dict — no signing
+API key. Tokens are 10-character base62 strings indexed in a process-local dict — no signing
 key, no on-disk state, no replay-set bookkeeping. ``dict.pop`` doubles as the
 consume-and-burn primitive.
 
@@ -18,6 +18,11 @@ is installed as skills rather than ingested as a resource. The ``temp_file_id`` 
 :class:`openviking.server.temp_upload_store.TempUploadStore` at upload time, so the token
 does not pre-bind a filename and the upload can flow through either the local or shared
 TempUploadStore mode without a side-channel.
+
+``download_token_store`` is a separate instance used by the MCP ``download`` tool: its tokens
+carry the resolved ``uri`` of one file and are consumed by ``GET /api/v1/content/download``.
+Keeping the two stores apart means an upload token can never be redeemed for a download, or
+the reverse.
 
 Single-worker only: tokens are lost on restart and not shared across uvicorn workers.
 Multi-worker deployments should rely on the shared-mode TempUploadStore for the actual
@@ -37,7 +42,7 @@ from openviking.server.identity import Role
 from openviking.storage.acl import AclSpec
 
 _TOKEN_ALPHABET = string.ascii_letters + string.digits  # base62
-_TOKEN_LENGTH = 6
+_TOKEN_LENGTH = 10
 
 
 class UploadTokenError(Exception):
@@ -64,6 +69,7 @@ class _TokenInfo:
     list_only: bool = False
     acl: AclSpec | None = None
     from_oauth: bool = False
+    uri: str = ""
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,7 @@ class ConsumedUploadToken:
     list_only: bool = False
     acl: AclSpec | None = None
     from_oauth: bool = False
+    uri: str = ""
 
 
 class UploadTokenStore:
@@ -114,6 +121,7 @@ class UploadTokenStore:
         list_only: bool = False,
         acl: AclSpec | None = None,
         from_oauth: bool = False,
+        uri: str = "",
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -143,6 +151,7 @@ class UploadTokenStore:
             list_only,
             acl,
             from_oauth,
+            uri,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -178,6 +187,7 @@ class UploadTokenStore:
             list_only=info.list_only,
             acl=info.acl,
             from_oauth=info.from_oauth,
+            uri=info.uri,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:
@@ -196,3 +206,4 @@ class UploadTokenStore:
 
 
 upload_token_store = UploadTokenStore()
+download_token_store = UploadTokenStore()

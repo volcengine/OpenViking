@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-import yaml
+from hermes_cli.config import yaml
 
 
 @contextmanager

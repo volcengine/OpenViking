@@ -1,6 +1,8 @@
 # System Status
 
-The OpenViking System API provides health, readiness, consistency, and multi-write backend synchronization status. Component observers and Prometheus metrics are documented separately.
+The OpenViking System API provides health, readiness, consistency, and
+background-processing status. Component observers and Prometheus metrics are
+documented separately.
 
 ## API Reference
 
@@ -11,11 +13,10 @@ The OpenViking System API provides health, readiness, consistency, and multi-wri
 Basic liveness check; no authentication is required. Returns the service version, health status, and auth mode. Supplied credentials trigger identity resolution; successful resolution adds identity fields, and invalid credentials are rejected with an authentication error.
 
 In trusted mode, a complete `X-OpenViking-Account` and `X-OpenViking-User` header pair
-requests identity resolution, including on localhost deployments with `root_api_key`
-omitted. Configured Root keys remain required for authenticated requests. The optional
-`root_api_key_required` boolean reports that trusted-server configuration requirement;
-the resolved `role` describes the caller's permissions. Older servers may omit this field.
-Anonymous health probes return basic liveness information.
+requests identity resolution and requires the matching root API key, including on
+localhost. `root_api_key_required` is always `true` in trusted mode; the resolved `role`
+describes the caller's permissions. Anonymous health probes return basic liveness
+information without identity fields.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:health_check` - HTTP route
@@ -330,7 +331,7 @@ ov system consistency viking://resources/my-project
 
 #### 1. API Implementation Overview
 
-Wait until the processing queues are drained, or until the timeout. This check is not scoped to the caller’s last request and does not cover every asynchronous API. Check the returned `error_count` and `errors`; empty queues do not prove that every operation succeeded. To confirm one import or commit, poll its [task ID](17-tasks.md) instead.
+Wait until the processing queues are drained. This check is not scoped to the caller’s last request and does not cover every asynchronous API. Check the returned `error_count` and `errors`; empty queues do not prove that every operation succeeded. To confirm one import or commit, poll its [task ID](17-tasks.md) instead.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP route
@@ -341,9 +342,7 @@ Wait until the processing queues are drained, or until the timeout. This check i
 
 **Parameters**
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| timeout | float | No | None | Timeout in seconds. None means wait indefinitely |
+None. HTTP requests use the client timeout configuration.
 
 #### 3. Usage Examples
 
@@ -356,32 +355,27 @@ POST /api/v1/system/wait
 ```bash
 curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "timeout": 60.0
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **Python SDK**
 
 ```python
 # Wait for the current processing queues to drain
-status = client.wait_processed(timeout=60.0)
+status = client.wait_processed()
 print(status)  # Inspect each queue’s error_count and errors
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.waitProcessed(60));
+console.log(await client.waitProcessed());
 ```
 
 **Go SDK**
 
 ```go
-status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-    Timeout: openviking.Float64(60),
-})
+status, err := client.WaitProcessed(ctx)
 if err != nil {
     return err
 }
@@ -391,7 +385,7 @@ fmt.Println(status)
 **CLI**
 
 ```bash
-ov system wait --timeout 60
+ov system wait
 ```
 
 **Response Example**
@@ -415,99 +409,6 @@ ov system wait --timeout 60
   }
 }
 ```
-
----
-
-### backend_sync_status()
-
-Return multi-write backend synchronization status for a Viking URI subtree. This endpoint requires ROOT or ADMIN permission.
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-status
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-The URI-path form is also available:
-
-```http
-GET /api/v1/system/sync/{sync_path}
-```
-
-**CLI**
-
-```bash
-ov system backend sync-status viking://resources
-```
-
-**Response example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "entry_count": 12
-  }
-}
-```
-
-`result` is supplied by the active filesystem backend. `path` identifies the queried scope and `entry_count` is the number of sync records in that scope. A backend may add diagnostics such as pending or failed records.
-
-### backend_sync_retry()
-
-Retry incomplete multi-write backend synchronization work for a URI subtree. This endpoint requires ROOT or ADMIN permission.
-
-**HTTP API**
-
-```http
-POST /api/v1/system/backend/sync-retry
-Content-Type: application/json
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-admin-key" \
-  -d '{"uri":"viking://resources"}'
-```
-
-The URI-path form is:
-
-```http
-POST /api/v1/system/sync/{sync_path}/retry
-```
-
-**CLI**
-
-```bash
-ov system backend sync-retry viking://resources
-```
-
-**Response example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "path": "viking://resources",
-    "retried": 2,
-    "failed": 0
-  }
-}
-```
-
-`retried` is the number of records rescheduled by this request, and `failed` is the number that could not be scheduled. A backend may include additional diagnostic fields.
-
-The public Python, TypeScript, and Go SDKs do not currently expose multi-write backend synchronization methods, so the sections above show only HTTP and CLI tabs.
 
 ---
 

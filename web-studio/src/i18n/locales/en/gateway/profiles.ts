@@ -1,4 +1,6 @@
 const profiles = {
+  inUseHelp:
+    'To delete it, revoke those keys first. If they are still needed, issue replacements that use another profile.',
   description:
     'How conversations use OpenViking memory and tools. Saved changes apply only to conversations that start afterwards.',
   defaultName: 'Default',
@@ -18,6 +20,7 @@ const profiles = {
     title: 'No context profiles yet',
     description:
       'Every gateway key needs a context profile. The recommended settings recall memory for each new message, save conversations, summarize long ones and let the model use the read-only OpenViking tools. You can change them at any time.',
+    readOnly: 'Waiting for your gateway admin to add a profile.',
   },
   summary: {
     recallOn: 'On · {{tokens}} tokens per message',

@@ -31,7 +31,7 @@ pub struct PathLockConfig {
     /// Built-in provider name: `filesystem`, `memory`, or `cache`.
     pub provider: String,
     /// OpenViking instance name used by the cache-backed provider.
-    pub namespace: Option<String>,
+    pub service_name: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -42,7 +42,7 @@ impl Default for PathLockConfig {
     fn default() -> Self {
         Self {
             provider: "filesystem".to_string(),
-            namespace: None,
+            service_name: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
@@ -875,7 +875,7 @@ impl PathLockManager {
                     }
 
                     if waiting.0.is_none() {
-                        info!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
+                        debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, error = %err, "pathlock acquire batch entered wait state");
                         waiting.0 = Some(&self.waiting_lock_count);
                         self.waiting_lock_count
                             .fetch_add(1, AtomicOrdering::Relaxed);

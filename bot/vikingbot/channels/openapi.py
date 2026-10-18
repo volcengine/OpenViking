@@ -168,11 +168,13 @@ class OpenAPIChannel(BaseChannel):
         app: "FastAPI | None" = None,
         global_config: Config | None = None,
         compile_service: Any | None = None,
+        agent_loop: Any | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config
         self._global_config = global_config
         self._compile_service = compile_service
+        self._agent_loop = agent_loop
         # Regular OpenAPI pending and sessions
         self._pending: Dict[str, PendingResponse] = {}
         self._sessions: Dict[str, Dict[str, Any]] = {}
@@ -282,6 +284,11 @@ class OpenAPIChannel(BaseChannel):
                 )
                 pending.set_final(msg.content or "")
                 await pending.close_stream()
+            elif msg.event_type == OutboundEventType.INTERRUPT:
+                pending.set_response_id(msg.response_id)
+                await pending.add_event("interrupt", msg.metadata or {})
+                pending.set_final(msg.content or "")
+                await pending.close_stream()
             elif msg.event_type == OutboundEventType.REASONING:
                 await pending.add_event("reasoning", msg.content)
             elif msg.event_type == OutboundEventType.CONTENT_DELTA:
@@ -313,6 +320,11 @@ class OpenAPIChannel(BaseChannel):
                 "response",
                 {"content": msg.content or "", "response_id": msg.response_id},
             )
+            pending.set_final(msg.content or "")
+            await pending.close_stream()
+        elif msg.event_type == OutboundEventType.INTERRUPT:
+            pending.set_response_id(msg.response_id)
+            await pending.add_event("interrupt", msg.metadata or {})
             pending.set_final(msg.content or "")
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:
@@ -531,6 +543,37 @@ class OpenAPIChannel(BaseChannel):
             channel._session_manager.delete(session_key)
             del channel._sessions[storage_key]
             return {"deleted": True}
+
+        @router.post("/sessions/{session_id}/interrupt")
+        async def interrupt_session(
+            session_id: str,
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
+        ):
+            """Interrupt the active or queued turn for a session."""
+            if channel._agent_loop is None:
+                raise HTTPException(status_code=503, detail="Agent loop is not available")
+            scope = await channel._resolve_request_principal(http_request, auth)
+            storage_key = channel._scoped_session_id(scope, session_id)
+            session_key = SessionKey(
+                type="cli",
+                channel_id=channel.config.channel_id(),
+                chat_id=storage_key,
+            )
+            interrupted = await channel._agent_loop.interrupt(session_key)
+            return {"interrupted": interrupted}
+
+        @router.post("/sessions/{session_id}/steer")
+        async def steer_session(
+            session_id: str,
+            request: ChatRequest,
+            http_request: Request,
+            auth: GatewayRequestAuth = Depends(verify_gateway_request),
+        ):
+            """Append user input to an active streaming turn."""
+            await channel._prepare_chat_request(http_request, request, auth)
+            request.session_id = session_id
+            return await channel._handle_chat_steer(request)
 
         # ========== Bot Channel Routes ==========
 
@@ -914,11 +957,8 @@ class OpenAPIChannel(BaseChannel):
             rebuilt["agent_id"] = agent_id
             return OpenVikingConnection(**rebuilt)
 
-        # Keyless forwards are only valid for trusted/dev upstreams. In api_key
-        # mode, unauthenticated /health still returns 200 with auth_mode and no
-        # resolved identity, so claimed account/user/role must not be accepted
-        # without a real API key (Web Studio review on #4866).
-        if auth_mode not in {"trusted", "dev"}:
+        # Only dev mode accepts forwarded identities without an API key.
+        if auth_mode != "dev":
             raise HTTPException(
                 status_code=401,
                 detail=(
@@ -927,7 +967,7 @@ class OpenAPIChannel(BaseChannel):
                 ),
             )
 
-        # Trusted / DEV forwards may omit api_key; keep proxy-asserted identity
+        # DEV forwards may omit api_key; keep proxy-asserted identity
         # but never honor a client-chosen upstream URL.
         values["server_url"] = self._ov_server_url()
         values["agent_id"] = agent_id
@@ -983,27 +1023,12 @@ class OpenAPIChannel(BaseChannel):
             actor_peer_id=request.headers.get("X-OpenViking-Actor-Peer", ""),
         )
 
-    async def _resolve_trusted_connection(
-        self,
-        request: Request,
-        auth: GatewayRequestAuth,
-    ) -> dict[str, Any] | None:
+    async def _resolve_trusted_connection(self, request: Request) -> dict[str, Any] | None:
         if not self._ov_server_url():
             return None
         api_key = self._extract_api_key(request)
-        configured_api_key = str(
-            getattr(getattr(self._global_config, "ov_server", None), "api_key", "") or ""
-        ).strip()
-        if not api_key and configured_api_key:
+        if not api_key:
             raise HTTPException(status_code=401, detail="OpenViking API key header required")
-        if not configured_api_key and not api_key and not auth.can_trust_forwarded_connection:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "Trusted OpenViking identity requires a trusted local proxy "
-                    "or configured root API key"
-                ),
-            )
         account_id = str(request.headers.get("X-OpenViking-Account") or "").strip()
         user_id = str(request.headers.get("X-OpenViking-User") or "").strip()
         if not account_id or not user_id:
@@ -1022,18 +1047,6 @@ class OpenAPIChannel(BaseChannel):
             )
         health = await self._request_upstream_health(request)
         self._assert_runtime_health_mode(health)
-        if (
-            not configured_api_key
-            and not auth.can_trust_forwarded_connection
-            and health.get("root_api_key_required") is not True
-        ):
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "Trusted OpenViking identity requires a trusted local proxy "
-                    "or upstream-validated root API key"
-                ),
-            )
         resolved_account_id = str(health.get("account_id") or "").strip()
         resolved_user_id = str(health.get("user_id") or "").strip()
         role = str(health.get("role") or "").strip().lower()
@@ -1205,7 +1218,7 @@ class OpenAPIChannel(BaseChannel):
             self._assert_runtime_health_mode(health)
             connection = self._resolve_api_key_connection(http_request, health)
         elif auth_mode == "trusted":
-            connection = await self._resolve_trusted_connection(http_request, auth)
+            connection = await self._resolve_trusted_connection(http_request)
         else:
             raise HTTPException(
                 status_code=503,
@@ -1596,6 +1609,44 @@ class OpenAPIChannel(BaseChannel):
                 "X-VikingBot-Session-ID": session_id,
             },
         )
+
+    async def _handle_chat_steer(self, request: ChatRequest) -> dict[str, bool]:
+        """Append input to an existing streaming chat request."""
+        session_id = request.session_id
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+
+        storage_key = self._scoped_session_id(request._principal_scope, session_id)
+        if storage_key not in self._pending:
+            raise HTTPException(
+                status_code=409,
+                detail="Session has no active request to steer",
+            )
+
+        user_id = self._request_user_id(request)
+        session_key = SessionKey(
+            type="cli",
+            channel_id=self.config.channel_id(),
+            chat_id=storage_key,
+        )
+        msg = InboundMessage(
+            session_key=session_key,
+            sender_id=user_id,
+            actor_peer_id=self._request_actor_peer_id(request, user_id),
+            content=self._request_content(request),
+            media=self._request_media(request),
+            metadata=self._request_metadata(request),
+            openviking_connection=self._request_openviking_connection(request),
+        )
+        if self._agent_loop is None or not self._agent_loop.steer(msg):
+            raise HTTPException(
+                status_code=409,
+                detail="Session has no active turn to steer",
+            )
+        if storage_key in self._sessions:
+            self._sessions[storage_key]["last_active"] = datetime.now()
+            self._sessions[storage_key]["message_count"] += 1
+        return {"accepted": True}
 
     async def _handle_bot_chat(self, channel_id: str, request: ChatRequest) -> ChatResponse:
         """Handle a BotChannel chat request."""

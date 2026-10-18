@@ -224,7 +224,7 @@ async def test_on_resource_added_bridges_reason_through_fixed_session(request_co
     )
 
     session_id = result["session_id"]
-    assert result["status"] == "success"
+    assert result["status"] == "accepted"
     assert session_id == _RESOURCE_REASON_SESSION_ID
     assert session_service.got == [
         {
@@ -252,6 +252,41 @@ async def test_on_resource_added_bridges_reason_through_fixed_session(request_co
     assert "这是越前龙马的照片" in message_text
     assert "yueqian.jpeg" in message_text
     assert "动漫角色照片合集" in message_text
+
+
+@pytest.mark.asyncio
+async def test_on_resource_added_returns_once_reason_commit_is_queued(request_context, monkeypatch):
+    """All reason commits serialize on one session; waiting for each one held the
+    caller (an AddResource worker) behind every earlier reason commit."""
+
+    class QueuedSessionService(_FakeSessionService):
+        async def commit_async(self, session_id, ctx, keep_recent_count=0):
+            result = await super().commit_async(session_id, ctx, keep_recent_count)
+            return {**result, "task_id": "reason-task"}
+
+    class NeverFinishingTracker:
+        async def wait(self, *args, **kwargs):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker", lambda: NeverFinishingTracker()
+    )
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=QueuedSessionService(),
+    )
+
+    result = await asyncio.wait_for(
+        service.on_resource_added(
+            ctx=request_context,
+            resource_uri="viking://resources/images/ryoma.jpeg",
+            reason="这是越前龙马的照片",
+        ),
+        timeout=3,
+    )
+
+    assert result["status"] == "accepted"
+    assert result["commit_task_id"] == "reason-task"
 
 
 @pytest.mark.asyncio
@@ -303,7 +338,7 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
         release.set()
         results = await asyncio.wait_for(asyncio.gather(first, second, worker), timeout=3)
 
-    assert all(result["status"] == "success" for result in results)
+    assert all(result["status"] == "accepted" for result in results)
     assert all(result["session_id"] == _RESOURCE_REASON_SESSION_ID for result in results)
     assert [call["session_id"] for call in session_service.committed] == [
         _RESOURCE_REASON_SESSION_ID

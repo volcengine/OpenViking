@@ -24,13 +24,18 @@ import {
 } from './keys-issue-dialog'
 import { KeysSecretDialog, snippetModel } from './keys-secret-dialog'
 
-const api = vi.hoisted(() => ({ issueKey: vi.fn(), listKeyUsers: vi.fn() }))
-const state = vi.hoisted(() => ({ role: 'admin' }))
+const api = vi.hoisted(() => ({
+  issueKey: vi.fn(),
+  listKeyUsers: vi.fn(),
+  getAccess: vi.fn(),
+}))
+const state = vi.hoisted(() => ({ role: 'admin', devMode: false }))
 
 vi.mock('../-lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof Api>()),
   issueKey: api.issueKey,
   listKeyUsers: api.listKeyUsers,
+  getAccess: api.getAccess,
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 vi.mock('react-i18next', () => ({
@@ -39,6 +44,10 @@ vi.mock('react-i18next', () => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -50,7 +59,7 @@ vi.mock('#/hooks/use-app-connection', () => ({
     },
     connectionRole: state.role,
     isConnectionRoleLoading: false,
-    serverMode: 'api_key',
+    serverMode: state.devMode ? 'dev' : 'api_key',
   }),
 }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -64,6 +73,16 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   state.role = 'admin'
+  state.devMode = false
+  api.getAccess.mockImplementation(async () => ({
+    managed: false,
+    can_write_objects: true,
+    can_issue_for_others: state.role !== 'user' && !state.devMode,
+    role: state.role,
+    account_id: 'acme',
+    user_id: 'admin',
+    warnings: [],
+  }))
   api.listKeyUsers.mockResolvedValue([alice])
 })
 
@@ -118,7 +137,7 @@ const settings = {
   models: [],
 }
 const request = { ...settings, user_id: 'alice' }
-const pasted = { ...settings, openviking_key: 'ov-key' }
+const pasted = { ...settings, user_id: 'alice', openviking_key: 'ov-key' }
 
 describe('validateKeyRequest', () => {
   it('accepts a complete request for a user or with a pasted key', () => {
@@ -143,6 +162,16 @@ describe('validateKeyRequest', () => {
     })
   })
 
+  it('accepts self issuance with no owner', () => {
+    expect(validateKeyRequest(settings)).toEqual({})
+  })
+
+  it('rejects a management key pasted as the user API key', () => {
+    expect(
+      validateKeyRequest({ ...settings, openviking_key: 'ovgm_abc' }),
+    ).toEqual({ openviking_key: 'keys.form.openvikingKey.managementKey' })
+  })
+
   it('rejects a gateway key pasted as the OpenViking key', () => {
     expect(
       validateKeyRequest({ ...settings, openviking_key: 'ovgw_abc' }),
@@ -152,25 +181,11 @@ describe('validateKeyRequest', () => {
 
 describe('issueProblem', () => {
   it.each([
-    [
-      'Unknown OpenViking user in this account',
-      400,
-      'keys.errors.unknownUser',
-      true,
-    ],
-    [
-      "This user's OpenViking key cannot be read on the server; paste the user's OpenViking key instead",
-      409,
-      'keys.errors.userKeyUnreadable',
-      true,
-    ],
+    ['unknown_user', 400, 'keys.errors.unknownUser', true],
+    ['user_required', 400, 'keys.errors.userRequired', true],
+    ['user_key_unreadable', 409, 'keys.errors.userKeyUnreadable', true],
     ['root_key_not_allowed', 403, 'keys.errors.rootKey', true],
-    [
-      'OpenViking key belongs to another account',
-      403,
-      'keys.errors.otherAccount',
-      true,
-    ],
+    ['other_account', 403, 'keys.errors.otherAccount', true],
     ['openviking_http_401', 401, 'keys.errors.invalidKey', true],
     [
       'openviking_identity_missing',
@@ -180,12 +195,42 @@ describe('issueProblem', () => {
     ],
     ['openviking_unavailable', 503, 'keys.errors.unavailable', false],
     ['openviking_version_mismatch', 503, 'keys.errors.versionMismatch', false],
-    ['Unknown upstream', 400, 'errors.unknownUpstream', false],
-  ])('maps %s', (detail, status, message, keyField) => {
-    expect(issueProblem(t, new GatewayError(detail, status))).toEqual({
-      message,
-      keyField,
-    })
+  ])(
+    'maps stable reason %s independent of detail',
+    (reason, status, message, keyField) => {
+      expect(
+        issueProblem(
+          t,
+          new GatewayError(
+            'arbitrary server wording',
+            status,
+            undefined,
+            reason,
+          ),
+        ),
+      ).toEqual({ message, keyField })
+    },
+  )
+  it('includes the required version', () => {
+    const translate = ((key: string, values?: { version?: string }) =>
+      values?.version ?? key) as Translate
+    expect(
+      issueProblem(
+        translate,
+        new GatewayError(
+          'upgrade',
+          503,
+          undefined,
+          'openviking_version_mismatch',
+          { required_version: '0.5.0' },
+        ),
+      ).message,
+    ).toContain('0.5.0')
+  })
+  it('does not infer a reason from English detail', () => {
+    expect(
+      issueProblem(t, new GatewayError('root_key_not_allowed', 400)).keyField,
+    ).toBe(false)
   })
 })
 
@@ -198,7 +243,10 @@ describe('snippetModel', () => {
   })
 })
 
-function renderIssueDialog(upstreams: Upstream[] = [deepseek]) {
+function renderIssueDialog(
+  upstreams: Upstream[] = [deepseek],
+  defaults?: React.ComponentProps<typeof KeysIssueDialog>['defaults'],
+) {
   const onIssued = vi.fn()
   const onOpenChange = vi.fn()
   const client = new QueryClient({
@@ -212,6 +260,7 @@ function renderIssueDialog(upstreams: Upstream[] = [deepseek]) {
         profiles={[profile]}
         upstreams={upstreams}
         onIssued={onIssued}
+        defaults={defaults}
       />
     </QueryClientProvider>,
   )
@@ -237,16 +286,19 @@ function pasteKey(value: string) {
   fireEvent.click(
     screen.getByRole('button', { name: 'keys.form.openvikingKey.paste' }),
   )
-  fireEvent.change(screen.getByLabelText('keys.form.openvikingKey.label'), {
-    target: { value },
-  })
+  fireEvent.change(
+    screen.getByLabelText(/keys.form.openvikingKey.(forUser|label)/),
+    {
+      target: { value },
+    },
+  )
 }
 
 const submit = () =>
   fireEvent.click(screen.getByRole('button', { name: 'keys.form.submit' }))
 
 describe('KeysIssueDialog', () => {
-  it('lists the account users and disables those whose key the server cannot read', async () => {
+  it('lists every account user including users whose key must be pasted', async () => {
     api.listKeyUsers.mockResolvedValue([hashed, boss, alice])
     api.issueKey.mockResolvedValue({})
     renderIssueDialog()
@@ -266,7 +318,7 @@ describe('KeysIssueDialog', () => {
       'bosskeys.form.user.roles.admin',
       'hashedkeys.form.user.roles.userkeys.form.user.unavailable',
     ])
-    expect(options[2].getAttribute('aria-disabled')).toBe('true')
+    expect(options[2].getAttribute('aria-disabled')).not.toBe('true')
     expect(options[1].getAttribute('aria-disabled')).not.toBe('true')
     // Base UI selects only the highlighted option; hovering highlights it.
     fireEvent.mouseMove(options[1])
@@ -281,15 +333,22 @@ describe('KeysIssueDialog', () => {
     )
   })
 
-  it('preselects the only user whose key the server can read', async () => {
-    api.listKeyUsers.mockResolvedValue([alice, hashed])
+  it('defaults to the signed-in user when other users exist', async () => {
+    api.listKeyUsers.mockResolvedValue([
+      { ...boss, user_id: 'admin' },
+      alice,
+      hashed,
+    ])
     api.issueKey.mockResolvedValue({})
     renderIssueDialog()
-    await fillRequiredFields()
+    fillName()
+    await waitFor(() => expect(userPicker().textContent).toContain('admin'))
     submit()
-
     await waitFor(() =>
-      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), request),
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), {
+        ...request,
+        user_id: 'admin',
+      }),
     )
   })
 
@@ -324,7 +383,7 @@ describe('KeysIssueDialog', () => {
     )
     await waitFor(() =>
       expect(document.activeElement).toBe(
-        screen.getByLabelText('keys.form.openvikingKey.label'),
+        screen.getByLabelText(/keys.form.openvikingKey.(forUser|label)/),
       ),
     )
     fireEvent.click(
@@ -333,32 +392,139 @@ describe('KeysIssueDialog', () => {
     await waitFor(() => expect(document.activeElement).toBe(userPicker()))
   })
 
-  it('asks root for a pasted key without listing users', async () => {
-    // A root key may act on another account than the one Studio shows.
+  it('lets root choose a user in the selected account', async () => {
     state.role = 'root'
     api.issueKey.mockResolvedValue({})
     renderIssueDialog()
-    fillName()
-
-    expect(screen.getByText('keys.form.user.root')).toBeTruthy()
-    expect(
-      screen.queryByRole('button', { name: 'keys.form.user.choose' }),
-    ).toBeNull()
-    fireEvent.change(screen.getByLabelText('keys.form.openvikingKey.label'), {
-      target: { value: 'ov-key' },
-    })
+    await fillRequiredFields()
     submit()
-
     await waitFor(() =>
-      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), pasted),
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), request),
     )
-    expect(api.listKeyUsers).not.toHaveBeenCalled()
+    expect(api.listKeyUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 'acme' }),
+    )
+  })
+
+  it.each([false, true])(
+    'issues for the current identity without an owner (dev: %s)',
+    async (devMode) => {
+      state.role = devMode ? 'root' : 'user'
+      state.devMode = devMode
+      api.issueKey.mockResolvedValue({})
+      renderIssueDialog()
+      fillName()
+      await screen.findByText(
+        devMode ? 'keys.form.user.developmentIdentity' : 'keys.form.user.self',
+      )
+      expect(
+        screen.queryByRole('combobox', { name: 'keys.form.user.label' }),
+      ).toBeNull()
+      submit()
+      await waitFor(() =>
+        expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), settings),
+      )
+      expect(api.listKeyUsers).not.toHaveBeenCalled()
+    },
+  )
+
+  it('focuses the paste field when a selected user key is unreadable', async () => {
+    api.listKeyUsers.mockResolvedValue([hashed])
+    renderIssueDialog()
+    const field = await screen.findByLabelText(
+      'keys.form.openvikingKey.forUser',
+    )
+    await waitFor(() => expect(document.activeElement).toBe(field))
+  })
+
+  it('asks for a pasted key while an unreadable user is selected', async () => {
+    api.listKeyUsers.mockResolvedValue([alice, hashed])
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog()
+    fillName()
+    await waitFor(() =>
+      expect(userPicker().hasAttribute('disabled')).toBe(false),
+    )
+    const pick = async (name: RegExp) => {
+      fireEvent.click(userPicker())
+      const option = await screen.findByRole('option', { name })
+      fireEvent.mouseMove(option)
+      fireEvent.click(option)
+    }
+    await pick(/hashed/)
+    const field = await screen.findByLabelText(
+      'keys.form.openvikingKey.forUser',
+    )
+    await waitFor(() => expect(document.activeElement).toBe(field))
+    // Choosing a user whose key the server can read drops the paste field.
+    await pick(/alice/)
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText('keys.form.openvikingKey.forUser'),
+      ).toBeNull(),
+    )
+    submit()
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), request),
+    )
+  })
+
+  it('never asks an admin to paste their own key', async () => {
+    api.listKeyUsers.mockResolvedValue([
+      { ...hashed, user_id: 'admin', role: 'admin' },
+      alice,
+    ])
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog()
+    fillName()
+    await waitFor(() => expect(userPicker().textContent).toContain('admin'))
+    expect(
+      screen.queryByLabelText('keys.form.openvikingKey.forUser'),
+    ).toBeNull()
+    submit()
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), {
+        ...request,
+        user_id: 'admin',
+      }),
+    )
+  })
+
+  it('switches and focuses the paste field on user_key_unreadable, then retries', async () => {
+    api.issueKey
+      .mockRejectedValueOnce(
+        new GatewayError(
+          'changed wording',
+          409,
+          undefined,
+          'user_key_unreadable',
+        ),
+      )
+      .mockResolvedValueOnce({})
+    renderIssueDialog()
+    await fillRequiredFields()
+    submit()
+    const field = await screen.findByLabelText(
+      'keys.form.openvikingKey.forUser',
+    )
+    await waitFor(() => expect(document.activeElement).toBe(field))
+    expect(screen.getByText('keys.errors.userKeyUnreadable')).toBeTruthy()
+    fireEvent.change(field, { target: { value: 'ov-key' } })
+    submit()
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenLastCalledWith(expect.anything(), pasted),
+    )
   })
 
   it('keeps a removed user unselected instead of choosing another', async () => {
     api.listKeyUsers.mockResolvedValue([alice, boss])
     api.issueKey.mockRejectedValue(
-      new GatewayError('Unknown OpenViking user in this account', 400),
+      new GatewayError(
+        'Unknown OpenViking user in this account',
+        400,
+        undefined,
+        'unknown_user',
+      ),
     )
     renderIssueDialog()
     fillName()
@@ -385,7 +551,12 @@ describe('KeysIssueDialog', () => {
 
   it('retries a preselected user rather than another one', async () => {
     api.issueKey.mockRejectedValue(
-      new GatewayError('Unknown OpenViking user in this account', 400),
+      new GatewayError(
+        'Unknown OpenViking user in this account',
+        400,
+        undefined,
+        'unknown_user',
+      ),
     )
     renderIssueDialog()
     await fillRequiredFields()
@@ -404,33 +575,17 @@ describe('KeysIssueDialog', () => {
     ['the users cannot be listed', 'keys.form.user.loadFailed', false],
     ['no user key can be read', 'keys.form.user.none', true],
   ])('asks for a pasted key when %s', async (_case, reason, listed) => {
-    if (listed) api.listKeyUsers.mockResolvedValue([hashed])
+    if (listed) api.listKeyUsers.mockResolvedValue([])
     else api.listKeyUsers.mockRejectedValue(new GatewayError('Forbidden', 403))
     renderIssueDialog()
 
     expect(await screen.findByText(reason)).toBeTruthy()
-    expect(screen.getByLabelText('keys.form.openvikingKey.label')).toBeTruthy()
+    expect(
+      screen.getByLabelText(/keys.form.openvikingKey.(forUser|label)/),
+    ).toBeTruthy()
     expect(
       screen.queryByRole('button', { name: 'keys.form.user.choose' }),
     ).toBeNull()
-  })
-
-  it('explains an unreadable user key next to the picker', async () => {
-    api.issueKey.mockRejectedValue(
-      new GatewayError(
-        "This user's OpenViking key cannot be read on the server; paste the user's OpenViking key instead",
-        409,
-      ),
-    )
-    renderIssueDialog()
-    await fillRequiredFields()
-    submit()
-
-    expect(
-      await screen.findByText('keys.errors.userKeyUnreadable'),
-    ).toBeTruthy()
-    expect(userPicker().getAttribute('aria-invalid')).toBe('true')
-    expect(screen.queryByText('keys.errors.title')).toBeNull()
   })
 
   it('shows what is missing instead of sending an incomplete request', async () => {
@@ -472,34 +627,92 @@ describe('KeysIssueDialog', () => {
     })
   })
 
+  it('starts from the given defaults', async () => {
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog([deepseek, openai], {
+      name: 'Quick mode',
+      policy_id: 'p1',
+      upstream_ids: ['u2'],
+    })
+    await waitFor(() => expect(userPicker().textContent).toContain('alice'))
+    submit()
+
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), {
+        ...request,
+        name: 'Quick mode',
+        upstream_ids: ['u2'],
+      }),
+    )
+  })
+
   it('explains a rejected OpenViking key next to that field', async () => {
     api.issueKey.mockRejectedValue(
-      new GatewayError('root_key_not_allowed', 403),
+      new GatewayError(
+        'root_key_not_allowed',
+        403,
+        undefined,
+        'root_key_not_allowed',
+      ),
     )
     const { onIssued } = renderIssueDialog()
-    fillName()
+    await fillRequiredFields()
     pasteKey('ov-key')
     submit()
 
     expect(await screen.findByText('keys.errors.rootKey')).toBeTruthy()
     expect(
       screen
-        .getByLabelText('keys.form.openvikingKey.label')
+        .getByLabelText('keys.form.openvikingKey.forUser')
         .getAttribute('aria-invalid'),
     ).toBe('true')
     expect(screen.queryByText('keys.errors.title')).toBeNull()
     expect(onIssued).not.toHaveBeenCalled()
 
     // Editing the key clears the server's verdict.
-    fireEvent.change(screen.getByLabelText('keys.form.openvikingKey.label'), {
-      target: { value: 'another-key' },
-    })
+    fireEvent.change(
+      screen.getByLabelText(/keys.form.openvikingKey.(forUser|label)/),
+      {
+        target: { value: 'another-key' },
+      },
+    )
     expect(screen.queryByText('keys.errors.rootKey')).toBeNull()
+  })
+
+  it('rejects a management key pasted into the user-key field before sending', async () => {
+    renderIssueDialog()
+    await fillRequiredFields()
+    pasteKey('ovgm_wrong_place')
+    submit()
+    expect(
+      screen.getByText('keys.form.openvikingKey.managementKey'),
+    ).toBeTruthy()
+    expect(api.issueKey).not.toHaveBeenCalled()
+  })
+
+  it('labels blocked Coding Plan upstreams and keeps them selectable', async () => {
+    api.issueKey.mockResolvedValue({})
+    renderIssueDialog([
+      { ...deepseek, coding_plan: true, allow_coding_plan: false },
+    ])
+    await fillRequiredFields()
+    expect(screen.getByText('keys.form.upstreams.blocked')).toBeTruthy()
+    const checkbox = screen.getByRole('checkbox')
+    expect(checkbox.getAttribute('aria-disabled')).not.toBe('true')
+    submit()
+    await waitFor(() =>
+      expect(api.issueKey).toHaveBeenCalledWith(expect.anything(), request),
+    )
   })
 
   it('shows other failures in an alert inside the dialog', async () => {
     api.issueKey.mockRejectedValue(
-      new GatewayError('openviking_unavailable', 503),
+      new GatewayError(
+        'openviking_unavailable',
+        503,
+        undefined,
+        'openviking_unavailable',
+      ),
     )
     renderIssueDialog()
     await fillRequiredFields()
@@ -531,7 +744,7 @@ describe('KeysSecretDialog', () => {
       <KeysSecretDialog
         open
         issued={issued}
-        baseUrl="https://gw.example.com"
+        baseUrl="https://gw.example.com/gateway"
         profileName="Coding"
         upstreams={upstreams}
         onDone={onDone}
@@ -555,11 +768,12 @@ describe('KeysSecretDialog', () => {
 
   it('opens on a client the key can serve, with the real key and address', () => {
     renderSecret()
-    expect(screen.getByText('alice')).toBeTruthy()
+    expect(screen.getByText('keys.secret.identity')).toBeTruthy()
+    expect(screen.getByText('keys.secret.dependency')).toBeTruthy()
     expect(screen.getByText('Coding')).toBeTruthy()
     // Only a Chat Completions upstream: the chat client tab is selected.
     const snippet = screen.getByText(/chat\.completions\.create/)
-    expect(snippet.textContent).toContain('https://gw.example.com/v1')
+    expect(snippet.textContent).toContain('https://gw.example.com/gateway/v1')
     expect(snippet.textContent).toContain('ovgw_theSecret')
     expect(snippet.textContent).toContain('deepseek-chat')
     expect(screen.queryByText('keys.secret.noProtocol')).toBeNull()

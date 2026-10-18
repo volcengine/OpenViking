@@ -1,8 +1,10 @@
+import { Notice } from './notice'
 import * as React from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   CopyPlusIcon,
+  EyeIcon,
   KeyRoundIcon,
   PencilIcon,
   PlusIcon,
@@ -23,10 +25,10 @@ import {
 } from '#/components/ui/card'
 import { cn } from '#/lib/utils'
 
-import { deleteProfile, keysUsing } from '../-lib/api'
+import { deleteProfile, keysUsing, toGatewayError } from '../-lib/api'
 import type { GatewayTool, Profile } from '../-lib/api'
 import { EMPTY_VALUE, formatNumber, formatPercent } from '../-lib/format'
-import { gatewayErrorMessage } from '../-lib/localize'
+import { toastGatewayError } from '../-lib/error-toast'
 import type { Translate } from '../-lib/localize'
 import { offeredTools, toProfileSettings } from '../-lib/profile-schema'
 import { NEW_ID } from '../-lib/search'
@@ -87,11 +89,13 @@ function ProfileCard({
   usedBy,
   tools,
   onDelete,
+  readOnly,
 }: {
   profile: Profile
   /** Keys using the profile; undefined while keys are loading. */
   usedBy?: number
   tools: GatewayTool[] | undefined
+  readOnly: boolean
   onDelete: () => void
 }) {
   const { t, i18n } = useTranslation('gateway')
@@ -157,37 +161,41 @@ function ProfileCard({
               />
             }
           >
-            <PencilIcon />
-            {t('actions.edit')}
+            {readOnly ? <EyeIcon /> : <PencilIcon />}
+            {t(readOnly ? 'actions.view' : 'actions.edit')}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs"
-            nativeButton={false}
-            render={
-              <Link
-                to="/gateway/profiles/$profileId"
-                params={{ profileId: NEW_ID }}
-                search={{ from: profile.id }}
-              />
-            }
-          >
-            <CopyPlusIcon />
-            {t('actions.duplicate')}
-          </Button>
-          <ExplainedButton
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={inUse}
-            explanation={deleteHint}
-            aria-label={t('actions.delete')}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            onClick={onDelete}
-          >
-            <Trash2Icon />
-          </ExplainedButton>
+          {!readOnly ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs"
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/gateway/profiles/$profileId"
+                    params={{ profileId: NEW_ID }}
+                    search={{ from: profile.id }}
+                  />
+                }
+              >
+                <CopyPlusIcon />
+                {t('actions.duplicate')}
+              </Button>
+              <ExplainedButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={inUse}
+                explanation={deleteHint}
+                aria-label={t('actions.delete')}
+                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                onClick={onDelete}
+              >
+                <Trash2Icon />
+              </ExplainedButton>
+            </>
+          ) : null}
         </div>
       </CardFooter>
     </Card>
@@ -197,7 +205,8 @@ function ProfileCard({
 /** Context profiles: recall, saving, long conversations and tools. */
 export function ProfilesPage() {
   const { t } = useTranslation('gateway')
-  const { connection, invalidate } = useGateway()
+  const { connection, invalidate, readOnly } = useGateway()
+  const [inUseCount, setInUseCount] = React.useState<number | null>(null)
   const profiles = useProfiles()
   const keys = useKeys()
   const tools = useTools({
@@ -216,10 +225,16 @@ export function ProfilesPage() {
   const remove = useMutation({
     mutationFn: (profile: Profile) => deleteProfile(connection, profile.id),
     onSuccess: async (_result, profile) => {
+      setInUseCount(null)
       toast.success(t('profiles.toast.deleted', { name: profile.name }))
       await invalidate('profiles')
     },
-    onError: (error) => toast.error(gatewayErrorMessage(t, error)),
+    // A profile still in use gets the notice with its next steps instead.
+    onError: (error) => {
+      const failure = toGatewayError(error)
+      if (failure.reason === 'in_use') setInUseCount(failure.keyCount ?? 0)
+      else toastGatewayError(t, error)
+    },
   })
 
   const refreshing = profiles.isFetching || keys.isFetching || tools.isFetching
@@ -248,25 +263,29 @@ export function ProfilesPage() {
         <EmptyState
           icon={<SlidersHorizontalIcon />}
           title={t('profiles.empty.title')}
-          description={t('profiles.empty.description')}
+          description={t(
+            readOnly ? 'profiles.empty.readOnly' : 'profiles.empty.description',
+          )}
           action={
-            <>
-              <RecommendedProfileButton />
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={
-                  <Link
-                    to="/gateway/profiles/$profileId"
-                    params={{ profileId: NEW_ID }}
-                  />
-                }
-              >
-                <SlidersHorizontalIcon />
-                {t('profiles.actions.customize')}
-              </Button>
-            </>
+            readOnly ? undefined : (
+              <>
+                <RecommendedProfileButton />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  render={
+                    <Link
+                      to="/gateway/profiles/$profileId"
+                      params={{ profileId: NEW_ID }}
+                    />
+                  }
+                >
+                  <SlidersHorizontalIcon />
+                  {t('profiles.actions.customize')}
+                </Button>
+              </>
+            )
           }
         />
       </Card>
@@ -278,6 +297,7 @@ export function ProfilesPage() {
           <ProfileCard
             key={profile.id}
             profile={profile}
+            readOnly={readOnly}
             tools={tools.data}
             usedBy={keysUsing(keys.data, { profileId: profile.id })}
             onDelete={() => setDeleteTarget(profile)}
@@ -305,19 +325,21 @@ export function ProfilesPage() {
               />
               {t('actions.refresh')}
             </Button>
-            <Button
-              size="sm"
-              nativeButton={false}
-              render={
-                <Link
-                  to="/gateway/profiles/$profileId"
-                  params={{ profileId: NEW_ID }}
-                />
-              }
-            >
-              <PlusIcon />
-              {t('profiles.actions.new')}
-            </Button>
+            {!readOnly ? (
+              <Button
+                size="sm"
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/gateway/profiles/$profileId"
+                    params={{ profileId: NEW_ID }}
+                  />
+                }
+              >
+                <PlusIcon />
+                {t('profiles.actions.new')}
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -331,6 +353,24 @@ export function ProfilesPage() {
             onRetry={() => void tools.refetch()}
           />
         </Card>
+      ) : null}
+      {inUseCount !== null ? (
+        <Notice
+          tone="warning"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link to="/gateway/keys" />}
+            >
+              {t('actions.viewKeys')}
+            </Button>
+          }
+        >
+          <p>{t('errors.reasons.in_use', { count: inUseCount })}</p>
+          <p>{t('profiles.inUseHelp')}</p>
+        </Notice>
       ) : null}
       {content}
       <ConfirmDialog

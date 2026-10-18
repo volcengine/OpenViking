@@ -1,29 +1,18 @@
+import { useAppConnection } from '#/hooks/use-app-connection'
 import * as React from 'react'
-import {
-  Link,
-  Outlet,
-  useNavigate,
-  useRouterState,
-} from '@tanstack/react-router'
+import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   ActivityIcon,
   KeyRoundIcon,
   LayoutDashboardIcon,
   PlugIcon,
   ServerIcon,
-  ShieldAlertIcon,
+  LockOpenIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '#/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import {
   Tooltip,
@@ -34,7 +23,10 @@ import {
 import { useConnectionInfo, useGateway } from '../-lib/use-gateway'
 import { CopyButton } from './copy-button'
 import { LoadingState } from './empty-state'
-import { GatewayDevMode, GatewayUnavailable } from './gateway-unavailable'
+import { GatewayConnect, GatewayUnavailable } from './gateway-unavailable'
+import { ManagementKeyDialog } from './management-key-dialog'
+import { AccessNotices } from './access-notices'
+import { lockManagementKey } from '../-lib/management-key'
 import { ToneBadge } from './status-badges'
 
 /** Sections in tab order; editor routes belong to their list's tab. */
@@ -63,27 +55,6 @@ export function gatewayTabFor(pathname: string): GatewayTab {
 // list can scroll horizontally on narrow screens without clipping it.
 const tabTriggerClassName =
   'h-full flex-none rounded-none border-0 px-4 text-sm data-active:bg-transparent data-active:font-semibold dark:data-active:border-transparent dark:data-active:bg-transparent focus-visible:border-transparent focus-visible:bg-transparent focus-visible:ring-0 focus-visible:outline-none focus-visible:after:h-1 focus-visible:after:bg-ring focus-visible:after:opacity-100 after:bg-primary group-data-horizontal/tabs:after:bottom-0'
-
-function AccessDenied() {
-  const { t } = useTranslation('gateway')
-  return (
-    <Card className="mx-auto mt-10 w-full max-w-xl">
-      <CardHeader className="items-center text-center">
-        <div className="mb-2 flex size-12 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground">
-          <ShieldAlertIcon className="size-5" />
-        </div>
-        <CardTitle>{t('access.title')}</CardTitle>
-        <CardDescription>{t('access.description')}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex justify-center">
-        <Button nativeButton={false} render={<Link to="/settings" />}>
-          <KeyRoundIcon />
-          {t('access.action')}
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
 
 function AddressChip({ address }: { address: string }) {
   const { t } = useTranslation('gateway')
@@ -163,16 +134,38 @@ function SectionTabs({ activeTab }: { activeTab: GatewayTab }) {
  */
 export function GatewayLayout() {
   const { t } = useTranslation('gateway')
+  const navigate = useNavigate()
+  const { isGatewayHost } = useAppConnection()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const { allowed, devMode, isRoleLoading } = useGateway()
-  const probe = useConnectionInfo()
+  const {
+    allowed,
+    isRoleLoading,
+    accessQuery,
+    access,
+    managementKey,
+    connection,
+  } = useGateway()
+  const probe = useConnectionInfo({ enabled: Boolean(access) })
 
+  React.useEffect(() => {
+    if (isGatewayHost && !allowed && !isRoleLoading)
+      void navigate({ to: '/settings' })
+  }, [isGatewayHost, allowed, isRoleLoading, navigate])
   if (isRoleLoading) return <LoadingState />
-  // No key helps in development mode, so don't ask for one.
-  if (devMode) return <GatewayDevMode />
-  if (!allowed) return <AccessDenied />
+  if (!allowed) return <GatewayConnect />
+  if (accessQuery.isError)
+    return (
+      <GatewayUnavailable
+        error={accessQuery.error}
+        retrying={accessQuery.isFetching}
+        onRetry={() => void accessQuery.refetch()}
+        checkAccess={async () => (await accessQuery.refetch()).isSuccess}
+      />
+    )
+  if (!access) return <LoadingState />
+  const activeTab = gatewayTabFor(pathname)
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
@@ -188,19 +181,31 @@ export function GatewayLayout() {
             {t('description')}
           </p>
         </div>
-        {probe.data ? <AddressChip address={probe.data.base_url} /> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {probe.data ? <AddressChip address={probe.data.base_url} /> : null}
+          {access.managed && access.can_write_objects && managementKey ? (
+            <>
+              <ToneBadge tone="success">
+                <LockOpenIcon className="size-3.5" />
+                {t('management.editing')}
+              </ToneBadge>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => lockManagementKey(connection.baseUrl)}
+              >
+                {t('management.lock')}
+              </Button>
+            </>
+          ) : null}
+        </div>
       </header>
-      {probe.data ? (
-        <SectionTabs activeTab={gatewayTabFor(pathname)} />
-      ) : probe.isError ? (
-        <GatewayUnavailable
-          error={probe.error}
-          retrying={probe.isFetching}
-          onRetry={() => void probe.refetch()}
-        />
-      ) : (
-        <LoadingState />
-      )}
+      <ManagementKeyDialog />
+      <AccessNotices
+        key={connection.baseUrl}
+        objectsTab={activeTab === 'upstreams' || activeTab === 'profiles'}
+      />
+      <SectionTabs activeTab={activeTab} />
     </div>
   )
 }

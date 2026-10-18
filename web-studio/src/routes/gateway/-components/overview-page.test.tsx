@@ -15,6 +15,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { toast } from 'sonner'
 import {
@@ -32,17 +33,35 @@ import i18n from '#/i18n'
 
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
-import type { LogRecord, Overview, Profile } from '../-lib/api'
+import type {
+  GatewayAccess,
+  IssuedKey,
+  LogRecord,
+  Overview,
+  Profile,
+  Upstream,
+} from '../-lib/api'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
+import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { OverviewPage } from './overview-page'
 
 const api = vi.hoisted(() => ({
+  getAccess: vi.fn(),
   getOverview: vi.fn(),
   listLogs: vi.fn(),
   listUpstreams: vi.fn(),
   listProfiles: vi.fn(),
   listKeys: vi.fn(),
   saveProfile: vi.fn(),
+  importVlm: vi.fn(),
+  issueKey: vi.fn(),
+  listKeyUsers: vi.fn(),
+  getConnectionInfo: vi.fn(),
+}))
+const host = vi.hoisted(() => ({ serverMode: 'api_key', gatewayHost: false }))
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
 }))
 
 vi.mock('#/hooks/use-app-connection', () => ({
@@ -56,7 +75,8 @@ vi.mock('#/hooks/use-app-connection', () => ({
     },
     connectionRole: 'admin',
     isConnectionRoleLoading: false,
-    serverMode: 'api_key',
+    serverMode: host.serverMode,
+    isGatewayHost: host.gatewayHost,
   }),
 }))
 vi.mock('../-lib/api', async (importOriginal) => ({
@@ -204,6 +224,22 @@ afterAll(async () => {
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   for (const mock of Object.values(api)) mock.mockReset()
+  host.serverMode = 'api_key'
+  host.gatewayHost = false
+  api.getConnectionInfo.mockResolvedValue({
+    base_url: 'http://gateway.test:1933',
+    public_url_configured: true,
+  })
+  api.getAccess.mockResolvedValue({
+    managed: false,
+    can_write_objects: true,
+    can_import_vlm: true,
+    can_issue_for_others: true,
+    role: 'admin',
+    account_id: 'acme',
+    user_id: 'admin',
+    warnings: [],
+  })
   api.listLogs.mockResolvedValue([])
   api.listUpstreams.mockResolvedValue([])
   api.listProfiles.mockResolvedValue([])
@@ -272,7 +308,7 @@ describe('OverviewPage', () => {
     )
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        'The gateway rejected these settings. Check the values and limits.',
+        'The gateway rejected these settings. Check the values and try again.',
       ),
     )
     expect(
@@ -384,5 +420,246 @@ describe('OverviewPage', () => {
       /overview\.|enums\.|states\.|actions\./,
     )
     await i18n.changeLanguage('en')
+  })
+})
+
+const ARK: Upstream = {
+  ...UPSTREAM_DEFAULTS,
+  id: 'vlm-ark',
+  revision: 1,
+  name: 'vlm-ark',
+  protocol: 'chat',
+  base_url: 'https://ark.example.com/api/v3',
+  models: ['doubao-seed-1-6'],
+  has_api_key: true,
+}
+const CODING_PLAN: Upstream = {
+  ...ARK,
+  id: 'vlm-kimi',
+  name: 'vlm-kimi',
+  coding_plan: true,
+}
+const DEFAULT_PROFILE: Profile = {
+  ...PROFILE_DEFAULTS,
+  id: 'default',
+  revision: 1,
+}
+const ISSUED: IssuedKey = {
+  id: 'k1',
+  revision: 1,
+  name: 'Quick mode',
+  policy_id: 'default',
+  upstream_ids: ['vlm-ark'],
+  models: [],
+  user_id: 'default',
+  prefix: 'ovgw_quick12',
+  created_at: NOW,
+  key: 'ovgw_quickSecret',
+}
+const QUICK_REQUEST = {
+  name: 'Quick mode',
+  policy_id: 'default',
+  upstream_ids: ['vlm-ark'],
+  models: [],
+}
+const LOCKED: GatewayAccess = {
+  managed: true,
+  can_write_objects: false,
+  can_import_vlm: false,
+  can_issue_for_others: false,
+  role: 'user',
+  account_id: 'acme',
+  user_id: 'alice',
+  warnings: [],
+}
+
+const quickButton = () => screen.findByRole('button', { name: 'Get a key' })
+
+describe('OverviewPage quick mode', () => {
+  beforeEach(() => {
+    api.getOverview.mockResolvedValue(EMPTY_OVERVIEW)
+  })
+
+  it('issues a key with the seeded upstream and profile in one request', async () => {
+    host.serverMode = 'dev'
+    api.listUpstreams.mockResolvedValue([ARK])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.issueKey.mockResolvedValue(ISSUED)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        'Upstream: use vlm-ark (doubao-seed-1-6, Chat Completions)',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Context profile: use “Default”')).toBeTruthy()
+    expect(screen.getByText('Or set up step by step')).toBeTruthy()
+    api.listKeys.mockResolvedValue([ISSUED])
+    fireEvent.click(await quickButton())
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('ovgw_quickSecret')).toBeTruthy()
+    expect(api.issueKey).toHaveBeenCalledTimes(1)
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+    expect(api.importVlm).not.toHaveBeenCalled()
+    expect(api.saveProfile).not.toHaveBeenCalled()
+    // A chat-only key opens on the chat client, with the model filled in.
+    const snippet = within(dialog).getAllByText(/v1\/chat\/completions/)[0]
+    expect(snippet.textContent).toContain('doubao-seed-1-6')
+    expect(snippet.textContent).toContain('http://gateway.test:1933')
+
+    expect(await screen.findByText('3 of 4 done')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Get a key' })).toBeNull()
+    expect(screen.getByRole('dialog')).toBe(dialog)
+  })
+
+  it('imports, creates the default profile and issues; a retry skips the import', async () => {
+    let stored: Upstream[] = []
+    api.listUpstreams.mockImplementation(async () => stored)
+    api.importVlm.mockImplementation(async () => {
+      stored = [ARK]
+      return {
+        imported: [{ id: 'vlm-ark', name: 'vlm-ark' }],
+        needs_confirmation: [],
+        skipped: [],
+      }
+    })
+    api.saveProfile
+      .mockRejectedValueOnce(new GatewayError('Invalid', 422))
+      .mockResolvedValue(DEFAULT_PROFILE)
+    api.issueKey.mockResolvedValue(ISSUED)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        "Upstream: import the OpenViking server's model settings, reusing its API key and quota",
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Context profile: create “Default” with the recommended settings',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Key: issued for admin')).toBeTruthy()
+    fireEvent.click(await quickButton())
+    expect(
+      await screen.findByText(
+        'The gateway rejected these settings. Check the values and try again.',
+      ),
+    ).toBeTruthy()
+    expect(api.issueKey).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('ovgw_quickSecret')).toBeTruthy()
+    expect(api.importVlm).toHaveBeenCalledTimes(1)
+    expect(api.saveProfile).toHaveBeenCalledTimes(2)
+    const [, id, settings] = api.saveProfile.mock.calls[1]
+    expect(id).toBe('default')
+    expect(settings).toEqual(PROFILE_DEFAULTS)
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+    const order = [api.importVlm, api.saveProfile, api.issueKey].map(
+      (mock) => mock.mock.invocationCallOrder[0],
+    )
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('stops after an import that yields only an unconfirmed Coding Plan', async () => {
+    let stored: Upstream[] = []
+    api.listUpstreams.mockImplementation(async () => stored)
+    api.importVlm.mockImplementation(async () => {
+      stored = [CODING_PLAN]
+      return {
+        imported: [],
+        needs_confirmation: [{ id: 'vlm-kimi', name: 'vlm-kimi' }],
+        skipped: [],
+      }
+    })
+    renderOverview()
+
+    fireEvent.click(await quickButton())
+    expect(
+      await screen.findByText(/no model the gateway can relay directly/),
+    ).toBeTruthy()
+    const review = screen
+      .getAllByText('Review')
+      .map((node) => node.closest('a')?.getAttribute('href'))
+    expect(review).toContain('/gateway/upstreams/vlm-kimi')
+    expect(api.saveProfile).not.toHaveBeenCalled()
+    expect(api.issueKey).not.toHaveBeenCalled()
+  })
+
+  it('lets root pick the user in a prefilled issue dialog', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: false,
+      can_write_objects: true,
+      can_import_vlm: true,
+      can_issue_for_others: true,
+      role: 'root',
+      account_id: 'acme',
+      user_id: 'admin',
+      warnings: [],
+    })
+    api.listUpstreams.mockResolvedValue([ARK, CODING_PLAN])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.listKeyUsers.mockResolvedValue([
+      { user_id: 'alice', role: 'user', api_key_available: true },
+    ])
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        'Key: choose the OpenViking user who owns it in the next step',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(await quickButton())
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Issue a gateway key')).toBeTruthy()
+    expect(within(dialog).getByLabelText('Name')).toBe(
+      within(dialog).getByDisplayValue('Quick mode'),
+    )
+    expect(
+      within(dialog).getByRole('combobox', { name: 'Context profile' })
+        .textContent,
+    ).toContain('Default')
+    const checked = within(dialog)
+      .getAllByRole('checkbox')
+      .map((box) => box.getAttribute('aria-checked'))
+    expect(checked).toEqual(['true', 'false'])
+    expect(api.issueKey).not.toHaveBeenCalled()
+  })
+
+  it('issues while locked when an upstream and a profile exist', async () => {
+    api.getAccess.mockResolvedValue(LOCKED)
+    api.listUpstreams.mockResolvedValue([ARK])
+    api.listProfiles.mockResolvedValue([DEFAULT_PROFILE])
+    api.issueKey.mockResolvedValue({ ...ISSUED, user_id: 'alice' })
+    renderOverview()
+
+    fireEvent.click(await quickButton())
+    await waitFor(() => expect(api.issueKey).toHaveBeenCalledTimes(1))
+    expect(api.issueKey.mock.calls[0][1]).toEqual(QUICK_REQUEST)
+  })
+
+  it('offers unlocking while locked without a profile', async () => {
+    api.getAccess.mockResolvedValue(LOCKED)
+    api.listUpstreams.mockResolvedValue([ARK])
+    renderOverview()
+
+    const locked = await screen.findByText(
+      'Creating a context profile or importing models needs the gateway management key.',
+    )
+    expect(
+      within(locked.closest('section') as HTMLElement).getByRole('button'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Get a key' })).toBeNull()
+  })
+
+  it('stays hidden on a standalone gateway that is locked without upstreams', async () => {
+    host.gatewayHost = true
+    api.getAccess.mockResolvedValue(LOCKED)
+    renderOverview()
+
+    expect(await screen.findByText('0 of 4 done')).toBeTruthy()
+    expect(screen.queryByText('Quick mode')).toBeNull()
   })
 })

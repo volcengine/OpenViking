@@ -614,13 +614,17 @@ def test_validate_openviking_auth_exits_when_explicit_server_unavailable(monkeyp
     assert "user-key" not in captured.err
 
 
-def test_validate_openviking_auth_keeps_managed_upstream_while_server_starts(monkeypatch, capsys):
+@pytest.mark.parametrize("auth_mode", ["api_key", "trusted"])
+def test_validate_openviking_auth_keeps_managed_upstream_while_server_starts(
+    monkeypatch, capsys, auth_mode
+):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             _source="inherited",
             _server_managed=True,
+            effective_auth_mode=auth_mode,
             mode="remote",
-            api_key_type="user",
+            api_key_type="root" if auth_mode == "trusted" else "user",
             api_key="",
             root_api_key="",
             server_url="http://127.0.0.1:1935",
@@ -632,6 +636,11 @@ def test_validate_openviking_auth_keeps_managed_upstream_while_server_starts(mon
         lambda *_args, **_kwargs: _auth_probe(ok=False, status_code=None, error="ConnectError"),
     )
 
+    if auth_mode == "trusted":
+        with pytest.raises(SystemExit):
+            config_loader_module.validate_openviking_auth(config)
+        assert "no valid root API key" in capsys.readouterr().err
+        return
     config_loader_module.validate_openviking_auth(config)
 
     assert config.ov_server.server_url == "http://127.0.0.1:1935"
@@ -969,30 +978,6 @@ def test_viking_client_request_connection_preserves_trusted_scope(monkeypatch):
         "profile_enabled": False,
         "account": "acct",
         "user": "default",
-    }
-
-
-def test_viking_client_request_connection_allows_trusted_no_key(monkeypatch):
-    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
-
-    VikingClient(
-        agent_id="workspace#channel",
-        connection={
-            "server_url": "http://studio.local",
-            "account_id": "acct",
-            "user_id": "alice",
-            "agent_id": "web-playground",
-            "role": "user",
-            "api_key_type": "root",
-        },
-    )
-
-    first = _DummyHTTPClient.instances[0]
-    assert first.kwargs == {
-        "url": "http://ov.local",
-        "profile_enabled": False,
-        "account": "acct",
-        "user": "alice",
     }
 
 

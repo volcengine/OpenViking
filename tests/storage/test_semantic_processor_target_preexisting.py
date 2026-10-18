@@ -188,6 +188,77 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
 
 
 @pytest.mark.asyncio
+async def test_content_write_handoff_is_not_reused_for_sidecar_writes(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        _FakeTreeExecutor,
+    )
+    scope = SimpleNamespace(lock={"id": "file-exact-lock"}, close=AsyncMock())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=scope),
+    )
+
+    _FakeTreeExecutor.calls = []
+    _FakeTreeExecutor.runs = []
+    processor = _processor()
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://resources/wiki",
+        context_type="resource",
+        recursive=False,
+        changes={"modified": ["viking://resources/wiki/changed.md"]},
+        generation_trigger="content_write",
+        lock_handoff={"owner_id": "producer"},
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeTreeExecutor.calls[0]["lock"] is None
+    scope.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_embedding_lock_wait_skips_semantic_execution(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor",
+        _FakeTreeExecutor,
+    )
+    scope = SimpleNamespace(lock={"id": "file-exact-lock"}, close=AsyncMock())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=scope),
+    )
+
+    _FakeTreeExecutor.calls = []
+    _FakeTreeExecutor.runs = []
+    processor = SemanticProcessor(vlm_resolver=None)
+    msg = SemanticMsg(
+        uri="viking://resources/wiki/changed.md",
+        context_type="resource",
+        recursive=False,
+        skip_vectorization=True,
+        lock_handoff={"owner_id": "producer"},
+        generation_trigger="content_write",
+        aggregate_directory=False,
+        wait_for_embeddings_only=True,
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeTreeExecutor.calls == []
+    scope.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("recursive", [False, True])
 async def test_memory_reindex_uses_semantic_executor(monkeypatch, recursive):
     monkeypatch.setattr(

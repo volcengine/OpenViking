@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitepress'
 import taskLists from 'markdown-it-task-lists'
 import { hasPageLlmsTxt, pageLlmsTxtPath } from './theme/llms-txt'
+import { inferDescription, seoLinks } from './theme/seo'
 import { titleFromMarkdown, docPageTitle, documentationNav, documentationSidebars, documentationSections } from './docs-navigation'
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -11,8 +12,11 @@ const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
 const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
 const base = configuredBase === '//' ? '/' : configuredBase
+const siteRoot = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}`
 // Version the filename so social crawlers do not reuse the previous artwork.
-const ogImageUrl = `${(process.env.DOCS_SITE_URL || 'https://docs.openviking.ai').replace(/\/$/, '')}${base}og-openviking-docs-8efb541b.png`
+const ogImageUrl = `${siteRoot}og-openviking-docs-8efb541b.png`
+// Same GA4 property as openviking.ai; the linker keeps one session across both domains.
+const gaMeasurementId = 'G-86SNDZ0EY9'
 const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
 const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
 const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
@@ -195,6 +199,7 @@ export default defineConfig({
   description: 'Open-source context database for AI Agents',
   cleanUrls: true,
   lastUpdated: true,
+  sitemap: { hostname: siteRoot },
   markdown: { config: md => md.use(taskLists, { label: true }) },
   // Repository guides are read on GitHub; review notes are local artifacts.
   // images/ is the public asset directory, including raw Markdown consumed by other apps.
@@ -213,18 +218,26 @@ export default defineConfig({
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:image', content: ogImageUrl }],
     ['meta', { name: 'twitter:image:alt', content: 'OpenViking / docs — Guides and API reference for AI agent context.' }],
+    ['script', { async: '', src: `https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}` }],
+    ['script', {}, `window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', '${gaMeasurementId}', { linker: { domains: ['openviking.ai', 'docs.openviking.ai'] } });`],
     ['script', {}, preferenceBootstrapScript],
     ['script', {}, languageBootstrapScript]
   ],
   transformPageData(pageData, { siteConfig }) {
+    const head = pageData.frontmatter.head ??= []
     if (hasPageLlmsTxt(pageData.relativePath)) {
-      const head = pageData.frontmatter.head ??= []
       head.push(['link', { rel: 'alternate', type: 'text/plain', title: 'LLM page content', href: `${base.replace(/\/$/, '')}${pageLlmsTxtPath(pageData.relativePath)}` }])
     }
+    head.push(...seoLinks(siteRoot, pageData.relativePath, relativePath => fs.existsSync(path.join(siteConfig.srcDir, relativePath))))
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
     try {
+      const markdown = fs.readFileSync(srcPath, 'utf-8')
+      pageData.description ||= inferDescription(markdown)
       // Raw SFC closing tags must not terminate VitePress's generated script block.
-      pageData.frontmatter._rawMarkdownEncoded = encodeURIComponent(fs.readFileSync(srcPath, 'utf-8'))
+      pageData.frontmatter._rawMarkdownEncoded = encodeURIComponent(markdown)
     } catch {
       pageData.frontmatter._rawMarkdownEncoded = ''
     }

@@ -1,3 +1,4 @@
+import { useReadOnly } from './read-only'
 import * as React from 'react'
 import { PlusIcon, XIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -38,9 +39,11 @@ export function TagInput({
   suggestions = [],
   placeholder,
   id,
-  disabled,
+  disabled: explicitlyDisabled,
   ...aria
 }: TagInputProps) {
+  const readOnly = useReadOnly()
+  const disabled = explicitlyDisabled || readOnly
   const { t } = useTranslation('gateway')
   const [text, setText] = React.useState('')
 
@@ -90,14 +93,19 @@ export function TagInput({
             className="h-6 max-w-full gap-1 pr-1 font-mono font-normal"
           >
             <span className="truncate">{item}</span>
-            <button
-              type="button"
-              aria-label={t('tags.remove', { value: item })}
-              className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              onClick={() => onChange(value.filter((other) => other !== item))}
-            >
-              <XIcon className="size-3" />
-            </button>
+            {readOnly ? null : (
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={t('tags.remove', { value: item })}
+                className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                onClick={() =>
+                  onChange(value.filter((other) => other !== item))
+                }
+              >
+                <XIcon className="size-3" />
+              </button>
+            )}
           </Badge>
         ))}
         <input
@@ -106,7 +114,7 @@ export function TagInput({
           id={id}
           value={text}
           disabled={disabled}
-          placeholder={value.length ? undefined : placeholder}
+          placeholder={value.length || readOnly ? undefined : placeholder}
           className="h-6 min-w-24 flex-1 bg-transparent font-mono text-sm outline-none placeholder:font-sans placeholder:text-muted-foreground"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
@@ -123,6 +131,7 @@ export function TagInput({
             <button
               key={item}
               type="button"
+              disabled={disabled}
               className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2 font-mono text-xs text-muted-foreground transition-colors hover:border-solid hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               onClick={() => add([item])}
             >

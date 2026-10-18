@@ -6,9 +6,15 @@ from fastapi import HTTPException
 
 
 async def list_account_users(registry, account_id, role=None, *, expose_key=True):
-    """Refresh account users, exposing readable keys only when requested."""
-    await registry.refresh_account_users_from_store(account_id)
-    return registry.get_users(account_id, limit=None, role_filter=role, expose_key=expose_key)
+    """List users from the authoritative store, exposing readable keys when requested."""
+    page = await registry.list_users_page(
+        account_id,
+        limit=None,
+        role_filter=role,
+        expose_key=expose_key,
+        fresh=True,
+    )
+    return page["users"]
 
 
 def pick_account_user(rows, user_id, *, missing, unreadable, require_key=True):

@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 
 import i18n from '#/i18n'
 import {
+  createOvClient,
   getTasks,
   getOvResult,
   isOvClientError,
+  ovClient,
   postResourcesTempUpload,
 } from '#/lib/ov-client'
 import { parseUploadError } from '../-lib/upload'
@@ -118,6 +120,33 @@ const TASK_REFRESH_LIMIT = 50
 const ResourceUploadContext =
   React.createContext<ResourceUploadContextValue | null>(null)
 
+function captureUploadConnection() {
+  const options = ovClient.getOptions()
+  const connection = ovClient.getConnection()
+  const client = createOvClient({
+    ...options,
+    apiKeyStorageKey: '',
+    connection,
+  }).client
+
+  return {
+    client,
+    isCurrent() {
+      const currentOptions = ovClient.getOptions()
+      const current = ovClient.getConnection()
+      return (
+        currentOptions.baseUrl === options.baseUrl &&
+        currentOptions.apiKeyAuth === options.apiKeyAuth &&
+        current.accountId === connection.accountId &&
+        current.userId === connection.userId &&
+        current.apiKey === connection.apiKey &&
+        current.adminApiKey === connection.adminApiKey &&
+        current.identityHeaders === connection.identityHeaders
+      )
+    },
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -176,41 +205,85 @@ export function useResourceUpload(): ResourceUploadContextValue {
 
 export function ResourceUploadProvider({
   children,
+  enabled = true,
 }: {
   children: React.ReactNode
+  enabled?: boolean
 }) {
   const { t } = useTranslation('resources', { i18n })
   const [tasks, setTasks] = React.useState<ResourceUploadTask[]>([])
   const [remoteState, setRemoteState] =
     React.useState<RemoteUploadState>(INITIAL_REMOTE_STATE)
   const [isRefreshingTasks, setIsRefreshingTasks] = React.useState(false)
+  const [source] = React.useState(captureUploadConnection)
+  const mountedRef = React.useRef(true)
+  const operationsRef = React.useRef(new Set<AbortController>())
   const remoteAbortRef = React.useRef<AbortController | null>(null)
-  const refreshInFlightRef = React.useRef(false)
+  const refreshAbortRef = React.useRef<AbortController | null>(null)
   const notifiedServerTaskIdsRef = React.useRef<Set<string>>(new Set())
   const remoteCompletionCallbacksRef = React.useRef(
     new Map<string, { onCompleted?: () => void; onFailed?: () => void }>(),
   )
   const uploadQueueRef = React.useRef<Promise<void>>(Promise.resolve())
 
+  const isSourceCurrent = React.useCallback(
+    () => mountedRef.current && source.isCurrent(),
+    [source],
+  )
+
+  const beginOperation = React.useCallback(() => {
+    if (!isSourceCurrent()) return null
+    const controller = new AbortController()
+    operationsRef.current.add(controller)
+    return controller
+  }, [isSourceCurrent])
+
+  const isOperationCurrent = React.useCallback(
+    (controller: AbortController) => {
+      if (controller.signal.aborted) return false
+      if (isSourceCurrent()) return true
+      controller.abort()
+      return false
+    },
+    [isSourceCurrent],
+  )
+
+  React.useEffect(() => {
+    mountedRef.current = true
+    const operations = operationsRef.current
+    const callbacks = remoteCompletionCallbacksRef.current
+    return () => {
+      // Promise queues outlive React; abort requests and stop their continuations.
+      mountedRef.current = false
+      for (const controller of operations) controller.abort()
+      operations.clear()
+      callbacks.clear()
+      remoteAbortRef.current = null
+    }
+  }, [])
+
   const updateTask = React.useCallback(
     (
       taskId: string,
       updater: (task: ResourceUploadTask) => ResourceUploadTask,
     ) => {
+      if (!isSourceCurrent()) return
       setTasks((prev) =>
         prev.map((task) => (task.id === taskId ? updater(task) : task)),
       )
     },
-    [],
+    [isSourceCurrent],
   )
 
   const refreshTasks = React.useCallback(
     async (options: RefreshTasksOptions = {}) => {
-      if (refreshInFlightRef.current) {
+      if (refreshAbortRef.current && !refreshAbortRef.current.signal.aborted) {
         return
       }
+      const controller = beginOperation()
+      if (!controller) return
 
-      refreshInFlightRef.current = true
+      refreshAbortRef.current = controller
       if (!options.silent) {
         setIsRefreshingTasks(true)
       }
@@ -218,12 +291,15 @@ export function ResourceUploadProvider({
       try {
         const result = await getOvResult<TaskListResult>(
           getTasks({
+            client: source.client,
+            signal: controller.signal,
             query: {
               limit: TASK_REFRESH_LIMIT,
               task_type: RESOURCE_ADD_TASK_TYPE,
             },
           }),
         )
+        if (!isOperationCurrent(controller)) return
         const serverTasks = normalizeTaskList(result)
         const fallbackMessages = {
           failed: i18n.t('resources:processingTasks.errors.failed'),
@@ -233,17 +309,21 @@ export function ResourceUploadProvider({
           mergeServerTasks(prev, serverTasks, fallbackMessages),
         )
       } catch (error) {
+        if (!isOperationCurrent(controller)) return
         if (options.notifyOnError !== false) {
           toast.error(getErrorMessage(error), { duration: 5000 })
         }
       } finally {
-        refreshInFlightRef.current = false
-        if (!options.silent) {
-          setIsRefreshingTasks(false)
+        operationsRef.current.delete(controller)
+        if (refreshAbortRef.current === controller) {
+          refreshAbortRef.current = null
+          if (isOperationCurrent(controller) && !options.silent) {
+            setIsRefreshingTasks(false)
+          }
         }
       }
     },
-    [],
+    [beginOperation, isOperationCurrent, source],
   )
 
   const processFileUpload = React.useCallback(
@@ -251,8 +331,10 @@ export function ResourceUploadProvider({
       taskId: string,
       params: UploadBatchItem,
       commonBody: ResourceImportCommonBody,
+      controller: AbortController,
     ) => {
       try {
+        if (!isOperationCurrent(controller)) return
         updateTask(taskId, (task) => ({
           ...task,
           status: 'uploading',
@@ -261,11 +343,14 @@ export function ResourceUploadProvider({
 
         const uploadResult = await getOvResult<TempUploadResult>(
           postResourcesTempUpload({
+            client: source.client,
+            signal: controller.signal,
             body: {
               file: params.file,
               telemetry: true,
             },
             onUploadProgress: (event: { loaded: number; total?: number }) => {
+              if (!isOperationCurrent(controller)) return
               const total = event.total
               if (!total) return
               updateTask(taskId, (task) => ({
@@ -276,6 +361,7 @@ export function ResourceUploadProvider({
             },
           }),
         )
+        if (!isOperationCurrent(controller)) return
 
         const tempFileId = isRecord(uploadResult)
           ? uploadResult.temp_file_id
@@ -299,8 +385,10 @@ export function ResourceUploadProvider({
               params.file.name,
               commonBody,
             ),
+            { client: source.client, signal: controller.signal },
           ),
         )
+        if (!isOperationCurrent(controller)) return
 
         if (addResult.status === 'error') {
           const errors = Array.isArray(addResult.errors) ? addResult.errors : []
@@ -338,6 +426,7 @@ export function ResourceUploadProvider({
         }))
         toast.success(params.file.name)
       } catch (error) {
+        if (!isOperationCurrent(controller)) return
         const { errorCode, errorMessage } = parseUploadError(
           getErrorMessage(error),
         )
@@ -352,12 +441,14 @@ export function ResourceUploadProvider({
         toast.error(errorMessage, { duration: 5000 })
       }
     },
-    [refreshTasks, updateTask],
+    [isOperationCurrent, refreshTasks, source, updateTask],
   )
 
   const enqueueUploads = React.useCallback(
     (params: UploadBatchParams) => {
       if (params.files.length === 0) return
+      const controller = beginOperation()
+      if (!controller) return
 
       const createdAt = Date.now()
       const nextTasks = params.files.map((item, index) => ({
@@ -381,18 +472,22 @@ export function ResourceUploadProvider({
       for (const [index, item] of params.files.entries()) {
         const task = nextTasks[index]
         uploadQueueRef.current = uploadQueueRef.current.then(() =>
-          processFileUpload(task.id, item, params.commonBody),
+          processFileUpload(task.id, item, params.commonBody, controller),
         )
       }
+      void uploadQueueRef.current.finally(() => {
+        operationsRef.current.delete(controller)
+      })
     },
-    [processFileUpload],
+    [beginOperation, processFileUpload],
   )
 
   const startRemote = React.useCallback(
     (params: RemoteStartParams) => {
       if (remoteAbortRef.current) return
 
-      const controller = new AbortController()
+      const controller = beginOperation()
+      if (!controller) return
       remoteAbortRef.current = controller
       const taskId = createTaskId()
 
@@ -428,9 +523,10 @@ export function ResourceUploadProvider({
           const result = await getOvResult<ResourceImportResult>(
             postResourceImport(
               buildRemoteResourceRequest(params.url, params.commonBody),
-              controller.signal,
+              { client: source.client, signal: controller.signal },
             ),
           )
+          if (!isOperationCurrent(controller)) return
 
           if (result.status === 'error') {
             const errors = Array.isArray(result.errors) ? result.errors : []
@@ -449,6 +545,7 @@ export function ResourceUploadProvider({
               : null
 
           params.onAccepted?.({ rootUri, taskId: serverTaskId })
+          if (!isOperationCurrent(controller)) return
 
           if (serverTaskId) {
             if (params.onCompleted || params.onFailed) {
@@ -477,6 +574,7 @@ export function ResourceUploadProvider({
           }
 
           params.onCompleted?.()
+          if (!isOperationCurrent(controller)) return
 
           updateTask(taskId, (task) => ({
             ...task,
@@ -495,6 +593,7 @@ export function ResourceUploadProvider({
           })
           toast.success(params.url)
         } catch (error) {
+          if (!isSourceCurrent()) return
           if (controller.signal.aborted) {
             params.onFailed?.()
             updateTask(taskId, (task) => ({
@@ -531,24 +630,35 @@ export function ResourceUploadProvider({
           })
           toast.error(errorMessage, { duration: 5000 })
         } finally {
-          remoteAbortRef.current = null
+          operationsRef.current.delete(controller)
+          if (remoteAbortRef.current === controller) {
+            remoteAbortRef.current = null
+          }
         }
       })()
     },
-    [refreshTasks, updateTask],
+    [
+      beginOperation,
+      isOperationCurrent,
+      isSourceCurrent,
+      refreshTasks,
+      source,
+      updateTask,
+    ],
   )
 
   const resetRemote = React.useCallback(() => {
+    if (!isSourceCurrent()) return
     if (remoteAbortRef.current) {
       remoteAbortRef.current.abort()
       remoteAbortRef.current = null
     }
     setRemoteState(INITIAL_REMOTE_STATE)
-  }, [])
+  }, [isSourceCurrent])
 
   React.useEffect(() => {
-    void refreshTasks({ notifyOnError: false, silent: true })
-  }, [refreshTasks, t])
+    if (enabled) void refreshTasks({ notifyOnError: false, silent: true })
+  }, [enabled, refreshTasks, t])
 
   const hasActiveServerTasks = React.useMemo(
     () =>
@@ -571,6 +681,7 @@ export function ResourceUploadProvider({
   }, [hasActiveServerTasks, refreshTasks])
 
   React.useEffect(() => {
+    if (!isSourceCurrent()) return
     if (remoteState.phase !== 'processing' || !remoteState.taskId) {
       return
     }
@@ -618,9 +729,10 @@ export function ResourceUploadProvider({
           : prev,
       )
     }
-  }, [remoteState.phase, remoteState.taskId, t, tasks])
+  }, [isSourceCurrent, remoteState.phase, remoteState.taskId, t, tasks])
 
   React.useEffect(() => {
+    if (!isSourceCurrent()) return
     for (const task of tasks) {
       if (!task.serverTaskId || isUploadStatusActive(task.status)) {
         continue
@@ -640,9 +752,10 @@ export function ResourceUploadProvider({
         callbacks.onFailed?.()
       }
     }
-  }, [tasks])
+  }, [isSourceCurrent, tasks])
 
   React.useEffect(() => {
+    if (!isSourceCurrent()) return
     for (const task of tasks) {
       if (
         !task.serverTaskId ||
@@ -660,7 +773,7 @@ export function ResourceUploadProvider({
         toast.error(task.errorMessage || task.fileName, { duration: 5000 })
       }
     }
-  }, [tasks])
+  }, [isSourceCurrent, tasks])
 
   const activeTaskCount = React.useMemo(
     () => tasks.filter((task) => isUploadStatusActive(task.status)).length,

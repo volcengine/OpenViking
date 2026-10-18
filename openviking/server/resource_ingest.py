@@ -59,6 +59,7 @@ async def ingest_temp_upload(
                 ctx=ctx,
                 to=to or None,
                 parent=parent or None,
+                create_parent=bool(parent),
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,

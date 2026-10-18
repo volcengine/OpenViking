@@ -156,12 +156,6 @@ class VikingClient:
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
         if not normalized.get("api_key"):
-            if (
-                normalized.get("api_key_type") == "root"
-                and normalized.get("account_id")
-                and normalized.get("user_id")
-            ):
-                return normalized
             return None
         return normalized
 
@@ -639,13 +633,11 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.add_skill(
             path,
             options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def update_skill(
@@ -655,14 +647,12 @@ class VikingClient:
         *,
         target_uri: str,
         wait: bool = True,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         return await self.client.update_skill(
             skill_name,
             path,
             options={"target_uri": target_uri},
             wait=wait,
-            timeout=timeout,
         )
 
     async def batch_write(
@@ -671,7 +661,6 @@ class VikingClient:
         root_uri: str,
         operations: List[Dict[str, Any]],
         wait: bool = True,
-        timeout: Optional[float] = None,
         skip_conflicts: bool = False,
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
@@ -679,7 +668,6 @@ class VikingClient:
             root_uri=root_uri,
             operations=operations,
             wait=wait,
-            timeout=timeout,
             options={"skip_conflicts": skip_conflicts},
         )
 
@@ -1046,7 +1034,7 @@ class VikingClient:
                         "type": "tool",
                         "tool_id": tool_id,
                         "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}"
+                        "tool_uri": f"viking://~/sessions/{session_id}/tools/{tool_id}"
                         if session_id
                         else "",
                         "tool_input": tool_input,

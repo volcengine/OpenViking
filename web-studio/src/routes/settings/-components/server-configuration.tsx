@@ -21,6 +21,8 @@ import {
   Undo2Icon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { canEditStudioConfiguration } from '#/lib/studio-permissions'
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { copyTextToClipboard } from '#/lib/clipboard'
@@ -313,9 +315,19 @@ export function ServerConfigurationEditor() {
     identityScopeKey,
     isConnectionRoleLoading,
   } = useAppConnection()
+  const service = useStudioService()
   const allowed =
-    connectionRole === 'root' &&
-    (serverMode === 'api_key' || serverMode === 'trusted')
+    service.ready &&
+    canEditStudioConfiguration({
+      serviceProvider: service.provider,
+      hasControlCredential: Boolean(connection.adminApiKey.trim()),
+      isRoleLoading: isConnectionRoleLoading,
+      role: connectionRole,
+      serverMode,
+    })
+  function requireAccess() {
+    if (!allowed) throw new Error(t('models.rootRequired'))
+  }
   const api = React.useMemo(
     () => createConfigFileApi(connection, serverMode === 'trusted'),
     [connection, serverMode],
@@ -324,7 +336,10 @@ export function ServerConfigurationEditor() {
   const queryKey = ['server-configuration', identityScopeKey]
   const query = useQuery({
     queryKey,
-    queryFn: () => api.get(),
+    queryFn: () => {
+      requireAccess()
+      return api.get()
+    },
     enabled: allowed,
     retry: false,
   })
@@ -343,6 +358,7 @@ export function ServerConfigurationEditor() {
   React.useEffect(() => () => restartAbort.current?.abort(), [api])
   const restartMutation = useMutation({
     mutationFn: async (revision: string) => {
+      requireAccess()
       const controller = new AbortController()
       restartAbort.current = controller
       const accepted = await api.restart(revision)
@@ -361,8 +377,10 @@ export function ServerConfigurationEditor() {
     },
   })
   const mutation = useMutation({
-    mutationFn: ({ content }: { content: string; restart?: boolean }) =>
-      api.save(content, (baseline ?? query.data)!.revision),
+    mutationFn: ({ content }: { content: string; restart?: boolean }) => {
+      requireAccess()
+      return api.save(content, (baseline ?? query.data)!.revision)
+    },
     onSuccess: async (result, variables) => {
       queryClient.setQueryData<ConfigFileConfiguration>(queryKey, (previous) =>
         previous
@@ -394,7 +412,10 @@ export function ServerConfigurationEditor() {
       content: string
       changes?: Partial<Record<EditableModelKind, ModelConfig>>
       returnToForm?: boolean
-    }) => api.preview(content, changes),
+    }) => {
+      requireAccess()
+      return api.preview(content, changes)
+    },
     onSuccess: (result, variables) => {
       setDraft(result)
       setEditor(null)

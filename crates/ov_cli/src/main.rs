@@ -433,14 +433,6 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Request timeout in seconds. Used with --wait and by Manifest private Git imports
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
         /// Enable strict mode for directory scanning (fail if any unsupported files found)
         #[arg(
             long = "strict",
@@ -733,14 +725,6 @@ enum Commands {
         /// Wait until semantic refresh is complete
         #[arg(long, help_heading = "Common options")]
         wait: bool,
-        /// Wait timeout in seconds (only used with --wait)
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
     },
     /// [Data] Copy a file or directory
     Cp {
@@ -847,14 +831,6 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         processing_mode: String,
-        /// Optional wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
@@ -986,7 +962,16 @@ enum Commands {
             help_heading = "Common options"
         )]
         search_type: String,
-        /// Target URI
+        /// Return ranked hits (list) or assembled context (context)
+        #[arg(
+            long,
+            default_value = "list",
+            value_parser = ["list", "context"],
+            value_name = "list|context",
+            help_heading = "Common options"
+        )]
+        mode: String,
+        /// Target URI (list mode only)
         #[arg(
             short,
             long,
@@ -1022,7 +1007,7 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         before: Option<String>,
-        /// Only include results with specific level(s) (0=abstract, 1=overview, 2=file)
+        /// Filter levels (0=abstract, 1=overview, 2=file); ignored in context mode
         #[arg(
             short = 'L',
             long = "level",
@@ -1042,7 +1027,7 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
-        /// Include the full visible content for every matched URI
+        /// Include the full visible content for every matched URI (list mode only)
         #[arg(long, help_heading = "Advanced options")]
         read_content: bool,
         /// Enable event decay with protection duration: 0 (immediate) or Xm/Xh/Xd
@@ -1177,7 +1162,7 @@ enum Commands {
     /// [Data] Privacy config management commands
     Privacy {
         #[command(subcommand)]
-        action: PrivacyCommands,
+        action: Box<PrivacyCommands>,
     },
     /// [Data] Export context as .ovpack
     Export {
@@ -1311,16 +1296,7 @@ enum Commands {
 
     // --- Status & Observability ---
     /// [Status] Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// [Status] Track async resource processing tasks
     Task {
         #[command(subcommand)]
@@ -1569,11 +1545,7 @@ pub(crate) enum SnapshotCmd {
 #[derive(Subcommand)]
 enum SystemCommands {
     /// Wait for queued async processing to complete
-    Wait {
-        /// Wait timeout in seconds
-        #[arg(long, value_parser = config::parse_positive_timeout, value_name = "seconds")]
-        timeout: Option<f64>,
-    },
+    Wait,
     /// Show component status
     Status,
     /// Quick health check
@@ -1588,29 +1560,6 @@ enum SystemCommands {
     Crypto {
         #[command(subcommand)]
         action: commands::crypto::CryptoCommands,
-    },
-    /// Backend sync inspection and repair commands
-    Backend {
-        #[command(subcommand)]
-        action: SystemBackendCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum SystemBackendCommands {
-    /// Show multi-write backend sync status for a URI subtree
-    #[command(name = "sync-status")]
-    SyncStatus {
-        /// Viking URI to inspect
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
-    /// Retry pending multi-write backend sync work for a URI subtree
-    #[command(name = "sync-retry")]
-    SyncRetry {
-        /// Viking URI to repair
-        #[arg(value_name = "uri")]
-        uri: String,
     },
 }
 
@@ -2009,6 +1958,30 @@ enum PrivacyCommands {
         #[arg(value_name = "target-key")]
         target_key: String,
     },
+    /// Show an owner-bound reference for one active field without revealing its value
+    Reference {
+        /// Privacy config category
+        #[arg(value_name = "category")]
+        category: String,
+        /// Privacy config target key
+        #[arg(value_name = "target-key")]
+        target_key: String,
+        /// Field in the current values object
+        #[arg(value_name = "field")]
+        field: Option<String>,
+    },
+    /// Reveal one active field value for immediate use
+    Resolve {
+        /// Owner-bound reference, field URI, or privacy category
+        #[arg(value_name = "reference-or-uri-or-category")]
+        selector_or_category: String,
+        /// Privacy config target key (category form only)
+        #[arg(value_name = "target-key")]
+        target_key: Option<String>,
+        /// Field in current values (category form only)
+        #[arg(value_name = "field")]
+        field: Option<String>,
+    },
     /// Upsert privacy config values
     Upsert {
         /// Privacy config category
@@ -2027,9 +2000,9 @@ enum PrivacyCommands {
             value_name = "path"
         )]
         values_file: Option<String>,
-        /// Existing key updates in key=value format (repeatable)
-        #[arg(long = "key", value_name = "key=value")]
-        key: Vec<String>,
+        /// Field updates in field=value format (repeatable; --key is a compatibility alias)
+        #[arg(long = "field", alias = "key", value_name = "field=value")]
+        field: Vec<String>,
         /// Change reason
         #[arg(long, default_value = "", value_name = "text")]
         change_reason: String,
@@ -2069,6 +2042,37 @@ enum PrivacyCommands {
         /// Version number
         #[arg(value_name = "version")]
         version: i32,
+    },
+    /// Delete a target or make one active field unavailable
+    Delete {
+        /// Privacy reference, URI, or config category
+        #[arg(value_name = "reference-or-uri-or-category")]
+        selector_or_category: String,
+        /// Privacy config target key (category form only)
+        #[arg(value_name = "target-key")]
+        target_key: Option<String>,
+        /// Field to remove from active values (optional)
+        #[arg(value_name = "field")]
+        field: Option<String>,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Scan persisted content for registered Privacy values
+    Scan {
+        /// Exact viking:// file or directory to scan
+        #[arg(long, value_name = "uri")]
+        uri: String,
+        /// Rewrite unambiguous matches and refresh derived indexes
+        #[arg(long)]
+        fix: bool,
+        /// Maximum files/nodes enumerated per root
+        #[arg(
+            long,
+            default_value_t = 1000,
+            value_parser = clap::value_parser!(u16).range(1..=1000)
+        )]
+        node_limit: u16,
     },
 }
 
@@ -2544,14 +2548,6 @@ fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
         {
             path.push(watch_subcommand.to_string());
         }
-        if command == "system"
-            && path.get(1).is_some_and(|token| token == "backend")
-            && let Some(backend_subcommand) =
-                tokens.get(2).map(|token| canonical_plain_help_token(token))
-            && backend_subcommand != "help"
-        {
-            path.push(backend_subcommand.to_string());
-        }
         return Some(PlainHelpMisuse {
             help_command: prefixed_help_command(&path),
         });
@@ -2763,10 +2759,6 @@ fn known_task_command_requires_config(tokens: &[String]) -> bool {
 fn known_system_command_requires_config(tokens: &[String]) -> bool {
     match tokens.get(1).map(String::as_str) {
         Some("wait" | "status" | "health" | "consistency") => true,
-        Some("backend") => matches!(
-            tokens.get(2).map(String::as_str),
-            None | Some("sync-status" | "sync-retry")
-        ),
         Some("crypto") => matches!(tokens.get(2).map(String::as_str), None | Some("init-key")),
         _ => false,
     }
@@ -2867,7 +2859,17 @@ fn is_session_subcommand(token: &str) -> bool {
 fn is_privacy_subcommand(token: &str) -> bool {
     matches!(
         token,
-        "categories" | "list" | "get" | "upsert" | "versions" | "version" | "activate"
+        "categories"
+            | "list"
+            | "get"
+            | "reference"
+            | "resolve"
+            | "upsert"
+            | "versions"
+            | "version"
+            | "activate"
+            | "delete"
+            | "scan"
     )
 }
 
@@ -2893,7 +2895,7 @@ fn preprocess_privacy_get_shortcut(args: Vec<OsString>) -> Vec<OsString> {
     out
 }
 
-fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
+fn preprocess_privacy_upsert_field_flags(args: Vec<OsString>) -> Vec<OsString> {
     let Some(cmd_idx) = find_command_index(&args) else {
         return args;
     };
@@ -2919,8 +2921,11 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
             continue;
         }
 
-        if i > cmd_idx + 1 && arg_lossy.starts_with("--key-") {
-            let suffix = &arg_lossy[6..];
+        let dynamic_field = arg_lossy
+            .strip_prefix("--field-")
+            .or_else(|| arg_lossy.strip_prefix("--key-"));
+        if i > cmd_idx + 1 && dynamic_field.is_some() {
+            let suffix = dynamic_field.expect("checked above");
             if suffix.is_empty() {
                 converted.push(args[i].clone());
                 i += 1;
@@ -2928,7 +2933,7 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
             }
 
             if let Some((key, value)) = suffix.split_once('=') {
-                converted.push(OsString::from("--key"));
+                converted.push(OsString::from("--field"));
                 converted.push(OsString::from(format!("{}={}", key, value)));
                 i += 1;
                 continue;
@@ -2936,7 +2941,7 @@ fn preprocess_privacy_upsert_key_flags(args: Vec<OsString>) -> Vec<OsString> {
 
             if i + 1 < args.len() {
                 let next_val = args[i + 1].to_string_lossy();
-                converted.push(OsString::from("--key"));
+                converted.push(OsString::from("--field"));
                 converted.push(OsString::from(format!("{}={}", suffix, next_val)));
                 i += 2;
                 continue;
@@ -3009,7 +3014,7 @@ fn pre_parse_output_options(args: &[OsString]) -> (OutputFormat, bool) {
 
 fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_privacy_get_shortcut(args);
-    preprocess_privacy_upsert_key_flags(args)
+    preprocess_privacy_upsert_field_flags(args)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3375,7 +3380,6 @@ async fn main() {
             reason,
             instruction,
             wait,
-            timeout,
             tags,
             tag_mode,
             acl,
@@ -3408,7 +3412,6 @@ async fn main() {
                                 processing_mode,
                                 external_connector: run.external_connector,
                             },
-                            timeout,
                             ctx,
                         )
                         .await
@@ -3424,7 +3427,6 @@ async fn main() {
                     reason,
                     instruction,
                     wait,
-                    timeout,
                     strict_mode,
                     ignore_dirs,
                     include,
@@ -3572,9 +3574,9 @@ async fn main() {
             on_conflict,
             vector_mode,
         } => handlers::handle_restore(file_path, on_conflict, vector_mode, ctx).await,
-        Commands::Wait { timeout } => {
+        Commands::Wait => {
             let client = ctx.get_client();
-            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+            commands::system::wait(&client, ctx.output_format, ctx.compact).await
         }
         Commands::Task { action } => match action {
             TaskCommands::Status { task_id } => {
@@ -3661,7 +3663,7 @@ async fn main() {
         Commands::Observer { action } => handlers::handle_observer(action, ctx).await,
         Commands::Session { action } => handlers::handle_session(action, ctx).await,
         Commands::Admin { action } => handlers::handle_admin(action, ctx).await,
-        Commands::Privacy { action } => handlers::handle_privacy(action, ctx).await,
+        Commands::Privacy { action } => handlers::handle_privacy(*action, ctx).await,
         Commands::Ls {
             uri,
             simple,
@@ -3743,8 +3745,7 @@ async fn main() {
             uri,
             recursive,
             wait,
-            timeout,
-        } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
+        } => handlers::handle_rm(uri, recursive, wait, ctx).await,
         Commands::Cp {
             from_uri,
             to_uri,
@@ -3856,7 +3857,6 @@ async fn main() {
             mode,
             wait,
             processing_mode,
-            timeout,
             tags,
             tag_mode,
             acl,
@@ -3874,7 +3874,6 @@ async fn main() {
                 from_file,
                 effective_mode,
                 wait,
-                timeout,
                 processing_mode,
                 tags,
                 tag_mode,
@@ -3936,6 +3935,7 @@ async fn main() {
             query,
             image,
             search_type,
+            mode,
             uri,
             session_id,
             node_limit,
@@ -3953,6 +3953,7 @@ async fn main() {
                 uri,
                 image,
                 search_type,
+                mode,
                 session_id,
                 node_limit,
                 threshold,
@@ -4032,7 +4033,7 @@ mod tests {
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
-    use crate::{AdminCommands, SystemBackendCommands, SystemCommands, handlers};
+    use crate::{AdminCommands, handlers};
     use clap::{CommandFactory, Parser};
     use std::ffi::OsString;
 
@@ -4194,12 +4195,23 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_search_context_type() {
-        let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
-            .expect("search context type should parse");
+    fn cli_parses_search_context_mode_and_type() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "search",
+            "invoice",
+            "--mode",
+            "context",
+            "--context-type",
+            "skill",
+        ])
+        .expect("search context mode and type should parse");
 
         match cli.command {
-            Commands::Search { context_type, .. } => {
+            Commands::Search {
+                mode, context_type, ..
+            } => {
+                assert_eq!(mode, "context");
                 assert_eq!(context_type, Some(vec!["skill".to_string()]));
             }
             _ => panic!("expected search command"),
@@ -4212,9 +4224,12 @@ mod tests {
             .expect("search image should parse");
 
         match cli.command {
-            Commands::Search { query, image, .. } => {
+            Commands::Search {
+                query, image, mode, ..
+            } => {
                 assert_eq!(query.as_deref(), Some("poster"));
                 assert_eq!(image.as_deref(), Some("viking://x.png"));
+                assert_eq!(mode, "list");
             }
             _ => panic!("expected search command"),
         }
@@ -4382,22 +4397,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cli_parses_system_backend_sync_status() {
-        let cli = Cli::try_parse_from(["ov", "system", "backend", "sync-status", "viking://a"])
-            .expect("system backend sync-status should parse");
-
-        match cli.command {
-            Commands::System { action } => match action {
-                SystemCommands::Backend { action } => match action {
-                    SystemBackendCommands::SyncStatus { uri } => assert_eq!(uri, "viking://a"),
-                    _ => panic!("expected backend sync-status command"),
-                },
-                _ => panic!("expected system backend command"),
-            },
-            _ => panic!("expected system command"),
-        }
-    }
 
     #[test]
     fn server_commands_require_existing_cli_config() {
@@ -4623,7 +4622,6 @@ mod tests {
             &["ov", "config", "validate"],
             &["ov", "config", "show"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend", "sync-status"],
             &["ov", "admin", "list-accounts"],
         ] {
             assert!(
@@ -4708,9 +4706,6 @@ mod tests {
             &["ov", "system", "status"],
             &["ov", "system", "health"],
             &["ov", "system", "consistency"],
-            &["ov", "system", "backend"],
-            &["ov", "system", "backend", "sync-status"],
-            &["ov", "system", "backend", "sync-retry"],
             &["ov", "system", "crypto"],
             &["ov", "system", "crypto", "init-key"],
             &["ov", "session", "new"],
@@ -4725,10 +4720,14 @@ mod tests {
             &["ov", "privacy", "categories"],
             &["ov", "privacy", "list"],
             &["ov", "privacy", "get"],
+            &["ov", "privacy", "reference"],
+            &["ov", "privacy", "resolve"],
             &["ov", "privacy", "upsert"],
             &["ov", "privacy", "versions"],
             &["ov", "privacy", "version"],
             &["ov", "privacy", "activate"],
+            &["ov", "privacy", "delete"],
+            &["ov", "privacy", "scan"],
             &["ov", "observer", "queue"],
             &["ov", "observer", "vikingdb"],
             &["ov", "observer", "models"],
@@ -5309,42 +5308,6 @@ mod tests {
     }
 
     #[test]
-    fn all_timeout_options_require_positive_finite_seconds() {
-        let command_prefixes = [
-            vec!["ov", "add-resource", "https://example.com", "--timeout"],
-            vec!["ov", "rm", "viking://resources/item", "--timeout"],
-            vec![
-                "ov",
-                "write",
-                "viking://resources/item",
-                "--content",
-                "value",
-                "--timeout",
-            ],
-            vec!["ov", "wait", "--timeout"],
-            vec!["ov", "system", "wait", "--timeout"],
-        ];
-
-        for prefix in command_prefixes {
-            for invalid in ["0", "-1", "inf", "NaN", "1e300"] {
-                let mut args = prefix.clone();
-                args.push(invalid);
-                assert!(
-                    Cli::try_parse_from(&args).is_err(),
-                    "{args:?} should reject an invalid timeout"
-                );
-            }
-
-            let mut args = prefix;
-            args.push("0.1");
-            assert!(
-                Cli::try_parse_from(&args).is_ok(),
-                "{args:?} should accept a positive finite timeout"
-            );
-        }
-    }
-
-    #[test]
     fn all_node_limit_options_accept_zero_and_reject_negative_values() {
         let command_prefixes = [
             vec!["ov", "ls", "--node-limit"],
@@ -5627,10 +5590,6 @@ mod tests {
             (
                 vec!["ov", "system", "consistency", "help"],
                 "ov system consistency --help",
-            ),
-            (
-                vec!["ov", "system", "backend", "sync-status", "help"],
-                "ov system backend sync-status --help",
             ),
         ] {
             let misuse = plain_help_misuse(&os_args(&args))
@@ -6053,126 +6012,350 @@ mod tests {
     }
 
     #[test]
-    fn preprocess_key_dynamic_flag_to_static_form() {
-        let args = vec![
-            OsString::from("ov"),
-            OsString::from("privacy"),
-            OsString::from("upsert"),
-            OsString::from("skill"),
-            OsString::from("demo"),
-            OsString::from("--key-api_key"),
-            OsString::from("secret-v1"),
-        ];
+    fn preprocess_field_dynamic_flags_to_static_form() {
+        for dynamic_flag in ["--field-api_key", "--key-api_key"] {
+            let args = vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("upsert"),
+                OsString::from("skill"),
+                OsString::from("demo"),
+                OsString::from(dynamic_flag),
+                OsString::from("secret-v1"),
+            ];
 
-        let converted = preprocess_privacy_args(args);
-        let converted_strs: Vec<String> = converted
-            .into_iter()
-            .map(|s| s.to_string_lossy().to_string())
-            .collect();
+            let converted = preprocess_privacy_args(args);
+            let converted_strs: Vec<String> = converted
+                .into_iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
 
-        assert_eq!(
-            converted_strs,
-            vec![
-                "ov",
-                "privacy",
-                "upsert",
-                "skill",
-                "demo",
-                "--key",
-                "api_key=secret-v1",
-            ]
-        );
+            assert_eq!(
+                converted_strs,
+                vec![
+                    "ov",
+                    "privacy",
+                    "upsert",
+                    "skill",
+                    "demo",
+                    "--field",
+                    "api_key=secret-v1",
+                ]
+            );
+        }
+    }
+
+    fn on_cli_parser_stack(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("spawn CLI parser test")
+            .join()
+            .expect("CLI parser test thread");
     }
 
     #[test]
-    fn cli_parses_privacy_upsert_with_key_dynamic_flag() {
-        let cli = Cli::parse_from(preprocess_privacy_args(vec![
-            OsString::from("ov"),
-            OsString::from("privacy"),
-            OsString::from("upsert"),
-            OsString::from("skill"),
-            OsString::from("demo"),
-            OsString::from("--key-api_key"),
-            OsString::from("secret-v2"),
-        ]));
+    fn cli_parses_privacy_upsert_with_field_dynamic_flag() {
+        on_cli_parser_stack(|| {
+            let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("upsert"),
+                OsString::from("skill"),
+                OsString::from("demo"),
+                OsString::from("--field-api_key"),
+                OsString::from("secret-v2"),
+            ]));
 
-        match cli.command {
-            Commands::Privacy { action } => match action {
-                PrivacyCommands::Upsert {
-                    category,
-                    target_key,
-                    key,
-                    ..
-                } => {
-                    assert_eq!(category, "skill");
-                    assert_eq!(target_key, "demo");
-                    assert_eq!(key, vec!["api_key=secret-v2"]);
+            match cli.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Upsert {
+                        category,
+                        target_key,
+                        field,
+                        ..
+                    } => {
+                        assert_eq!(category, "skill");
+                        assert_eq!(target_key, "demo");
+                        assert_eq!(field, vec!["api_key=secret-v2"]);
+                    }
+                    _ => panic!("expected privacy upsert"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+
+            for flag in ["--field", "--key"] {
+                let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                    OsString::from("ov"),
+                    OsString::from("privacy"),
+                    OsString::from("upsert"),
+                    OsString::from("skill"),
+                    OsString::from("demo"),
+                    OsString::from(flag),
+                    OsString::from("api_key=secret-v3"),
+                ]));
+                match cli.command {
+                    Commands::Privacy { action } => match *action {
+                        PrivacyCommands::Upsert { field, .. } => {
+                            assert_eq!(field, vec!["api_key=secret-v3"]);
+                        }
+                        _ => panic!("expected privacy upsert"),
+                    },
+                    _ => panic!("expected privacy command"),
                 }
-                _ => panic!("expected privacy upsert"),
-            },
-            _ => panic!("expected privacy command"),
-        }
+            }
+        });
+    }
+
+    #[test]
+    fn cli_parses_privacy_reference_resolve_and_delete() {
+        on_cli_parser_stack(|| {
+            for (subcommand, expected_field) in [("reference", "api_key"), ("resolve", "token")] {
+                let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                    OsString::from("ov"),
+                    OsString::from("privacy"),
+                    OsString::from(subcommand),
+                    OsString::from("credential"),
+                    OsString::from("github-prod"),
+                    OsString::from(expected_field),
+                ]));
+
+                match cli.command {
+                    Commands::Privacy { action } => match *action {
+                        PrivacyCommands::Reference {
+                            category,
+                            target_key,
+                            field,
+                        } => {
+                            assert_eq!(subcommand, "reference");
+                            assert_eq!(category, "credential");
+                            assert_eq!(target_key, "github-prod");
+                            assert_eq!(field.as_deref(), Some(expected_field));
+                        }
+                        PrivacyCommands::Resolve {
+                            selector_or_category,
+                            target_key,
+                            field,
+                        } => {
+                            assert_eq!(subcommand, "resolve");
+                            assert_eq!(selector_or_category, "credential");
+                            assert_eq!(target_key.as_deref(), Some("github-prod"));
+                            assert_eq!(field.as_deref(), Some(expected_field));
+                        }
+                        _ => panic!("expected privacy field command"),
+                    },
+                    _ => panic!("expected privacy command"),
+                }
+            }
+
+            for subcommand in ["reference", "resolve"] {
+                let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                    OsString::from("ov"),
+                    OsString::from("privacy"),
+                    OsString::from(subcommand),
+                    OsString::from("credential"),
+                    OsString::from("github-prod"),
+                ]));
+
+                match cli.command {
+                    Commands::Privacy { action } => match *action {
+                        PrivacyCommands::Reference { field, .. } => {
+                            assert_eq!(subcommand, "reference");
+                            assert!(field.is_none());
+                        }
+                        PrivacyCommands::Resolve {
+                            target_key, field, ..
+                        } => {
+                            assert_eq!(subcommand, "resolve");
+                            assert_eq!(target_key.as_deref(), Some("github-prod"));
+                            assert!(field.is_none());
+                        }
+                        _ => panic!("expected privacy field command"),
+                    },
+                    _ => panic!("expected privacy command"),
+                }
+            }
+
+            let scan = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("scan"),
+                OsString::from("--uri"),
+                OsString::from("viking://~/resources/project-a"),
+                OsString::from("--fix"),
+            ]));
+            match scan.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Scan {
+                        uri,
+                        fix,
+                        node_limit,
+                    } => {
+                        assert_eq!(uri, "viking://~/resources/project-a");
+                        assert!(fix);
+                        assert_eq!(node_limit, 1000);
+                    }
+                    _ => panic!("expected privacy scan"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+
+            for invalid_args in [
+                vec!["ov", "privacy", "scan"],
+                vec![
+                    "ov",
+                    "privacy",
+                    "scan",
+                    "--uri",
+                    "viking://~/resources/project-a",
+                    "--node-limit",
+                    "1001",
+                ],
+            ] {
+                assert!(Cli::try_parse_from(invalid_args).is_err());
+            }
+
+            let reference =
+                "{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}";
+            let resolved = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("resolve"),
+                OsString::from(reference),
+            ]));
+            match resolved.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Resolve {
+                        selector_or_category,
+                        target_key,
+                        field,
+                    } => {
+                        assert_eq!(selector_or_category, reference);
+                        assert!(target_key.is_none() && field.is_none());
+                    }
+                    _ => panic!("expected privacy resolve"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+
+            let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("delete"),
+                OsString::from("credential"),
+                OsString::from("github-prod"),
+                OsString::from("--yes"),
+            ]));
+            match cli.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Delete {
+                        selector_or_category,
+                        target_key,
+                        field,
+                        yes,
+                    } => {
+                        assert_eq!(selector_or_category, "credential");
+                        assert_eq!(target_key.as_deref(), Some("github-prod"));
+                        assert!(field.is_none());
+                        assert!(yes);
+                    }
+                    _ => panic!("expected privacy delete"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+
+            let field_delete = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("delete"),
+                OsString::from("credential"),
+                OsString::from("github-prod"),
+                OsString::from("api_key"),
+                OsString::from("--yes"),
+            ]));
+            match field_delete.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Delete {
+                        selector_or_category,
+                        target_key,
+                        field,
+                        yes,
+                    } => {
+                        assert_eq!(selector_or_category, "credential");
+                        assert_eq!(target_key.as_deref(), Some("github-prod"));
+                        assert_eq!(field.as_deref(), Some("api_key"));
+                        assert!(yes);
+                    }
+                    _ => panic!("expected privacy field delete"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+        });
     }
 
     #[test]
     fn cli_parses_privacy_shortcut_as_get() {
-        let cli = Cli::parse_from(preprocess_privacy_args(vec![
-            OsString::from("ov"),
-            OsString::from("privacy"),
-            OsString::from("skill"),
-            OsString::from("demo"),
-        ]));
+        on_cli_parser_stack(|| {
+            let cli = Cli::parse_from(preprocess_privacy_args(vec![
+                OsString::from("ov"),
+                OsString::from("privacy"),
+                OsString::from("skill"),
+                OsString::from("demo"),
+            ]));
 
-        match cli.command {
-            Commands::Privacy { action } => match action {
-                PrivacyCommands::Get {
-                    category,
-                    target_key,
-                } => {
-                    assert_eq!(category, "skill");
-                    assert_eq!(target_key, "demo");
-                }
-                _ => panic!("expected privacy get"),
-            },
-            _ => panic!("expected privacy command"),
-        }
+            match cli.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Get {
+                        category,
+                        target_key,
+                    } => {
+                        assert_eq!(category, "skill");
+                        assert_eq!(target_key, "demo");
+                    }
+                    _ => panic!("expected privacy get"),
+                },
+                _ => panic!("expected privacy command"),
+            }
+        });
     }
 
     #[test]
     fn cli_parses_privacy_shortcut_after_compact_without_value() {
-        let cli = Cli::try_parse_from(preprocess_cli_args(vec![
-            OsString::from("ov"),
-            OsString::from("--compact"),
-            OsString::from("privacy"),
-            OsString::from("skill"),
-            OsString::from("demo"),
-        ]))
-        .expect("--compact without a value should not consume the privacy command");
+        on_cli_parser_stack(|| {
+            let cli = Cli::try_parse_from(preprocess_cli_args(vec![
+                OsString::from("ov"),
+                OsString::from("--compact"),
+                OsString::from("privacy"),
+                OsString::from("skill"),
+                OsString::from("demo"),
+            ]))
+            .expect("--compact without a value should not consume the privacy command");
 
-        assert!(cli.compact);
-        match cli.command {
-            Commands::Privacy { action } => match action {
-                PrivacyCommands::Get {
-                    category,
-                    target_key,
-                } => {
-                    assert_eq!(category, "skill");
-                    assert_eq!(target_key, "demo");
-                }
-                _ => panic!("expected privacy get"),
-            },
-            _ => panic!("expected privacy command"),
-        }
+            assert!(cli.compact);
+            match cli.command {
+                Commands::Privacy { action } => match *action {
+                    PrivacyCommands::Get {
+                        category,
+                        target_key,
+                    } => {
+                        assert_eq!(category, "skill");
+                        assert_eq!(target_key, "demo");
+                    }
+                    _ => panic!("expected privacy get"),
+                },
+                _ => panic!("expected privacy command"),
+            }
 
-        let explicit_false = Cli::try_parse_from(preprocess_cli_args(vec![
-            OsString::from("ov"),
-            OsString::from("-c"),
-            OsString::from("false"),
-            OsString::from("privacy"),
-            OsString::from("skill"),
-            OsString::from("demo"),
-        ]))
-        .expect("-c false should keep its explicit bool value");
-        assert!(!explicit_false.compact);
+            let explicit_false = Cli::try_parse_from(preprocess_cli_args(vec![
+                OsString::from("ov"),
+                OsString::from("-c"),
+                OsString::from("false"),
+                OsString::from("privacy"),
+                OsString::from("skill"),
+                OsString::from("demo"),
+            ]))
+            .expect("-c false should keep its explicit bool value");
+            assert!(!explicit_false.compact);
+        });
     }
 }

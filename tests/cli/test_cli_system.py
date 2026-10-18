@@ -31,16 +31,3 @@ class TestSystemStatus:
         assert data is not None, f"status should return JSON, got stdout: {r['stdout'][:200]}"
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
         assert "result" in data, "'result' field should exist in status response"
-
-
-class TestSystemWait:
-    @pytest.mark.skip(
-        reason="CLI --timeout passed as query param but server only reads from request body, "
-        "causing infinite wait when queue is not empty. "
-        "Re-enable after CLI/Server timeout parameter mismatch is fixed."
-    )
-    def test_wait_with_timeout(self):
-        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=120)
-        assert r["exit_code"] == 0, (
-            f"ov wait should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )

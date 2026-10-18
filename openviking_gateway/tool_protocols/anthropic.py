@@ -13,6 +13,7 @@ from .common import (
     ToolLoopError,
     ToolProtocol,
     ToolRound,
+    append,
     call,
     strip_notices,
 )
@@ -25,10 +26,6 @@ class AnthropicProtocol(ToolProtocol):
     summary_drops = ("stop_sequences", "output_config.format")
     reply_ends = frozenset({"end_turn", "stop_sequence", "tool_use"})
     signed_thinking = True
-
-    @staticmethod
-    def auth_header(key):
-        return {"x-api-key": key}
 
     @staticmethod
     def thinking_as_text(message):
@@ -161,11 +158,11 @@ class AnthropicProtocol(ToolProtocol):
             index, delta = value["index"], value["delta"]
             block = self.blocks[index]
             if "partial_json" in delta:
-                self.arguments[index] = self.arguments.get(index, "") + delta["partial_json"]
+                append(self.arguments, index, delta["partial_json"])
             else:
                 for key in ("text", "thinking", "signature"):
                     if key in delta:
-                        block[key] = block.get(key, "") + delta[key]
+                        append(block, key, delta[key])
                 if delta.get("type") == "citations_delta":
                     block.setdefault("citations", []).append(copy.deepcopy(delta["citation"]))
         elif kind == "content_block_stop":

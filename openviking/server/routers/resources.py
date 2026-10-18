@@ -52,7 +52,6 @@ class AddResourceRequest(BaseModel):
             Provides hints for how the resource should be processed.
         wait: Whether to wait for semantic extraction and vectorization to complete.
             Default is False (async processing).
-        timeout: Timeout in seconds when wait=True. None means no timeout.
         strict: Whether to use strict mode for processing. Default is True.
         internal_task: Whether to hide this task from the default task list.
         ignore_dirs: Comma-separated list of directory names to ignore during parsing.
@@ -88,7 +87,6 @@ class AddResourceRequest(BaseModel):
     reason: str = ""
     instruction: str = ""
     wait: bool = False
-    timeout: Optional[float] = None
     strict: bool = False
     internal_task: bool = False
     source_name: Optional[str] = None
@@ -144,7 +142,6 @@ class AddSkillRequest(BaseModel):
             HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
-        timeout: Timeout in seconds when wait=True.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -154,7 +151,6 @@ class AddSkillRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     list_only: bool = False
     wait: bool = False
-    timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
     target_uri: Optional[str] = None
     telemetry: TelemetryRequest = False
@@ -333,7 +329,6 @@ async def add_resource(
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,
-                timeout=request.timeout,
                 acl=request.acl,
                 tags=request.tags,
                 tag_mode=request.tag_mode,
@@ -409,7 +404,6 @@ async def add_skill(
                 names=request.skills,
                 list_only=request.list_only,
                 wait=request.wait,
-                timeout=request.timeout,
                 target_uri=target_uri,
                 source_metadata=source_metadata,
                 allow_local_path_resolution=allow_local_path_resolution,

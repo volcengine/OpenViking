@@ -2572,8 +2572,10 @@ async def test_reindex_global_namespace_partitions_user_and_resources(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_reindex_upsert_ignores_empty_replace_tags(monkeypatch):
+@pytest.mark.parametrize("tag_mode", ["replace", "clear"])
+async def test_reindex_upsert_empty_tags_preserves_replace_and_clear_semantics(
+    monkeypatch, tag_mode
+):
     from types import SimpleNamespace
 
     from openviking.service.reindex_executor import ReindexExecutor
@@ -2590,10 +2592,6 @@ async def test_reindex_upsert_ignores_empty_replace_tags(monkeypatch):
         "openviking.service.reindex_executor.get_service",
         lambda: SimpleNamespace(vikingdb_manager=FakeVikingDB()),
     )
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.get_request_wait_tracker",
-        lambda: SimpleNamespace(register_embedding_root=lambda *args: None),
-    )
 
     ctx = RequestContext(
         user=UserIdentifier(account_id="test", user_id="alice"),
@@ -2608,54 +2606,17 @@ async def test_reindex_upsert_ignores_empty_replace_tags(monkeypatch):
         context_type="resource",
         level=ContextLevel.DETAIL,
         ctx=ctx,
-        ingest_options=IngestOptions.from_search_tags([], mode="replace"),
+        ingest_options=IngestOptions.from_search_tags(
+            [] if tag_mode == "replace" else None, mode=tag_mode
+        ),
     )
 
-    assert "search_tags" not in queued[0].context_data
-    assert "_upsert_options" not in queued[0].context_data
-
-
-@pytest.mark.asyncio
-async def test_reindex_upsert_applies_clear_tags_to_embedding_message(monkeypatch):
-    from types import SimpleNamespace
-
-    from openviking.service.reindex_executor import ReindexExecutor
-    from openviking.utils.ingest_options import IngestOptions
-
-    queued = []
-
-    class FakeVikingDB:
-        async def enqueue_embedding_msg(self, msg):
-            queued.append(msg)
-            return True
-
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.get_service",
-        lambda: SimpleNamespace(vikingdb_manager=FakeVikingDB()),
-    )
-    monkeypatch.setattr(
-        "openviking.service.reindex_executor.get_request_wait_tracker",
-        lambda: SimpleNamespace(register_embedding_root=lambda *args: None),
-    )
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice"),
-        role=Role.ROOT,
-    )
-    await ReindexExecutor()._upsert_context(
-        uri="viking://resources/demo.md",
-        parent_uri="viking://resources",
-        abstract="demo",
-        vector_text="demo",
-        is_leaf=True,
-        context_type="resource",
-        level=ContextLevel.DETAIL,
-        ctx=ctx,
-        ingest_options=IngestOptions.from_search_tags(None, mode="clear"),
-    )
-
-    assert queued[0].context_data["search_tags"] == []
-    assert queued[0].context_data["_upsert_options"] == {"search_tag_mode": "replace"}
+    if tag_mode == "replace":
+        assert "search_tags" not in queued[0].context_data
+        assert "_upsert_options" not in queued[0].context_data
+    else:
+        assert queued[0].context_data["search_tags"] == []
+        assert queued[0].context_data["_upsert_options"] == {"search_tag_mode": "replace"}
 
 
 @pytest.mark.asyncio

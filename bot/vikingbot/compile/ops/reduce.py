@@ -11,7 +11,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from openviking.core.namespace import relative_uri_path
-from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.ops import common
@@ -317,7 +317,7 @@ async def reduce_group(
             break
         except ModelCallError as exc:
             if (
-                classify_api_error(exc) != ERROR_CLASS_INPUT_TOO_LARGE
+                model_error_kind(exc) is not ModelErrorKind.INPUT_TOO_LARGE
                 or depth == 3
                 or stage == "map"
             ):

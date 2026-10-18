@@ -10,7 +10,14 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
-from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
+from openviking.server.routers.content import (
+    BatchWriteOperation,
+    BatchWriteRequest,
+    ReindexRequest,
+    WriteContentRequest,
+    batch_write,
+    reindex,
+)
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -52,6 +59,69 @@ def test_write_content_request_accepts_clear_without_tags():
 
     assert request.tags is None
     assert request.tag_mode == "clear"
+
+
+def test_batch_write_request_accepts_write_parity_options():
+    request = BatchWriteRequest(
+        root_uri="viking://resources/demo",
+        processing_mode="vectors_only",
+        operations=[
+            BatchWriteOperation(
+                uri="viking://resources/demo/a.md",
+                content="updated",
+                tags=["team=search"],
+                tag_mode="append",
+                acl={
+                    "acl_mode": "restricted",
+                    "entries": [{"principal": "group:engineering", "level": "write"}],
+                },
+            )
+        ],
+    )
+
+    assert request.processing_mode == "vectors_only"
+    assert request.operations[0].tags == ["team=search"]
+    assert request.operations[0].tag_mode == "append"
+    assert request.operations[0].acl.acl_mode == "restricted"
+
+
+async def test_batch_write_forwards_processing_mode_and_operation_metadata(monkeypatch):
+    seen = {}
+
+    async def fake_batch_write(**kwargs):
+        seen.update(kwargs)
+        return {"updated": [kwargs["operations"][0]["uri"]]}
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(batch_write=fake_batch_write)),
+    )
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await batch_write(
+        BatchWriteRequest(
+            root_uri="viking://resources/demo",
+            processing_mode="vectors_only",
+            operations=[
+                BatchWriteOperation(
+                    uri="viking://resources/demo/a.md",
+                    content="updated",
+                    tags=["team=search"],
+                    tag_mode="append",
+                    acl={"acl_mode": "restricted", "entries": []},
+                )
+            ],
+        ),
+        ctx,
+    )
+
+    assert seen["processing_mode"] == "vectors_only"
+    operation = seen["operations"][0]
+    assert operation["tags"] == ["team=search"]
+    assert operation["tag_mode"] == "append"
+    assert operation["acl"]["acl_mode"] == "restricted"
+    assert list(operation["acl"]["entries"]) == []
 
 
 async def test_write_forwards_processing_mode_to_service(monkeypatch):

@@ -7,7 +7,8 @@ import json
 import logging
 import time
 import uuid
-from urllib.parse import urlsplit
+from dataclasses import replace
+from urllib.parse import quote, unquote_plus
 
 import aiohttp
 import orjson
@@ -15,13 +16,15 @@ from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 
+from .capture import CapturePipeline
+from .models import KEY_PLACEHOLDER, Policy
 from .protocols import SSEDecoder, parse_body
 from .storage import digest
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
 from .tool_protocols import ResponseCapture, tool_protocol
 from .tool_protocols.common import SummaryError
-from .vendors import ARK_PATHS, ARK_VENDORS, apply_vendor, ark_url
+from .vendors import ARK_VENDORS, apply_vendor
 
 logger = logging.getLogger(__name__)
 HOP_HEADERS = {
@@ -39,6 +42,11 @@ PATH_PROTOCOL = {
     "/v1/messages/count_tokens": "anthropic",
     "/v1/chat/completions": "chat",
     "/v1/responses": "responses",
+}
+PRIMARY_PATH = {
+    "anthropic": "/v1/messages",
+    "chat": "/v1/chat/completions",
+    "responses": "/v1/responses",
 }
 
 
@@ -62,19 +70,28 @@ def filtered_headers(headers, request=False):
     }
 
 
-def upstream_url(upstream, path):
-    if upstream.get("vendor") in ARK_VENDORS:
-        return ark_url(upstream, path)
-    base = upstream["base_url"].rstrip("/")
-    # Accept both https://host and https://host/v1 as a configured base URL.
-    if urlsplit(base).path.endswith("/v1") and path.startswith("/v1/"):
-        path = path[3:]
-    return base + path
+def query_names(pairs):
+    return {unquote_plus(pair.partition("=")[0]) for pair in pairs}
 
 
-def upstream_headers(upstream, incoming):
-    headers = filtered_headers(incoming, request=True)
-    headers.update(upstream.get("headers", {}))
+def upstream_url(upstream, path, query=""):
+    """The upstream address for a client path; ``{api_key}`` stays unfilled."""
+    base, _, stored = upstream["base_url"].partition("?")
+    base = base.rstrip("/")
+    if not upstream.get("append_endpoint_path", True):
+        primary = PRIMARY_PATH[upstream["protocol"]]
+        if path != primary and not path.startswith(primary + "/"):
+            raise HTTPException(404, f"This upstream is an exact endpoint for {primary} only")
+        path = path[len(primary) :]
+    elif upstream["protocol"] != "anthropic":
+        path = path.removeprefix("/v1")
+    pairs = [pair for pair in stored.split("&") if pair]
+    names = query_names(pairs)
+    pairs += [pair for pair in query.split("&") if pair and not query_names([pair]) & names]
+    return base + path + ("?" + "&".join(pairs) if pairs else "")
+
+
+def upstream_key(upstream, incoming):
     key = (
         upstream.get("api_key", "")
         if upstream.get("auth_mode") != "passthrough"
@@ -86,7 +103,30 @@ def upstream_headers(upstream, incoming):
         )
     if not key:
         raise HTTPException(401, "Upstream API key is missing")
-    headers.update(tool_protocol(upstream["protocol"]).auth_header(key))
+    return key
+
+
+def fill_key(url, key):
+    return url.replace(KEY_PLACEHOLDER, quote(key, safe=""))
+
+
+def upstream_headers(upstream, incoming):
+    headers = filtered_headers(incoming, request=True)
+    headers.update(upstream.get("headers", {}))
+    key = upstream_key(upstream, incoming)
+    name = upstream.get("key_header", "authorization")
+    # Drop configured copies of the auth headers set below.
+    if KEY_PLACEHOLDER in upstream.get("base_url", ""):
+        own, auth = {"authorization", "x-api-key", "api-key"}, {}
+    elif name == "authorization":
+        own, auth = {"authorization"}, {"Authorization": "Bearer " + key}
+        # Anthropic-compatible services accept either header; some require Bearer.
+        if upstream["protocol"] == "anthropic":
+            own, auth = own | {"x-api-key"}, {**auth, "x-api-key": key}
+    else:
+        own, auth = {"authorization", name}, {name: key}
+    headers = {k: v for k, v in headers.items() if k.lower() not in own}
+    headers.update(auth)
     headers["accept-encoding"] = "identity"
     return headers
 
@@ -99,7 +139,11 @@ def check_coding_plan(upstream):
 def matches(upstream, protocol, model):
     return (
         upstream.get("enabled", True)
-        and (not protocol or upstream["protocol"] == protocol)
+        and (
+            upstream["protocol"] == protocol
+            if protocol
+            else upstream.get("append_endpoint_path", True)
+        )
         and (
             not model
             or not upstream.get("models")
@@ -118,9 +162,10 @@ class ProxyRequest:
             app.state.management,
         )
         self.path = "/" + path
-        if self.path.startswith("/api/v3/responses/"):
-            self.path = "/v1/responses/" + self.path.removeprefix("/api/v3/responses/")
-        self.path = ARK_PATHS.get(self.path, self.path)
+        for prefix in ("/api/v3/", "/api/compatible/v1/"):
+            if self.path.startswith(prefix):
+                self.path = "/v1/" + self.path.removeprefix(prefix)
+                break
         self.protocol = PATH_PROTOCOL.get(self.path)
         self.prepared = None
         self.metrics = {"request_id": uuid.uuid4().hex, "kind": "passthrough"}
@@ -128,8 +173,6 @@ class ProxyRequest:
     async def run(self):
         if self.request.headers.get("upgrade", "").lower() == "websocket":
             return Response(status_code=426, headers={"Upgrade": "HTTP/1.1"})
-        if self.path.startswith("/admin") or self.path == "/health":
-            raise HTTPException(404)
         raw = bytearray()
         async for chunk in self.request.stream():
             raw.extend(chunk)
@@ -194,8 +237,15 @@ class ProxyRequest:
             for u in await self.management.list(self.credential["account"], "upstreams")
             if u["id"] in self.credential["upstream_ids"]
         ]
+        # A stored response is pinned below; an exact responses endpoint may hold it.
+        stored_response = self.path.startswith("/v1/responses/")
         candidates = sorted(
-            [u for u in self.upstreams if matches(u, self.protocol, self.model)],
+            [
+                u
+                for u in self.upstreams
+                if matches(u, self.protocol, self.model)
+                or (stored_response and matches(u, "responses", self.model))
+            ],
             key=lambda u: (-u["priority"], u["id"]),
         )
         if not candidates:
@@ -250,8 +300,9 @@ class ProxyRequest:
                 self.metrics.update(self.prepared.metrics)
 
     def url(self, upstream):
-        target = upstream_url(upstream, self.path)
-        return target + "?" + self.request.url.query if self.request.url.query else target
+        key = upstream_key(upstream, self.request.headers)
+        filled = {**upstream, "base_url": fill_key(upstream["base_url"], key)}
+        return upstream_url(filled, self.path, self.request.url.query)
 
     async def outgoing(self, body, upstream, prepared):
         """Vendor fields and the model alias, for the client request and its summary."""
@@ -265,13 +316,14 @@ class ProxyRequest:
         try:
             check_coding_plan(upstream)
             headers = upstream_headers(upstream, self.request.headers)
+            target = self.url(upstream)
         except HTTPException as error:
             raise SummaryError(f"summary_http_{error.status_code}") from error
         headers.setdefault("content-type", "application/json")
         body = await self.outgoing(body, upstream, prepared)
         try:
             async with self.app.state.http.post(
-                self.url(upstream),
+                target,
                 data=orjson.dumps(body),
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
@@ -319,10 +371,26 @@ class ProxyRequest:
                     self.credential["account"],
                     "responses",
                     digest(self.credential["id"] + self.capture.response_id),
-                    {"upstream_id": self.upstream["id"]},
+                    {"upstream_id": self.upstream["id"], "user_id": self.credential["user_id"]},
                     ttl=self.config.response_ttl_seconds,
                 )
-            await self.management.log(self.credential["account"], self.metrics)
+            if self.prepared:
+                # Delivery may have failed or recovered while this request was in flight.
+                # A worker row inserted between this read and the log below can still be
+                # older than this row; if the read fails, the prepare-time fields are kept.
+                try:
+                    capture = await self.store.capture.get(
+                        self.prepared.scope, self.prepared.session
+                    )
+                    CapturePipeline.metrics(
+                        replace(self.prepared, capture=capture, metrics=self.metrics),
+                        Policy.model_validate(self.prepared.root["policy"]),
+                    )
+                except Exception:
+                    logger.exception("OpenViking Gateway capture status refresh failed")
+            await self.management.log(
+                self.credential["account"], self.metrics, user_id=self.credential["user_id"]
+            )
         except Exception:
             logger.exception("OpenViking Gateway response bookkeeping failed")
 
@@ -335,6 +403,7 @@ class ProxyRequest:
             self.credential,
             self.config.public_url,
             self.config.max_body_bytes,
+            self.config.mcp_file_links,
         )
         loop = HiddenToolLoop(prepared, executor, self.store, capture)
         headers = {
@@ -413,10 +482,9 @@ class ProxyRequest:
                     async for chunk in response.content.iter_any():
                         if observe:
                             try:
-                                for frame in decoder.feed(chunk):
-                                    data = decoder.data(frame)
-                                    if data:
-                                        capture.event(data)
+                                # A chunk inside one event completes none: no reply to reread.
+                                if frames := decoder.feed(chunk):
+                                    capture.events(d for d in map(decoder.data, frames) if d)
                             except Exception:
                                 observe = False
                                 capture.complete = False

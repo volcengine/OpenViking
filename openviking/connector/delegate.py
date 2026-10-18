@@ -890,7 +890,6 @@ class ConnectorDelegate:
                                 ctx=ctx,
                                 reason=reason,
                                 source_name=None,
-                                timeout=None,
                             )
                             for key in ("memory_linking", "warnings"):
                                 if key in link_result:

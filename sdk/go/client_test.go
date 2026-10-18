@@ -690,14 +690,14 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Search(context.Background(), "auth", &SearchOptions{
-		TargetURI: "resources/docs",
-		SessionID: "session-1",
+		TargetURI:  "resources/docs",
+		SessionID:  "session-1",
 		SearchType: "keywords",
-		Since:     "1d",
-		Until:     "2026-06-18",
-		TimeField: "updated_at",
-		Level:     []int{2},
-		Tags:      []string{"topic=docs"},
+		Since:      "1d",
+		Until:      "2026-06-18",
+		TimeField:  "updated_at",
+		Level:      []int{2},
+		Tags:       []string{"topic=docs"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -872,7 +872,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/content/batch-write":
 			body := readJSONBody(t, r)
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -881,9 +881,15 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			}
 			operation, ok := operations[0].(map[string]any)
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
-				"uri":     "viking://resources/project/a.txt",
-				"content": "hello",
-				"mode":    "upsert",
+				"uri":      "viking://resources/project/a.txt",
+				"content":  "hello",
+				"mode":     "upsert",
+				"tags":     []any{"team=search"},
+				"tag_mode": "append",
+				"acl": map[string]any{
+					"acl_mode": "restricted",
+					"entries":  []any{map[string]any{"principal": "group:engineering", "level": "write"}},
+				},
 			}) {
 				t.Fatalf("operation = %#v", operations[0])
 			}
@@ -904,8 +910,11 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			URI:     "resources/project/a.txt",
 			Content: String("hello"),
 			Mode:    "upsert",
+			Tags:    []string{"team=search"},
+			TagMode: "append",
+			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
-	}, &BatchWriteOptions{Extra: map[string]any{"future_flag": 0}}); err != nil {
+	}, &BatchWriteOptions{ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := client.DownloadBytes(context.Background(), "resources/project/a.txt")

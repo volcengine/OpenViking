@@ -13,6 +13,7 @@ import functools
 import itertools
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import orjson
@@ -43,6 +44,18 @@ class SummaryError(Exception):
         self.reason = reason
 
 
+def append(target, key, text):
+    """``target[key] += text``, in linear time over a whole stream of deltas."""
+    value = target.get(key) or ""
+    # Without the dict's reference the string is the local's alone, so CPython grows it
+    # in place instead of copying everything streamed so far for every delta.
+    target[key] = ""
+    try:
+        value += text
+    finally:
+        target[key] = value
+
+
 def merge_delta(target, delta):
     for key, value in delta.items():
         if value is None:
@@ -52,7 +65,7 @@ def merge_delta(target, delta):
                 target[key] = {}
             merge_delta(target[key], value)
         elif isinstance(value, str) and key not in {"role", "type", "id"}:
-            target[key] = (target.get(key) or "") + value
+            append(target, key, value)
         elif isinstance(value, list):
             target.setdefault(key, []).extend(copy.deepcopy(value))
         else:
@@ -209,10 +222,6 @@ class ToolProtocol(ABC):
         return True
 
     @staticmethod
-    def auth_header(key: str) -> dict:
-        return {"authorization": "Bearer " + key}
-
-    @staticmethod
     def is_reply(message: dict) -> bool:
         """Whether a history item belongs to a model reply, so a reply can end at it."""
         return message.get("role") == "assistant"
@@ -259,8 +268,8 @@ class ToolProtocol(ABC):
         body["tool_choice"] = "none"
 
     @staticmethod
-    def history_chain(messages: list[dict]) -> list[str]:
-        return prefix_chain(messages)
+    def history_chain(messages: list[dict], after: Sequence[str] = ()) -> list[str]:
+        return prefix_chain(messages, after)
 
     @staticmethod
     def join_replayed_history(messages: list[dict]) -> list[dict]:

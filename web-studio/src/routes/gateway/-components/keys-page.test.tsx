@@ -20,6 +20,7 @@ import { KeysPage } from './keys-page'
 
 const api = vi.hoisted(() => ({
   getConnectionInfo: vi.fn(),
+  getAccess: vi.fn(),
   listKeys: vi.fn(),
   listProfiles: vi.fn(),
   listUpstreams: vi.fn(),
@@ -41,6 +42,10 @@ vi.mock('react-i18next', () => ({
     i18n: { resolvedLanguage: 'en' },
   }),
 }))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
     connection: {
@@ -146,6 +151,15 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.getAccess.mockResolvedValue({
+    managed: false,
+    can_write_objects: true,
+    can_issue_for_others: true,
+    role: 'admin',
+    account_id: 'acme',
+    user_id: 'admin',
+    warnings: [],
+  })
   api.getConnectionInfo.mockResolvedValue({
     base_url: BASE_URL,
     public_url_configured: true,
@@ -235,6 +249,79 @@ describe('KeysPage', () => {
     const issue = screen.getByRole('button', { name: 'keys.issue' })
     expect((issue as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('offers management unlock when shared prerequisites are missing', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: true,
+      can_write_objects: false,
+      can_issue_for_others: false,
+      role: 'user',
+      user_id: 'alice',
+    })
+    api.listKeys.mockResolvedValue([])
+    api.listUpstreams.mockResolvedValue([])
+    const unlock = vi.fn()
+    window.addEventListener('gateway-management-unlock', unlock)
+    renderPage()
+    const button = await screen.findByRole('button', {
+      name: 'keys.prerequisites.unlock',
+    })
+    expect(screen.getByText('keys.prerequisites.managed')).toBeTruthy()
+    expect(
+      screen.queryByRole('link', { name: /keys.prerequisites.addUpstream/ }),
+    ).toBeNull()
+    fireEvent.click(button)
+    expect(unlock).toHaveBeenCalledTimes(1)
+    window.removeEventListener('gateway-management-unlock', unlock)
+  })
+
+  it('hides the user column and user-data deletion for ordinary users', async () => {
+    api.getAccess.mockResolvedValue({
+      managed: true,
+      can_write_objects: false,
+      can_issue_for_others: false,
+      role: 'user',
+      user_id: 'alice',
+    })
+    renderPage()
+    await screen.findByText('Alice laptop')
+    expect(
+      screen.queryByRole('columnheader', { name: 'keys.table.user' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'keys.actions.more' }),
+    ).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: 'keys.actions.revokeKey' }),
+    ).toHaveLength(2)
+  })
+
+  it.each(['admin', 'root'])(
+    'offers user-data deletion for %s',
+    async (role) => {
+      api.getAccess.mockResolvedValue({
+        managed: true,
+        can_write_objects: false,
+        can_issue_for_others: true,
+        role,
+        user_id: 'admin',
+      })
+      renderPage()
+      const buttons = await screen.findAllByRole('button', {
+        name: 'keys.actions.more',
+      })
+      expect(
+        screen.getByRole('columnheader', { name: 'keys.table.user' }),
+      ).toBeTruthy()
+      fireEvent.click(buttons[0])
+      fireEvent.click(
+        await screen.findByRole('menuitem', {
+          name: 'keys.actions.deleteUserData',
+        }),
+      )
+      expect(screen.getByText('keys.deleteUser.title')).toBeTruthy()
+    },
+  )
 
   it('issues a key and shows the secret once with ready-to-use snippets', async () => {
     api.listUpstreams.mockResolvedValue([claude])

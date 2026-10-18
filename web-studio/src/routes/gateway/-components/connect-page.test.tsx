@@ -44,8 +44,15 @@ const api = vi.hoisted(() => ({
   listUpstreams: vi.fn(),
 }))
 
+const host = vi.hoisted(() => ({ isGatewayHost: false }))
+
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ ready: true, provider: 'opensource' }),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({
+    isGatewayHost: host.isGatewayHost,
     connection: {
       baseUrl: 'http://localhost:1933',
       accountId: 'acme',
@@ -65,7 +72,7 @@ vi.mock('../-lib/api', async (importOriginal) => ({
 }))
 
 const PUBLIC: ConnectionInfo = {
-  base_url: 'https://gw.example.com',
+  base_url: 'https://gw.example.com/gateway',
   public_url_configured: true,
 }
 
@@ -76,7 +83,9 @@ function upstream(overrides: Partial<Upstream>): Upstream {
     name: 'Upstream',
     protocol: 'chat',
     base_url: 'https://api.example.com/v1',
+    append_endpoint_path: true,
     auth_mode: 'managed',
+    key_header: 'authorization',
     models: [],
     aliases: {},
     priority: 0,
@@ -188,8 +197,10 @@ describe('ConnectPage', () => {
 
   it('shows the address for both client families and links keys and docs', async () => {
     renderPage()
-    expect(await screen.findByText('https://gw.example.com')).toBeTruthy()
-    expect(screen.getByText('https://gw.example.com/v1')).toBeTruthy()
+    expect(
+      await screen.findByText('https://gw.example.com/gateway'),
+    ).toBeTruthy()
+    expect(screen.getByText('https://gw.example.com/gateway/v1')).toBeTruthy()
     expect(screen.queryByText(/public_url/)).toBeNull()
     expect(linkTo('Manage keys')).toBe('/gateway/keys')
     expect(linkTo('Full guide')).toBe(gatewayDocsUrl('guide', 'en'))
@@ -198,12 +209,15 @@ describe('ConnectPage', () => {
   it.each([
     [
       'a loopback address',
-      { base_url: 'http://127.0.0.1:1935', public_url_configured: false },
+      {
+        base_url: 'http://127.0.0.1:1933/gateway',
+        public_url_configured: false,
+      },
       "Only the gateway's own machine can use this address",
     ],
     [
       'an address that is not the public one',
-      { base_url: 'http://gateway:1935', public_url_configured: false },
+      { base_url: 'http://gateway:1933/gateway', public_url_configured: false },
       'Clients may not be able to reach this address',
     ],
   ])('warns about %s', async (_, info, title) => {
@@ -213,6 +227,27 @@ describe('ConnectPage', () => {
     expect(screen.getAllByText('gateway.public_url')).toHaveLength(1)
   })
 
+  it('points a standalone gateway at gateway.conf instead of ov.conf', async () => {
+    host.isGatewayHost = true
+    api.getConnectionInfo.mockResolvedValue({
+      base_url: 'http://gateway:1935/gateway',
+      public_url_configured: false,
+    })
+    try {
+      renderPage()
+      expect(
+        await screen.findByText(
+          'Clients may not be able to reach this address',
+        ),
+      ).toBeTruthy()
+      expect(screen.getByText('gateway.conf')).toBeTruthy()
+      expect(screen.getByText('OPENVIKING_GATEWAY_PUBLIC_URL')).toBeTruthy()
+      expect(screen.queryByText('ov.conf')).toBeNull()
+    } finally {
+      host.isGatewayHost = false
+    }
+  })
+
   it('starts with Claude Code and warns when no enabled upstream speaks its protocol', async () => {
     renderPage()
     expect(
@@ -220,7 +255,7 @@ describe('ConnectPage', () => {
     ).toBeTruthy()
     expect(snippetTexts()).toContain(
       [
-        'export ANTHROPIC_BASE_URL=https://gw.example.com',
+        'export ANTHROPIC_BASE_URL=https://gw.example.com/gateway',
         "export ANTHROPIC_AUTH_TOKEN='<gateway-key>'",
         'export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
       ].join('\n'),
@@ -246,7 +281,7 @@ describe('ConnectPage', () => {
     ).toBeTruthy()
     expect(
       snippetTexts().some((code) =>
-        code.includes('base_url = "https://gw.example.com/v1"'),
+        code.includes('base_url = "https://gw.example.com/gateway/v1"'),
       ),
     ).toBe(true)
     expect(

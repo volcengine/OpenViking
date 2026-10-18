@@ -158,6 +158,8 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 - `grep` - Content pattern search.
 - `glob` - File glob pattern search.
 
+`search --mode list` (the default) returns ranked hits. `search --mode context` assembles context using server defaults and prints its text; use `-o json` to retain the complete `entries`, `rendered`, `digest`, and `stats` result. Context mode supports `--events-time-decay-protection`, but rejects `--uri` and `--read-content`; `--level` is ignored by the server. Context-specific options such as `max_tokens` and `detail` are not exposed as CLI flags yet.
+
 ### Sessions And Memory
 
 - `session new` - Create a session with optional event-memory tags and auto-commit policy.
@@ -256,11 +258,11 @@ Some command help may also show the long `--output json` form. `-o json` is the 
 
 ```bash
 # Add URL and wait for processing
-ov add-resource https://example.com/docs --wait --timeout 60
+ov add-resource https://example.com/docs --wait
 
 # Add a local directory with filters
 ov add-resource ./dir \
-  --wait --timeout 600 \
+  --wait \
   --ignore-dirs "node_modules,dist" \
   --include "*.md,*.py" \
   --exclude "*.tmp,*.log"
@@ -271,6 +273,10 @@ ov add-resource ./docs -p "viking://resources/docs/{calendar:today}" --wait
 # Search with filters
 ov find "API authentication" --threshold 0.7 --limit 5
 ov find "authentication" --uri viking://resources/project --level 0,1
+
+# Assemble context with event time decay, or inspect the complete JSON result
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+ov -o json search "authentication" --mode context
 
 # Recursive list
 ov ls viking://resources --recursive

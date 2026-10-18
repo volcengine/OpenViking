@@ -14,7 +14,7 @@ from .notices import tool_tail
 from .protocols import SSEDecoder, replays_reasoning, usage_of
 from .records import RecordKind as K
 from .tool_catalog import notice_head
-from .tool_protocols import hidden_chain, tool_protocol
+from .tool_protocols import reply_chain, tool_protocol
 from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage
 from .windows import ALONE, NEW_CONTEXT, window_number
 
@@ -69,18 +69,28 @@ class HiddenToolLoop:
                 received += len(chunk)
                 if received > 64 * 1024 * 1024:
                     raise ToolLoopError("Model stream exceeds tool response budget")
-                for frame in decoder.feed(chunk):
-                    value = decoder.data(frame)
-                    if value is None:
-                        continue
-                    if "error" in value or value.get("type") == "error":
-                        raise ToolLoopError("Model stream failed")
-                    for event in adapter.event(value):
-                        yield adapter.encode(event)
+                # Events that arrive together leave in one write, any before a failure included.
+                events = []
+                try:
+                    events.extend(self.decode(decoder, chunk))
+                finally:
+                    if events:
+                        yield b"".join(events)
             if decoder.buffer.strip():
                 raise ToolLoopError("Incomplete model event stream")
         self.round = adapter.end()
         response.close()
+
+    def decode(self, decoder, chunk):
+        """Client bytes for the upstream events ``chunk`` completes."""
+        for frame in decoder.feed(chunk):
+            value = decoder.data(frame)
+            if value is None:
+                continue
+            if "error" in value or value.get("type") == "error":
+                raise ToolLoopError("Model stream failed")
+            for event in self.adapter.event(value):
+                yield self.adapter.encode(event)
 
     def observe(self):
         self.transcript.extend(self.round.output)
@@ -182,9 +192,7 @@ class HiddenToolLoop:
         # The next request strips the recall notice before matching, so the anchor,
         # the visible count and the replaced span all go without it.
         visible = self.adapter.strip_lead(self.adapter.visible)
-        anchor = (
-            hidden_chain([*self.prepared.messages, *visible], self.protocol)[-1] if visible else ""
-        )
+        anchor = reply_chain(self.prepared, visible)[-1] if visible else ""
         if self.window:
             # new_context refuses an anchor whose cut this request applies, so only a
             # concurrent request can have stored another header here first.
@@ -204,7 +212,7 @@ class HiddenToolLoop:
             # which relaying recorded as the same reply; the transcript replaces it there too.
             dropped, _ = self.adapter.split_reasoning(visible)
             if dropped is not visible and replays_reasoning(self.prepared.upstream):
-                other = hidden_chain([*self.prepared.messages, *dropped], self.protocol)[-1]
+                other = reply_chain(self.prepared, dropped)[-1]
                 if dropped and other:
                     await self.store.replay.put(
                         self.prepared.scope,

@@ -6,6 +6,8 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openviking_cli.setup_wizard import (
     _CUSTOM_SETUP,
     _DEFAULT_KIMI_MODEL,
@@ -1022,6 +1024,162 @@ class TestServerWizardCurrentDefaults:
         assert len(result["root_api_key"]) == 64
 
 
+class TestGatewayWizard:
+    def test_local_enable_needs_no_management_key(self):
+        from openviking_cli.setup_wizard import _wizard_gateway
+
+        with patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True) as prompt:
+            assert _wizard_gateway({"host": "127.0.0.1"}) == {"enabled": True}
+        assert prompt.call_count == 1
+
+    def test_remote_restricted_generates_key_and_preserves_it_on_update(self):
+        from openviking_cli.setup_wizard import _wizard_gateway
+
+        server = {"root_api_key": "root-secret"}
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", side_effect=[True, False]),
+            patch("builtins.print"),
+        ):
+            gateway = _wizard_gateway(server)
+        assert gateway["management_key"].startswith("ovgm_")
+        assert len(gateway["management_key"]) >= 32
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", side_effect=[True, False]),
+            patch("builtins.print") as output,
+        ):
+            assert _wizard_gateway(server, gateway) == gateway
+        assert gateway["management_key"] not in str(output.call_args_list)
+
+    def test_open_configuration_removes_management_key(self):
+        from openviking_cli.setup_wizard import _wizard_gateway
+
+        with patch("openviking_cli.setup_wizard._prompt_confirm", side_effect=[True, True]):
+            assert _wizard_gateway(
+                {"auth_mode": "api_key"},
+                {"enabled": True, "management_key": "old-secret", "storage_path": "/gateway"},
+            ) == {"enabled": True, "storage_path": "/gateway"}
+
+    def test_gateway_update_preserves_other_sections_and_redacts_summary(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        original = _existing_config()
+        original["gateway"] = {"enabled": False, "management_key": "ovgm_saved-secret"}
+        config_path.write_text(json.dumps(original))
+        with (
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._post_save_actions"),
+            patch("builtins.print") as output,
+        ):
+            assert _update_existing_config(config_path, "gateway") == 0
+        updated = json.loads(config_path.read_text())
+        assert updated == {**original, "gateway": {**original["gateway"], "enabled": True}}
+        assert "ovgm_saved-secret" not in str(output.call_args_list)
+
+    def test_update_drops_legacy_fields_and_stale_public_url(self):
+        from openviking_cli.setup_wizard import _wizard_gateway
+
+        legacy = {
+            "enabled": True,
+            "host": "0.0.0.0",
+            "port": 1935,
+            "workers": 2,
+            "url": "http://127.0.0.1:1935",
+            "openviking_url": "http://127.0.0.1:1933",
+            "admin_token_env": "OPENVIKING_GATEWAY_ADMIN_TOKEN",
+            "encryption_key_env": "OPENVIKING_GATEWAY_ENCRYPTION_KEY",
+            "public_url": "http://127.0.0.1:1935",
+            "storage_path": "/gateway",
+        }
+        with (
+            patch(
+                "openviking_cli.setup_wizard._prompt_confirm", side_effect=[True, True]
+            ) as prompt,
+            patch("builtins.print"),
+        ):
+            gateway = _wizard_gateway({"host": "127.0.0.1", "port": 1933}, legacy)
+        assert gateway == {"enabled": True, "storage_path": "/gateway"}
+        assert prompt.call_args_list[1].kwargs["default"] is True
+
+    def test_public_url_on_server_port_is_kept_without_asking(self):
+        from openviking_cli.setup_wizard import _wizard_gateway
+
+        current = {"enabled": True, "public_url": "https://ov.example.com"}
+        with patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True) as prompt:
+            assert _wizard_gateway({"host": "127.0.0.1"}, current) == current
+        assert prompt.call_count == 1
+
+    def test_server_switch_to_local_drops_management_key(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        original = _existing_config()
+        original["server"] = {"host": "0.0.0.0", "port": 1933, "root_api_key": "rk"}
+        original["gateway"] = {"enabled": True, "management_key": "ovgm_saved-secret"}
+        config_path.write_text(json.dumps(original))
+        with (
+            patch(
+                "openviking_cli.setup_wizard._wizard_server",
+                return_value={"host": "127.0.0.1", "port": 1933},
+            ),
+            patch("openviking_cli.setup_wizard._prompt_confirm", return_value=True),
+            patch("openviking_cli.setup_wizard._post_save_actions"),
+            patch("builtins.print"),
+        ):
+            assert _update_existing_config(config_path, "server") == 0
+        assert json.loads(config_path.read_text())["gateway"] == {"enabled": True}
+
+    def test_server_switch_to_remote_asks_who_may_configure(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        original = _existing_config()
+        original["gateway"] = {"enabled": True}
+        config_path.write_text(json.dumps(original))
+        with (
+            patch(
+                "openviking_cli.setup_wizard._wizard_server",
+                return_value={"host": "0.0.0.0", "port": 1933, "root_api_key": "rk"},
+            ),
+            patch("openviking_cli.setup_wizard._prompt_confirm", side_effect=[False, True]),
+            patch("openviking_cli.setup_wizard._post_save_actions"),
+            patch("builtins.print"),
+        ):
+            assert _update_existing_config(config_path, "server") == 0
+        gateway = json.loads(config_path.read_text())["gateway"]
+        assert gateway["enabled"] is True
+        assert gateway["management_key"].startswith("ovgm_")
+
+    def test_new_config_writes_gateway_and_summary_hides_management_key(self, tmp_path):
+        config_path = tmp_path / "ov.conf"
+        config = {
+            "embedding": {"dense": {"provider": "ollama", "model": "qwen", "dimension": 1024}}
+        }
+        with (
+            patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._wizard_ollama", return_value=(config, True)),
+            patch("openviking_cli.setup_wizard._wizard_query_planner", return_value=None),
+            patch(
+                "openviking_cli.setup_wizard._wizard_server",
+                return_value={"host": "0.0.0.0", "port": 1933, "root_api_key": "root-secret"},
+            ),
+            patch(
+                "openviking_cli.setup_wizard._prompt_confirm",
+                side_effect=lambda prompt, default=True: "Allow users" not in prompt,
+            ),
+            patch("openviking_cli.setup_wizard._write_config", return_value=True) as mock_write,
+            patch("openviking_cli.setup_wizard._post_save_actions", return_value=None),
+            patch("builtins.print") as mock_print,
+        ):
+            assert run_init() == 0
+
+        written = mock_write.call_args.args[0]
+        key = written["gateway"]["management_key"]
+        assert written["gateway"] == {"enabled": True, "management_key": key}
+        output = "\n".join(
+            " ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list
+        )
+        # Shown once when generated; never in the summary.
+        assert output.count(key) == 1
+        assert "root-secret" not in output
+        assert "Gateway:       enabled on server port · management key required" in output
+
+
 class TestCurrentConfigSeeding:
     def test_cloud_embedding_keeps_existing_key_and_model(self):
         from openviking_cli.setup_wizard import _prompt_cloud_embedding
@@ -1080,7 +1238,7 @@ class TestCurrentConfigSeeding:
         config_path.write_text(json.dumps(_existing_config()), encoding="utf-8")
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=5) as mock_choice,
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=6) as mock_choice,
             patch("builtins.print") as mock_print,
         ):
             assert run_init() == 0
@@ -1387,19 +1545,20 @@ class TestPartialUpdate:
 
 
 class TestRunInitExistingConfigMenu:
-    def test_dispatches_partial_update(self, tmp_path):
+    @pytest.mark.parametrize("choice,section", [(2, "vlm"), (5, "gateway")])
+    def test_dispatches_partial_update(self, tmp_path, choice, section):
         config_path = tmp_path / "ov.conf"
         config_path.write_text(json.dumps(_existing_config()), encoding="utf-8")
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=2),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=choice),
             patch(
                 "openviking_cli.setup_wizard._update_existing_config", return_value=0
             ) as mock_update,
             patch("builtins.print"),
         ):
             assert run_init() == 0
-        mock_update.assert_called_once_with(config_path, "vlm")
+        mock_update.assert_called_once_with(config_path, section)
 
     def test_cancel_leaves_config_untouched(self, tmp_path):
         config_path = tmp_path / "ov.conf"
@@ -1407,7 +1566,7 @@ class TestRunInitExistingConfigMenu:
         config_path.write_text(original, encoding="utf-8")
         with (
             patch.dict(os.environ, {"OPENVIKING_CONFIG_FILE": str(config_path)}, clear=False),
-            patch("openviking_cli.setup_wizard._prompt_choice", return_value=5),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=6),
             patch("builtins.print"),
         ):
             assert run_init() == 0

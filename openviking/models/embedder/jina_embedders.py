@@ -10,6 +10,7 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
+from openviking.models.model_error import model_error_boundary
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils import get_logger
 
@@ -126,6 +127,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.api_base,
+            max_retries=0,
         )
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -168,6 +170,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             lambda: openai.AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.api_base,
+                max_retries=0,
             )
         )
 
@@ -181,6 +184,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
                 f"to a valid task type for this model. API details: {error.message}"
             ) from error
 
+    @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -202,7 +206,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            result = self._run_with_retry(
+            result = self._run_once(
                 _call,
                 logger=logger,
                 operation_name="Jina embedding",
@@ -222,6 +226,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
+    @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
@@ -230,7 +235,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=response.data[0].embedding)
 
         try:
-            result = await self._run_with_async_retry(
+            result = await self._run_once_async(
                 _call,
                 logger=logger,
                 operation_name="Jina async embedding",

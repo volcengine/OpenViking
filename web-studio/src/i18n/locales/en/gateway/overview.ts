@@ -8,6 +8,23 @@ const overview = {
   sampleNote_other:
     'Figures cover the latest {{limit}} entries of the request log. Entries are kept for {{count}} days.',
   setup: {
+    providedUpstreams_one: '{{count}} upstream provided by your gateway admin',
+    providedUpstreams_other:
+      '{{count}} upstreams provided by your gateway admin',
+    importedUpstreams_one:
+      "{{count}} upstream, imported from OpenViking's model settings",
+    importedUpstreams_other:
+      "{{count}} upstreams, imported from OpenViking's model settings",
+    someImportedUpstreams:
+      "{{count}} upstreams, {{imported}} of them imported from OpenViking's model settings",
+    waitUpstreams: 'Waiting for your gateway admin to add an upstream',
+    providedProfiles_one: '{{count}} profile provided by your gateway admin',
+    providedProfiles_other: '{{count}} profiles provided by your gateway admin',
+    waitProfiles: 'Waiting for your gateway admin to add a profile',
+    codingPlan:
+      '{{name}} is a Coding Plan upstream. Requests to it are blocked until you confirm the plan allows it.',
+    confirm: 'Review',
+
     title: 'Get started',
     description:
       'Four steps to the first conversation with memory. This card goes away once a client sends its first request.',
@@ -34,6 +51,8 @@ const overview = {
       description:
         'Clients use this key to call the gateway. It belongs to one OpenViking user, whose memory the gateway reads and writes.',
       blocked: 'Add an upstream and a context profile first.',
+      waiting:
+        'You can issue a key once your gateway admin adds an upstream and a profile.',
       done_one: '{{count}} key issued',
       done_other: '{{count}} keys issued',
       action: 'Issue key',
@@ -44,6 +63,28 @@ const overview = {
         'Point Claude Code, Codex CLI or a chat app at the gateway address with the key, then send a message.',
       action: 'Open setup guides',
     },
+  },
+  quick: {
+    title: 'Quick mode',
+    description:
+      'Skip the steps below and get a gateway key that works right away.',
+    upstreamImport:
+      "Upstream: import the OpenViking server's model settings, reusing its API key and quota",
+    upstreamUse: 'Upstream: use {{names}} ({{models}}, {{protocol}})',
+    profileCreate:
+      'Context profile: create “{{name}}” with the recommended settings',
+    profileUse: 'Context profile: use “{{name}}”',
+    keySelf: 'Key: issued for {{user}}',
+    keyPick: 'Key: choose the OpenViking user who owns it in the next step',
+    action: 'Get a key',
+    running: 'Generating…',
+    retry: 'Try again',
+    locked:
+      'Creating a context profile or importing models needs the gateway management key.',
+    noUsable:
+      "OpenViking's model settings have no model the gateway can relay directly. Fix the issues listed below, or add an upstream yourself in step 1.",
+    keyName: 'Quick mode',
+    divider: 'Or set up step by step',
   },
   kpi: {
     requests: {
@@ -78,14 +119,6 @@ const overview = {
     description:
       'Finds memory for new messages and stores saved conversations.',
     version: 'Version',
-    authMode: 'Authentication',
-    authModes: {
-      api_key: 'API key mode',
-      trusted: 'Trusted mode',
-      dev: 'Development mode',
-      oidc: 'OIDC mode',
-      ldap: 'LDAP mode',
-    },
     unreachable:
       "While OpenViking can't be reached, requests still go to the model without memory, and saving conversations is retried until it's back.",
     starting:

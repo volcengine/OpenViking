@@ -9,11 +9,12 @@ from openviking.prompts.manager import PromptManager
 @pytest.mark.parametrize(
     "prompt_id",
     [
+        "retrieval.intent_analysis",
         "retrieval.ov_intent_analysis_sft_v4",
         "retrieval.ov_intent_analysis_sft_v7",
     ],
 )
-def test_sft_intent_prompts_use_compact_queries_contract(prompt_id: str):
+def test_intent_prompts_use_compact_queries_contract(prompt_id: str):
     manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
     rendered = manager.render(
         prompt_id,
@@ -34,3 +35,18 @@ def test_sft_intent_prompts_use_compact_queries_contract(prompt_id: str):
     assert "priority" in output_contract
     assert '"reasoning"' not in output_contract
     assert '"intent"' not in output_contract
+
+
+def test_default_intent_prompt_matches_v4_contract():
+    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
+    variables = {
+        "compression_summary": "The user is working on OpenViking retrieval.",
+        "recent_messages": "[user]: Improve semantic search.",
+        "current_message": "Use the style we discussed earlier.",
+        "context_type": "resource",
+        "target_abstract": "OpenViking retrieval documentation.",
+    }
+
+    assert manager.render("retrieval.intent_analysis", variables) == manager.render(
+        "retrieval.ov_intent_analysis_sft_v4", variables
+    )

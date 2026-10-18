@@ -12,7 +12,8 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.privacy import UserPrivacyConfigService
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -60,6 +61,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
+    from openviking.scheduling.expiry.runtime import ExpiryRuntime
     from openviking.session.compressor_v3 import SessionCompressorV3
 
 
@@ -103,8 +105,10 @@ class OpenVikingService:
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
+        self._expiry_runtime: Optional["ExpiryRuntime"] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._privacy_sanitizer: Optional[PrivacySanitizer] = None
         self._runtime_config_manager: Optional[Any] = None
         self._vlm_resolver: Optional["VLMResolver"] = None
         self._vector_config_resolver: Optional[Any] = None
@@ -414,6 +418,11 @@ class OpenVikingService:
         return self._privacy_config_service
 
     @property
+    def privacy_sanitizer(self) -> Optional[PrivacySanitizer]:
+        """Get the shared PrivacySanitizer instance."""
+        return self._privacy_sanitizer
+
+    @property
     def debug(self) -> DebugService:
         """Get DebugService instance."""
         return self._debug_service
@@ -517,11 +526,15 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
+        self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
+        self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
 
         # Initialize processors
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
             vlm_resolver=self._vlm_resolver,
         )
         self._session_compressor = create_session_compressor(
@@ -542,6 +555,7 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
@@ -577,7 +591,15 @@ class OpenVikingService:
         except Exception:
             session_auto_commit_config = SessionAutoCommitConfig()
         self._session_service.set_session_auto_commit_config(session_auto_commit_config)
-        if session_auto_commit_config.enabled:
+        expiry_config = get_openviking_config().expiry
+        session_expiry_enabled = (
+            session_auto_commit_config.enabled
+            and getattr(session_auto_commit_config, "idle_backend", "local") == "redis"
+        )
+        if (
+            session_auto_commit_config.enabled
+            and getattr(session_auto_commit_config, "idle_backend", "local") == "local"
+        ):
             self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
                 self._session_service,
                 session_auto_commit_config,
@@ -649,6 +671,29 @@ class OpenVikingService:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
+        if session_expiry_enabled:
+            from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
+
+            self._expiry_runtime = ExpiryRuntime(
+                expiry_config,
+                roles=ExpiryRuntimeRoles(
+                    report=True,
+                    publish=not expiry_config.publisher_separate_process,
+                    consume=True,
+                ),
+            )
+            try:
+                self._session_service.configure_expiry(
+                    self._expiry_runtime.scheduler,
+                    consumer_concurrency=expiry_config.session_consumer_concurrency,
+                )
+                await self._expiry_runtime.start_storage()
+                await self._expiry_runtime.start_roles()
+            except Exception:
+                await self._stop_expiry()
+                raise
+            logger.info("Expiry roles started")
+
         # Preflight the MinerU endpoint when it will be used, so endpoint
         # misconfiguration or a stopped service surfaces now instead of on the
         # first PDF import. Required for strategy="mineru"; advisory for "auto".
@@ -663,6 +708,7 @@ class OpenVikingService:
                 logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
             except RuntimeError as exc:
                 if pdf_config.strategy == "mineru":
+                    await self._stop_expiry()
                     raise
                 logger.warning(
                     "MinerU preflight failed (fallback will retry on first parse): %s", exc
@@ -673,10 +719,31 @@ class OpenVikingService:
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
+    async def _stop_expiry(self) -> None:
+        """Stop expiry work before releasing dependencies used by callbacks."""
+        runtime = self._expiry_runtime
+        if runtime is None:
+            self._session_service.set_session_expiry_adapter(None)
+            return
+        try:
+            await runtime.close()
+        except Exception as exc:
+            logger.exception("Expiry shutdown failed")
+            if getattr(exc, "code", None) == "shard_not_stopped":
+                # Retain the runtime and leave QueueFS/AGFS open for still-running
+                # callbacks. The caller can retry close after they terminate.
+                raise
+        else:
+            self._session_service.set_session_expiry_adapter(None)
+            self._expiry_runtime = None
+            logger.info("Expiry stopped")
+
     async def close(self) -> None:
         """Close OpenViking and release resources."""
         await self._resource_service.close_background_tasks()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
+
+        await self._stop_expiry()
 
         if self._runtime_config_manager:
             await self._runtime_config_manager.stop_refresh_loop()

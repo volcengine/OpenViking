@@ -85,8 +85,9 @@ const enums = {
     errorCode: 'OpenViking reported error {{code}}',
     versionMismatch: 'OpenViking is older than the gateway requires',
     identityMissing: "OpenViking couldn't tell which user this key belongs to",
-    rootKey: "Root keys aren't accepted. Use a user key from this account.",
-    otherAccount: 'This OpenViking key belongs to another account.',
+    rootKey:
+      "Root API keys aren't accepted. Use a user API key from this account.",
+    otherAccount: 'This OpenViking API key belongs to another account.',
   },
   degradation: {
     memory_store_failure: {
@@ -154,6 +155,12 @@ const enums = {
       explanation:
         "The streamed reply couldn't be read, so it wasn't saved to OpenViking. The client wasn't affected.",
       action: 'No action needed unless it happens often.',
+    },
+    revocation_check_unavailable: {
+      label: 'Key not verified',
+      explanation:
+        "OpenViking couldn't confirm the gateway key, so the request was served without checking whether the key was revoked.",
+      action: 'Check that OpenViking is reachable and healthy.',
     },
   },
 }

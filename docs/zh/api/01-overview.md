@@ -354,10 +354,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/system/status` | 系统状态 |
 | POST | `/api/v1/system/wait` | 等待后台处理完成 |
 | POST | `/api/v1/system/consistency` | 文件系统与向量索引一致性检查 |
-| POST | `/api/v1/system/backend/sync-status` | 查询后端同步状态 |
-| POST | `/api/v1/system/backend/sync-retry` | 重试后端同步 |
-| GET | `/api/v1/system/sync/{sync_path}` | 路径形式的同步状态兼容接口 |
-| POST | `/api/v1/system/sync/{sync_path}/retry` | 路径形式的同步重试兼容接口 |
 
 ### [资源](02-resources.md)与[文件系统](03-filesystem.md)
 
@@ -425,7 +421,6 @@ JSON 输出 - 错误：
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
-| POST | `/api/v1/sessions/{session_id}/extract` | 提取记忆 |
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
@@ -520,21 +515,46 @@ JSON 输出 - 错误：
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
+| POST | `/api/v1/privacy-configs/scan` | 扫描或修复正文中的登记值 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/fields` | 列出不含明文值的安全字段元数据 |
+| GET | `/api/v1/privacy-configs/{category}/{target_key}/field` | 获取单字段引用或显式读取值 |
+| POST | `/api/v1/privacy-configs/resolve` | 按字段 reference/URI 显式读取值 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | 列出配置版本 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | 获取指定版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
+| PATCH | `/api/v1/privacy-configs/{category}/{target_key}` | 原子合并字段；不存在时创建 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
+| DELETE | `/api/v1/privacy-configs/{category}/{target_key}` | 删除目标及全部版本 |
+| DELETE | `/api/v1/privacy-configs/{category}/{target_key}/field` | 删除当前字段 |
+| DELETE | `/api/v1/privacy-configs/selector` | 按 URI/reference 删除目标或字段 |
 
 ### [OpenViking 网关管理](25-gateway.md)
 
+网关在 Server 内运行时，从 Server 端口访问；独立运行时，从网关自己的端口访问。OpenViking API 密钥决定调用方能访问哪个账号；部署者设置了网关管理密钥时，修改上游和上下文配置还需要这把密钥。每个用户都能给自己签发网关密钥。权限矩阵和错误原因见[网关管理 API](25-gateway.md)。
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/admin/gateway/{path}` | 读取调用方账号的网关概览、日志、上游、上下文配置、密钥或工具 |
-| POST | `/api/v1/admin/gateway/{path}` | 签发网关密钥、测试上游或重置对话保存 |
-| PUT | `/api/v1/admin/gateway/{path}` | 创建或替换上游、上下文配置 |
-| DELETE | `/api/v1/admin/gateway/{path}` | 删除上游或上下文配置、吊销密钥或删除用户的网关数据 |
+| GET | `/gateway/admin/access` | 读取调用方的权限和部署告警 |
+| GET | `/gateway/admin/guides` | 读取客户端使用的网关地址 |
+| GET | `/gateway/admin/tools` | 列出调用方可用的 OpenViking 工具 |
+| GET | `/gateway/admin/upstreams/{identifier}` | 读取单个上游 |
+| GET | `/gateway/admin/policies/{identifier}` | 读取单个上下文配置 |
+| GET | `/gateway/admin/keys/{identifier}` | 读取单个网关密钥（不含密钥本身） |
+| GET | `/gateway/admin/overview` | 读取调用方可见范围内的用量概览 |
+| GET | `/gateway/admin/logs` | 读取调用方可见的请求日志 |
+| GET | `/gateway/admin/upstreams` | 列出本账号的上游 |
+| PUT / DELETE | `/gateway/admin/upstreams/{identifier}` | 创建/替换或删除上游 |
+| POST | `/gateway/admin/upstreams/{identifier}/test` | 测试上游连接或模型 |
+| POST | `/gateway/admin/upstreams/import-vlm` | 把 Server 的 VLM 配置导入为上游（仅嵌入部署） |
+| GET | `/gateway/admin/policies` | 列出本账号的上下文配置 |
+| PUT / DELETE | `/gateway/admin/policies/{identifier}` | 创建/替换或删除上下文配置 |
+| GET / POST | `/gateway/admin/keys` | 列出调用方可见的网关密钥，或签发新密钥 |
+| DELETE | `/gateway/admin/keys/{identifier}` | 吊销网关密钥 |
+| POST | `/gateway/admin/keys/{identifier}/capture/reset` | 让一段对话重新开始保存 |
+| DELETE | `/gateway/admin/users/{user_id}/data` | admin 或 root：删除某个用户的网关数据 |
+| DELETE | `/gateway/admin/account/data` | root：删除整个账号的网关数据 |
 
 ### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 

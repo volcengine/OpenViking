@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking_cli.utils import get_logger
@@ -78,9 +79,9 @@ PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 class AutoCommitPolicyRequest(BaseModel):
     """Session-level auto-commit policy overrides.
 
-    All fields are optional. Bounds are not enforced here: ``AutoCommitPolicy``
-    clamps every value into ``[0, max]`` so clamping lives in one place across
-    the HTTP, SDK, and CLI entrypoints.
+    All fields are optional. ``idle_timeout_seconds`` validates its write-time
+    minimum here so legacy stored policies remain readable. Other bounds are
+    clamped by ``AutoCommitPolicy``.
     """
 
     pending_token_threshold: Optional[int] = None
@@ -90,6 +91,11 @@ class AutoCommitPolicyRequest(BaseModel):
     min_commit_interval_seconds: Optional[int] = None
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("idle_timeout_seconds")
+    @classmethod
+    def validate_idle_timeout_seconds(cls, value: Optional[int]) -> Optional[int]:
+        return None if value is None else validate_idle_timeout_input(value)
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> "AutoCommitPolicyRequest":
@@ -700,17 +706,6 @@ async def commit_session(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
-
-
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.post("/{session_id}/messages")

@@ -12,12 +12,17 @@ DEFAULT_GLM_API_BASE = "https://api.z.ai/api/coding/paas/v4"
 DEFAULT_GLM_MODEL = "glm-4.6v"
 
 
+def normalize_glm_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply GLM defaults; the embedded gateway imports credentials through this too."""
+    normalized = dict(config)
+    normalized["provider"] = "glm"
+    normalized["model"] = normalized.get("model") or DEFAULT_GLM_MODEL
+    normalized["api_base"] = str(normalized.get("api_base") or DEFAULT_GLM_API_BASE).rstrip("/")
+    return normalized
+
+
 class GLMVLM(OpenAIVLM):
     """First-class GLM backend with Coding Plan defaults."""
 
     def __init__(self, config: Dict[str, Any]):
-        normalized = dict(config)
-        normalized["provider"] = "glm"
-        normalized.setdefault("model", DEFAULT_GLM_MODEL)
-        normalized["api_base"] = str(normalized.get("api_base") or DEFAULT_GLM_API_BASE).rstrip("/")
-        super().__init__(normalized)
+        super().__init__(normalize_glm_config(config))

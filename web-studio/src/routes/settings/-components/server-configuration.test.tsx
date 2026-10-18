@@ -19,6 +19,8 @@ import type { ModelConfig } from '../-lib/config-file-api'
 
 const state = vi.hoisted(() => ({
   role: 'root',
+  provider: 'opensource',
+  ready: true,
   get: vi.fn(),
   save: vi.fn(),
   preview: vi.fn(),
@@ -44,6 +46,9 @@ vi.mock('#/components/code-editor', () => ({
       onChange={(event) => onChange(event.target.value)}
     />
   ),
+}))
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ provider: state.provider, ready: state.ready }),
 }))
 vi.mock('#/lib/clipboard', () => ({ copyTextToClipboard: state.copy }))
 vi.mock('../-lib/config-file-api', async (importOriginal) => ({
@@ -80,6 +85,8 @@ afterEach(() => {
   cleanup()
   vi.resetAllMocks()
   state.role = 'root'
+  state.provider = 'opensource'
+  state.ready = true
 })
 const language = {
   model: 'default-model',
@@ -1086,3 +1093,20 @@ it('edits uppercase VikingDB credentials with the correct auth controls', async 
     state.preview.mock.lastCall![1].embedding.dense.credentials[0],
   ).toMatchObject({ provider: 'VIKINGDB', sk: 'rotated-sk' })
 })
+
+it.each(['volcengine', 'unknown'])(
+  'does not read server configuration for a %s root identity',
+  (provider) => {
+    state.provider = provider
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <ServerConfigurationEditor />
+      </QueryClientProvider>,
+    )
+    expect(state.get).not.toHaveBeenCalled()
+    expect(state.save).not.toHaveBeenCalled()
+    expect(state.restart).not.toHaveBeenCalled()
+    client.clear()
+  },
+)

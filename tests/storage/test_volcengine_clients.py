@@ -326,6 +326,56 @@ def test_volcengine_collection_update_data_posts_to_update_endpoint(monkeypatch)
     }
 
 
+@pytest.mark.parametrize("failure_path", ["/search/scalar", "/delete"])
+@pytest.mark.parametrize("response_kind", [429, 500, "invalid_json", "success"])
+def test_volcengine_delete_propagates_request_failures(monkeypatch, failure_path, response_kind):
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    adapter = VolcengineCollectionAdapter.from_config(
+        VectorDBBackendConfig(
+            backend="volcengine",
+            name="context",
+            volcengine=VolcengineConfig(ak="test-ak", sk="test-sk", region="cn-beijing"),
+        )
+    )
+    adapter._collection = Collection(collection)
+    deleted_ids = []
+
+    def fake_request(method, path, req_body):
+        response = requests.Response()
+        response.status_code = 200
+        if path.endswith("/search/scalar"):
+            response._content = (
+                b'{"result":{"data":[{"id":"doc-1"}]}}'
+                if req_body["offset"] == 0
+                else b'{"result":{"data":[]}}'
+            )
+        else:
+            assert path.endswith("/delete")
+            deleted_ids.extend(req_body["ids"])
+            response._content = b'{"result":{}}'
+        if path.endswith(failure_path) and response_kind != "success":
+            response.status_code = response_kind if isinstance(response_kind, int) else 200
+            response._content = b"invalid JSON" if response_kind == "invalid_json" else b"{}"
+        return response
+
+    monkeypatch.setattr(collection.data_client, "do_req", fake_request)
+    scope = {"op": "must", "field": "uri", "conds": ["/resources/expired"]}
+    if response_kind == "success":
+        assert adapter.delete(filter=scope) == 1
+        assert deleted_ids == ["doc-1"]
+    else:
+        message = "invalid JSON" if response_kind == "invalid_json" else str(response_kind)
+        with pytest.raises(ConnectionError, match=message):
+            adapter.delete(filter=scope)
+        if failure_path == "/search/scalar":
+            assert deleted_ids == []
+
+
 def test_volcengine_collection_update_data_sanitizes_uri_fields(monkeypatch):
     captured = {}
 

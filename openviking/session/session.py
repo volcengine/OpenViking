@@ -6,12 +6,13 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Protocol
 from uuid import uuid4
 
 from openviking.core.context import ContextLevel
@@ -20,6 +21,7 @@ from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.session import working_memory as wm
 from openviking.session.archive_store import (
@@ -63,11 +65,11 @@ from openviking.session.working_memory import (
 )
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
+    InternalError,
     NotFoundError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -320,6 +322,9 @@ class SessionMeta:
     # Timestamp of the most recent successful auto-commit, surfaced via session
     # GET and used to throttle auto-commit frequency.
     last_auto_commit_at: str = ""
+    # Timeout commits stamp their accepted time after the Phase 1 ready marker;
+    # this remains separate from the legacy auto-commit statistic.
+    last_idle_commit_accepted_at: str = ""
     # Default custom scalar tags applied to event memories extracted from this
     # session. Maps to config.memory_extraction_config.events.tags in the API.
     # None means no session default; a commit may still override per-call.
@@ -350,6 +355,7 @@ class SessionMeta:
             ),
             "last_message_at": self.last_message_at,
             "last_auto_commit_at": self.last_auto_commit_at,
+            "last_idle_commit_accepted_at": self.last_idle_commit_accepted_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -404,8 +410,24 @@ class SessionMeta:
             auto_commit_policy=data.get("auto_commit_policy"),
             last_message_at=data.get("last_message_at", ""),
             last_auto_commit_at=data.get("last_auto_commit_at", ""),
+            last_idle_commit_accepted_at=data.get("last_idle_commit_accepted_at", ""),
             event_search_tags=data.get("event_search_tags"),
         )
+
+
+@dataclass(frozen=True)
+class SessionExpirySnapshot:
+    account_id: str
+    user_id: str
+    session_id: str
+    last_message_at: str
+    auto_commit_policy: Optional[Dict[str, Any]]
+
+
+class SessionExpiryReporter(Protocol):
+    async def report_after_append(self, snapshot: SessionExpirySnapshot) -> None: ...
+
+    def record_report_failure(self, reason: str, exc: Optional[Exception] = None) -> None: ...
 
 
 class Session:
@@ -427,6 +449,7 @@ class Session:
         agent_evolution_enabled_provider: Optional[Callable[[], bool | Awaitable[bool]]] = None,
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
+        expiry_reporter: Optional[SessionExpiryReporter] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -466,6 +489,7 @@ class Session:
         self._memory_policy_provider = memory_policy_provider
         self._usage_reporter = usage_reporter
         self._vlm_resolver = vlm_resolver
+        self._expiry_reporter = expiry_reporter
 
     async def _get_vlm_config(self):
         if self._vlm_resolver is None:
@@ -615,15 +639,23 @@ class Session:
 
     async def ensure_exists(self) -> None:
         """Materialize session root and messages file if missing."""
-        if await self.exists():
-            return
-        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(
-            f"{self._session_uri}/messages.jsonl",
-            "",
-            ctx=self.ctx,
+        # Initial state must not overwrite a concurrent append or commit.
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
-        await self._save_meta()
+        try:
+            if await self.exists():
+                return
+            await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
+            await self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                "",
+                ctx=self.ctx,
+            )
+            await self._save_meta()
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     async def _save_meta(self, lease_ref: Optional[Any] = None) -> None:
         """Persist .meta.json to storage using an optional held PathLock lease."""
@@ -711,6 +743,9 @@ class Session:
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
+        snapshot: Optional[SessionExpirySnapshot] = None
+        snapshot_error: Optional[Exception] = None
+        metadata_reload_error: Optional[Exception] = None
         try:
             live_messages_missing = False
             try:
@@ -727,10 +762,11 @@ class Session:
                     ctx=self.ctx,
                 )
                 self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
+            except Exception as exc:
                 # Legacy/malformed metadata must not prevent an otherwise safe
                 # append. Message correctness remains rooted in messages.jsonl.
                 self._meta = in_memory_meta
+                metadata_reload_error = exc
 
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
@@ -747,8 +783,42 @@ class Session:
                     ctx=self.ctx,
                 )
             await self._save_meta()
+            if self._expiry_reporter is not None:
+                try:
+                    # _save_meta() made this exact in-memory state authoritative
+                    # under the Session path lock, even when the preceding reload
+                    # failed. Reporting it prevents the previous due time from
+                    # firing early and repairs a missing expiry registration.
+                    snapshot = self._build_expiry_snapshot_locked()
+                except Exception as exc:
+                    snapshot_error = exc
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
+        if self._expiry_reporter is not None:
+            if metadata_reload_error is not None:
+                logger.warning(
+                    "Session metadata reload failed before append; reporting repaired state",
+                    exc_info=metadata_reload_error,
+                )
+            if snapshot is not None:
+                await self._expiry_reporter.report_after_append(snapshot)
+            else:
+                self._expiry_reporter.record_report_failure("snapshot_build_failed", snapshot_error)
+
+    def _build_expiry_snapshot_locked(self) -> SessionExpirySnapshot:
+        if not self._meta.last_message_at:
+            raise ValueError("Session last_message_at is missing")
+        account_id = self._meta.created_by_account_id or self.ctx.account_id
+        user_id = self._meta.created_by_user_id or self.ctx.user.user_id
+        if not account_id or not user_id:
+            raise ValueError("Session owner identity is incomplete")
+        return SessionExpirySnapshot(
+            account_id=account_id,
+            user_id=user_id,
+            session_id=self.session_id,
+            last_message_at=self._meta.last_message_at,
+            auto_commit_policy=copy.deepcopy(self._meta.auto_commit_policy),
+        )
 
     async def _apply_appended_messages_to_state(self, messages: List[Message]) -> None:
         """Update in-memory counters after an authoritative root reload."""
@@ -1129,7 +1199,7 @@ class Session:
             from openviking.service.task_tracker import get_task_tracker
 
             tracker = get_task_tracker()
-            if not task_id or not tracker.has_work(str(task_id)):
+            if not task_id or not await tracker.has_work(str(task_id)):
                 error = "Phase 1 has no QueueFS work to resume"
                 await self._write_failed_marker(
                     archive_uri,
@@ -1247,6 +1317,7 @@ class Session:
         min_raw_tail_steps: Optional[int] = None,
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
+        record_idle_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -1275,6 +1346,9 @@ class Session:
             record_auto_commit_success: When ``True``, clear the auto-commit
                 error fields and stamp ``last_auto_commit_at`` in the same
                 lock-protected meta update as the commit boundary.
+            record_idle_commit_success: When ``True``, best-effort stamp
+                ``last_idle_commit_accepted_at`` after the Phase 1 ready marker
+                is durable and before releasing the Session lock.
             event_tags: Per-commit override for the custom scalar tags applied
                 to event memories. ``None`` uses the session default
                 (``meta.event_search_tags``); an empty list disables default-tag
@@ -1580,15 +1654,6 @@ class Session:
                     queue_msg.to_dict(),
                 )
 
-                phase1_stage = "task_tracker_create"
-                await get_task_tracker().create(
-                    "session_commit",
-                    resource_id=self.session_id,
-                    account_id=self.ctx.account_id,
-                    user_id=self.ctx.user.user_id,
-                    task_id=task_id,
-                )
-
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
@@ -1613,6 +1678,20 @@ class Session:
                     self._meta.last_auto_commit_at = get_current_timestamp()
                 await self._save_meta()
                 await self._write_phase1_ready_marker(archive_uri)
+                if record_idle_commit_success:
+                    previous_accepted_at = self._meta.last_idle_commit_accepted_at
+                    previous_updated_at = self._meta.updated_at
+                    try:
+                        self._meta.last_idle_commit_accepted_at = get_current_timestamp()
+                        await self._save_meta()
+                    except Exception:
+                        self._meta.last_idle_commit_accepted_at = previous_accepted_at
+                        self._meta.updated_at = previous_updated_at
+                        logger.warning(
+                            "Failed to record idle commit time for %s",
+                            self.session_id,
+                            exc_info=True,
+                        )
             except Exception as e:
                 logger.error(f"[commit] Failed during {phase1_stage}: {e}")
                 # Whether the queue write failed or a queued Phase 1 stopped
@@ -1641,6 +1720,25 @@ class Session:
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
+
+        # Registration must not hold the session lock or roll back published Phase 1.
+        try:
+            await get_task_tracker().create(
+                "session_commit",
+                resource_id=self.session_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                task_id=task_id,
+            )
+        except Exception as exc:
+            error = map_exception(exc) or InternalError(str(exc))
+            error.details.update(
+                task_id=task_id,
+                archive_uri=archive_uri,
+                archived=True,
+                stage="task_tracker_create",
+            )
+            raise error
 
         return {
             "session_id": self.session_id,
@@ -1961,11 +2059,11 @@ class Session:
     ) -> None:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_work_index import get_task_context
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
         tracker = get_task_tracker()
-        request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
         usage_events_extracted = 0
@@ -1994,7 +2092,6 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
-            request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
                 with bind_telemetry(telemetry):
@@ -2339,11 +2436,13 @@ class Session:
                                 )
 
                 try:
-                    await request_wait_tracker.wait_for_request(
-                        telemetry.telemetry_id,
+                    task_context = get_task_context()
+                    await tracker.wait_for_task_work(
+                        task_id,
+                        exclude_work_id=task_context.work_id if task_context else None,
                         timeout=_PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
-                except TimeoutError as exc:
+                except (TimeoutError, asyncio.TimeoutError) as exc:
                     telemetry.set_error(
                         "session.commit.phase2.wait_for_request",
                         "DEADLINE_EXCEEDED",
@@ -2356,7 +2455,6 @@ class Session:
                         _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS,
                     )
             finally:
-                request_wait_tracker.cleanup(telemetry.telemetry_id)
                 unregister_telemetry(telemetry.telemetry_id)
 
             # Phase 2 complete — update meta with telemetry and commit info
@@ -2367,20 +2465,6 @@ class Session:
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
                 record_auto_commit_success=record_auto_commit_success,
-            )
-
-            # Write .done last so a recovered queue item can skip completed work.
-            await self._write_done_file(
-                archive_uri,
-                first_message_id,
-                last_message_id,
-                enable_working_memory=enable_working_memory,
-                coverage_start_archive=coverage_start_archive,
-                coverage_end_archive=coverage_end_archive,
-                covered_failed_archives=covered_failed_archives,
-                completed_memory_steps=self._archives.serialize_completed_memory_steps(
-                    completed_memory_steps
-                ),
             )
 
             result_payload = {
@@ -2425,12 +2509,30 @@ class Session:
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
+            # Write .done last so a recovered queue item can skip completed work.
+            await self._write_done_file(
+                archive_uri,
+                first_message_id,
+                last_message_id,
+                enable_working_memory=enable_working_memory,
+                coverage_start_archive=coverage_start_archive,
+                coverage_end_archive=coverage_end_archive,
+                covered_failed_archives=covered_failed_archives,
+                completed_memory_steps=self._archives.serialize_completed_memory_steps(
+                    completed_memory_steps
+                ),
+            )
+
             logger.info(f"Session {self.session_id} memory extraction completed")
         except asyncio.CancelledError:
             telemetry.set_error("session.commit.phase2", "CANCELLED", "session commit cancelled")
             snapshot = telemetry.finish("cancelled")
             _publish_telemetry_summary_best_effort(snapshot)
-            if tracker.is_cancellation_requested(task_id):
+            if await tracker.is_cancellation_requested(
+                task_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            ):
                 await self._write_failed_marker(
                     archive_uri,
                     stage="cancelled",
@@ -2750,7 +2852,7 @@ class Session:
         from openviking.service.task_tracker import get_task_tracker
 
         tracker = get_task_tracker()
-        if tracker.has_work(str(task_id)):
+        if await tracker.has_work(str(task_id)):
             return False
 
         error = "Session commit queue work is missing"
@@ -3016,10 +3118,11 @@ class Session:
                 response = await vlm.get_completion_async(
                     prompt=prompt,
                     tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "create_working_memory"},
-                    },
+                    tool_choice=(
+                        "auto"
+                        if getattr(vlm, "thinking", False)
+                        else {"type": "function", "function": {"name": "create_working_memory"}}
+                    ),
                 )
                 if not (
                     getattr(response, "has_tool_calls", False)
@@ -3063,10 +3166,11 @@ class Session:
         resp = await vlm.get_completion_async(
             prompt=update_prompt,
             tools=[WM_UPDATE_TOOL],
-            tool_choice={
-                "type": "function",
-                "function": {"name": "update_working_memory"},
-            },
+            tool_choice=(
+                "auto"
+                if getattr(vlm, "thinking", False)
+                else {"type": "function", "function": {"name": "update_working_memory"}}
+            ),
         )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))

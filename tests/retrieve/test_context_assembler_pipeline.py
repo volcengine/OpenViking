@@ -785,6 +785,39 @@ async def test_exclude_uris_directory_prefix_excludes_subtree():
     assert f"{USER_ROOT}/memories/preferences/lang.md" in uris
 
 
+async def test_a_cooled_directory_does_not_hide_files_added_under_it(monkeypatch):
+    """The ledger cools served entries only; caller exclude_uris keep subtree semantics."""
+    folder = f"{USER_ROOT}/memories/preferences"
+    hits = [
+        {"uri": f"{folder}/.overview.md", "score": 0.9, "abstract": "prefs", "level": 1},
+        {"uri": f"{folder}/region.md", "score": 0.8, "abstract": "region pref"},
+    ]
+
+    class _Ledger:
+        status = "on"
+        turn = 2
+
+        def cooled_uris(self):
+            return {folder}
+
+        async def record(self, entries):
+            del entries
+
+    async def fake_load(**kwargs):
+        del kwargs
+        return _Ledger()
+
+    monkeypatch.setattr(pipeline_module.RecallLedger, "load", staticmethod(fake_load))
+    result = await assemble_context(
+        service=_service(hits=hits, bodies={}),
+        ctx=_ctx(),
+        params=AssembleParams(query="region", session_id="s", dedup_turns=5),
+    )
+
+    assert [e.uri for e in result.entries] == [f"{folder}/region.md"]
+    assert result.stats["excluded"] == 1
+
+
 async def test_a_pinned_detail_reads_the_package_skill_md():
     """A package entry is a file, not a directory: `detail` reaches its SKILL.md."""
     service = _skill_service(

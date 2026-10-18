@@ -152,9 +152,15 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         reason: str,
         source_name: Optional[str] = None,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Bridge add-resource reason extraction through normal session commit."""
+        """Queue add-resource reason extraction as a normal session commit.
+
+        Returns ``status="accepted"`` once the commit is queued; poll
+        ``commit_task_id`` through the Task API for its result. Every reason commit
+        serializes on one shared session, so waiting for it here held the caller
+        behind all earlier reason commits (one stalled commit could block resource
+        ingestion).
+        """
         reason = (reason or "").strip()
         if not reason:
             return {"status": "skipped", "reason": "empty_reason"}
@@ -168,7 +174,6 @@ class ResourceMemoryLinkService:
         session_id = _RESOURCE_REASON_SESSION_ID
         target_peer_id = _resource_reason_peer_id(ctx, resource_uri)
         commit_result: Dict[str, Any] = {}
-        task_result: Optional[Dict[str, Any]] = None
 
         async with self._reason_session_lock:
             session = await self._session_service.get(
@@ -205,19 +210,11 @@ class ResourceMemoryLinkService:
                 keep_recent_count=0,
             )
 
-        task_id = commit_result.get("task_id")
-        if task_id:
-            task_result = await self._wait_for_commit_task(
-                task_id=str(task_id),
-                ctx=ctx,
-                timeout=timeout,
-            )
         return {
-            "status": "success",
+            "status": "accepted",
             "session_id": session_id,
-            "commit_task_id": task_id,
+            "commit_task_id": commit_result.get("task_id"),
             "archive_uri": commit_result.get("archive_uri"),
-            "commit_task": task_result,
         }
 
     async def on_resource_deleted(
@@ -227,7 +224,6 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         memory_uris: Sequence[str],
         recursive: bool = False,
-        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Bridge resource deletion through normal session commit for mutable memories."""
         if not resource_uri:
@@ -280,7 +276,6 @@ class ResourceMemoryLinkService:
             task_result = await self._wait_for_commit_task(
                 task_id=str(task_id),
                 ctx=ctx,
-                timeout=timeout,
             )
         return {
             "status": "success",
@@ -335,7 +330,6 @@ class ResourceMemoryLinkService:
         *,
         task_id: str,
         ctx: RequestContext,
-        timeout: Optional[float],
     ) -> Dict[str, Any]:
         from openviking.service.task_tracker import TaskStatus, get_task_tracker
 
@@ -343,7 +337,7 @@ class ResourceMemoryLinkService:
             task_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            timeout=(_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS if timeout is None else timeout),
+            timeout=_RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS,
             poll_interval=0.1,
         )
         if task.status == TaskStatus.COMPLETED:

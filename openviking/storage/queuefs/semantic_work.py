@@ -8,7 +8,9 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from openviking.server.identity import RequestContext
+from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
@@ -20,7 +22,6 @@ from openviking.telemetry import (
     resolve_telemetry,
     unregister_telemetry,
 )
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 
 if TYPE_CHECKING:
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -62,9 +63,14 @@ class SemanticMessageWork:
 
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
-        if self.msg.plan is not None and self.msg.lock_handoff is not None:
-            await get_request_wait_tracker().wait_for_embeddings(
-                self.msg.telemetry_id,
+        context = get_task_context()
+        if self.msg.wait_for_request_completion and context is not None:
+            await get_task_tracker().wait_for_task_work(
+                context.task_id,
+                exclude_work_id=context.work_id,
+            )
+        elif self.msg.lock_handoff is not None:
+            await self._wait_for_embedding_work(
                 stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
             )
         if succeeded:
@@ -73,6 +79,20 @@ class SemanticMessageWork:
 
     def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         return None
+
+    async def _wait_for_embedding_work(
+        self,
+        *,
+        stop_waiting: Callable[[], bool] | None = None,
+    ) -> None:
+        context = get_task_context()
+        work_ids = get_enqueued_work_ids("Embedding")
+        if context is not None and work_ids:
+            await get_task_tracker().wait_for_work(
+                context.task_id,
+                work_ids,
+                stop_waiting=stop_waiting,
+            )
 
     async def reenqueue(self) -> None:
         async def enqueue(queue, msg):
@@ -93,11 +113,8 @@ class SemanticMessageWork:
     async def cancel(self) -> None:
         if self.scope is None:
             await self.skip()
-        get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)
 
     async def cancel_queued(self) -> None:
-        if self.msg.telemetry_id and self.msg.id:
-            get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)
         await self.processor._release_cancelled_semantic_lock(self.msg)
 
     async def close(self) -> None:
@@ -120,7 +137,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         caller_lock: dict[str, Any] | None,
     ) -> None:
         super().__init__(processor, msg, caller_lock)
-        self._internal_tracking = False
+        self._owns_telemetry = False
         self._lock_started = False
         self._lock_closed = False
 
@@ -130,12 +147,6 @@ class SkillSemanticMessageWork(SemanticMessageWork):
             msg.telemetry_id = OperationTelemetry(
                 operation="skill_index", enabled=False
             ).telemetry_id
-        tracker = get_request_wait_tracker()
-        self._internal_tracking = not tracker.has_request(msg.telemetry_id)
-        tracker.retain_request(msg.telemetry_id, msg.id)
-        tracker.register_semantic_root(msg.telemetry_id, msg.id)
-        if self._internal_tracking:
-            tracker.cleanup(msg.telemetry_id)
 
     def resolve_telemetry(self) -> OperationTelemetry:
         collector = super().resolve_telemetry()
@@ -143,6 +154,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
             collector = OperationTelemetry(operation="skill_index", enabled=False)
             collector.telemetry_id = self.msg.telemetry_id
             register_telemetry(collector)
+            self._owns_telemetry = True
         return collector
 
     async def acquire_lock(self, ctx: RequestContext) -> bool:
@@ -158,8 +170,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
     async def finish_processing(self, succeeded: bool) -> None:
         async def finish():
             if not self.msg.skip_vectorization:
-                await get_request_wait_tracker().wait_for_embeddings(
-                    self.msg.telemetry_id,
+                await self._wait_for_embedding_work(
                     stop_waiting=self.processor._embedding_worker_stopped,
                 )
             if succeeded:
@@ -173,13 +184,12 @@ class SkillSemanticMessageWork(SemanticMessageWork):
     def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         if stats is None or not stats.failures:
             return None
-        for failure in stats.failures:
-            get_request_wait_tracker().mark_semantic_failed(
-                self.msg.telemetry_id, self.msg.id, failure
-            )
         # Report every file error, but settle this queue item only once.
         self.processor._merge_request_stats(self.msg.telemetry_id, error_count=len(stats.failures))
-        return ProcessResult.failed("\n".join(stats.failures))
+        return ProcessResult.failed(
+            "\n".join(stats.failures),
+            errors=tuple(stats.failures),
+        )
 
     async def reenqueue(self) -> None:
         async def enqueue(queue, msg):
@@ -201,7 +211,6 @@ class SkillSemanticMessageWork(SemanticMessageWork):
             await run_to_completion(
                 lambda: self.processor._release_cancelled_semantic_lock(self.msg)
             )
-            get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)
             raise
 
     async def skip(self) -> None:
@@ -214,18 +223,13 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         if not self._lock_started:
             # Cancellation during the circuit-breaker delay precedes adoption.
             await self.skip()
-        get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)
 
     async def close(self) -> None:
         if self.scope is not None and not self._lock_closed:
             await run_to_completion(self.scope.close)
-        if self._internal_tracking and get_request_wait_tracker().is_complete(
-            self.msg.telemetry_id
-        ):
+        if self._owns_telemetry:
             unregister_telemetry(self.msg.telemetry_id)
 
     async def cancel_queued(self) -> None:
         # Skill rollback must observe release before this item is settled.
         await self.processor._release_cancelled_semantic_lock(self.msg)
-        if self.msg.telemetry_id and self.msg.id:
-            get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)

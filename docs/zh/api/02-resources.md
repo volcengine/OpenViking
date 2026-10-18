@@ -1,6 +1,6 @@
 # 资源管理
 
-资源是智能体可以引用的外部知识。本页介绍资源导入、定时更新和临时文件上传。数据包导出与导入见 [OVPack](14-ovpack.md)。
+资源是智能体可以引用的外部知识。本页介绍资源导入、定时更新和临时文件上传。目录规划见[数据组织指引](../guides/23-data-organize.md)，数据包导出与导入见 [OVPack](14-ovpack.md)。
 
 ## 核心概念
 
@@ -83,7 +83,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 OpenViking 先检查来源和请求参数是否满足 Connector 接入条件。Connector 在标准流水线之外完成导入。其余请求中，[`parser_api`](../guides/01-configuration.md#parser-api) 选中的格式交给外部 Understanding 解析，剩余格式使用内置 Parser。外部解析只替换 Parse 阶段，结果仍进入 TreeBuilder 和后续存储、语义处理。已经由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析。
 
-Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；等待超时不代表导入已取消。
+Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；HTTP 请求超时不代表导入已取消。
 
 #### 阶段 1：源解析 (Parse)
 - 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
@@ -186,8 +186,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | source_name | string | 否 | None | 来源显示名；上传文件省略时使用原始文件名 |
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
-| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
+| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回；不支持单独的 `timeout` 参数，HTTP 超时使用客户端配置 |
 | strict | bool | 否 | False | 是否使用严格模式 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
@@ -622,7 +621,7 @@ task_id      uuid-xxx
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | 可选警告，包括部分处理失败或资源记忆关联失败 |
 | `queue_status` | object | 同步等待或已完成任务结果中的队列汇总，按队列返回 `processed`、`requeue_count`、`error_count` 和 `errors` |
-| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果。`status="accepted"` 表示记忆提交已入队、尚未完成，需轮询 `/api/v1/tasks/{task_id}`（`commit_task_id`）获取结果 |
 
 **完成后的资源添加任务结果**
 

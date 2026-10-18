@@ -442,7 +442,7 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
 /// Redis-backed PathLock provider.
 pub struct RedisPathLockProvider {
     runtime: Arc<CacheRuntime>,
-    namespace: String,
+    service_name: String,
     hash_ttl_ms: i64,
 }
 
@@ -450,16 +450,16 @@ impl RedisPathLockProvider {
     /// Create Redis-backed PathLock storage and register its Lua scripts.
     pub fn new(
         runtime: Arc<CacheRuntime>,
-        namespace: &str,
+        service_name: &str,
         lock_expire_secs: f64,
     ) -> PathLockResult<Self> {
-        if namespace.is_empty()
-            || !namespace
+        if service_name.is_empty()
+            || !service_name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         {
             return Err(PathLockError::InvalidRequest(
-                "pathlock Redis namespace must contain only ASCII letters, digits, '.', '_' or '-'"
+                "pathlock Redis service_name must contain only ASCII letters, digits, '.', '_' or '-'"
                     .to_string(),
             ));
         }
@@ -484,7 +484,7 @@ impl RedisPathLockProvider {
         }
         Ok(Self {
             runtime,
-            namespace: namespace.to_string(),
+            service_name: service_name.to_string(),
             hash_ttl_ms: hash_ttl_ms as i64,
         })
     }
@@ -509,8 +509,8 @@ impl RedisPathLockProvider {
             }
         };
         Ok(format!(
-            "ov:pathlock:{{{}}}:{suffix}:tokens",
-            self.namespace
+            "{{{}}}:ov:pathlock:{suffix}:tokens",
+            self.service_name
         ))
     }
 
@@ -1175,12 +1175,12 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         })
         .await
         .unwrap();
-        let namespace = format!("pathlock-test-{}-{test_name}", std::process::id());
-        let provider = RedisPathLockProvider::new(runtime.clone(), &namespace, 1.0).unwrap();
+        let service_name = format!("pathlock-test-{}-{test_name}", std::process::id());
+        let provider = RedisPathLockProvider::new(runtime.clone(), &service_name, 1.0).unwrap();
         Some((runtime, provider))
     }
 
-    /// Build two managers that share one Redis namespace.
+    /// Build two managers that share one service name.
     async fn test_managers(
         test_name: &str,
     ) -> Option<(Arc<CacheRuntime>, PathLockManager, PathLockManager, String)> {
@@ -1192,15 +1192,15 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         })
         .await
         .unwrap();
-        let namespace = format!("pathlock-manager-test-{}-{test_name}", std::process::id());
+        let service_name = format!("pathlock-manager-test-{}-{test_name}", std::process::id());
         let config = PathLockConfig {
             provider: "cache".to_string(),
-            namespace: Some(namespace.clone()),
+            service_name: Some(service_name.clone()),
             lock_timeout_secs: 0.0,
             lock_expire_secs: 3.0,
         };
         let first_provider =
-            Arc::new(RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap());
+            Arc::new(RedisPathLockProvider::new(runtime.clone(), &service_name, 3.0).unwrap());
         let key = first_provider
             .tokens_key_for_path("/local/account-a")
             .unwrap();
@@ -1211,7 +1211,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         );
         let second = PathLockManager::new(
             Arc::new(MemFileSystem::new()),
-            Arc::new(RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap()),
+            Arc::new(RedisPathLockProvider::new(runtime.clone(), &service_name, 3.0).unwrap()),
             config,
         );
         Some((runtime, first, second, key))
@@ -1246,8 +1246,8 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         })
         .await
         .unwrap();
-        let namespace = format!("pathlock-topology-test-{}-{test_name}", std::process::id());
-        let provider = RedisPathLockProvider::new(runtime.clone(), &namespace, 3.0).unwrap();
+        let service_name = format!("pathlock-topology-test-{}-{test_name}", std::process::id());
+        let provider = RedisPathLockProvider::new(runtime.clone(), &service_name, 3.0).unwrap();
 
         provider
             .try_acquire_batch_atomic(
@@ -1290,7 +1290,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         }
     }
 
-    /// Verify invalid namespace and expiry values are rejected before Redis access.
+    /// Verify invalid service_name and expiry values are rejected before Redis access.
     #[test]
     fn provider_rejects_invalid_configuration() {
         let runtime = CacheRuntime::memory();
@@ -1325,7 +1325,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             ("/local/account-a/resources/a.md", "scope:account:account-a"),
             ("/local/account-b/resources/b.md", "scope:account:account-b"),
         ];
-        let namespace = format!("pathlock-test-{}-scope-keys", std::process::id());
+        let service_name = format!("pathlock-test-{}-scope-keys", std::process::id());
         for (index, (path, scope)) in cases.iter().enumerate() {
             provider
                 .try_create_token(
@@ -1337,7 +1337,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             let raw = runtime
                 .execute_script(ScriptRequest {
                     script_id: TEST_HASH_ID.to_string(),
-                    keys: vec![format!("ov:pathlock:{{{namespace}}}:{scope}:tokens")],
+                    keys: vec![format!("{{{service_name}}}:ov:pathlock:{scope}:tokens")],
                     args: vec![
                         RedisPathLockProvider::bytes("get"),
                         RedisPathLockProvider::bytes(path),
@@ -1782,7 +1782,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             provider.clone(),
             PathLockConfig {
                 provider: "cache".to_string(),
-                namespace: Some("timeout-test".to_string()),
+                service_name: Some("timeout-test".to_string()),
                 ..PathLockConfig::default()
             },
         );
@@ -1806,7 +1806,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             provider.clone(),
             PathLockConfig {
                 provider: "cache".to_string(),
-                namespace: Some("race-test".to_string()),
+                service_name: Some("race-test".to_string()),
                 lock_expire_secs: 1.0,
                 ..PathLockConfig::default()
             },

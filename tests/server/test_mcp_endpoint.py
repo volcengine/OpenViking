@@ -31,6 +31,7 @@ from openviking.server.mcp_endpoint import (
     add_resource,
     add_skill,
     cancel_watch,
+    download,
     edit,
     forget,
     glob,
@@ -46,7 +47,6 @@ from openviking.server.mcp_endpoint import (
 from openviking.server.mcp_endpoint import ls as list_tool
 from openviking.service.fs_service import ListingPage
 from openviking_cli.exceptions import (
-    AlreadyExistsError,
     FailedPreconditionError,
     InvalidArgumentError,
     InvalidURIError,
@@ -1194,7 +1194,7 @@ async def test_read_rejects_images_too_large_for_common_clients(monkeypatch):
 
     assert "too large to inline" in result
     assert 'ov get "viking://resources/huge.png" "./huge.png"' in result
-    assert "/api/v1/content/download?uri=viking%3A%2F%2Fresources%2Fhuge.png" in result
+    assert 'Call the download tool with uri="viking://resources/huge.png"' in result
     read_file_bytes.assert_not_awaited()
 
 
@@ -1640,6 +1640,144 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     upload_token_store.clear()
 
 
+# ---------------------------------------------------------------------------
+# download tool
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _clear_download_tokens():
+    from openviking.server.upload_token_store import download_token_store
+
+    download_token_store.clear()
+    yield download_token_store
+    download_token_store.clear()
+
+
+def _stat_service(monkeypatch, stat):
+    monkeypatch.setattr(
+        mcp_endpoint, "get_service", lambda: SimpleNamespace(fs=SimpleNamespace(stat=stat))
+    )
+
+
+async def test_download_tool_is_registered_read_only():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    tool = tools["download"]
+    assert set(tool.inputSchema["properties"]) == {"uri"}
+    assert tool.annotations.readOnlyHint is True
+    assert tool.description.startswith("Get a short-lived URL for downloading")
+
+
+async def test_download_mints_token_bound_to_identity_and_uri(monkeypatch, _clear_download_tokens):
+    store = _clear_download_tokens
+    stat = AsyncMock(return_value={"name": "design.pdf", "size": 2_516_582, "isDir": False})
+    _stat_service(monkeypatch, stat)
+    ctx = RequestContext(
+        UserIdentifier("acct", "alice"), Role.USER, actor_peer_id="bot-a", from_oauth=True
+    )
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://ov.example.com/")
+    token_ctx = _mcp_ctx.set(ctx)
+    try:
+        result = await download("viking://~/specs/design.pdf")
+    finally:
+        _mcp_ctx.reset(token_ctx)
+
+    stat.assert_awaited_once_with("viking://user/alice/specs/design.pdf", ctx=ctx, skip_count=True)
+    assert "viking://user/alice/specs/design.pdf (design.pdf, 2.4 MB)" in result
+    match = re.search(
+        r"curl -fL -o \./design\.pdf 'https://ov\.example\.com/api/v1/content/download"
+        r"\?token=([A-Za-z0-9]+)'",
+        result,
+    )
+    assert match, result
+    assert "no OpenViking API key needed" in result
+    assert "replay the same headers" in result
+    assert "expires in ~10 minutes" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
+    info = store.peek(match.group(1))
+    assert info.uri == "viking://user/alice/specs/design.pdf"
+    assert (info.account_id, info.user_id, info.role) == ("acct", "alice", Role.USER)
+    assert info.actor_peer_id == "bot-a"
+    assert info.from_oauth is True
+
+
+async def test_download_shell_quotes_untrusted_filename(monkeypatch, _clear_download_tokens):
+    _stat_service(
+        monkeypatch, AsyncMock(return_value={"name": "$(id).pdf", "size": 3, "isDir": False})
+    )
+
+    result = await download("viking://resources/$(id).pdf")
+
+    assert "-o './$(id).pdf' " in result
+
+
+async def test_download_rejects_directory_without_minting(monkeypatch, _clear_download_tokens):
+    _stat_service(monkeypatch, AsyncMock(return_value={"name": "specs", "isDir": True}))
+
+    result = await download("viking://resources/specs")
+
+    assert "directory" in result
+    assert "list or tree" in result
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_missing_file_fails_without_minting(service, _clear_download_tokens):
+    with pytest.raises(NotFoundError):
+        await download("viking://resources/does-not-exist.pdf")
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_denied_file_fails_without_minting(monkeypatch, _clear_download_tokens):
+    _stat_service(monkeypatch, AsyncMock(side_effect=PermissionDeniedError("denied")))
+
+    with pytest.raises(PermissionDeniedError):
+        await download("viking://resources/secret.pdf")
+    assert _clear_download_tokens._store == {}
+
+
+async def test_download_checks_with_user_role_outside_api_key_mode(
+    monkeypatch, _clear_download_tokens
+):
+    stat = AsyncMock(return_value={"name": "a.bin", "size": 10, "isDir": False})
+    _stat_service(monkeypatch, stat)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_server_config",
+        lambda: SimpleNamespace(
+            get_effective_auth_mode=lambda: "dev",
+            upload_signed_ttl_seconds=600,
+        ),
+    )
+    monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://ov.example.com")
+    ctx = RequestContext(UserIdentifier("default", "default"), Role.ROOT)
+    token_ctx = _mcp_ctx.set(ctx)
+    try:
+        await download("viking://resources/a.bin")
+    finally:
+        _mcp_ctx.reset(token_ctx)
+
+    assert stat.await_args.kwargs["ctx"].role == Role.USER
+
+
+async def test_download_inferred_base_url_adds_operator_note(monkeypatch, _clear_download_tokens):
+    from openviking.server.mcp_endpoint import _request_url_ctx
+
+    _stat_service(
+        monkeypatch, AsyncMock(return_value={"name": "a.bin", "size": 10, "isDir": False})
+    )
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
+    token = _request_url_ctx.set({"x_forwarded_host": "ov.public.example.com"})
+    try:
+        result = await download("viking://resources/a.bin")
+    finally:
+        _request_url_ctx.reset(token)
+
+    assert "https://ov.public.example.com/api/v1/content/download?token=" in result
+    assert "(a.bin, 10 B)" in result
+    assert "OPENVIKING_PUBLIC_BASE_URL is not set" in result
+
+
 async def test_add_resource_temp_file_id_lookalike_in_path_is_rejected(service):
     result = await add_resource(path="upload_abc123.pdf")
     assert "looks like a temp_file_id" in result.lower()
@@ -1698,6 +1836,7 @@ async def test_add_resource_remote_parent_is_forwarded(service, monkeypatch):
     )
 
     assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     assert captured["to"] is None
 
 
@@ -1785,15 +1924,20 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
 
     async def fake_add_resource(*, path, ctx, **kwargs):
         captured["path"] = path
-        captured["allow_local_path_resolution"] = kwargs.get("allow_local_path_resolution")
+        captured.update(kwargs)
         return {"root_uri": "viking://resources/from_tfid"}
 
     monkeypatch.setattr(service.resources, "add_resource", fake_add_resource)
 
-    result = await add_resource(temp_file_id=tfid)
+    result = await add_resource(
+        temp_file_id=tfid,
+        parent="viking://resources/imports",
+    )
     assert "Resource added" in result
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
+    assert captured["parent"] == "viking://resources/imports"
+    assert captured["create_parent"] is True
     upload_token_store.clear()
 
 
@@ -2014,11 +2158,12 @@ async def test_write_replace_overwrites_existing(service):
     assert body == "v2-content"
 
 
-async def test_write_create_fails_when_file_exists(service):
+async def test_write_create_overwrites_existing_file(service):
     uri = "viking://resources/test_write_create_exists.md"
     await write(uri=uri, content="v1")
-    with pytest.raises(AlreadyExistsError):
-        await write(uri=uri, content="v2", mode="create")
+    result = await write(uri=uri, content="v2", mode="create")
+    assert "mode=create" in result
+    assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "v2"
 
 
 async def test_write_append_appends_to_existing(service):
@@ -2029,11 +2174,11 @@ async def test_write_append_appends_to_existing(service):
     assert body == "line1\nline2\n"
 
 
-async def test_write_append_missing_file_fails(service):
-    with pytest.raises(NotFoundError):
-        await write(
-            uri="viking://resources/test_write_append_missing.md", content="x", mode="append"
-        )
+async def test_write_append_creates_missing_file(service):
+    uri = "viking://resources/test_write_append_missing.md"
+    result = await write(uri=uri, content="x", mode="append")
+    assert "mode=append" in result
+    assert await service.fs.read(uri, ctx=DEFAULT_CTX) == "x"
 
 
 async def test_write_create_rejects_disallowed_extension(service):

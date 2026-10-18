@@ -10,6 +10,10 @@ import { resources } from '#/i18n/resources'
 
 import { RetrievalResults } from './retrieval-results'
 
+vi.mock('#/hooks/use-studio-service', () => ({
+  useStudioService: () => ({ provider: 'opensource' }),
+}))
+
 const t = ((key: string) => key) as TFunction<'retrieval'>
 
 afterEach(cleanup)

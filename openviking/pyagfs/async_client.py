@@ -83,10 +83,9 @@ def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
 class AsyncAGFSClient:
     """Run blocking AGFS binding client operations off the event loop.
 
-    This is intentionally a thin adapter over the synchronous RAGFS binding
-    client (``RAGFSBindingClient``). If the binding later provides native async
-    methods, they can be swapped in here without changing storage and
-    transaction call sites.
+    This is a thin adapter over ``RAGFSBindingClient``. Blocking methods use a
+    worker thread; native async methods, currently PathLock acquisition, run
+    without occupying that shared executor.
     """
 
     def __init__(self, client: AGFSSyncClientProtocol):
@@ -349,18 +348,6 @@ class AsyncAGFSClient:
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
 
-    async def system_sync_status(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Return multi-write sync status for a file or directory path."""
-        return await self.run("system_sync_status", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
-    async def system_sync_retry(
-        self, path: str, *, fs_ctx: Dict[str, str] | None = None
-    ) -> Dict[str, Any]:
-        """Retry pending multi-write sync work for a file or directory path."""
-        return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))
-
     # -- pathlock async wrappers ------------------------------------------------
 
     async def pathlock_acquire_exact(
@@ -372,12 +359,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire an exact lock on a single path."""
-        return await self.run(
-            "pathlock_acquire_exact",
-            _fs_ctx_or_default(path, fs_ctx),
-            path,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "exact"}],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_exact_batch(
@@ -389,12 +375,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire exact locks on multiple paths."""
-        return await self.run(
-            "pathlock_acquire_exact_batch",
-            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
-            paths,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "exact"} for path in paths],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_tree(
@@ -406,12 +391,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire a tree lock on a single path."""
-        return await self.run(
-            "pathlock_acquire_tree",
-            _fs_ctx_or_default(path, fs_ctx),
-            path,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "tree"}],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_tree_batch(
@@ -423,12 +407,11 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire tree locks on multiple paths."""
-        return await self.run(
-            "pathlock_acquire_tree_batch",
-            _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
-            paths,
+        return await self.pathlock_acquire_batch(
+            [{"path": path, "kind": "tree"} for path in paths],
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_exact_tree_batch(
@@ -441,14 +424,13 @@ class AsyncAGFSClient:
         fs_ctx: Dict[str, str] | None = None,
     ) -> Dict[str, Any]:
         """Acquire a mixed batch of exact and tree locks."""
-        first = exact_paths[0] if exact_paths else (tree_paths[0] if tree_paths else "/")
-        return await self.run(
-            "pathlock_acquire_exact_tree_batch",
-            _fs_ctx_or_default(first, fs_ctx),
-            exact_paths,
-            tree_paths,
+        requests = [{"path": path, "kind": "exact"} for path in exact_paths]
+        requests.extend({"path": path, "kind": "tree"} for path in tree_paths)
+        return await self.pathlock_acquire_batch(
+            requests,
             timeout_secs,
             owner_lease_ref,
+            fs_ctx=fs_ctx,
         )
 
     async def pathlock_acquire_batch(
@@ -468,14 +450,23 @@ class AsyncAGFSClient:
                 raise ValueError("pathlock request.path must be an absolute path")
             if request.get("kind") not in {"exact", "tree"}:
                 raise ValueError("pathlock request.kind must be 'exact' or 'tree'")
-        first = requests[0]["path"]
-        return await self.run(
-            "pathlock_acquire_batch",
-            _fs_ctx_or_default(first, fs_ctx),
-            requests,
-            timeout_secs,
-            owner_lease_ref,
+        fs_ctx = _fs_ctx_or_default(requests[0]["path"], fs_ctx)
+        future = asyncio.ensure_future(
+            self._client.pathlock_acquire_batch_async(
+                fs_ctx, requests, timeout_secs, owner_lease_ref
+            )
         )
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError as cancelled:
+
+            async def release_acquired() -> None:
+                await self.pathlock_release(await future, fs_ctx=fs_ctx)
+
+            try:
+                await run_to_completion(release_acquired)
+            finally:
+                raise cancelled
 
     async def pathlock_as_borrowed(
         self,

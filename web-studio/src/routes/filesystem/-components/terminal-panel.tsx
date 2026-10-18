@@ -44,7 +44,6 @@ import {
   commitSession,
   createSession,
   deleteSession,
-  extractSession,
   fetchSession,
   fetchSessionArchive,
   fetchSessionContext,
@@ -176,13 +175,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     key: 'commit',
     parameters: ['sessionId', 'keepRecent'],
     usage: '/session commit [session_id] --keep-recent 10',
-  },
-  {
-    examples: ['session.extract'],
-    insertText: '/session extract ',
-    key: 'extract',
-    parameters: ['sessionId'],
-    usage: '/session extract [session_id]',
   },
   {
     examples: ['session.message'],
@@ -1224,17 +1216,6 @@ export function TerminalPanel({
                   kind: 'success',
                   refs: [sessionRef(id)],
                   title: `/session commit ${id}`,
-                })
-                return
-              }
-              case 'extract': {
-                const id = resolveSessionId()
-                const result = await extractSession(id)
-                append({
-                  body: formatJson(result),
-                  kind: 'success',
-                  refs: [sessionRef(id)],
-                  title: `/session extract ${id}`,
                 })
                 return
               }

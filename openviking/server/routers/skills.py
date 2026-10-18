@@ -69,7 +69,6 @@ class UpdateSkillRequest(BaseModel):
     temp_file_id: Optional[str] = None
     from_source: bool = False
     wait: bool = False
-    timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
     target_uri: Optional[str] = None
@@ -983,7 +982,6 @@ async def update_skill(
                     data=preparation,
                     ctx=_ctx,
                     wait=request.wait,
-                    timeout=request.timeout,
                     allow_local_path_resolution=False,
                     source_path_hint=source_path_hint,
                     apply_privacy=False,

@@ -256,6 +256,14 @@ def test_generic_code_hosting_domains_include_supported_platforms():
     ]
 
 
+def test_example_config_loads_as_runtime_config():
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
+
+    config = OpenVikingConfig.from_dict(load_json_config(example_path))
+
+    assert config.storage.agfs.backend == "local"
+
+
 def test_example_code_hosting_domains_match_runtime_defaults():
     example_path = Path(__file__).resolve().parents[1] / "examples" / "ov.conf.example"
     example_text = example_path.read_text(encoding="utf-8")

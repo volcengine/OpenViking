@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.extraction_output_protocol.base import (
     ExtractionOutputContext,
     ExtractionOutputProtocol,
@@ -50,23 +51,15 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
         )
 
     def render_reference_rules(self, context: ExtractionOutputContext) -> str:
-        rules = """
-## Page ID Rules
-- Every memory item you create or edit MUST include "page_id".
-- For existing items, use the page_id shown in read/search results.
-- For new items, assign a unique page_id >= 100.
-- When editing an existing item, reuse its existing page_id.
-- To delete an existing item, add an entry to `delete_ids` using its page_id.
-- `delete_ids` deletes the whole item: use it only if every substantive fact is in scope; otherwise MUST use DELETE blocks for affected lines, preserving the rest and not inferring scope from the file name/topic.
-- For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
-"""
-        if context.link_enabled:
-            rules += """
-## Link Rules
-- Link fields `f` and `t` must reference these page_id values.
-- Only create links when the relationship is meaningful and clear from the conversation. Do NOT force links between unrelated items.
-"""
-        return rules
+        link_rules = prompts.JSON_LINK_RULES if context.link_enabled else ""
+        if context.add_only:
+            return "".join((prompts.JSON_ADD_ONLY_REFERENCE_RULES, link_rules))
+        removal_rule = (
+            prompts.JSON_PATCH_REMOVAL_RULE
+            if context.supports_string_patch
+            else prompts.JSON_FULL_REMOVAL_RULE
+        )
+        return "".join((prompts.JSON_UPSERT_REFERENCE_RULES, removal_rule, link_rules))
 
     def parse(
         self, content: str, context: ExtractionOutputContext
@@ -78,7 +71,9 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
         )
 
     def render_final_instruction(self, context: ExtractionOutputContext) -> str:
-        fields = ["delete_ids", *context.operations_model.model_fields]
+        fields = list(context.operations_model.model_fields)
+        if not context.add_only:
+            fields = ["delete_ids", *fields]
         skeleton = json.dumps(
             {name: [] for name in dict.fromkeys(fields)},
             ensure_ascii=False,

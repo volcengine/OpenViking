@@ -15,6 +15,7 @@ from typing import Any
 
 from loguru import logger
 
+from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from openviking.utils.multimodal import redact_image_data_urls
@@ -336,6 +337,7 @@ class VLMProviderAdapter(LLMProvider):
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
+                error_kind=model_error_kind(e),
             )
 
     async def chat_stream(
@@ -389,6 +391,7 @@ class VLMProviderAdapter(LLMProvider):
                 response=LLMResponse(
                     content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
                     finish_reason="error",
+                    error_kind=model_error_kind(exc),
                 ),
             )
 

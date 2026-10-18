@@ -87,12 +87,12 @@ def _prepare_snapshot_diff(
     return change_type, before, after
 
 
-def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
+def _ensure_non_empty_search_query(query: str, image_url: str | list[str] | None = None) -> None:
     if not query.strip() and not image_url:
         raise InvalidArgumentError("Search query or image_url must not be empty.")
 
 
-def is_filter_only_query(query: str, image_url: Optional[str] = None) -> bool:
+def is_filter_only_query(query: str, image_url: str | list[str] | None = None) -> bool:
     """Return True when the caller supplied no query and no image."""
     return not query.strip() and not image_url
 

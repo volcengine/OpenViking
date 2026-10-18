@@ -313,7 +313,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `with_bot` | boolean | `false` | Enable the VikingBot API proxy |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI endpoint |
 | `public_base_url` | URL / `null` | `null` | Externally visible base URL |
-| `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
+| `upload_signed_ttl_seconds` | integer | `600` | Signed upload and download URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
 
 ### Encryption and API Key Hashing

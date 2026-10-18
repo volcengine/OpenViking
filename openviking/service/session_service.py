@@ -8,7 +8,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
@@ -28,6 +28,7 @@ from openviking.service.session_auto_commit import (
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.archive_store import is_storage_not_found
 from openviking.session.auto_commit_policy import AutoCommitPolicy
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
@@ -46,8 +47,18 @@ from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
 
+
+def _parse_utc_timestamp(value: str) -> datetime:
+    parsed = parse_iso_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
+    from openviking.scheduling.expiry import ExpiryScheduler
+    from openviking.service.session_expiry import SessionExpiryAdapter
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.usage_reporter import UsageReporter
 
@@ -79,6 +90,24 @@ class SessionService:
         self._auto_commit_inflight_lock = asyncio.Lock()
         # Strong refs so spawned tasks aren't GC'd mid-await.
         self._auto_commit_tasks: set[asyncio.Task] = set()
+        self._session_expiry_adapter: Optional["SessionExpiryAdapter"] = None
+
+    def configure_expiry(
+        self,
+        scheduler: "ExpiryScheduler",
+        *,
+        consumer_concurrency: int = 8,
+    ) -> None:
+        from openviking.service.session_expiry import install_session_expiry
+
+        install_session_expiry(
+            scheduler,
+            self,
+            concurrency=consumer_concurrency,
+        )
+
+    def set_session_expiry_adapter(self, adapter: Optional["SessionExpiryAdapter"]) -> None:
+        self._session_expiry_adapter = adapter
 
     def set_dependencies(
         self,
@@ -218,6 +247,7 @@ class SessionService:
             memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
+            expiry_reporter=self._session_expiry_adapter,
         )
 
     async def _get_user_memory_policy(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
@@ -356,12 +386,18 @@ class SessionService:
         self._ensure_initialized()
 
         session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
+        session = self.session(ctx, session_id)
         if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx, no_vector=True)
+        if self._session_expiry_adapter is not None:
+            from openviking.scheduling.expiry import SESSION_ITEM_TYPE, ItemIdentity
+
+            await self._session_expiry_adapter.unregister_after_delete(
+                ItemIdentity(SESSION_ITEM_TYPE, ctx.account_id, ctx.user.user_id, session_id)
+            )
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
@@ -454,6 +490,58 @@ class SessionService:
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
 
+    async def commit_on_timeout(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Treat an idle-timeout callback as a signal to commit current messages.
+
+        The callback does not recheck ``last_message_at``. Messages appended
+        after the timeout was scheduled are included in the commit snapshot;
+        later appends schedule their own timeout callback.
+        """
+        try:
+            session = await self.get(session_id, ctx, auto_create=False)
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+            return {"status": "skipped", "reason": "not_found"}
+        decision = self._check_timeout_commit(session, datetime.now(timezone.utc))
+        if decision is not None:
+            return decision
+        result = await session.commit_async(
+            keep_recent_count=0,
+            persist_keep_recent_count=False,
+            record_auto_commit_success=True,
+            record_idle_commit_success=True,
+        )
+        self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
+        self._record_archive_metric("ok" if result.get("archived") else "skip")
+        return result
+
+    @staticmethod
+    def _check_timeout_commit(session: Session, now: datetime) -> Optional[Dict[str, Any]]:
+        """Check terminal skips and cooldown without rechecking idle activity."""
+        policy_data = session.meta.auto_commit_policy
+        if policy_data is None:
+            return {"status": "skipped", "reason": "idle_disabled"}
+        timeout_seconds = AutoCommitPolicy.from_dict(policy_data).idle_timeout_seconds
+        if timeout_seconds <= 0:
+            return {"status": "skipped", "reason": "idle_disabled"}
+        if not session.messages:
+            return {"status": "skipped", "reason": "no_messages"}
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now_ms = int(now.timestamp() * 1000)
+        accepted_at = session.meta.last_idle_commit_accepted_at
+        if accepted_at:
+            accepted = _parse_utc_timestamp(accepted_at)
+            if (now - accepted).total_seconds() < timeout_seconds:
+                return {
+                    "status": "deferred",
+                    "reason": "idle_cooldown",
+                    "timeout_seconds": timeout_seconds,
+                    "due_at_ms": now_ms + timeout_seconds * 1000,
+                }
+        return None
+
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""
         task = await get_task_tracker().get(
@@ -462,33 +550,6 @@ class SessionService:
             user_id=ctx.user.user_id,
         )
         return task.to_dict() if task else None
-
-    async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
-        """Extract memories from a session.
-
-        Args:
-            session_id: Session ID to extract from
-
-        Returns:
-            List of extracted memories
-        """
-        self._ensure_initialized()
-        if not self._session_compressor:
-            raise NotInitializedError("SessionCompressorV3")
-
-        session = await self.get(session_id, ctx)
-        archive_uri = f"{session.uri}/manual_extract"
-
-        memories = await self._session_compressor.extract_long_term_memories(
-            messages=session.messages,
-            user=ctx.user,
-            session_id=session_id,
-            ctx=ctx,
-            archive_uri=archive_uri,
-            agent_evolution_enabled=await self.get_agent_evolution_enabled(ctx.account_id),
-        )
-        self._record_lifecycle_metric("extract", "ok")
-        return memories
 
     @staticmethod
     def effective_auto_commit_policy(session: Session) -> Optional[Dict[str, Any]]:

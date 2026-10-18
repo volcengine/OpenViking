@@ -11,7 +11,7 @@ import {
   shellQuote,
 } from './client-guides'
 
-const base = 'https://ov.example.com/'
+const base = 'https://ov.example.com/gateway/'
 
 function code(client: Parameters<typeof clientSnippets>[0], id: string) {
   const snippet = clientSnippets(client, { baseUrl: base }).find(
@@ -35,7 +35,7 @@ describe('clientSnippets', () => {
   it('points Claude Code at the bare gateway address with a quoted placeholder', () => {
     expect(code('claude-code', 'env')).toBe(
       [
-        'export ANTHROPIC_BASE_URL=https://ov.example.com',
+        'export ANTHROPIC_BASE_URL=https://ov.example.com/gateway',
         "export ANTHROPIC_AUTH_TOKEN='<gateway-key>'",
         'export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
       ].join('\n'),
@@ -47,7 +47,7 @@ describe('clientSnippets', () => {
     const table = config.indexOf('[model_providers.openviking]')
     expect(config.indexOf('model_provider = "openviking"')).toBeLessThan(table)
     expect(config.indexOf('model = "<model>"')).toBeLessThan(table)
-    expect(config).toContain('base_url = "https://ov.example.com/v1"')
+    expect(config).toContain('base_url = "https://ov.example.com/gateway/v1"')
     expect(config).toContain('wire_api = "responses"')
     expect(config).toContain('env_key = "OPENVIKING_GATEWAY_KEY"')
   })
@@ -76,7 +76,7 @@ describe('clientSnippets', () => {
       provider: {
         openviking: {
           options: {
-            baseURL: 'https://ov.example.com/v1',
+            baseURL: 'https://ov.example.com/gateway/v1',
             apiKey: '{env:OPENVIKING_GATEWAY_KEY}',
           },
           models: { '<model>': {} },
@@ -94,7 +94,7 @@ describe('clientSnippets', () => {
       "-H 'X-OpenViking-Session: <conversation-id>'",
     )
     expect(code('chat', 'python')).toContain(
-      'base_url="https://ov.example.com/v1"',
+      'base_url="https://ov.example.com/gateway/v1"',
     )
   })
 
@@ -106,16 +106,16 @@ describe('clientSnippets', () => {
         )!.code,
       ).providers.openviking
     expect(config()).toMatchObject({
-      baseUrl: 'https://ov.example.com/v1',
+      baseUrl: 'https://ov.example.com/gateway/v1',
       apiKey: '$OPENVIKING_GATEWAY_KEY',
       api: 'openai-completions',
     })
     expect(config('responses')).toMatchObject({
-      baseUrl: 'https://ov.example.com/v1',
+      baseUrl: 'https://ov.example.com/gateway/v1',
       api: 'openai-responses',
     })
     expect(config('anthropic')).toMatchObject({
-      baseUrl: 'https://ov.example.com',
+      baseUrl: 'https://ov.example.com/gateway',
       api: 'anthropic-messages',
     })
   })
@@ -132,14 +132,16 @@ describe('clientSnippets', () => {
         '    providers:',
         '      openviking:',
         '        api: openai-completions',
-        '        baseURL: "https://ov.example.com/v1"',
+        '        baseURL: "https://ov.example.com/gateway/v1"',
         '        apiKeyEnv: OPENVIKING_GATEWAY_KEY',
         '        models:',
         '          - id: "<model>"',
       ].join('\n'),
     )
     expect(config('anthropic')).toContain('api: anthropic-messages')
-    expect(config('anthropic')).toContain('baseURL: "https://ov.example.com"\n')
+    expect(config('anthropic')).toContain(
+      'baseURL: "https://ov.example.com/gateway"\n',
+    )
   })
 
   it('picks the OpenCode SDK package by protocol, always under /v1', () => {
@@ -153,14 +155,16 @@ describe('clientSnippets', () => {
     expect(provider('responses').npm).toBe('@ai-sdk/openai')
     expect(provider('anthropic')).toMatchObject({
       npm: '@ai-sdk/anthropic',
-      options: { baseURL: 'https://ov.example.com/v1' },
+      options: { baseURL: 'https://ov.example.com/gateway/v1' },
     })
   })
 
   it('maps Ark-addressed clients to the native paths', () => {
-    expect(code('ark', 'endpoints')).toContain('https://ov.example.com/api/v3')
     expect(code('ark', 'endpoints')).toContain(
-      'https://ov.example.com/api/compatible',
+      'https://ov.example.com/gateway/api/v3',
+    )
+    expect(code('ark', 'endpoints')).toContain(
+      'https://ov.example.com/gateway/api/compatible',
     )
   })
 })
