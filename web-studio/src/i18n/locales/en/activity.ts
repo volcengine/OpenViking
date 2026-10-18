@@ -33,6 +33,8 @@ const activity = {
       thinking: 'Thinking...',
       generating: 'Generating',
       reasoning: 'Reasoning',
+      providerRecovering:
+        'The model provider hiccuped — retrying on a backup provider…',
       iteration: 'Round {{count}}',
       toolCall: 'Tool call',
       toolInput: 'Input',

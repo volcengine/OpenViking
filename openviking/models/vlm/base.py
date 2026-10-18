@@ -37,6 +37,21 @@ class ToolCall:
     arguments: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ProviderRecoveryStatus:
+    """Sanitized, ephemeral notice that a stream failover is starting.
+
+    Emitted by ``stream_with_failover`` *before* backup output when the
+    active backend fails before the first visible item.  Carries only coarse
+    classification: never API keys, credential IDs, provider URLs, or raw
+    exception text.
+    """
+
+    type: str = "provider_recovery"
+    reason: str = "primary_failed"  # primary_failed | credential_failed
+    error_kind: Optional[str] = None  # coarse ModelErrorKind value, if known
+
+
 @dataclass
 class VLMResponse:
     """VLM response that supports both text content and tool calls."""
@@ -422,6 +437,19 @@ def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
         pass
 
 
+def _recovery_error_kind(exc: Exception) -> Optional[str]:
+    """Coarse, sanitized error classification for a recovery notice.
+
+    Only the ModelErrorKind value is exposed — never provider URLs, API keys,
+    credential IDs, or raw exception text.
+    """
+    try:
+        kind = model_error_kind(exc)
+        return kind.value if kind is not None else None
+    except Exception:
+        return None
+
+
 class FailoverVLM(VLMBase):
     """VLM wrapper that provides failover to a backup VLM instance.
 
@@ -573,6 +601,11 @@ class FailoverVLM(VLMBase):
                 last_error = exc
                 if emitted or not self._switcher.record_primary_failure(exc):
                     raise
+                # One sanitized, ephemeral recovery notice before backup output.
+                yield ProviderRecoveryStatus(
+                    reason="primary_failed",
+                    error_kind=_recovery_error_kind(exc),
+                )
 
         emitted = False
         try:
@@ -768,9 +801,7 @@ class FailoverVLM(VLMBase):
         backup_tracker = self.backup.token_tracker
         if primary_tracker is backup_tracker:
             return primary_tracker.to_dict()
-        merged_tracker = TokenUsageTracker.merge(
-            primary_tracker, backup_tracker
-        )
+        merged_tracker = TokenUsageTracker.merge(primary_tracker, backup_tracker)
         return merged_tracker.to_dict()
 
     def reset_token_usage(self) -> None:
@@ -829,9 +860,7 @@ class MultiCredentialVLM(VLMBase):
             "temperature": first.temperature,
             "max_retries": first.max_retries,
             "timeout": first.timeout,
-            "max_tokens": (
-                min(configured_token_limits) if configured_token_limits else None
-            ),
+            "max_tokens": (min(configured_token_limits) if configured_token_limits else None),
             "thinking": first.thinking,
         }
         super().__init__(config)
@@ -986,6 +1015,11 @@ class MultiCredentialVLM(VLMBase):
                     "Credential %s failed with %s, trying next credential",
                     credential_id,
                     kind.value,
+                )
+                # One sanitized, ephemeral recovery notice per credential switch.
+                yield ProviderRecoveryStatus(
+                    reason="credential_failed",
+                    error_kind=_recovery_error_kind(exc),
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)

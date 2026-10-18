@@ -12,6 +12,7 @@ from .base import (
     AllCredentialsFailedError,
     FailoverVLM,
     MultiCredentialVLM,
+    ProviderRecoveryStatus,
     VLMBase,
     VLMFactory,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "FailoverVLM",
     "MultiCredentialVLM",
     "AllCredentialsFailedError",
+    "ProviderRecoveryStatus",
     "OpenAIVLM",
     "CodexVLM",
     "KimiVLM",

@@ -33,6 +33,7 @@ const activity = {
       thinking: '思考中...',
       generating: '生成中',
       reasoning: '思考过程',
+      providerRecovering: '模型提供方出现故障，正在通过备用提供方恢复…',
       iteration: '第 {{count}} 轮',
       toolCall: '工具调用',
       toolInput: '输入',

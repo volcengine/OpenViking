@@ -41,9 +41,11 @@ class LLMResponse:
 class LLMStreamEvent:
     """Streaming event emitted by an LLM provider."""
 
-    type: Literal["content_delta", "reasoning_delta", "response"]
+    type: Literal["content_delta", "reasoning_delta", "response", "provider_recovery"]
     content: str | None = None
     response: LLMResponse | None = None
+    # Sanitized payload for type="provider_recovery": {"reason", "error_kind"}.
+    recovery: dict[str, Any] | None = None
 
 
 def stream_delta_value(delta: Any, name: str) -> str:

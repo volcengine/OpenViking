@@ -17,6 +17,7 @@ from loguru import logger
 
 from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
+from openviking.models.vlm.base import ProviderRecoveryStatus
 from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
@@ -464,6 +465,17 @@ class VLMProviderAdapter(LLMProvider):
                         temperature=temperature,
                     )
                 ):
+                    if isinstance(event, ProviderRecoveryStatus):
+                        # A pre-output failover is not visible output: keep the
+                        # retry gate closed and forward the sanitized notice.
+                        yield LLMStreamEvent(
+                            type="provider_recovery",
+                            recovery={
+                                "reason": event.reason,
+                                "error_kind": event.error_kind,
+                            },
+                        )
+                        continue
                     emitted = True
                     yield event
                 return

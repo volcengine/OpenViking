@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import secrets
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,12 @@ from vikingbot.session.manager import SessionManager
 DEFAULT_OPENVIKING_AGENT_ID = "web-playground"
 OPENVIKING_AUTH_TIMEOUT_SECONDS = 5.0
 OPENVIKING_PROXY_TIMEOUT_SECONDS = 300.0
+# SSE liveness: emit a keepalive comment while idle instead of a terminal
+# cutoff, so a pre-output provider failover (default provider timeout is
+# 600s) can never be cut off by the transport.  The lifetime bound is a
+# safety net for a pending request whose agent died without closing it.
+SSE_KEEPALIVE_INTERVAL_SECONDS = 15.0
+SSE_MAX_STREAM_LIFETIME_SECONDS = 3600.0
 OPENVIKING_UPSTREAM_NOT_CONFIGURED_DETAIL = (
     "VikingBot gateway proxy is active, but no available OpenViking server is configured"
 )
@@ -301,6 +308,10 @@ class OpenAPIChannel(BaseChannel):
                 await pending.add_event("tool_result", msg.content)
             elif msg.event_type == OutboundEventType.ITERATION:
                 await pending.add_event("iteration", msg.content)
+            elif msg.event_type == OutboundEventType.PROVIDER_RECOVERY:
+                await pending.add_event(
+                    "provider_recovery", (msg.metadata or {}).get("recovery") or {}
+                )
             return
 
         # Handle as normal OpenAPIChannel message
@@ -339,6 +350,8 @@ class OpenAPIChannel(BaseChannel):
             await pending.add_event("tool_result", msg.content)
         elif msg.event_type == OutboundEventType.ITERATION:
             await pending.add_event("iteration", msg.content)
+        elif msg.event_type == OutboundEventType.PROVIDER_RECOVERY:
+            await pending.add_event("provider_recovery", (msg.metadata or {}).get("recovery") or {})
 
     def get_router(self) -> APIRouter:
         """Get or create the FastAPI router."""
@@ -933,8 +946,7 @@ class OpenAPIChannel(BaseChannel):
                     raise HTTPException(
                         status_code=401,
                         detail=(
-                            "OpenViking credentials did not resolve to a usable "
-                            "User/Admin identity"
+                            "OpenViking credentials did not resolve to a usable User/Admin identity"
                         ),
                     )
                 api_key_type = "user"
@@ -1536,6 +1548,38 @@ class OpenAPIChannel(BaseChannel):
             # Clean up pending
             self._pending.pop(storage_key, None)
 
+    async def _stream_pending_events(self, pending: PendingResponse) -> AsyncIterator[str]:
+        """Yield SSE frames for one pending request with idle keepalives.
+
+        The queue idle wait must not be a terminal cutoff: a pre-output
+        provider failover can legitimately stay silent for the configured
+        provider timeout (600s by default), which outlived the previous
+        300s cutoff and made the browser report a timeout while the agent
+        was still recovering.  Idle periods emit SSE comment keepalives
+        (": keepalive"), which conformant and older consumers ignore.  The
+        overall lifetime stays bounded as a safety net for a pending whose
+        agent died without closing it.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + SSE_MAX_STREAM_LIFETIME_SECONDS
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    pending.stream_queue.get(), timeout=SSE_KEEPALIVE_INTERVAL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                if loop.time() >= deadline:
+                    timeout_event = ChatStreamEvent(
+                        event=EventType.RESPONSE, data={"error": "timeout"}
+                    )
+                    yield f"data: {timeout_event.model_dump_json()}\n\n"
+                    return
+                yield ": keepalive\n\n"
+                continue
+            if event is None:
+                return
+            yield f"data: {event.model_dump_json()}\n\n"
+
     async def _handle_chat_stream(self, request: ChatRequest) -> StreamingResponse:
         """Handle a streaming chat request."""
         session_id = request.session_id or str(uuid.uuid4())
@@ -1583,15 +1627,8 @@ class OpenAPIChannel(BaseChannel):
                 await self.bus.publish_inbound(msg)
 
                 # Stream events as they arrive
-                while True:
-                    try:
-                        event = await asyncio.wait_for(pending.stream_queue.get(), timeout=300.0)
-                        if event is None:
-                            break
-                        yield f"data: {event.model_dump_json()}\n\n"
-                    except asyncio.TimeoutError:
-                        yield f"data: {ChatStreamEvent(event=EventType.RESPONSE, data={'error': 'timeout'}).model_dump_json()}\n\n"
-                        break
+                async for frame in self._stream_pending_events(pending):
+                    yield frame
 
             except Exception as e:
                 logger.exception(f"Error in stream generator: {e}")
@@ -1784,15 +1821,8 @@ class OpenAPIChannel(BaseChannel):
                 await self.bus.publish_inbound(msg)
 
                 # Stream events as they arrive
-                while True:
-                    try:
-                        event = await asyncio.wait_for(pending.stream_queue.get(), timeout=300.0)
-                        if event is None:
-                            break
-                        yield f"data: {event.model_dump_json()}\n\n"
-                    except asyncio.TimeoutError:
-                        yield f"data: {ChatStreamEvent(event=EventType.RESPONSE, data={'error': 'timeout'}).model_dump_json()}\n\n"
-                        break
+                async for frame in self._stream_pending_events(pending):
+                    yield frame
 
             except Exception as e:
                 logger.exception(f"Error in bot stream generator for channel {channel_id}: {e}")
