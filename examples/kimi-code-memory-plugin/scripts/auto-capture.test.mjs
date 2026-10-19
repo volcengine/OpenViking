@@ -24,7 +24,6 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const HOOK = join(SCRIPT_DIR, "auto-capture.mjs");
 
 const SESSION = "s1";
-const OV_SESSION = "kc-s1";
 
 /** A Kimi home holding one session whose wire journal is `rows`. */
 function workspace(rows) {

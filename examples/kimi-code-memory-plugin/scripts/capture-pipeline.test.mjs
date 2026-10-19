@@ -97,13 +97,19 @@ test("pipeline shapes sanitized turns with structured tool parts", () => {
 
   // Conversation order inside the entry stream: user first, tools in the
   // middle, assistant text closing the turn.
-  const kinds = decoded.entries.map((e) => {
+  const kinds = decoded.entries.flatMap((e) => {
     const p = e.payload;
-    if (p.type === "message") return `${p.role}-text`;
-    return p.type === "function_call" ? "call" : "result";
+    if (p.type !== "message") return ["result"];
+    return (p.content || []).map((block) => {
+      if (block.type === "tool_call") return "call";
+      return `${p.role}-text`;
+    });
   });
   assert.equal(kinds[0], "user-text");
   assert.equal(kinds[kinds.length - 1], "assistant-text");
+  // The call sits in the assistant message that also carries the text, and its
+  // result follows in wire order.
+  assert.ok(kinds.includes("call"));
   assert.ok(kinds.indexOf("call") < kinds.indexOf("result"));
 });
 
