@@ -456,7 +456,12 @@ class _VikingClient:
 
     def _anonymous_json(self, path: str) -> dict:
         """Probe server identity without disclosing credentials or tenant IDs."""
-        resp = self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0)
+        resp = self._httpx.get(
+            f"{self._endpoint}{path}",
+            headers={"Accept": "application/json"},
+            timeout=3.0,
+            follow_redirects=False,
+        )
         status = getattr(resp, "status_code", None)
         if isinstance(status, int) and 300 <= status < 400:
             # An authenticating gateway answered the anonymous probe with a redirect to
@@ -476,6 +481,37 @@ class _VikingClient:
             return dict(self._extra_headers)
         return self._headers(include_tenant=False)
 
+    def _probe_retry_json(self, *, gateway_only: bool) -> dict:
+        """One probe retry with either the gateway headers or the key."""
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=gateway_only),
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        return self._probe_json(resp, gateway_only=gateway_only)
+
+    def _probe_json(self, resp, *, gateway_only: bool) -> dict:
+        """Parse a probe response, never reading a 3xx as if it were a payload.
+
+        ``_parse_response`` only raises at ``>= 400``, so a retry that lands on a redirect
+        would otherwise come back as an empty dict (an HTML login page) or — when the
+        redirect body happens to be JSON — as a healthy payload. Either way the probe would
+        accept an answer nobody gave: the endpoint is still gating the request.
+        """
+        status = getattr(resp, "status_code", None)
+        if _is_redirect(status):
+            if gateway_only:
+                sent = "extra_headers"
+                detail = ("the gateway is still redirecting, so check that the configured "
+                          "gateway credentials are valid")
+            else:
+                sent = "the API key"
+                detail = ("the endpoint is still redirecting, so check the API key and any "
+                          "gateway credentials")
+            raise _OpenVikingHTTPError(f"HTTP {status} after retrying with {sent}: {detail}", status)
+        return self._parse_response(resp)
+
     def _probe_gateway_retry(self) -> dict:
         """Retry the probe with the operator's gateway headers only.
 
@@ -488,23 +524,11 @@ class _VikingClient:
             f"{self._endpoint}/health",
             headers=self._probe_retry_headers(gateway_only=True),
             timeout=3.0,
+            follow_redirects=False,
         )
-        status = getattr(resp, "status_code", None)
-        if _is_redirect(status):
-            raise _OpenVikingHTTPError(
-                f"HTTP {status} after retrying with extra_headers: the gateway is still "
-                "redirecting, so check that the configured gateway credentials are valid",
-                status,
-            )
-        if status in (401, 403) and self._api_key:
-            return self._parse_response(
-                self._httpx.get(
-                    f"{self._endpoint}/health",
-                    headers=self._probe_retry_headers(gateway_only=False),
-                    timeout=3.0,
-                )
-            )
-        return self._parse_response(resp)
+        if getattr(resp, "status_code", None) in (401, 403) and self._api_key:
+            return self._probe_retry_json(gateway_only=False)
+        return self._probe_json(resp, gateway_only=True)
 
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
@@ -521,6 +545,15 @@ class _VikingClient:
         authorization to resend secrets, so it stays a failure, and the login URL is never
         followed.
 
+        A ``401``/``403`` is the endpoint asking for credentials, and which credential it
+        wants is not knowable from the status alone: an OpenViking server wants the key, a
+        gateway (oauth2-proxy, many WAFs) wants its own headers and answers 401/403 rather
+        than redirecting. So the key is tried when one is configured, and the gateway headers
+        are tried when they are — a gateway-only deployment has no key to try, and gating the
+        gateway retry on a key it never sends is what kept such a deployment from starting at
+        all. When both are configured the key is tried first, which is the pre-existing
+        behaviour, and the gateway headers are not retried a second time.
+
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
         """
@@ -532,15 +565,13 @@ class _VikingClient:
                 if not self._extra_headers:
                     raise
                 return self._probe_gateway_retry()
-            if status not in (401, 403) or not self._api_key:
+            if status not in (401, 403):
                 raise
-            return self._parse_response(
-                self._httpx.get(
-                    f"{self._endpoint}/health",
-                    headers=self._probe_retry_headers(gateway_only=False),
-                    timeout=3.0,
-                )
-            )
+            if self._api_key:
+                return self._probe_retry_json(gateway_only=False)
+            if self._extra_headers:
+                return self._probe_gateway_retry()
+            raise
 
     def openapi_payload(self) -> dict:
         return self._anonymous_json("/openapi.json")
