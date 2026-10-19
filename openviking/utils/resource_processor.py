@@ -140,6 +140,7 @@ class ResourceProcessor:
         doc_rel: str,
         target_root_uri: str,
         ctx: RequestContext,
+        root_is_file: bool = False,
     ) -> None:
         """Rewrite text in a temporary parse artifact before planning or persistence."""
         if self._privacy_sanitizer is None:
@@ -200,7 +201,8 @@ class ResourceProcessor:
                 )
                 await sanitize_file(entry.rel_path, relative)
 
-        if getattr(artifact_ref, "root_type", "dir") == "file":
+        # A flattened document can be a file inside a directory artifact.
+        if root_is_file or getattr(artifact_ref, "root_type", "dir") == "file":
             await sanitize_file(base, "")
         else:
             await walk(base)
@@ -435,6 +437,7 @@ class ResourceProcessor:
             doc_rel=doc_rel,
             target_root_uri=root_uri,
             ctx=ctx,
+            root_is_file=root_is_file,
         )
         commit_store = _DocRelStore(output_store, doc_rel)
         artifact_backend = str(getattr(artifact_ref, "backend", "unknown"))
