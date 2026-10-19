@@ -493,7 +493,18 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
 }
 
-export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+/**
+ * Shared capture turns from a host transcript.
+ *
+ * `options.onTurn(turn, entry)` fires once per produced turn, in order, with the
+ * transcript entry it came from. That is the only correct way for a host to
+ * attach its own per-turn identity: the tool-name map is built from the whole
+ * list, so extracting one entry at a time is not an equivalent pass and its
+ * counts can disagree with this one. A host that needs the source entry asks
+ * for it here instead of running the extractor a second time.
+ */
+export function extractCaptureTurns(rolloutEntries, cfg = {}, options = {}) {
+  const onTurn = typeof options.onTurn === "function" ? options.onTurn : null;
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];
   for (const entry of rolloutEntries || []) {
@@ -507,7 +518,9 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
 
     const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
     if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
-    turns.push({ role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts });
+    const turn = { role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts };
+    turns.push(turn);
+    if (onTurn) onTurn(turn, entry);
   }
   return turns;
 }

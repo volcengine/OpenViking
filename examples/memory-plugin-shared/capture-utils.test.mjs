@@ -132,6 +132,25 @@ test("a turn that is only a system reminder never reaches the extractor", () => 
   assert.equal(decision.reason, "empty")
 })
 
+test("onTurn reports the source entry for each produced turn, and only for those", () => {
+  const entries = [
+    { payload: { message: { role: "user", content: "the question" } }, tag: "first" },
+    // No recognisable role: the extractor drops it, so it must not be reported.
+    { payload: { type: "noise" }, tag: "dropped" },
+    { payload: { message: { role: "assistant", content: "the answer" } }, tag: "second" },
+  ]
+  const seen = []
+  const turns = extractCaptureTurns(entries, CAPTURE_CONFIG, {
+    onTurn: (turn, entry) => seen.push({ role: turn.role, tag: entry.tag }),
+  })
+
+  assert.equal(turns.length, 2)
+  assert.deepEqual(seen, [
+    { role: "user", tag: "first" },
+    { role: "assistant", tag: "second" },
+  ])
+})
+
 test("findLastHumanTurnIndex skips tool results mapped onto the user role", () => {
   const turns = extractCaptureTurns(
     [
