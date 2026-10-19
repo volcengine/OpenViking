@@ -20,7 +20,6 @@ from openviking.server.api_keys.legacy import FileStore
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -412,19 +411,7 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
     assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
 
 
-async def test_file_store_rejects_deleting_nonempty_group():
-    store = _file_store()
-    await store.load()
-    await store.create_account_with_api_key("acme", "alice", "alice-key")
-    await store.create_group("acme", "engineering")
-    await store.add_group_member("acme", "engineering", "alice")
-
-    with pytest.raises(FailedPreconditionError, match="Group must be empty"):
-        await store.delete_group("acme", "engineering")
-    assert await store.get_group_members("acme", "engineering") == ["alice"]
-
-
-async def test_force_group_deletion_preserves_users_and_persists_membership_removal():
+async def test_group_deletion_preserves_users_and_persists_membership_removal():
     fs = SimpleNamespace(agfs=InMemoryAGFS())
     manager = build_api_key_manager("root", fs)
     reloaded = build_api_key_manager("root", fs)
@@ -442,7 +429,7 @@ async def test_force_group_deletion_preserves_users_and_persists_membership_remo
             "reviewers",
         )
 
-        await manager.delete_group("acme", "engineering", force=True)
+        await manager.delete_group("acme", "engineering")
         await reloaded.load()
 
         for reader in (manager, reloaded):
@@ -455,14 +442,13 @@ async def test_force_group_deletion_preserves_users_and_persists_membership_remo
                 await reader.get_group_members("acme", "engineering")
 
         with pytest.raises(NotFoundError, match="Group not found"):
-            await manager.delete_group("acme", "engineering", force=True)
+            await manager.delete_group("acme", "engineering")
     finally:
         await reloaded.close()
         await manager.close()
 
 
-@pytest.mark.parametrize("force", [False, True])
-async def test_redis_group_deletion_invalidates_member_caches_only_when_forced(force):
+async def test_redis_group_deletion_invalidates_member_caches():
     mysql = SimpleNamespace(_service_name="test", delete_group=AsyncMock())
     store = RedisMySQLAccountStore(
         service_name="test",
@@ -472,17 +458,14 @@ async def test_redis_group_deletion_invalidates_member_caches_only_when_forced(f
     )
     store._clear_account_cache = AsyncMock()
 
-    await store.delete_group("acme", "engineering", force=force)
+    await store.delete_group("acme", "engineering")
 
-    mysql.delete_group.assert_awaited_once_with("acme", "engineering", force=force)
-    if force:
-        store._clear_account_cache.assert_awaited_once_with("acme")
-    else:
-        store._clear_account_cache.assert_not_awaited()
+    mysql.delete_group.assert_awaited_once_with("acme", "engineering")
+    store._clear_account_cache.assert_awaited_once_with("acme")
 
 
 @pytest.mark.parametrize("provider", ["mysql", "redis_mysql"])
-async def test_mysql_force_group_deletion_cascades_memberships_and_refreshes_caches(provider):
+async def test_mysql_group_deletion_cascades_memberships_and_refreshes_caches(provider):
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
     if not raw_mysql or (provider == "redis_mysql" and not redis_url):
@@ -521,11 +504,7 @@ async def test_mysql_force_group_deletion_cascades_memberships_and_refreshes_cac
         await writer.add_group_member("acme", "engineering", "alice")
         assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
 
-        with pytest.raises(FailedPreconditionError, match="Group must be empty"):
-            await writer.delete_group("acme", "engineering")
-        assert await reader.get_group_members("acme", "engineering") == ["alice"]
-
-        await writer.delete_group("acme", "engineering", force=True)
+        await writer.delete_group("acme", "engineering")
 
         assert await reader.get_groups("acme") == []
         assert await reader.get_user_group_ids("acme", "alice") == ()

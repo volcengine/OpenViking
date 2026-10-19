@@ -860,13 +860,13 @@ class RedisMySQLAccountStore(AccountStore):
             lambda: (self._group_ids_key(account_id, user_id),),
         )
 
-    async def delete_group(self, account_id: str, group_id: str, force: bool = False) -> None:
+    async def delete_group(self, account_id: str, group_id: str) -> None:
         await self._mutate_account(
             account_id,
-            lambda: self._mysql.delete_group(account_id, group_id, force=force),
+            lambda: self._mysql.delete_group(account_id, group_id),
             lambda: (),
             # Clear all member caches, including memberships added concurrently.
-            account_wide=force,
+            account_wide=True,
         )
 
     async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:

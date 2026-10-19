@@ -1197,11 +1197,10 @@ async def delete_group(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     group_id: str = Path(..., description="Group ID"),
-    force: bool = Query(False, description="Delete the group even if it still has members"),
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    await _get_api_key_manager(request).delete_group(account_id, group_id, force=force)
+    await _get_api_key_manager(request).delete_group(account_id, group_id)
     return Response(status="ok", result={"deleted": True})
 
 
