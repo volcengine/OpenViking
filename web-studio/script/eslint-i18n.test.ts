@@ -54,6 +54,9 @@ describe('i18n lint boundaries', () => {
     'toast.error(error.message)',
     'toast(t("saved"), { description: t("details") })',
     'toast(error.message)',
+    'toast.dismiss("upload-id")',
+    'const id = "upload-id"; toast.dismiss(id)',
+    'toast["dismiss"]("upload-id")',
     'const a = "first"; const b = "second"; const v = <span>{`${a} · ${b}`}</span>',
     'const v = <div className={`grid ${className}`} />',
     'new DOMException("Aborted", "AbortError")',
@@ -96,11 +99,15 @@ describe('i18n lint boundaries', () => {
       const code = jsx
         ? 'export const value = <button title="Delete item">Delete</button>'
         : 'throw new Error("Failed to save")'
-      const config = await new ESLint().calculateConfigForFile(filePath)
+      const config: Linter.Config = await new ESLint().calculateConfigForFile(
+        filePath,
+      )
       const rule = jsx
         ? 'i18next/no-literal-string'
         : 'studio-i18n/no-literal-message'
-      expect(config.rules[rule][0]).toBe(2)
+      const rules = config.rules ?? {}
+      const setting = rules[rule]
+      expect(Array.isArray(setting) ? setting[0] : setting).toBe(2)
       // Exercise the configured i18n rules without building an unrelated full
       // TypeScript program for each synthetic snippet.
       const messages = new Linter().verify(
@@ -109,12 +116,12 @@ describe('i18n lint boundaries', () => {
           {
             files: ['**/*.{ts,tsx}'],
             languageOptions: {
-              parser: config.languageOptions.parser,
+              parser: config.languageOptions?.parser,
               parserOptions: { ecmaFeatures: { jsx: true } },
             },
             plugins: config.plugins,
             rules: Object.fromEntries(
-              Object.entries(config.rules).filter(
+              Object.entries(rules).filter(
                 ([key]) =>
                   key.startsWith('i18next/') || key.startsWith('studio-i18n/'),
               ),

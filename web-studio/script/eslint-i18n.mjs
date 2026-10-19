@@ -115,7 +115,9 @@ export const noLiteralMessage = {
           (callee.type === 'Identifier' && callee.name === 'toast') ||
           (callee.type === 'MemberExpression' &&
             callee.object.type === 'Identifier' &&
-            callee.object.name === 'toast')
+            callee.object.name === 'toast' &&
+            (callee.computed ? callee.property.value : callee.property.name) !==
+              'dismiss')
         ) {
           check(node.arguments[0])
           const options = node.arguments[1]

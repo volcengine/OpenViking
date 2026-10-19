@@ -10,6 +10,7 @@ import {
 import { Compartment, EditorState } from '@codemirror/state'
 import {
   EditorView,
+  getDialog,
   keymap,
   lineNumbers,
   highlightActiveLine,
@@ -310,22 +311,61 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     ])
 
     useEffect(() => {
-      viewRef.current?.dispatch({
-        effects: attributesCompartment.current.reconfigure(
-          EditorView.contentAttributes.of(
-            ariaLabel ? { 'aria-label': ariaLabel } : {},
+      const view = viewRef.current
+      if (!view) return
+      // CodeMirror's built-in gotoLine dialog captures its text and initial
+      // value when opened. Phrase reconfiguration recreates that panel from
+      // the old configuration, so restore its draft and refresh captured text.
+      const input = getDialog(
+        view,
+        'cm-dialog',
+      )?.dom.querySelector<HTMLInputElement>('input[name="line"]')
+      const draft = input
+        ? {
+            value: input.value,
+            start: input.selectionStart,
+            end: input.selectionEnd,
+            direction: input.selectionDirection,
+          }
+        : undefined
+      const activeElement = view.dom.ownerDocument.activeElement
+      view.dispatch({
+        effects: [
+          attributesCompartment.current.reconfigure(
+            EditorView.contentAttributes.of(
+              ariaLabel ? { 'aria-label': ariaLabel } : {},
+            ),
           ),
-        ),
+          phrasesCompartment.current.reconfigure(
+            EditorState.phrases.of(phrases),
+          ),
+        ],
       })
-    }, [ariaLabel])
-
-    useEffect(() => {
-      viewRef.current?.dispatch({
-        effects: phrasesCompartment.current.reconfigure(
-          EditorState.phrases.of(phrases),
-        ),
-      })
-    }, [phrases])
+      if (!draft) return
+      const panel = getDialog(view, 'cm-dialog')?.dom
+      const nextInput =
+        panel?.querySelector<HTMLInputElement>('input[name="line"]')
+      if (!nextInput) return
+      nextInput.value = draft.value
+      nextInput.setSelectionRange(
+        draft.start,
+        draft.end,
+        draft.direction ?? undefined,
+      )
+      const label = nextInput.closest('label')?.firstChild
+      if (label?.nodeType === Node.TEXT_NODE)
+        label.textContent = `${view.state.phrase('Go to line')}: `
+      const submit = panel?.querySelector<HTMLButtonElement>(
+        'button[type="submit"]',
+      )
+      if (submit) submit.textContent = view.state.phrase('go')
+      if (activeElement === input) nextInput.focus()
+      else if (
+        activeElement instanceof HTMLElement &&
+        activeElement.isConnected
+      )
+        activeElement.focus()
+    }, [ariaLabel, phrases])
 
     useEffect(() => {
       const view = viewRef.current
