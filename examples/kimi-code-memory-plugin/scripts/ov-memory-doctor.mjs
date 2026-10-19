@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./config.mjs";
 import { getStateDir } from "./session-state.mjs";
+import { listPending } from "./shared/pending-queue.mjs";
 import {
   credentialSources,
   fmtAge,
@@ -37,6 +38,8 @@ import {
 
 const PLUGIN_ROOT = resolvePath(fileURLToPath(import.meta.url), "..", "..");
 const PLUGIN_NAME = "openviking-memory";
+/** Filled before `runDoctor`; the doctor's own hooks are synchronous. */
+let PENDING = { rows: [], error: "" };
 
 const HOST = {
   harness: "kimicode",
@@ -50,7 +53,10 @@ const HOST = {
   loadConfig,
   checkInstall,
   checkConfig,
-  checkActivity,
+  checkActivity: (report, cfg, connection) => {
+    checkActivity(report, cfg, connection);
+    reportPending(report, PENDING);
+  },
   resolveIdentity: (cfg) => ({ account: cfg.account, user: cfg.user }),
   extraResolved: (cfg) => ({ credentialSource: cfg.credentialSource, authMode: cfg.authMode }),
 };
@@ -80,7 +86,7 @@ function checkInstall(report) {
   const plugins = Array.isArray(installed?.plugins) ? installed.plugins : [];
   const record = plugins.find((p) => p?.id === PLUGIN_NAME || p?.manifest?.name === PLUGIN_NAME);
   if (!record) {
-    report.fail(`plugins/installed.json has no ${PLUGIN_NAME} record`, "", `/plugins install <dir | zip URL | GitHub URL>`);
+    report.fail(`plugins/installed.json has no ${PLUGIN_NAME} record`, "", `/plugins install <dir | zip URL>`);
     return;
   }
 
@@ -88,14 +94,30 @@ function checkInstall(report) {
   const enabled = record.enabled !== false;
   (enabled ? report.ok : report.fail)(`installed record: ${PLUGIN_NAME} enabled=${enabled}`, "", enabled ? "" : `/plugins enable ${PLUGIN_NAME}`);
 
+  let manifest;
   try {
-    const manifest = JSON.parse(readFileSync(join(managedRoot, "kimi.plugin.json"), "utf-8"));
-    const hooks = manifest.hooks ?? [];
-    const events = hooks.map((h) => h.event).filter(Boolean);
-    report.info(`manifest declares ${hooks.length} hooks (${events.join(", ") || "none"}) and ${manifest.mcpServers ? "an" : "no"} MCP server`);
+    manifest = JSON.parse(readFileSync(join(managedRoot, "kimi.plugin.json"), "utf-8"));
   } catch {
     report.warn(`managed copy at ${managedRoot} is missing or unreadable`, "the CLI runs the managed copy, not the source dir", `/plugins install ${PLUGIN_ROOT}`);
     return;
+  }
+  const hooks = Array.isArray(manifest.hooks) ? manifest.hooks : [];
+  const events = hooks.map((h) => h.event).filter(Boolean);
+  report.info(`manifest declares ${hooks.length} hooks (${events.join(", ") || "none"}) and ${manifest.mcpServers ? "an" : "no"} MCP server`);
+  // A half-copied managed dir is the failure mode that leaves every tool
+  // missing while the report stays green: resolve what the manifest names.
+  const missingHooks = hooks
+    .map((hook) => localTarget(hook?.command))
+    .filter((target) => target && !existsSync(join(managedRoot, target)));
+  if (missingHooks.length) {
+    report.fail(`manifest names ${missingHooks.length} hook entr${missingHooks.length === 1 ? "y" : "ies"} that are missing`, missingHooks.join(", "), `/plugins install ${PLUGIN_ROOT} again`);
+  }
+  const mcpServers = manifest.mcpServers && typeof manifest.mcpServers === "object" ? manifest.mcpServers : {};
+  for (const [name, server] of Object.entries(mcpServers)) {
+    const target = localTarget(Array.isArray(server?.args) ? server.args.join(" ") : "");
+    if (target && !existsSync(join(managedRoot, target))) {
+      report.fail(`MCP server ${name} points at a missing entry`, target, "every OpenViking tool call fails; reinstall the plugin");
+    }
   }
 
   let sourceVersion = "";
@@ -173,6 +195,59 @@ function checkConfig(report, cfg, host) {
   return { keyInfo, peer, ovConf };
 }
 
+/**
+ * What the replay queue holds. Read before `runDoctor` because the shared
+ * listing is async and the doctor's hooks are not.
+ */
+async function pendingSnapshot() {
+  try {
+    const entries = await listPending();
+    const rows = entries.map(({ entry }) => ({
+      sessionId: String(entry?.sessionId || "?"),
+      type: String(entry?.type || "?"),
+      createdAt: Number(entry?.createdAt) || 0,
+      retries: Number(entry?.retries) || 0,
+    }));
+    return { rows, error: "" };
+  } catch (error) {
+    return { rows: [], error: error?.message || String(error) };
+  }
+}
+
+function reportPending(report, snapshot) {
+  report.section("Pending queue");
+  if (snapshot.error) {
+    report.warn("the pending queue could not be read", snapshot.error, "");
+    return;
+  }
+  if (!snapshot.rows.length) {
+    report.ok("nothing parked — every captured message reached the server or was committed", "", "");
+    return;
+  }
+  const now = Date.now();
+  const bySession = new Map();
+  for (const row of snapshot.rows) {
+    const bucket = bySession.get(row.sessionId) || { count: 0, oldest: now, maxRetries: 0 };
+    bucket.count += 1;
+    bucket.oldest = Math.min(bucket.oldest, row.createdAt || now);
+    bucket.maxRetries = Math.max(bucket.maxRetries, row.retries);
+    bySession.set(row.sessionId, bucket);
+  }
+  for (const [sessionId, bucket] of bySession) {
+    report.info(`${sessionId}: ${bucket.count} parked (oldest ${fmtAge(bucket.oldest)}, retries up to ${bucket.maxRetries})`);
+  }
+  const stuck = [...bySession.values()].reduce((max, bucket) => Math.max(max, bucket.retries), 0);
+  if (stuck >= 2) {
+    report.warn(`queued messages have been retried ${stuck} times`, "the server keeps refusing them; they are dropped at the retry limit", "check the server logs for the rejection reason");
+  }
+}
+
+function localTarget(command) {
+  const tokens = String(command || "").split(/\s+/);
+  const target = tokens.find((token) => token.startsWith("./"));
+  return target ? target.slice(2) : "";
+}
+
 function checkActivity(report, cfg) {
   report.section("Recent activity");
   const stateDir = getStateDir();
@@ -181,7 +256,7 @@ function checkActivity(report, cfg) {
     return;
   }
   const states = readdirSync(stateDir)
-    .filter((n) => n.endsWith(".json"))
+    .filter((n) => n.endsWith(".json") && !n.endsWith(".recall.json") && !n.endsWith(".profile.json"))
     .map((n) => {
       const path = join(stateDir, n);
       const st = statSync(path);
@@ -199,7 +274,7 @@ function checkActivity(report, cfg) {
     const detail = d
       ? `turn ${d.lastTurnId ?? "?"} · ${Array.isArray(d.capturedTurnIds) ? d.capturedTurnIds.length : "?"} acked · ${d.capturedSinceCommit ?? 0} since commit · ov session ${d.ovSessionId || d.ov_session_id || "?"}`
       : "state file unreadable";
-    report.info(`${s.name}  ${fmtAge(s.mtimeMs)} ago — ${detail}`);
+    report.info(`${s.name}  ${fmtAge(s.mtimeMs)} — ${detail}`);
   }
   if (states.length > 5) report.info(`… and ${states.length - 5} more state file(s)`);
 }
@@ -214,6 +289,7 @@ function isDirectRun() {
 }
 
 if (isDirectRun()) {
+  PENDING = await pendingSnapshot();
   runDoctor(HOST).catch((err) => {
     console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
     process.exit(2);

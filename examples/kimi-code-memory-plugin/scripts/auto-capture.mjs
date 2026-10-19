@@ -37,6 +37,7 @@ import {
 } from "./ov-session.mjs";
 import { commitAgentSession, runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { shapeKimicodeTurns } from "./capture-shape.mjs";
+import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
@@ -56,10 +57,10 @@ let cfg;
 let fetchJSON;
 
 /**
- * Ack keys at or before the cursor are dead weight: the decoder never emits
- * those turns again, so the set would grow by one entry per message part for
- * the whole session. Keys without a numeric turn id (the content-hash
- * fallback) are kept.
+ * Ack keys at or before the cursor are dead weight: the decoder filters by turn
+ * id rather than by position, so a truncated journal cannot bring those turns
+ * back. Keeping them grows the state file by one entry per message part, and it
+ * is rewritten on every confirmation.
  */
 function pruneAckedKeys(keys, lastTurnId) {
   const cursor = Number(lastTurnId);
@@ -77,7 +78,9 @@ runHookStage(
       cfg = loadConfig(cwd);
       return cfg;
     },
-    gates: { enabled: (reloaded) => reloaded.autoCapture },
+    // The adapter gate and the shared one: the shared predicate is what every
+    // host ends up consulting, so a future knob cannot be honoured here alone.
+    gates: { enabled: (reloaded) => reloaded.autoCapture && isCaptureEnabled(reloaded) },
     // Capture is a write path: no envelope, no stdout.
     envelope: () => {},
     onSkip: (reason) => log("skip", { stage: "init", reason, event: EVENT }),
@@ -92,6 +95,10 @@ runHookStage(
       requireJsonBody: true,
     });
 
+    if (!stage.sessionId) {
+      logError("no_session_id", `event=${EVENT}`);
+      return;
+    }
     const ovSessionId = deriveOvSessionId(stage.sessionId);
 
     // Overall synchronous budget (spec §5.5): lock wait, message backfill and
@@ -111,6 +118,9 @@ runHookStage(
       cfg.timeoutMs,
     );
 
+    // The lock waits inside the same budget as the requests: an interrupt has
+    // 2s total, and a lock wait that ignores it would spend the whole hook
+    // queueing nothing.
     const locked = await withSessionLock(stage.sessionId, async () => {
       const state = await loadState(stage.sessionId, (message) => logError("state_read_failed", message));
 
@@ -191,9 +201,6 @@ runHookStage(
       // neither in the ack set nor decoded again.
       const advanceTo = nextCursor(plan, acked, decoded.turnOrder);
       if (advanceTo != null) state.lastTurnId = advanceTo;
-      // Keys at or before the cursor are never decoded again; keeping them
-      // grows the state file by one entry per message part, rewritten on every
-      // confirmation.
       state.capturedTurnIds = pruneAckedKeys(state.capturedTurnIds, state.lastTurnId);
       try {
         await saveState(stage.sessionId, state);
@@ -246,7 +253,7 @@ runHookStage(
           log("commit_queued", { ok: queuedCommit.ok, deduped: Boolean(queuedCommit.deduped) });
         }
       }
-    });
+    }, { waitMs: remainingMs() });
     if (locked === null) {
       // Lock never came: this hook did nothing. Fail open, the next event retries.
       logError("lock_timeout", `event=${EVENT} sessionId=${stage.sessionId}`);

@@ -83,7 +83,7 @@ runHookStage(
       defaultTimeoutMs: cfg.timeoutMs,
       requireJsonBody: true,
     }), remainingMs, cfg.timeoutMs);
-    log("start", { source, sessionId: stage.sessionId, ovSessionId: deriveOvSessionId(stage.sessionId) });
+    log("start", { source, sessionId: stage.sessionId, ovSessionId: stage.sessionId ? deriveOvSessionId(stage.sessionId) : "" });
 
     const health = await fetchJSON("/health", {}, { timeoutMs: HEALTH_TIMEOUT_MS });
     if (!health.ok) {

@@ -9,6 +9,9 @@
  */
 
 import { extractCaptureTurns, truncateCaptureText } from "./shared/capture-utils.mjs";
+import { KNOBS, knobDefault } from "./shared/config-schema.mjs";
+
+const CAPTURE_MAX_LENGTH = KNOBS.find((knob) => knob.name === "captureMaxLength");
 
 // `notification` keeps its body: a finished background task or a cron firing is
 // a real prompt, and for a turn with no user input it is the whole turn. The
@@ -17,12 +20,16 @@ import { extractCaptureTurns, truncateCaptureText } from "./shared/capture-utils
 const BODY_TAGS = ["notification"];
 const BLOCK_TAGS = ["output-file", "skill-loaded", "bash-input", "bash-stdout", "bash-stderr"];
 const BODY_RE = new RegExp(`<(${BODY_TAGS.join("|")})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`, "gi");
+// The host writes some of these as an empty element (`<output-file path="x" />`),
+// so both shapes are transport and both go.
+const BLOCK_SELF_CLOSING_RE = new RegExp(`<(${BLOCK_TAGS.join("|")})\\b[^>]*\\/>`, "gi");
 const BLOCK_RE = new RegExp(`<(${BLOCK_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?<\\/\\1>`, "gi");
 
 /** Drop the host's transport wrappers from one captured text. */
 export function stripHostEnvelopes(text) {
   return String(text || "")
     .replace(/<hook_result\b[^>]*>[\s\S]*?<\/hook_result>/gi, " ")
+    .replace(BLOCK_SELF_CLOSING_RE, " ")
     .replace(BLOCK_RE, " ")
     .replace(BODY_RE, " $2 ");
 }
@@ -42,13 +49,19 @@ export function shapeKimicodeTurns(entries, cfg = {}) {
   const turns = extractCaptureTurns(list, cfg);
   if (turns.length === 0) return [];
 
-  const maxLength = Number(cfg.captureMaxLength) || 24000;
+  const maxLength = Number(cfg.captureMaxLength) || knobDefault(CAPTURE_MAX_LENGTH);
   const turnIds = [];
   for (const entry of list) {
     const produced = extractCaptureTurns([entry], cfg).length;
     for (let i = 0; i < produced; i += 1) turnIds.push(entry?.payload?.turn_id ?? null);
   }
+  // The shared extractor drops entries it cannot shape, so the two passes are
+  // expected to agree; when they do not, the ids are dropped rather than
+  // guessed, and the caller sees why in the hook log.
   const aligned = turnIds.length === turns.length;
+  if (!aligned) {
+    console.error(`capture-shape: turn id alignment lost (${turnIds.length} ids for ${turns.length} turns)`);
+  }
 
   return turns.map((turn, index) => {
     const turnId = aligned ? turnIds[index] : null;

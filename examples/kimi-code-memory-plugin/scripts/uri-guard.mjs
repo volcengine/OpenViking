@@ -8,17 +8,14 @@
  * MCP tools. Kimi's deny envelope is
  * `hookSpecificOutput.permissionDecision` + `permissionDecisionReason`.
  *
- * The guard is deliberately narrow: it checks the path argument of the
- * matched file tools only. It never grows into a general command interceptor,
- * and shell commands that merely mention a viking:// URI as data are left
- * alone (they run normally).
+ * The scope is the manifest matcher (`Read|Glob|Grep`), not a list here: the
+ * shared guard resolves the tool name against its own table, so passing a
+ * narrower set would be a claim the code never reads. Shell commands that
+ * merely mention a viking:// URI as data are left alone (they run normally).
  */
 
 import { preToolUseOutput, runUriGuardHook } from "./shared/uri-guard.mjs";
 
-export const evaluatePreToolUse = (input = {}) =>
-  preToolUseOutput(input, {
-    guarded: new Set(["read", "glob", "grep"]),
-  });
+export const evaluatePreToolUse = (input = {}) => preToolUseOutput(input);
 
 runUriGuardHook(import.meta.url, evaluatePreToolUse);

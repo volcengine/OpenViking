@@ -23,6 +23,11 @@
 
 import { isDeepStrictEqual } from "node:util";
 
+import { KNOBS, knobDefault } from "./shared/config-schema.mjs";
+
+// One default table for every surface: the schema's.
+const COMMIT_THRESHOLD = KNOBS.find((knob) => knob.name === "commitTurnThreshold");
+
 import { stableHash } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { dequeue, listPending } from "./shared/pending-queue.mjs";
@@ -46,9 +51,9 @@ export function turnDedupKey(turn) {
 /**
  * Build add-message payloads from shared capture turns: `{ role, parts }` when
  * the turn carries structured parts (text + tool), else `{ role, content }`;
- * `turn_id` stamped when the turn carries one (shared extractCaptureTurns
- * propagates it since the Kimi decoder stamps entries); `peer_id` when a peer
- * is resolved.
+ * `turn_id` stamped when the turn carries one (capture-shape.mjs attaches it —
+ * the shared extractor does not copy the entry's turn id); `peer_id` when a
+ * peer is resolved.
  */
 export function buildMessagePayloads(turns, { peerId = "" } = {}) {
   return turns.map((turn) => {
@@ -63,10 +68,10 @@ export function buildMessagePayloads(turns, { peerId = "" } = {}) {
 
 /**
  * Split shaped turns into the payloads still to send. A turn is new unless
- * every one of its dedup keys is already acked — a multi-tool turn whose
- * first call was acked but whose second was not is re-sent as a whole, which
- * the server's idempotent add-message tolerates better than dropping half a
- * turn.
+ * every one of its dedup keys is already acked. A multi-tool turn whose first
+ * call was acked but whose second was not is re-sent as a whole: the server
+ * has no turn-id idempotency, so that repeat is a real duplicate, accepted
+ * over dropping half a turn. DESIGN.md §Replay states the policy.
  *
  * Two entries can share `turnId:role` (two assistant text steps in one turn,
  * or a rewritten turn reusing its id). The first keeps the plain key so an
@@ -167,7 +172,7 @@ export function shouldCommit(event, cfg = {}, previousCaptured = 0, captured = 0
   if (progress <= 0) return false;
   if (event === "interrupt" || event === "session-end") return true;
   if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return progress >= Number(cfg.commitTurnThreshold || Infinity);
+  return progress >= Number(cfg.commitTurnThreshold || knobDefault(COMMIT_THRESHOLD));
 }
 
 /**

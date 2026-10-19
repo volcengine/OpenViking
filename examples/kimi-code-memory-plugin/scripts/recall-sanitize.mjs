@@ -1,10 +1,11 @@
 /**
  * Neutralise the tags this host reserves before retrieved text enters a prompt.
  *
- * The shared wrapper already strips the two legacy memory envelopes; the rest
- * are Kimi's own transport wrappers and out-of-band notes, which a resource
- * import or an MCP `remember` can still carry into a recall block or the user
- * profile. They describe this host, so the list lives here.
+ * The first two entries mirror `wrapContext` in the shared recall core, which
+ * is private and only wraps recall blocks — the profile block is injected by
+ * this adapter, so it repeats them here. The rest are the host wrappers and
+ * out-of-band notes a resource import or an MCP `remember` can still carry
+ * into either block. Change the mirrored pair together with the shared one.
  */
 
 const RESERVED_TAGS = [

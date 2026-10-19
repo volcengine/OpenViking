@@ -107,13 +107,13 @@ export async function saveState(sessionId, value) {
  * treat that as "skip this hook", not as success — the next event retries).
  * A holder that died without releasing is reclaimed after LOCK_STALE_MS.
  */
-export async function withSessionLock(sessionId, callback) {
+export async function withSessionLock(sessionId, callback, { waitMs = LOCK_WAIT_MS } = {}) {
   const dir = join(getStateDir(), `${safeId(sessionId)}.lock`);
   // The lock can be the first thing a fresh install touches: auto-recall
   // creates the state directory through loadState, but a short first prompt,
   // or auto-recall disabled, reaches capture before that ever runs.
   await mkdir(getStateDir(), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + Math.max(0, Math.min(Number(waitMs) || 0, LOCK_WAIT_MS));
   const token = `${process.pid}-${randomUUID()}`;
   let acquired = false;
   while (true) {

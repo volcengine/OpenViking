@@ -377,10 +377,18 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
     // step.begin / step.end: grouping markers only, no payload (§6.3).
   }
 
-  const lastIndex = lastTurnId == null || lastTurnId === ""
-    ? -1
-    : order.indexOf(String(lastTurnId));
-  const unseen = order.slice(lastIndex + 1);
+  // The cursor is a turn id, not a position: repairWireJournal can truncate the
+  // tail, and an index found by `indexOf` would silently become -1 — re-decoding
+  // (and re-sending) the whole session. Kimi's turn ids increase, so anything
+  // numerically above the cursor is new even when the cursor turn itself is gone.
+  const cursor = lastTurnId == null || lastTurnId === "" ? null : String(lastTurnId);
+  const cursorNumber = cursor == null ? NaN : Number(cursor);
+  const numericCursor = Number.isFinite(cursorNumber);
+  const unseen = cursor == null
+    ? order
+    : numericCursor
+      ? order.filter((turnId) => !Number.isFinite(Number(turnId)) || Number(turnId) > cursorNumber)
+      : order.slice(order.indexOf(cursor) + 1);
   // `turnOrder` is the cursor walk's map, so it only lists turns that actually
   // produced entries. An unclosed turn has none: anchoring past it would make
   // the decoder skip it once it closes.
