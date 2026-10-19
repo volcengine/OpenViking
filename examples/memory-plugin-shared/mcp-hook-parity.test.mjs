@@ -29,6 +29,8 @@ import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mc
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { buildMcpConfig as dshMcpConfig } from "../dsh-memory-plugin/mcp-env.mjs";
 import { readProxyConfig as dshProxy } from "../dsh-memory-plugin/servers/mcp-proxy.mjs";
+import { loadConfig as loadKimicode } from "../kimi-code-memory-plugin/scripts/config.mjs";
+import { readProxyConfig as kimicodeProxy } from "../kimi-code-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { readProxyConfig as opencodeProxy } from "../opencode-plugin/servers/mcp-proxy.mjs";
 
@@ -82,6 +84,13 @@ const HARNESSES = [
     section: "agent_hook",
     hook: ({ env, cwd }) => loadAgentHookConfig("agent-hook", cwd, { env }),
     proxy: ({ env }) => agentHookProxy(env),
+  },
+  {
+    name: "kimicode",
+    dir: "kimi-code-memory-plugin",
+    section: "kimicode",
+    hook: ({ env, cwd }) => loadKimicode(cwd, { env }),
+    proxy: ({ env }) => kimicodeProxy(env),
   },
   {
     name: "dsh",
