@@ -12,7 +12,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
-def _start_server(records, *, require_header=None, redirect_to=None, plain_redirect_to=None):
+def _start_server(records, *, require_header=None, redirect_to=None, plain_redirect_to=None,
+                  gateway_value=None, require_key=False):
     """Local stand-in for an OpenViking server.
 
     ``redirect_to`` models an authenticating gateway that answers header-less requests
@@ -22,40 +23,55 @@ def _start_server(records, *, require_header=None, redirect_to=None, plain_redir
     ``plain_redirect_to`` models an endpoint that simply redirects every request and
     says nothing about being OpenViking — the ordinary 3xx that must never receive
     credentials.
+
+    ``gateway_value`` makes ``require_header`` value-checked: a request that does not
+    present exactly this value is answered like a header-less one, modelling a gateway
+    token that expired or was rotated.
+
+    ``require_key`` makes the server behind the gateway ask for credentials itself: a
+    request that passes the gateway but carries no ``X-API-Key`` gets ``401``.
     """
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            records.append(dict(self.headers))
-            if plain_redirect_to:
-                body = b"<html><head><title>302 Found</title></head><body></body></html>"
-                self.send_response(302)
-                self.send_header("Location", plain_redirect_to)
-                self.send_header("Content-Type", "text/html; charset=UTF-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if require_header and not self.headers.get(require_header):
-                if redirect_to:
-                    body = b"<html><head><title>302 Found</title></head><body></body></html>"
-                    self.send_response(302)
-                    self.send_header("Location", redirect_to)
-                    self.send_header("Content-Type", "text/html; charset=UTF-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
-                status, payload = 403, {"error": "blocked at edge"}
-            else:
-                status, payload = 200, {"status": "ok", "healthy": True,
-                                        "version": "0.4.18", "auth_mode": "api_key"}
+        def _redirect(self, target):
+            body = b"<html><head><title>302 Found</title></head><body></body></html>"
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Type", "text/html; charset=UTF-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, status, payload):
             raw = json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
+
+        def do_GET(self):
+            records.append(dict(self.headers))
+            if plain_redirect_to:
+                self._redirect(plain_redirect_to)
+                return
+            if require_header:
+                presented = self.headers.get(require_header)
+                authorised = bool(presented) and (
+                    gateway_value is None or presented == gateway_value
+                )
+                if not authorised:
+                    if redirect_to:
+                        self._redirect(redirect_to)
+                        return
+                    self._json(403, {"error": "blocked at edge"})
+                    return
+            if require_key and not self.headers.get("X-API-Key"):
+                self._json(401, {"error": {"code": "AuthenticationError",
+                                           "message": "The API key in the request is missing or invalid."}})
+                return
+            self._json(200, {"status": "ok", "healthy": True,
+                             "version": "0.4.18", "auth_mode": "api_key"})
 
         def log_message(self, *_args):
             pass
@@ -261,6 +277,121 @@ def test_ordinary_redirect_receives_no_secrets(external_provider):
         )
         assert provider._client is None, (
             "a redirecting non-OpenViking endpoint was accepted as a client"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_gateway_only_deployment_needs_no_api_key(external_provider):
+    """A gateway-only deployment: extra_headers set, no OpenViking API key at all.
+
+    The gateway retry carries the operator's headers and nothing else, so it must not be
+    gated on a key that request never sends. A loopback OpenViking published through
+    Cloudflare Access has exactly this shape.
+    """
+    records = []
+    server, worker = _start_server(
+        records,
+        require_header="CF-Access-Client-Id",
+        redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
+    )
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        _, _, module, _ = external_provider("gateway-only-no-key")
+        client = module._VikingClient(
+            endpoint, "", extra_headers={"CF-Access-Client-Id": "id.access"}
+        )
+        payload = client.health_payload()
+
+        assert payload.get("status") == "ok", (
+            "a gateway-only deployment could not probe /health without an API key"
+        )
+        assert len(records) == 2, (
+            "expected one anonymous probe and one gateway retry, got %d requests" % len(records)
+        )
+        assert records[1].get("CF-Access-Client-Id") == "id.access"
+        assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
+            "the gateway retry carried credentials it never needed"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_gateway_redirect_then_key_challenge_is_answered(external_provider):
+    """A gateway in front of an API-key-protected /health still starts.
+
+    anonymous -> 302 (gateway), gateway-only retry -> 401 (the server itself asks for
+    credentials), key retry -> 200. Three requests at most, and the key stays out of the
+    redirect attempt.
+    """
+    records = []
+    server, worker = _start_server(
+        records,
+        require_header="CF-Access-Client-Id",
+        redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
+        require_key=True,
+    )
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        _, _, module, _ = external_provider("gateway-then-key")
+        client = module._VikingClient(
+            endpoint, "test-key", extra_headers={"CF-Access-Client-Id": "id.access"}
+        )
+        payload = client.health_payload()
+
+        assert payload.get("status") == "ok", (
+            "the 401 challenge behind the gateway was never answered"
+        )
+        assert len(records) == 3, (
+            "expected probe + gateway retry + key retry, got %d requests" % len(records)
+        )
+        assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
+            "the redirect retry carried the key"
+        )
+        assert records[2].get("X-API-Key") == "test-key", (
+            "the explicit 401 challenge went unanswered"
+        )
+        assert records[2].get("CF-Access-Client-Id") == "id.access"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def test_stale_gateway_token_reports_the_gateway_not_openviking(external_provider):
+    """An expired gateway token must say so, not "not valid OpenViking".
+
+    The retry stays bounded and the login URL is never followed.
+    """
+    records = []
+    server, worker = _start_server(
+        records,
+        require_header="CF-Access-Client-Id",
+        redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
+        gateway_value="rotated-token",
+    )
+    endpoint = "http://127.0.0.1:%d" % server.server_port
+    try:
+        _, _, module, _ = external_provider("stale-gateway-token")
+        client = module._VikingClient(
+            endpoint, "test-key", extra_headers={"CF-Access-Client-Id": "stale-token"}
+        )
+        message = ""
+        try:
+            client.health_payload()
+        except Exception as exc:  # noqa: BLE001 — the message is the point here
+            message = str(exc)
+
+        assert "still redirecting" in message or "extra_headers" in message, (
+            "a repeated gateway redirect was reported as %r" % message
+        )
+        assert len(records) == 2, "the retry was not bounded: %d requests" % len(records)
+        assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
+            "the bounded retry carried credentials"
         )
     finally:
         server.shutdown()

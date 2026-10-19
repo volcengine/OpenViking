@@ -267,25 +267,6 @@ def _status_code_from_error(error: Exception) -> Optional[int]:
     return getattr(getattr(error, "response", None), "status_code", None)
 
 
-def _probe_needs_credentials(status: Optional[int], *, has_gateway_headers: bool = False) -> bool:
-    """True when an anonymous probe's status authorizes a retry with credentials.
-
-    ``401``/``403`` are explicit challenges from the server itself: retrying with the key
-    is the documented path for a hosted OpenViking whose ``/health`` requires auth.
-
-    A ``3xx`` is a redirect, and a redirect on its own identifies nothing — an ordinary
-    3xx from an endpoint that has not been shown to be OpenViking must not receive
-    secrets. It is retried only when this connection carries gateway headers, because
-    those are the operator's explicit declaration that an authenticating gateway
-    (Cloudflare Access, oauth2-proxy, ...) sits in front of that endpoint.
-    """
-    if status is None:
-        return False
-    if status in (401, 403):
-        return True
-    return bool(has_gateway_headers) and 300 <= status < 400
-
-
 def _is_redirect(status: Optional[int]) -> bool:
     return isinstance(status, int) and 300 <= status < 400
 
@@ -484,29 +465,61 @@ class _VikingClient:
             raise _OpenVikingHTTPError(f"HTTP {status}", status)
         return self._parse_response(resp)
 
-    def _probe_retry_headers(self, status: Optional[int]) -> dict:
-        """The headers the retry may carry, limited to what that response authorizes.
+    def _probe_retry_headers(self, *, gateway_only: bool) -> dict:
+        """Headers a retry may carry, limited to what that response authorizes.
 
-        ``401``/``403`` is the server itself asking for credentials, so the retry keeps the
-        set it always sent. A redirect only says a gateway wants its own headers: the
-        gateway support this plugin adds needs nothing else, so a ``3xx`` retry carries the
-        operator's gateway headers and no credential or peer identity.
+        ``gateway_only`` is the operator's ``extra_headers`` and nothing else: a gateway
+        never asks for the OpenViking key, so a redirect retry must not carry it. The other
+        set is the one every other request uses (the key, tenant-free).
         """
-        if _is_redirect(status):
+        if gateway_only:
             return dict(self._extra_headers)
         return self._headers(include_tenant=False)
 
+    def _probe_gateway_retry(self) -> dict:
+        """Retry the probe with the operator's gateway headers only.
+
+        Bounded to one extra request, and the redirect destination is never followed. If the
+        gateway lets the probe through and the server behind it then asks for credentials
+        (401/403), that explicit challenge is answered by the ordinary key retry, so the key
+        still stays out of the redirect attempt itself.
+        """
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=True),
+            timeout=3.0,
+        )
+        status = getattr(resp, "status_code", None)
+        if _is_redirect(status):
+            raise _OpenVikingHTTPError(
+                f"HTTP {status} after retrying with extra_headers: the gateway is still "
+                "redirecting, so check that the configured gateway credentials are valid",
+                status,
+            )
+        if status in (401, 403) and self._api_key:
+            return self._parse_response(
+                self._httpx.get(
+                    f"{self._endpoint}/health",
+                    headers=self._probe_retry_headers(gateway_only=False),
+                    timeout=3.0,
+                )
+            )
+        return self._parse_response(resp)
+
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
-        Hosted OpenViking requires auth on /health: when an API key is configured and the
-        anonymous call gets 401/403, retry once with the key (no tenant headers).
+        Hosted OpenViking requires auth on /health: an explicit 401/403 challenge is retried
+        once with the key (no tenant headers), exactly as it always was.
 
-        A 3xx is retried only when this connection carries gateway headers — the operator's
-        declaration that an authenticating gateway (Cloudflare Access, oauth2-proxy, ...)
-        fronts the endpoint — and that retry carries nothing but those gateway headers: the
-        key and the peer identity are not what a gateway asks for. An ordinary redirect from
-        an endpoint that has not been shown to be OpenViking is not authorization to resend
-        secrets, so it stays a failure.
+        A 3xx is a gateway answering. It is retried only when this connection carries gateway
+        headers — the operator's declaration that an authenticating gateway (Cloudflare
+        Access, oauth2-proxy, ...) fronts the endpoint — and that retry carries nothing but
+        those headers: no key, no peer identity, and no API key is required for it, because
+        none is sent. If the gateway then lets us through to a server that asks for
+        credentials itself, that 401/403 is handled by the ordinary key retry. An ordinary
+        redirect from an endpoint that has not been shown to be OpenViking is not
+        authorization to resend secrets, so it stays a failure, and the login URL is never
+        followed.
 
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
@@ -515,14 +528,16 @@ class _VikingClient:
             return self._anonymous_json("/health")
         except _OpenVikingHTTPError as exc:
             status = _status_code_from_error(exc)
-            if not self._api_key or not _probe_needs_credentials(
-                status, has_gateway_headers=bool(self._extra_headers)
-            ):
+            if _is_redirect(status):
+                if not self._extra_headers:
+                    raise
+                return self._probe_gateway_retry()
+            if status not in (401, 403) or not self._api_key:
                 raise
             return self._parse_response(
                 self._httpx.get(
                     f"{self._endpoint}/health",
-                    headers=self._probe_retry_headers(status),
+                    headers=self._probe_retry_headers(gateway_only=False),
                     timeout=3.0,
                 )
             )
