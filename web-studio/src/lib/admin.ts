@@ -626,16 +626,11 @@ export function createAdminGroup(connection: AdminConnection, groupId: string) {
   )
 }
 
-export function deleteAdminGroup(
-  connection: AdminConnection,
-  groupId: string,
-  force = false,
-) {
+export function deleteAdminGroup(connection: AdminConnection, groupId: string) {
   return getOvResult<{ deleted: boolean }>(
     createAdminClient(connection).delete({
       url: `${groupsUrl}/{group_id}`,
       path: { account_id: connection.accountId, group_id: groupId },
-      query: { force },
     }),
   )
 }

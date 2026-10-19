@@ -214,12 +214,11 @@ pub async fn delete_group(
     client: &HttpClient,
     account_id: &str,
     group_id: &str,
-    force: bool,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show_admin(
-        client.admin_delete_group(account_id, group_id, force).await?,
+        client.admin_delete_group(account_id, group_id).await?,
         output_format,
         compact,
     )

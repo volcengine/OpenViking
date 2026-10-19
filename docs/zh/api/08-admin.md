@@ -79,7 +79,7 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
-要直接删除仍有成员的组，可使用 `ov --sudo admin delete-group acme engineering --force`，或调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering?force=true`。Python SDK 对应 `admin_delete_group("acme", "engineering", force=True)`。
+要直接删除仍有成员的组，可调用 `DELETE /api/v1/admin/accounts/acme/groups/engineering?force=true`。
 
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 

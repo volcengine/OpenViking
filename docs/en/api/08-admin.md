@@ -79,7 +79,7 @@ ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
 
-To delete a group that still has members, use `ov --sudo admin delete-group acme engineering --force`, or call `DELETE /api/v1/admin/accounts/acme/groups/engineering?force=true`. The Python SDK equivalent is `admin_delete_group("acme", "engineering", force=True)`.
+To delete a group that still has members, call `DELETE /api/v1/admin/accounts/acme/groups/engineering?force=true`.
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 

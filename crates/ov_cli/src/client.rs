@@ -1616,19 +1616,9 @@ impl HttpClient {
         self.get(&path, &[]).await
     }
 
-    pub async fn admin_delete_group(
-        &self,
-        account_id: &str,
-        group_id: &str,
-        force: bool,
-    ) -> Result<Value> {
+    pub async fn admin_delete_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/groups/{}", account_id, group_id);
-        let params = if force {
-            vec![("force".to_string(), "true".to_string())]
-        } else {
-            vec![]
-        };
-        self.delete(&path, &params).await
+        self.delete(&path, &[]).await
     }
 
     pub async fn admin_list_group_members(
@@ -3025,25 +3015,6 @@ mod tests {
             assert_eq!(params.get("uri").unwrap(), "viking://resources/example.md");
             assert_eq!(params.get("offset").unwrap(), &offset.to_string());
             assert_eq!(params.get("limit").unwrap(), &limit.to_string());
-        }
-    }
-
-    #[tokio::test]
-    async fn admin_delete_group_force_is_opt_in() {
-        for force in [false, true] {
-            let (base_url, request_rx) = spawn_request_capture_server().await;
-            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-            client
-                .admin_delete_group("acme", "engineering", force)
-                .await
-                .expect("delete-group should succeed");
-
-            let request = request_rx.await.expect("request should be captured");
-            let query = if force { "?force=true" } else { "" };
-            assert!(request.starts_with(&format!(
-                "DELETE /api/v1/admin/accounts/acme/groups/engineering{query} "
-            )));
         }
     }
 

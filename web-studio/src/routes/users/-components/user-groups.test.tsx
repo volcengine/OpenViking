@@ -82,32 +82,14 @@ it('creates a trimmed group ID using the management connection and refreshes the
   expect(api.groups.mock.calls.length).toBeGreaterThan(1)
 })
 
-it('requires explicit force deletion for nonempty groups', async () => {
+it('blocks nonempty deletion and requires confirmation for empty groups', async () => {
   const user = mount()
   const populated = (await screen.findByText('engineering')).closest('tr')!
-  await user.click(
-    within(populated).getByRole('button', { name: 'groups.delete' }),
-  )
-  const dialog = within(screen.getByRole('alertdialog'))
-  const confirm = dialog.getByRole('button', { name: 'groups.delete' })
-  expect(confirm.hasAttribute('disabled')).toBe(true)
-  expect(api.remove).not.toHaveBeenCalled()
-  await user.click(dialog.getByRole('checkbox', { name: 'groups.forceDelete' }))
-  await user.click(confirm)
-  await waitFor(() =>
-    expect(api.remove).toHaveBeenCalledWith(connection, 'engineering', true),
-  )
-  expect(api.change).not.toHaveBeenCalled()
-})
-
-it('resets force deletion after cancellation and confirms ordinary deletion for empty groups', async () => {
-  const user = mount()
-  const populated = (await screen.findByText('engineering')).closest('tr')!
-  await user.click(
-    within(populated).getByRole('button', { name: 'groups.delete' }),
-  )
-  await user.click(screen.getByRole('checkbox', { name: 'groups.forceDelete' }))
-  await user.click(screen.getByRole('button', { name: 'actions.cancel' }))
+  expect(
+    within(populated)
+      .getByRole('button', { name: 'groups.delete' })
+      .hasAttribute('disabled'),
+  ).toBe(true)
   const empty = screen.getByText('empty').closest('tr')!
   await user.click(within(empty).getByRole('button', { name: 'groups.delete' }))
   expect(api.remove).not.toHaveBeenCalled()
@@ -117,7 +99,7 @@ it('resets force deletion after cancellation and confirms ordinary deletion for 
     }),
   )
   await waitFor(() =>
-    expect(api.remove).toHaveBeenCalledWith(connection, 'empty', false),
+    expect(api.remove).toHaveBeenCalledWith(connection, 'empty'),
   )
 })
 
@@ -184,7 +166,6 @@ it('keeps a failed deletion open and refreshes potentially stale member counts',
       name: 'groups.delete',
     }),
   )
-  api.groups.mockResolvedValue([{ group_id: 'empty', member_count: 1 }])
   await user.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
       name: 'groups.delete',
@@ -193,23 +174,4 @@ it('keeps a failed deletion open and refreshes potentially stale member counts',
   await waitFor(() => expect(api.error).toHaveBeenCalled())
   expect(screen.getByRole('alertdialog')).toBeTruthy()
   expect(api.groups.mock.calls.length).toBeGreaterThan(1)
-  expect(api.remove).toHaveBeenCalledWith(connection, 'empty', false)
-  expect(api.remove).toHaveBeenCalledTimes(1)
-  await waitFor(() =>
-    expect(
-      within(screen.getByRole('alertdialog'))
-        .getByRole('button', { name: 'groups.delete' })
-        .hasAttribute('disabled'),
-    ).toBe(true),
-  )
-  api.remove.mockResolvedValue({ deleted: true })
-  await user.click(screen.getByRole('checkbox', { name: 'groups.forceDelete' }))
-  await user.click(
-    within(screen.getByRole('alertdialog')).getByRole('button', {
-      name: 'groups.delete',
-    }),
-  )
-  await waitFor(() =>
-    expect(api.remove).toHaveBeenLastCalledWith(connection, 'empty', true),
-  )
 })

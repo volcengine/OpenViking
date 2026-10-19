@@ -63,17 +63,14 @@ it('matches group CRUD and member endpoint contracts and unwraps results', async
   await fetchAdminGroupMembers(connection, 'team')
   await updateAdminGroupMember(connection, 'team', 'alice', false)
   await deleteAdminGroup(connection, 'team')
-  await deleteAdminGroup(connection, 'team', true)
   expect(requests.map((request) => request.method)).toEqual([
     'get',
     'post',
     'get',
     'delete',
     'delete',
-    'delete',
   ])
   expect(requests[2].url).toMatch(/\/groups\/team\/members$/)
   expect(requests[3].url).toMatch(/\/groups\/team\/members\/alice$/)
-  expect(requests[4].url).toMatch(/\/groups\/team\?force=false$/)
-  expect(requests[5].url).toMatch(/\/groups\/team\?force=true$/)
+  expect(requests[4].url).toMatch(/\/groups\/team$/)
 })

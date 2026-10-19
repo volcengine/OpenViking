@@ -1188,11 +1188,7 @@ const workspace = {
         'A unique ID within this Account. It cannot be renamed after creation.',
       manage: 'Manage members',
       delete: 'Delete group',
-      deleteHint:
-        'This group has members. Remove them first or select force delete.',
-      forceDelete: 'Force delete',
-      forceDeleteDescription:
-        'Remove all memberships in this group. User accounts are kept.',
+      deleteHint: 'Remove all members before deleting this group.',
       deleteDescription:
         'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
       empty: 'No user groups yet.',

@@ -723,13 +723,11 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::DeleteGroup {
             account_id,
             group_id,
-            force,
         } => {
             commands::admin::delete_group(
                 &client,
                 &account_id,
                 &group_id,
-                force,
                 ctx.output_format,
                 ctx.compact,
             )
