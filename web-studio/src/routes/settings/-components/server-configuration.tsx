@@ -2,6 +2,7 @@ import * as React from 'react'
 import { toast } from 'sonner'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  GripVerticalIcon,
   ArrowUpIcon,
   ArrowDownIcon,
   EyeIcon,
@@ -51,6 +52,7 @@ import {
   TooltipTrigger,
 } from '#/components/ui/tooltip'
 import { ModelFields, bindingFields, providers } from './model-fields'
+import { ModelConnectionTest } from './model-connection-test'
 import {
   createConfigFileApi,
   embeddingModes,
@@ -108,6 +110,9 @@ type RowProps = {
   onEdit: () => void
   onDelete: () => void
   onMove: (index: number) => void
+  dragHandle: React.ReactNode
+  dropProps: React.HTMLAttributes<HTMLDivElement>
+  dropTarget?: 'before' | 'after'
 }
 function ModelRow({
   value,
@@ -119,6 +124,9 @@ function ModelRow({
   onEdit,
   onDelete,
   onMove,
+  dragHandle,
+  dropProps,
+  dropTarget,
 }: RowProps) {
   const { t } = useTranslation('settings')
   const ordered = count > 1
@@ -127,11 +135,21 @@ function ModelRow({
   )
   return (
     <div
-      className={`grid min-w-0 items-start gap-2 border-b bg-background py-3 text-sm md:items-center ${ordered ? 'grid-cols-[32px_minmax(0,1fr)] md:grid-cols-[32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[0px_minmax(0,1fr)] gap-x-0 md:grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px] md:gap-x-2'}`}
+      {...dropProps}
+      data-model-row=""
+      data-drop-target={dropTarget}
+      className={`grid min-w-0 items-start gap-2 border-b bg-background py-3 data-[drop-target]:bg-accent data-[drop-target=before]:shadow-[inset_0_2px_0_var(--primary)] data-[drop-target=after]:shadow-[inset_0_-2px_0_var(--primary)] text-sm md:items-center ${ordered ? 'grid-cols-[56px_minmax(0,1fr)] md:grid-cols-[56px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[0px_minmax(0,1fr)] gap-x-0 md:grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px] md:gap-x-2'}`}
     >
-      <span className={ordered ? 'text-xs text-muted-foreground' : 'md:hidden'}>
+      <div
+        className={
+          ordered
+            ? 'flex items-center gap-1 text-xs text-muted-foreground'
+            : 'md:hidden'
+        }
+      >
+        {ordered && dragHandle}
         {ordered ? index + 1 : null}
-      </span>
+      </div>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -246,9 +264,13 @@ function ModelList({
   onDelete: (index: number) => void
 }) {
   const { t } = useTranslation('settings')
+  const [drag, setDrag] = React.useState<{ from: number; to: number } | null>(
+    null,
+  )
   const ids = values.map((value, index) => `${group}-${value.id || index}`)
   function move(from: number, to: number) {
-    if (from < 0 || to < 0 || to >= values.length || from === to) return
+    if (disabled || from < 0 || to < 0 || to >= values.length || from === to)
+      return
     const reordered = [...values]
     const [moved] = reordered.splice(from, 1)
     reordered.splice(to, 0, moved)
@@ -261,7 +283,7 @@ function ModelList({
   return (
     <div className="min-w-0">
       <div
-        className={`hidden gap-2 border-b pb-2 text-xs text-muted-foreground md:grid ${values.length > 1 ? 'grid-cols-[32px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]'}`}
+        className={`hidden gap-2 border-b pb-2 text-xs text-muted-foreground md:grid ${values.length > 1 ? 'grid-cols-[56px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]'}`}
       >
         {values.length > 1 && <span>{t('models.priority')}</span>}
         <span>{t('models.listModel')}</span>
@@ -273,6 +295,70 @@ function ModelList({
       {values.map((value, index) => (
         <ModelRow
           key={ids[index]}
+          dropProps={{
+            draggable: !disabled && values.length > 1,
+            onDragStart: (event) => {
+              const control = (event.target as Element).closest(
+                'button, a, input, select, textarea',
+              )
+              if (
+                disabled ||
+                (control && !control.hasAttribute('data-model-drag-handle'))
+              ) {
+                event.preventDefault()
+                return
+              }
+              const row = event.currentTarget
+              const bounds = row.getBoundingClientRect()
+              event.dataTransfer.effectAllowed = 'move'
+              event.dataTransfer.setData('text/plain', ids[index])
+              event.dataTransfer.setDragImage(
+                row,
+                event.clientX - bounds.left,
+                event.clientY - bounds.top,
+              )
+              setDrag({ from: index, to: index })
+            },
+            onDragEnd: () => setDrag(null),
+            onDragOver: (event) => {
+              if (disabled || !drag) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              if (drag.to !== index) setDrag({ ...drag, to: index })
+            },
+            onDrop: (event) => {
+              if (disabled || !drag) return
+              event.preventDefault()
+              move(drag.from, index)
+              setDrag(null)
+            },
+          }}
+          dropTarget={
+            !disabled && drag?.to === index && drag.from !== index
+              ? drag.from > index
+                ? 'before'
+                : 'after'
+              : undefined
+          }
+          dragHandle={
+            <button
+              type="button"
+              data-model-drag-handle=""
+              disabled={disabled}
+              aria-label={t('models.dragToReorder', {
+                model: String(value.model || fallback.model || index + 1),
+              })}
+              title={t('models.dragHint')}
+              className="flex size-6 shrink-0 cursor-grab items-center justify-center rounded hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing disabled:cursor-default"
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                event.preventDefault()
+                move(index, index + (event.key === 'ArrowUp' ? -1 : 1))
+              }}
+            >
+              <GripVerticalIcon className="size-4" />
+            </button>
+          }
           value={value}
           fallback={fallback}
           index={index}
@@ -294,6 +380,7 @@ type Editor = {
   value: ModelConfig
   readonly: boolean
   settings: boolean
+  thinking?: boolean
 }
 const titles: Record<EditableModelKind, string> = {
   vlm: 'models.vlmType',
@@ -444,8 +531,9 @@ export function ServerConfigurationEditor() {
     kind: EditableModelKind,
     mode: string | undefined,
     values: ModelConfig[],
+    shared: ModelConfig = {},
   ) {
-    const config = current(kind)
+    const config = { ...current(kind), ...shared }
     change(
       kind,
       mode
@@ -481,6 +569,8 @@ export function ServerConfigurationEditor() {
       readonly,
       settings,
       value: structuredClone(value),
+      thinking:
+        kind === 'vlm' && !settings ? config.thinking === true : undefined,
     })
   }
   function dismissEditor() {
@@ -505,13 +595,18 @@ export function ServerConfigurationEditor() {
       if (index === undefined) values.push(next)
       else values[index] = next
       const config = current(kind)
+      const shared =
+        kind === 'vlm' && editor.thinking !== (config.thinking === true)
+          ? { thinking: editor.thinking }
+          : {}
       if (!mode && !config.model)
         change(kind, {
           ...config,
+          ...shared,
           model: String(next.model || ''),
           credentials: values,
         })
-      else reorder(kind, mode, values)
+      else reorder(kind, mode, values, shared)
     }
   }
   function dismissConfirmation() {
@@ -1035,6 +1130,40 @@ export function ServerConfigurationEditor() {
                     setEditor({ ...editor, value })
                   }}
                 />
+                {editor.kind === 'vlm' && !editor.settings && (
+                  <div className="grid gap-2 border-t pt-4">
+                    <ModelFields
+                      prefix="shared-vlm"
+                      fields={[{ key: 'thinking', type: 'toggle' }]}
+                      value={{ thinking: editor.thinking }}
+                      readOnly={editor.readonly || pending}
+                      onChange={(value) => {
+                        if (!pending)
+                          setEditor({
+                            ...editor,
+                            thinking: value.thinking === true,
+                          })
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {t('models.thinkingHint')}
+                    </p>
+                  </div>
+                )}
+                {!editor.settings && (
+                  <ModelConnectionTest
+                    mode={editor.mode}
+                    kind={editor.kind}
+                    config={editor.value}
+                    fallback={
+                      editor.mode
+                        ? object(current(editor.kind)[editor.mode])
+                        : current(editor.kind)
+                    }
+                    thinking={editor.thinking}
+                    disabled={pending}
+                  />
+                )}
                 {editor.kind === 'embedding' && editor.settings && (
                   <>
                     <p className="text-xs text-muted-foreground">

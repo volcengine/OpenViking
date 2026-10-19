@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   cleanup,
+  createEvent,
   act,
   fireEvent,
   render,
@@ -25,6 +26,7 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
   preview: vi.fn(),
   restart: vi.fn(),
+  testModel: vi.fn(),
   copy: vi.fn(),
 }))
 vi.mock('#/components/code-editor', () => ({
@@ -58,6 +60,7 @@ vi.mock('../-lib/config-file-api', async (importOriginal) => ({
     save: state.save,
     preview: state.preview,
     restart: state.restart,
+    testModel: state.testModel,
   }),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
@@ -1110,3 +1113,242 @@ it.each(['volcengine', 'unknown'])(
     client.clear()
   },
 )
+
+it('drags VLM models into priority order and preserves complete credentials on save', async () => {
+  mount()
+  await screen.findByText('model-a')
+  const handles = section('vlmType').getAllByRole('button', {
+    name: 'models.dragToReorder',
+  })
+  const transfer = {
+    setData: vi.fn(),
+    setDragImage: vi.fn(),
+    effectAllowed: '',
+    dropEffect: '',
+  }
+  const row = handles[1].closest('[data-model-row]')!
+  expect(row.getAttribute('draggable')).toBe('true')
+  const start = createEvent.dragStart(row, { dataTransfer: transfer })
+  Object.defineProperties(start, {
+    clientX: { value: 20 },
+    clientY: { value: 10 },
+  })
+  fireEvent(row, start)
+  expect(transfer.setDragImage).toHaveBeenCalledWith(row, 20, 10)
+  fireEvent.dragOver(handles[0], { dataTransfer: transfer })
+  expect(state.preview).not.toHaveBeenCalled()
+  expect(
+    handles[0].closest('[data-drop-target]')?.getAttribute('data-drop-target'),
+  ).toBe('before')
+  fireEvent.drop(handles[0], { dataTransfer: transfer })
+  await waitFor(() => expect(state.preview).toHaveBeenCalledTimes(1))
+  fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+  const saved = JSON.parse(state.save.mock.calls[0][0])
+  expect(saved.vlm.credentials).toEqual([...language.credentials].reverse())
+  expect(saved.embedding).toEqual(file.embedding)
+})
+
+it('cancels a drag without changing the draft and supports keyboard reordering', async () => {
+  mount()
+  await screen.findByText('model-a')
+  const handles = section('vlmType').getAllByRole('button', {
+    name: 'models.dragToReorder',
+  })
+  const transfer = {
+    setData: vi.fn(),
+    setDragImage: vi.fn(),
+    effectAllowed: '',
+    dropEffect: '',
+  }
+  fireEvent.dragStart(handles[0], { dataTransfer: transfer })
+  fireEvent.dragOver(handles[1], { dataTransfer: transfer })
+  fireEvent.dragEnd(handles[0], { dataTransfer: transfer })
+  fireEvent.drop(handles[1], { dataTransfer: transfer })
+  expect(state.preview).not.toHaveBeenCalled()
+  fireEvent.keyDown(handles[0], { key: 'ArrowUp' })
+  expect(state.preview).not.toHaveBeenCalled()
+  fireEvent.keyDown(handles[1], { key: 'ArrowUp' })
+  await waitFor(() => expect(state.preview).toHaveBeenCalledTimes(1))
+  expect(state.preview.mock.calls[0][1].vlm.credentials).toEqual(
+    [...language.credentials].reverse(),
+  )
+})
+
+it.each(['addModel', 'edit'])(
+  'edits the shared thinking setting from the VLM %s dialog',
+  async (action) => {
+    mount()
+    await screen.findByText('model-a')
+    fireEvent.click(
+      section('vlmType').getAllByRole('button', {
+        name: `models.${action}`,
+      })[0],
+    )
+    expect(screen.getByText('models.thinkingHint')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'models.fields.thinking' }),
+    )
+    if (action === 'addModel') {
+      fireEvent.change(screen.getByLabelText('models.fields.model'), {
+        target: { value: 'new-model' },
+      })
+      fireEvent.change(screen.getByLabelText('models.fields.api_key'), {
+        target: { value: 'new-key' },
+      })
+    }
+    await apply()
+    fireEvent.click(screen.getByRole('button', { name: 'models.saveAll' }))
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1))
+    const saved = JSON.parse(state.save.mock.calls[0][0])
+    expect(saved.vlm.thinking).toBe(true)
+    expect(saved.vlm.credentials.slice(0, 2)).toEqual(language.credentials)
+    expect(
+      saved.vlm.credentials.every((item: ModelConfig) => !('thinking' in item)),
+    ).toBe(true)
+  },
+)
+
+it('discards thinking changes when the model dialog is cancelled', async () => {
+  mount()
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.click(
+    screen.getByRole('switch', { name: 'models.fields.thinking' }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'models.dismiss' }))
+  expect(state.preview).not.toHaveBeenCalled()
+  expect(screen.queryByRole('button', { name: 'models.saveAll' })).toBeNull()
+})
+
+it('reorders only the selected embedding group and blocks drag while validation is pending', async () => {
+  const payload = structuredClone(data)
+  payload.models.embedding.config.dense.credentials.push({
+    id: 'embed-backup',
+    provider: 'openai',
+    api_key: 'backup-key',
+    api_base: 'https://backup.example.com',
+  })
+  mount(payload)
+  await screen.findByText('model-a')
+  let finish!: (value: unknown) => void
+  state.preview.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const embedding = section('embeddingType')
+  const handles = embedding.getAllByRole('button', {
+    name: 'models.dragToReorder',
+  })
+  const transfer = {
+    setData: vi.fn(),
+    setDragImage: vi.fn(),
+    effectAllowed: '',
+    dropEffect: '',
+  }
+  // A drag from another model list must not be accepted here.
+  fireEvent.dragStart(
+    section('vlmType').getAllByRole('button', {
+      name: 'models.dragToReorder',
+    })[0],
+    { dataTransfer: transfer },
+  )
+  fireEvent.drop(handles[1], { dataTransfer: transfer })
+  expect(state.preview).not.toHaveBeenCalled()
+  fireEvent.dragEnd(
+    section('vlmType').getAllByRole('button', {
+      name: 'models.dragToReorder',
+    })[0],
+  )
+  fireEvent.dragStart(handles[1], { dataTransfer: transfer })
+  fireEvent.drop(handles[0], { dataTransfer: transfer })
+  await waitFor(() => expect(state.preview).toHaveBeenCalledTimes(1))
+  const changed = state.preview.mock.calls[0][1].embedding
+  expect(changed.dense.credentials).toEqual(
+    [...payload.models.embedding.config.dense.credentials].reverse(),
+  )
+  expect(state.preview.mock.calls[0][1].vlm).toBeUndefined()
+  for (const handle of section('vlmType').getAllByRole('button', {
+    name: 'models.dragToReorder',
+  })) {
+    expect(handle.hasAttribute('disabled')).toBe(true)
+    fireEvent.keyDown(handle, { key: 'ArrowDown' })
+  }
+  expect(state.preview).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    finish({ content, models: data.models })
+  })
+})
+
+it('tests an unsaved draft on the server without previewing or saving and clears stale results', async () => {
+  mount()
+  state.testModel.mockResolvedValue({ ok: true, ms: 12 })
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.change(screen.getByLabelText('models.fields.model'), {
+    target: { value: 'unsaved-model' },
+  })
+  fireEvent.click(
+    screen.getByRole('button', { name: 'models.connectionTest.action' }),
+  )
+  await screen.findByText('models.connectionTest.success')
+  expect(state.testModel.mock.calls[0][0].config.model).toBe('unsaved-model')
+  expect(state.preview).not.toHaveBeenCalled()
+  expect(state.save).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('models.fields.api_base'), {
+    target: { value: 'https://changed.example/v1' },
+  })
+  expect(screen.queryByText('models.connectionTest.success')).toBeNull()
+})
+it('cancels a pending server probe when the dialog closes', async () => {
+  mount()
+  let signal: AbortSignal | undefined
+  state.testModel.mockImplementation((_draft, incoming: AbortSignal) => {
+    signal = incoming
+    return new Promise((_resolve, reject) =>
+      incoming.addEventListener('abort', () => reject(incoming.reason)),
+    )
+  })
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.click(
+    screen.getByRole('button', { name: 'models.connectionTest.action' }),
+  )
+  await screen.findByRole('button', { name: 'models.connectionTest.testing' })
+  fireEvent.click(screen.getByRole('button', { name: 'models.dismiss' }))
+  expect(signal?.aborted).toBe(true)
+})
+it('shows safe model authentication failures from the server', async () => {
+  mount()
+  state.testModel.mockResolvedValue({ ok: false, code: 'authentication_error' })
+  await screen.findByText('model-a')
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
+  )
+  fireEvent.click(
+    screen.getByRole('button', { name: 'models.connectionTest.action' }),
+  )
+  await screen.findByText('models.connectionTest.authentication_error')
+  expect(state.save).not.toHaveBeenCalled()
+})
+
+it('keeps model row controls clickable without starting a drag', async () => {
+  mount()
+  const model = await screen.findByRole('button', {
+    name: 'model-a',
+    exact: true,
+  })
+  const transfer = { setData: vi.fn(), setDragImage: vi.fn() }
+  expect(fireEvent.dragStart(model, { dataTransfer: transfer })).toBe(false)
+  expect(transfer.setDragImage).not.toHaveBeenCalled()
+  fireEvent.click(model)
+  expect(await screen.findByRole('dialog')).toBeTruthy()
+})

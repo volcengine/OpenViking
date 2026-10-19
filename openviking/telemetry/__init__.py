@@ -4,10 +4,12 @@
 
 from . import tracer as tracer_module
 from .context import (
+    bind_ingestion_source_type,
     bind_telemetry,
     bind_telemetry_stage,
     get_current_telemetry,
     get_current_telemetry_stage,
+    get_ingestion_source_type,
 )
 from .operation import OperationTelemetry, TelemetrySnapshot
 from .registry import register_telemetry, resolve_telemetry, unregister_telemetry
@@ -20,10 +22,12 @@ __all__ = [
     "TelemetryRequest",
     "TelemetrySelection",
     "TelemetrySnapshot",
+    "bind_ingestion_source_type",
     "bind_telemetry",
     "bind_telemetry_stage",
     "get_current_telemetry",
     "get_current_telemetry_stage",
+    "get_ingestion_source_type",
     "get_telemetry_runtime",
     "normalize_telemetry_request",
     "register_telemetry",

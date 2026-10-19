@@ -3637,3 +3637,83 @@ async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
     )
     assert response.status_code == 400
     stopped.assert_not_called()
+
+
+@pytest.fixture
+def private_probe_config(monkeypatch, tmp_path):
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path)},
+            "vlm": {"provider": "openai", "model": "test-model", "api_key": "test-key"},
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "embedding",
+                    "api_key": "test-key",
+                    "dimension": 8,
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
+
+
+async def test_private_model_probe_requires_authentication(
+    private_probe_config, lightweight_admin_client, monkeypatch
+):
+    probe = AsyncMock(return_value={"ok": True, "ms": 1})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/configuration/test-model",
+        json={"kind": "vlm", "config": {"provider": "openai"}},
+    )
+    assert response.status_code == 401
+    probe.assert_not_awaited()
+
+
+async def test_private_model_probe_is_hidden_and_root_only(
+    private_probe_config, lightweight_admin_app, lightweight_admin_client, monkeypatch
+):
+    from openviking.server.auth import get_request_context
+
+    probe = AsyncMock(return_value={"ok": True, "ms": 1})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    schema = lightweight_admin_app.openapi()
+    assert "/api/v1/admin/configuration/test-model" not in schema["paths"]
+    assert "ModelConnectionTestRequest" not in schema.get("components", {}).get("schemas", {})
+    for role in (Role.ADMIN, Role.USER):
+        lightweight_admin_app.dependency_overrides[get_request_context] = lambda role=role: (
+            RequestContext(user=UserIdentifier("default", "default"), role=role)
+        )
+        response = await lightweight_admin_client.post(
+            "/api/v1/admin/configuration/test-model",
+            json={"kind": "vlm", "config": {"provider": "openai"}},
+        )
+        assert response.status_code == 403
+    probe.assert_not_awaited()
+
+
+async def test_private_model_probe_passes_draft_without_saving(
+    private_probe_config, lightweight_admin_client, monkeypatch
+):
+    probe = AsyncMock(return_value={"ok": True, "ms": 12})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    body = {
+        "kind": "vlm",
+        "config": {"provider": "openai", "api_key": "draft-secret"},
+        "fallback": {"model": "o3"},
+        "thinking": True,
+    }
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/configuration/test-model", headers={"X-API-Key": ROOT_KEY}, json=body
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["result"] == {"ok": True, "ms": 12}
+    assert "draft-secret" not in response.text
+    probe.assert_awaited_once_with("vlm", body["config"], body["fallback"], True, "dense")

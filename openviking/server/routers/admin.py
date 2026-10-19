@@ -4,7 +4,7 @@
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
 from fastapi import Response as HTTPResponse
@@ -796,6 +796,30 @@ async def patch_account_configuration(
             "settings": _visible_account_config(ctx, settings),
         },
     )
+
+
+class ModelConnectionTestRequest(BaseModel):
+    kind: Literal["vlm", "embedding"]
+    config: dict[str, Any]
+    fallback: dict[str, Any] = Field(default_factory=dict)
+    thinking: bool | None = None
+    mode: Literal["dense", "sparse", "hybrid"] = "dense"
+
+
+@router.post("/configuration/test-model", include_in_schema=False)
+@require_auth_root
+async def test_model_configuration(
+    body: ModelConnectionTestRequest,
+    request: Request,
+    response: HTTPResponse,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Private Studio operation; drafts are never saved or installed at runtime."""
+    from openviking.server.model_connection_test import probe_model
+
+    response.headers["Cache-Control"] = "no-store"
+    result = await probe_model(body.kind, body.config, body.fallback, body.thinking, body.mode)
+    return Response(status="ok", result=result)
 
 
 @router.get("/configuration")

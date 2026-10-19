@@ -41,7 +41,6 @@ from openviking.service.task_domain import (
 from openviking.service.task_events import append_task_event
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
-    StoreIOLimiter,
     run_to_completion,
 )
 
@@ -407,7 +406,7 @@ class PersistentTaskStore(TaskWorkStore):
     SYSTEM_DIRNAME = "_system"
     TASKS_DIRNAME = "tasks"
 
-    def __init__(self, agfs: Any, *, max_concurrent_io: int = 8) -> None:
+    def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
         self._ensured_task_dirs: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
@@ -417,7 +416,6 @@ class PersistentTaskStore(TaskWorkStore):
         self._record_locks = KeyedAsyncLockPool()
         self._cleanup_lock = KeyedAsyncLockPool()
         self._cleanup_scan: Optional[AsyncIterator[Optional[Dict[str, Any]]]] = None
-        self._io = StoreIOLimiter(max_concurrent_io)
 
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode:
@@ -1613,16 +1611,13 @@ class PersistentTaskStore(TaskWorkStore):
             )
 
     async def _read(self, path: str) -> Any:
-        return await self._io.run("read", lambda: run_to_completion(lambda: self._agfs.read(path)))
+        return await run_to_completion(lambda: self._agfs.read(path))
 
     async def _ls(self, path: str) -> Any:
-        return await self._io.run("ls", lambda: run_to_completion(lambda: self._agfs.ls(path)))
+        return await run_to_completion(lambda: self._agfs.ls(path))
 
     async def _rm(self, path: str) -> None:
-        await self._io.run(
-            "rm",
-            lambda: run_to_completion(lambda: self._agfs.rm(path, force=True, auto_pathlock=False)),
-        )
+        await run_to_completion(lambda: self._agfs.rm(path, force=True, auto_pathlock=False))
 
     async def _write_task(self, task: TaskRecord) -> None:
         if not task.account_id or not task.user_id:
@@ -1631,21 +1626,11 @@ class PersistentTaskStore(TaskWorkStore):
         payload = json.dumps(_task_to_payload(task), ensure_ascii=False).encode()
         path = self._task_path(task.account_id, task.user_id, task.task_id)
         try:
-            await self._io.run(
-                "write",
-                lambda: run_to_completion(
-                    lambda: self._agfs.write(path, payload, auto_pathlock=False)
-                ),
-            )
+            await run_to_completion(lambda: self._agfs.write(path, payload, auto_pathlock=False))
         except (AGFSNotFoundError, FileNotFoundError):
             self._ensured_task_dirs.discard((task.account_id, task.user_id))
             await self._ensure_task_dir(task.account_id, task.user_id)
-            await self._io.run(
-                "write",
-                lambda: run_to_completion(
-                    lambda: self._agfs.write(path, payload, auto_pathlock=False)
-                ),
-            )
+            await run_to_completion(lambda: self._agfs.write(path, payload, auto_pathlock=False))
 
     async def _ensure_task_dir(self, account_id: str, user_id: str) -> None:
         key = (account_id, user_id)
@@ -1653,10 +1638,7 @@ class PersistentTaskStore(TaskWorkStore):
             return
         for path in self._task_dir_chain(account_id, user_id):
             try:
-                await self._io.run(
-                    "mkdir",
-                    lambda path=path: run_to_completion(lambda: self._agfs.mkdir(path)),
-                )
+                await run_to_completion(lambda path=path: self._agfs.mkdir(path))
             except AGFSAlreadyExistsError:
                 pass
             except Exception as exc:

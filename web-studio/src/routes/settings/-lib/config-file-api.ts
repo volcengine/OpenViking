@@ -136,6 +136,25 @@ export function createConfigFileApi(
   })
   const url = '/api/v1/admin/configuration'
   return {
+    testModel: (
+      body: {
+        kind: ModelKind
+        config: ModelConfig
+        fallback: ModelConfig
+        thinking?: boolean
+        mode?: string
+      },
+      signal: AbortSignal,
+    ) =>
+      getOvResult<{ ok: boolean; code?: string; ms?: number }>(
+        client.post({
+          url: `${url}/test-model`,
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal,
+          timeout: 30_000,
+        }),
+      ),
     restart: (revision: string) =>
       getOvResult<RestartStatus>(
         client.post({

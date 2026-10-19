@@ -12,6 +12,13 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import { Input } from '#/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '#/components/ui/select'
 import { Field, FieldLabel } from '#/components/ui/field'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
@@ -224,8 +231,8 @@ export function ConnectionProfilesList() {
           if (!open) setDraft(null)
         }}
       >
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader className="pr-8">
             <DialogTitle>
               {t(
                 profiles.some((p) => p.id === draft?.id)
@@ -233,49 +240,61 @@ export function ConnectionProfilesList() {
                   : 'profiles.add',
               )}
             </DialogTitle>
-            <DialogDescription>{t('profiles.saveHint')}</DialogDescription>
+            <DialogDescription className="text-xs leading-relaxed">
+              {t('profiles.saveHint')}
+            </DialogDescription>
           </DialogHeader>
           {draft && (
-            <form onSubmit={save} className="grid gap-4">
-              <Field>
+            <form onSubmit={save} className="grid gap-5">
+              <Field className="gap-2">
                 <FieldLabel htmlFor="profile-name">
                   {t('profiles.name')}
                 </FieldLabel>
                 <Input
                   id="profile-name"
+                  className="h-10"
                   required
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   {...PLAIN_INPUT_PROPS}
                 />
               </Field>
-              <Field>
+              <Field className="gap-2">
                 <FieldLabel htmlFor="profile-provider">
                   {t('serviceType')}
                 </FieldLabel>
-                <select
-                  id="profile-provider"
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                <Select
                   value={draft.connection.serviceSelection}
-                  onChange={(e) =>
+                  items={[
+                    { value: 'opensource', label: t('providers.opensource') },
+                    { value: 'volcengine', label: t('providers.volcengine') },
+                  ]}
+                  onValueChange={(value) => {
+                    if (value !== 'opensource' && value !== 'volcengine') return
                     setDraft({
                       ...draft,
                       connection: {
                         ...draft.connection,
-                        serviceSelection: e.target.value as
-                          | 'opensource'
-                          | 'volcengine',
+                        serviceSelection: value,
                       },
                     })
-                  }
+                  }}
                 >
-                  <option value="opensource">
-                    {t('providers.opensource')}
-                  </option>
-                  <option value="volcengine">
-                    {t('providers.volcengine')}
-                  </option>
-                </select>
+                  <SelectTrigger
+                    id="profile-provider"
+                    className="w-full data-[size=default]:h-10"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    <SelectItem value="opensource">
+                      {t('providers.opensource')}
+                    </SelectItem>
+                    <SelectItem value="volcengine">
+                      {t('providers.volcengine')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
               {PROFILE_FIELDS.filter(
                 (field) =>
@@ -284,12 +303,13 @@ export function ConnectionProfilesList() {
                   field === 'apiKey',
               ).map((key) => {
                 return (
-                  <Field key={key}>
+                  <Field key={key} className="gap-2">
                     <FieldLabel htmlFor={`profile-${key}`}>
                       {t(`profiles.fields.${key}`)}
                     </FieldLabel>
                     <Input
                       id={`profile-${key}`}
+                      className="h-10"
                       required={key === 'baseUrl'}
                       type={
                         key === 'apiKey' || key === 'adminApiKey'
@@ -316,7 +336,7 @@ export function ConnectionProfilesList() {
                   {error}
                 </p>
               )}
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 border-t pt-4">
                 <Button
                   type="button"
                   variant="outline"

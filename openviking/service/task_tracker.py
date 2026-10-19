@@ -283,8 +283,7 @@ class TaskTracker:
     CLEANUP_INTERVAL = 300
     CLEANUP_BATCH = 256
 
-    def __init__(self, store: TaskWorkStore, *, max_concurrent_store_io: int = 8) -> None:
-        del max_concurrent_store_io
+    def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None

@@ -245,7 +245,7 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
         payload["updated_at"] = time.time() - days * 86400
         agfs.files[path] = json.dumps(payload).encode()
     store = PersistentTaskStore(agfs)
-    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    tracker = TaskTracker(store)
     await tracker.delete_expired()
     page = await asyncio.wait_for(
         tracker.list_tasks(
@@ -270,7 +270,7 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
 async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
-    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    tracker = TaskTracker(store)
     owner = {"account_id": "acme", "user_id": "alice"}
     task = await tracker.create("compile", task_id="updated-after-scan", **owner)
     path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
@@ -279,7 +279,7 @@ async def test_cursor_cleanup_rechecks_task_updated_after_scan():
     payload["updated_at"] = time.time() - 2 * 86400
     agfs.files[path] = json.dumps(payload).encode()
     store = PersistentTaskStore(agfs)
-    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    tracker = TaskTracker(store)
     record_lock = ("acme", "alice", task.task_id)
     async with store._record_locks.acquire(record_lock):
         cleanup = asyncio.create_task(tracker.delete_expired())
