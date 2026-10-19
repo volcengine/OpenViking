@@ -75,18 +75,25 @@ export function buildMessagePayloads(turns, { peerId = "" } = {}) {
  *
  * Two entries can share `turnId:role` (two assistant text steps in one turn,
  * or a rewritten turn reusing its id). The first keeps the plain key so an
- * existing ack set stays valid; later collisions get `#n`, because otherwise
- * acknowledging the first entry would silently retire the second.
+ * existing ack set stays valid; later collisions get a content-derived suffix,
+ * because otherwise acknowledging the first entry would silently retire the
+ * second.
  */
 export function planCapture(turns, acknowledged) {
   const acked = acknowledged instanceof Set ? acknowledged : new Set(acknowledged || []);
   const seen = new Map();
   const toSend = [];
   for (const turn of turns) {
+    // Two entries can share `turnId:role` (two assistant text steps in one turn,
+    // or a rewritten turn reusing its id). The suffix identifies the entry by
+    // its content, not by its position: an occurrence number changes when an
+    // earlier collision disappears (an undone step, a repaired journal), which
+    // would make a surviving entry look already acked.
+    const identity = stableHash(turn.role, turn.text || "", JSON.stringify(turn.parts || []));
     const keys = turnDedupKey(turn).split("|").map((key) => {
       const occurrence = (seen.get(key) || 0) + 1;
       seen.set(key, occurrence);
-      return occurrence === 1 ? key : `${key}#${occurrence}`;
+      return occurrence === 1 ? key : `${key}#${identity}`;
     });
     if (keys.length && keys.every((key) => acked.has(key))) continue;
     toSend.push({ turn, keys });
@@ -108,6 +115,19 @@ export function planCapture(turns, acknowledged) {
  * idempotency. Claimed (`.processing`) entries belong to their replayer and
  * are never touched here.
  */
+/**
+ * A queued copy is the same message when it names the same turn and role. Full
+ * payload equality would miss it whenever the peer, the capture cap or the
+ * sanitiser changed between queueing and delivery, and the stale copy would be
+ * replayed later as a duplicate.
+ */
+function sameQueuedPayload(payload, queued) {
+  if (payload?.turn_id != null && queued?.turn_id != null) {
+    return String(payload.turn_id) === String(queued.turn_id) && payload.role === queued.role;
+  }
+  return isDeepStrictEqual(payload, queued);
+}
+
 async function dropQueuedCopies(ovSessionId, payloads) {
   if (payloads.length === 0) return 0;
   let entries;
@@ -119,7 +139,7 @@ async function dropQueuedCopies(ovSessionId, payloads) {
   let removed = 0;
   for (const { filename, entry } of entries) {
     if (entry?.sessionId !== ovSessionId || entry?.type !== "addMessage") continue;
-    if (!payloads.some((payload) => isDeepStrictEqual(payload, entry.payload))) continue;
+    if (!payloads.some((payload) => sameQueuedPayload(payload, entry.payload))) continue;
     if (await dequeue(filename)) removed += 1;
   }
   return removed;

@@ -5,6 +5,10 @@
  * queue entry stuck until the ten-minute stale sweep.
  */
 
+// The manifest gives UserPromptSubmit 20s; the hook stops well short so it can
+// still answer. Declared here because the doctor reports against it too.
+export const RECALL_BUDGET_MS = 15_000;
+
 export function createRemainingMs(budgetMs, now = Date.now) {
   const deadline = now() + budgetMs;
   return () => Math.max(0, deadline - now());

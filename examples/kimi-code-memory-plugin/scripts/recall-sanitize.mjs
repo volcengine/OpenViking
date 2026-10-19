@@ -15,6 +15,18 @@ const RESERVED_TAGS = [
   [/<\/?system-reminder\b[^>]*>/gi, "system reminder marker"],
 ];
 
+// A recall block already carries the shared wrapper's envelope, so only the
+// host's own transport and notes are neutralised in it.
+const HOST_ONLY_TAGS = RESERVED_TAGS.slice(2);
+
+export function sanitizeHostTags(text) {
+  let value = String(text || "");
+  for (const [pattern, replacement] of HOST_ONLY_TAGS) {
+    value = value.replace(pattern, replacement);
+  }
+  return value;
+}
+
 export function sanitizeRecallText(text) {
   let value = String(text || "");
   for (const [pattern, replacement] of RESERVED_TAGS) {

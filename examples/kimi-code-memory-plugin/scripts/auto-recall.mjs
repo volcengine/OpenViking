@@ -29,15 +29,11 @@ import { createLogger } from "./debug-log.mjs";
 import { deriveOvSessionId, markProfileInjected, profileInjected } from "./session-state.mjs";
 import { buildAgentProfile, recallForPrompt, runHookStage, stableHash } from "./shared/agent-hook-runtime.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
-import { sanitizeRecallText } from "./recall-sanitize.mjs";
+import { sanitizeHostTags, sanitizeRecallText } from "./recall-sanitize.mjs";
 import { claimRecall, decideRecall, readRecallCache, writeRecallCache } from "./recall-cache.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
-import { createRemainingMs, boundFetch } from "./hook-budget.mjs";
+import { RECALL_BUDGET_MS, createRemainingMs, boundFetch } from "./hook-budget.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
-
-// The manifest gives UserPromptSubmit 20s; stop well short so the hook answers
-// before the host kills the process and the user waits on a dead prompt.
-const RECALL_BUDGET_MS = 15_000;
 
 const { log, logError } = createLogger("auto-recall");
 let cfg;
@@ -45,6 +41,9 @@ let effectivePeer = { peerId: "", legacyPeerId: "" };
 
 let emitted = false;
 let recallDeadline = null;
+// What the deadline should emit if it fires: a recall that finished at 14s must
+// not be thrown away by a profile request that never returns.
+let collected = [];
 
 /** Kimi's envelope for UserPromptSubmit is the raw text itself. */
 function emitText(text) {
@@ -97,7 +96,7 @@ runHookStage(
     );
     recallDeadline = setTimeout(() => {
       logError("recall_timeout", `budget ${budgetMs}ms exhausted`);
-      emitText("");
+      emitText(collected.join("\n\n"));
       process.exit(0);
     }, budgetMs);
     recallDeadline.unref?.();
@@ -148,15 +147,15 @@ runHookStage(
       recallBlock = cache.block;
       log("recall_cache_hit", { chars: recallBlock.length });
     } else {
-      // Claim before searching: a second event for the same prompt that
-      // overlaps this one backs off instead of paying for the same search.
-      if (kimiSessionId) await claimRecall(kimiSessionId, promptHash).catch(() => {});
       const health = await fetchJSON("/health");
       if (!health.ok) {
         logError("health_check", "server unreachable or unhealthy");
         emitText("");
         return;
       }
+      // Claimed after health: a claim left by a server-down turn would make the
+      // retry look like a duplicate for the life of the claim.
+      if (kimiSessionId) await claimRecall(kimiSessionId, promptHash).catch(() => {});
       recallBlock = await recallForPrompt(fetchJSON, cfg, userPrompt, cwd, log, {
         sessionId: recallSessionId,
       });
@@ -168,7 +167,9 @@ runHookStage(
     // is wrapped like every other recall block, so the model does not read a
     // bare memory body as host-authored text.
     const parts = [];
-    if (recallBlock) parts.push(recallBlock);
+    // Retrieved text must not be able to emit a wrapper the host owns; the
+    // shared wrapper only neutralises its own two envelopes.
+    if (recallBlock) parts.push(sanitizeHostTags(recallBlock));
     if (kimiSessionId && !(await profileInjected(kimiSessionId).catch(() => false))) {
       const profile = await buildAgentProfile(fetchJSON, cfg, cwd);
       if (profile && await markProfileInjected(kimiSessionId).catch(() => false)) {
@@ -186,6 +187,7 @@ runHookStage(
         hash: promptHash,
         at: Date.now(),
         block: recallBlock || "",
+        empty: !recallBlock,
       }).catch(() => {});
     }
 

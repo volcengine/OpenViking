@@ -42,7 +42,7 @@ const LOOP_EVENT_TYPES = new Set([
 
 /** Origins that are real conversation input (captured as user messages). */
 const USER_ORIGINS = new Set(["user", undefined, ""]);
-/** Origins that are real prompts but not typed by the user (captured, marked). */
+/** Origins that are real prompts but not typed by the user: captured as user text. */
 const SYSTEM_ORIGINS = new Set(["system_trigger", "task", "cron_job"]);
 /** Everything else is host injection / summary / retry noise (dropped). */
 
@@ -140,7 +140,7 @@ export function resolveKimicodeWirePath(input = {}, home = kimiCodeHome()) {
  * A corrupt tree returns status "tree_error" and the caller skips the round —
  * capture must never guess.
  */
-export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options = {}) {
+export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
   if (!wirePath || !existsSync(wirePath)) return { status: "missing", entries: [], turns: [] };
   let raw;
   try {
@@ -384,11 +384,12 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
   const cursor = lastTurnId == null || lastTurnId === "" ? null : String(lastTurnId);
   const cursorNumber = cursor == null ? NaN : Number(cursor);
   const numericCursor = Number.isFinite(cursorNumber);
-  const unseen = cursor == null
-    ? order
-    : numericCursor
-      ? order.filter((turnId) => !Number.isFinite(Number(turnId)) || Number(turnId) > cursorNumber)
-      : order.slice(order.indexOf(cursor) + 1);
+  const newerThanCursor = order.filter(
+    (turnId) => !Number.isFinite(Number(turnId)) || Number(turnId) > cursorNumber,
+  );
+  const afterCursorTurn = order.slice(order.indexOf(cursor) + 1);
+  let unseen = order;
+  if (cursor != null) unseen = numericCursor ? newerThanCursor : afterCursorTurn;
   // `turnOrder` is the cursor walk's map, so it only lists turns that actually
   // produced entries. An unclosed turn has none: anchoring past it would make
   // the decoder skip it once it closes.

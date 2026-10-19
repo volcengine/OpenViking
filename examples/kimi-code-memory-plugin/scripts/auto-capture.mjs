@@ -89,11 +89,6 @@ runHookStage(
     const { input, cwd } = stage;
     cfg = stage.cfg;
     const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
-    fetchJSON = createOvHttp(cfg, {
-      defaultTimeoutMs: cfg.timeoutMs,
-      resolveActorPeerId: () => effectivePeer.peerId,
-      requireJsonBody: true,
-    });
 
     if (!stage.sessionId) {
       logError("no_session_id", `event=${EVENT}`);
@@ -140,6 +135,13 @@ runHookStage(
       }
       if (decoded.unknownTypes?.length) {
         log("unknown_loop_event_types", { types: decoded.unknownTypes });
+      }
+      if (decoded.unresolvedResults || decoded.lateResults) {
+        // Dropped tool evidence is a diagnostic, not silence (§7).
+        log("dropped_tool_results", {
+          unresolved: decoded.unresolvedResults,
+          late: decoded.lateResults,
+        });
       }
       if (decoded.protocolVersion && cfg.wireProtocolVersion && decoded.protocolVersion !== cfg.wireProtocolVersion) {
         logError(

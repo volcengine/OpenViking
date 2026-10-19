@@ -28,7 +28,7 @@ export function decideRecall(cache, promptHash, now = Date.now()) {
   // A second event for the same prompt arrives while the first is still
   // searching; `at` is written before the search now, so this catches it.
   if (cache.pending && age < RECALL_CLAIM_TTL_MS) return "duplicate";
-  if (cache.block && age < RECALL_CACHE_TTL_MS) return "hit";
+  if ((cache.block || cache.empty) && age < RECALL_CACHE_TTL_MS) return "hit";
   return "miss";
 }
 

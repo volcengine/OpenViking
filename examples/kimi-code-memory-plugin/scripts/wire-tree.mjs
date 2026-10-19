@@ -36,15 +36,6 @@ function readSwitchEdge(record, line) {
   };
 }
 
-export function branchForLine(tree, line) {
-  let owner = MAIN_BRANCH;
-  for (const segment of tree.segments) {
-    if (segment.fromLine > line) break;
-    owner = segment.branch;
-  }
-  return owner;
-}
-
 export function parseTree(entries, lastLine) {
   const edges = [];
   const pairedLegacyUndoLines = new Set();

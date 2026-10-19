@@ -42,12 +42,8 @@ const HOOK_BUDGET_MS = 20_000;
 const HEALTH_TIMEOUT_MS = 3_000;
 const remainingMs = createRemainingMs(HOOK_BUDGET_MS);
 
-let cfg = loadConfig();
-let fetchJSON = boundFetch(
-  createOvHttp(cfg, { defaultTimeoutMs: cfg.timeoutMs }),
-  remainingMs,
-  cfg.timeoutMs,
-);
+let cfg;
+let fetchJSON;
 
 /**
  * Drain writes an earlier hook queued while the server was unreachable.

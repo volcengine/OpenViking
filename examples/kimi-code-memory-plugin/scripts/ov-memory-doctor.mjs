@@ -23,7 +23,8 @@ import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./config.mjs";
-import { getStateDir } from "./session-state.mjs";
+import { deriveOvSessionId, getStateDir } from "./session-state.mjs";
+import { RECALL_BUDGET_MS } from "./hook-budget.mjs";
 import { listPending } from "./shared/pending-queue.mjs";
 import {
   credentialSources,
@@ -40,6 +41,8 @@ const PLUGIN_ROOT = resolvePath(fileURLToPath(import.meta.url), "..", "..");
 const PLUGIN_NAME = "openviking-memory";
 /** Filled before `runDoctor`; the doctor's own hooks are synchronous. */
 let PENDING = { rows: [], error: "" };
+/** Hooks of the manifest the host actually runs, filled by `checkInstall`. */
+let MANAGED_HOOKS = [];
 
 const HOST = {
   harness: "kimicode",
@@ -102,6 +105,7 @@ function checkInstall(report) {
     return;
   }
   const hooks = Array.isArray(manifest.hooks) ? manifest.hooks : [];
+  MANAGED_HOOKS = hooks;
   const events = hooks.map((h) => h.event).filter(Boolean);
   report.info(`manifest declares ${hooks.length} hooks (${events.join(", ") || "none"}) and ${manifest.mcpServers ? "an" : "no"} MCP server`);
   // A half-copied managed dir is the failure mode that leaves every tool
@@ -124,13 +128,13 @@ function checkInstall(report) {
   try {
     sourceVersion = JSON.parse(readFileSync(join(PLUGIN_ROOT, "kimi.plugin.json"), "utf-8"))?.version || "";
   } catch { /* source manifest unreadable; the managed comparison below still stands */ }
-  const managedVersion = JSON.parse(readFileSync(join(managedRoot, "kimi.plugin.json"), "utf-8"))?.version || "?";
+  const managedVersion = String(manifest.version || "");
   const managedRootReal = existsSync(managedRoot) ? realpathSync(managedRoot) : managedRoot;
   if (managedRootReal === realpathSync(PLUGIN_ROOT)) {
     report.ok(`running from the managed copy at ${managedRoot} (version ${managedVersion})`);
   } else {
     report.info(`managed copy: ${managedRoot} (version ${managedVersion}) — this doctor runs from ${PLUGIN_ROOT}${sourceVersion ? ` (version ${sourceVersion})` : ""}`);
-    if (sourceVersion && managedVersion !== sourceVersion && managedVersion !== "?") {
+    if (sourceVersion && managedVersion && managedVersion !== sourceVersion) {
       report.warn(`managed copy is ${managedVersion}, this source is ${sourceVersion}`, "the CLI always runs the managed copy; edits to the source dir require reinstall", `/plugins install ${PLUGIN_ROOT} again to update`);
     }
   }
@@ -149,17 +153,12 @@ const HOOK_BUDGET_KNOBS = [
 ];
 
 function reportHookBudgets(report, cfg) {
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, "kimi.plugin.json"), "utf-8"));
-  } catch {
-    return;
-  }
-  const hooks = Array.isArray(manifest?.hooks) ? manifest.hooks : [];
   for (const [event, knob] of HOOK_BUDGET_KNOBS) {
-    const hook = hooks.find((item) => item?.event === event);
+    const hook = MANAGED_HOOKS.find((item) => item?.event === event);
     const budgetMs = Number(hook?.timeout) * 1000 || 0;
-    const value = Number(cfg[knob]) || 0;
+    // The hook clamps the knob to its own budget, so a large configured value
+    // can never outlive the host; compare what is actually spent.
+    const value = Math.min(Number(cfg[knob]) || 0, RECALL_BUDGET_MS);
     if (!budgetMs || !value || value <= budgetMs) continue;
     report.warn(
       `${knob} ${value}ms exceeds the ${event} hook budget ${budgetMs}ms`,
@@ -272,7 +271,7 @@ function checkActivity(report, cfg) {
   for (const s of states.slice(0, 5)) {
     const d = s.data;
     const detail = d
-      ? `turn ${d.lastTurnId ?? "?"} · ${Array.isArray(d.capturedTurnIds) ? d.capturedTurnIds.length : "?"} acked · ${d.capturedSinceCommit ?? 0} since commit · ov session ${d.ovSessionId || d.ov_session_id || "?"}`
+      ? `turn ${d.lastTurnId ?? "?"} · ${Array.isArray(d.capturedTurnIds) ? d.capturedTurnIds.length : "?"} acked · ${d.capturedSinceCommit ?? 0} since commit · ov session ${d.ovSessionId || (d.sessionId ? deriveOvSessionId(d.sessionId) : "?")}`
       : "state file unreadable";
     report.info(`${s.name}  ${fmtAge(s.mtimeMs)} — ${detail}`);
   }
