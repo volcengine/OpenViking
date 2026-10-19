@@ -22,9 +22,18 @@ import {
 
 const EXAMPLES = join(ROOT, "examples");
 
+// The Kimi manifest is both a package manifest (at a plugin root) and a host
+// manifest (under `hosts/<host>/`), so it is named once.
+const KIMI_MANIFEST = "kimi.plugin.json";
+
 // Manifests a host reads by name to find everything else.
-const HOST_MANIFESTS = ["openviking.integration.json", ".mcp.json", "hooks.json", join("hooks", "hooks.json")];
-const PACKAGE_MANIFESTS = ["plugin.json", "kimi.plugin.json"];
+const HOST_MANIFESTS = ["openviking.integration.json", ".mcp.json", "hooks.json", join("hooks", "hooks.json"), KIMI_MANIFEST];
+const PACKAGE_MANIFESTS = ["plugin.json", KIMI_MANIFEST];
+
+// What makes a directory a plugin the marketplace has to publish: a manifest a
+// host registers, either at the plugin root or in the host's own dot-directory.
+const REGISTERABLE_MANIFESTS = [...PACKAGE_MANIFESTS, "openviking.integration.json"];
+const REGISTERABLE_DIRS = [".claude-plugin", ".codex-plugin"];
 
 // Directories a host loads whole; what is inside them is named nowhere.
 const CONTENT_DIRS = ["skills", "rules", "commands"];
@@ -127,6 +136,43 @@ async function manifestRoots(root) {
   return roots;
 }
 
+/**
+ * Plugin directories the marketplace has to publish, derived from the tree
+ * instead of from the caller's list: a directory that ships a manifest a host
+ * registers is a plugin whether or not somebody remembered to name it. Without
+ * this, a name dropped from the staging list leaves both that list and this
+ * check agreeing that whatever is left is complete.
+ *
+ * The derivation is a lower bound on purpose. A plugin that ships only a
+ * package.json (opencode, pi) is not detected, because a package manifest alone
+ * does not say the marketplace is where it gets published; missing those is a
+ * quieter failure than inventing an entry that must not ship.
+ */
+async function registerablePlugins() {
+  const names = [];
+  for (const entry of await readdir(EXAMPLES, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const root = join(EXAMPLES, entry.name);
+    let registerable = false;
+    for (const manifest of REGISTERABLE_MANIFESTS) {
+      if (await isFile(join(root, manifest))) {
+        registerable = true;
+        break;
+      }
+    }
+    if (!registerable) {
+      for (const dir of REGISTERABLE_DIRS) {
+        if (await isDirectory(join(root, dir))) {
+          registerable = true;
+          break;
+        }
+      }
+    }
+    if (registerable) names.push(entry.name);
+  }
+  return names;
+}
+
 /** The manifests, entrypoints and content one staged plugin directory owes. */
 async function pluginRequirements(root) {
   const required = new Set();
@@ -214,15 +260,21 @@ export async function requiredArchiveFiles(stagedNames) {
 }
 
 async function main(stage, expected) {
-  const missing = [];
+  const problems = [];
+  const listed = new Set(expected);
+  for (const name of await registerablePlugins()) {
+    if (!listed.has(name)) {
+      problems.push(`${name}/ ships a manifest a host registers but the staging list does not name it`);
+    }
+  }
   for (const name of expected) {
-    if (!(await isDirectory(join(stage, name)))) missing.push(`${name}/`);
+    if (!(await isDirectory(join(stage, name)))) problems.push(`${name}/`);
   }
   for (const file of await requiredArchiveFiles(expected)) {
-    if (!(await isFile(join(stage, file)))) missing.push(file);
+    if (!(await isFile(join(stage, file)))) problems.push(file);
   }
-  if (missing.length) {
-    for (const file of missing) process.stderr.write(`Marketplace archive is missing ${file}\n`);
+  if (problems.length) {
+    for (const problem of problems) process.stderr.write(`Marketplace archive is incomplete: ${problem}\n`);
     process.exit(1);
   }
 }
