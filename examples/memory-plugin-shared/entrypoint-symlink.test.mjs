@@ -71,6 +71,7 @@ for (const pluginDir of [
   "examples/claude-code-memory-plugin",
   "examples/codex-memory-plugin",
   "examples/dsh-memory-plugin",
+  "examples/kimi-code-memory-plugin",
   "examples/opencode-plugin",
 ]) {
   test(`${pluginDir} MCP proxy serves stdio through a symlinked directory`, () => {
