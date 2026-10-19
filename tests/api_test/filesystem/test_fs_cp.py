@@ -4,6 +4,10 @@ import uuid
 import pytest
 
 
+@pytest.mark.skipif(
+    os.getenv("HAS_SECRETS", "true").lower() == "false",
+    reason="Copy tests require model credentials to prepare source files",
+)
 class TestFsCp:
     def test_cp_file_preserves_source_and_content(self, api_client):
         suffix = uuid.uuid4().hex[:8]

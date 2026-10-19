@@ -21,7 +21,6 @@ from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
-from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.session import working_memory as wm
 from openviking.session.archive_store import (
@@ -68,10 +67,7 @@ from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import (
-    InternalError,
-    NotFoundError,
-)
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -1357,6 +1353,7 @@ class Session:
         Returns a task_id for tracking Phase 2 progress.
         """
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_work_index import bind_task_context
         from openviking.storage.queuefs import QueueManager, get_queue_manager
         from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
@@ -1427,11 +1424,23 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "session_commit",
+            resource_id=self.session_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
         )
+        task_id = task.task_id
+        lease = None
+        enqueued = False
+        enqueued_work = []
+        commit_error = None
         try:
+            session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+            )
             self._messages = await self._read_live_messages_strict()
             try:
                 meta_content = await self._viking_fs.read_file(
@@ -1589,7 +1598,6 @@ class Session:
                 f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
             )
             original_messages = list(self._messages)
-            task_id = str(uuid4())
             queue_msg = SessionCommitMsg(
                 task_id=task_id,
                 session_id=self.session_id,
@@ -1649,10 +1657,17 @@ class Session:
                     )
 
                 phase1_stage = "queue_enqueue"
-                await get_queue_manager().enqueue(
-                    QueueManager.SESSION_COMMIT,
-                    queue_msg.to_dict(),
-                )
+                with bind_task_context(
+                    task_id,
+                    self.ctx.account_id,
+                    self.ctx.user.user_id,
+                    enqueued_work=enqueued_work,
+                ):
+                    await get_queue_manager().enqueue(
+                        QueueManager.SESSION_COMMIT,
+                        queue_msg.to_dict(),
+                    )
+                enqueued = True
 
                 phase1_stage = "phase1_persist"
                 self._messages = retained_messages
@@ -1713,32 +1728,38 @@ class Session:
                 raise
             if reset_context:
                 await self._append_context_reset_archive()
+        except BaseException as exc:
+            commit_error = exc
+            raise
         finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
+            if lease is not None:
+                await self._viking_fs._async_agfs.pathlock_release(lease)
+            # Pre-registration and unused-task cleanup stay outside the session lock.
+            if not enqueued and not (
+                isinstance(commit_error, asyncio.CancelledError) and enqueued_work
+            ):
+                if commit_error is None:
+                    await tracker.complete(
+                        task_id,
+                        {"session_id": self.session_id, "status": "skipped"},
+                        account_id=self.ctx.account_id,
+                        user_id=self.ctx.user.user_id,
+                    )
+                else:
+                    try:
+                        await tracker.fail(
+                            task_id,
+                            str(commit_error) or type(commit_error).__name__,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                        )
+                    except Exception:
+                        logger.exception("Failed to record unqueued session commit failure")
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
 
         self._compression.original_count += len(messages_to_archive)
         logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
-
-        # Registration must not hold the session lock or roll back published Phase 1.
-        try:
-            await get_task_tracker().create(
-                "session_commit",
-                resource_id=self.session_id,
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                task_id=task_id,
-            )
-        except Exception as exc:
-            error = map_exception(exc) or InternalError(str(exc))
-            error.details.update(
-                task_id=task_id,
-                archive_uri=archive_uri,
-                archived=True,
-                stage="task_tracker_create",
-            )
-            raise error
 
         return {
             "session_id": self.session_id,

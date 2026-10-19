@@ -155,8 +155,8 @@ async def test_deleting_task_releases_retained_work_status(monkeypatch):
     read = create_autospec(agfs.read, side_effect=agfs.read)
     monkeypatch.setattr(agfs, "read", read)
     assert await tracker.delete_tasks(**OWNER) == 2
-    # Cloud storage must read each owned task file only once for deletion.
-    assert read.call_count == 2
+    # Cached owned tasks need no file reread during deletion.
+    assert read.call_count == 0
     assert not await tracker.has_work("first", **OWNER)
     assert (await tracker.build_queue_status("first", **OWNER))["Semantic"]["processed"] == 0
     assert await tracker.get("second", **OWNER) is None

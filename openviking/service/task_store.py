@@ -1032,13 +1032,7 @@ class PersistentTaskStore(TaskWorkStore):
         if account_id:
             users = [user_id] if user_id else await self._owner_users(account_id)
             for owner_user in users:
-                for payload in await self._list_owner_payloads(account_id, owner_user):
-                    try:
-                        self._put_if_absent(
-                            _task_from_payload(payload, account_id=account_id, user_id=owner_user)
-                        )
-                    except (ValueError, TypeError, KeyError):
-                        continue
+                await self._load_owner_tasks(account_id, owner_user)
         with self._lock:
             tasks = [
                 self._copy_task(task, self._work_sets.get(owner))
@@ -1674,25 +1668,25 @@ class PersistentTaskStore(TaskWorkStore):
         except (AGFSNotFoundError, FileNotFoundError):
             return []
 
-    async def _list_owner_payloads(self, account_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def _load_owner_tasks(self, account_id: str, user_id: str) -> None:
         try:
             entries = await self._ls(self._task_dir(account_id, user_id))
         except (AGFSNotFoundError, FileNotFoundError):
-            return []
-        payloads = []
+            return
         for item in entries:
             path = (
                 item.get("path") or f"{self._task_dir(account_id, user_id)}/{item.get('name', '')}"
             )
             if not path.endswith(".json"):
                 continue
+            task_id = path.rsplit("/", 1)[-1][:-5]
+            owner = (account_id, user_id, task_id)
             try:
-                value = json.loads(_decode_bytes(await self._read(path)))
-                if isinstance(value, dict):
-                    payloads.append(value)
-            except (AGFSNotFoundError, FileNotFoundError, ValueError, TypeError):
+                # Lifecycle writes already update the cache; only restore missing records.
+                async with self._record_locks.acquire(owner):
+                    await self._load_task(task_id, account_id, user_id)
+            except (AGFSNotFoundError, FileNotFoundError, ValueError, TypeError, KeyError):
                 continue
-        return payloads
 
     async def _iter_task_payloads(self) -> AsyncIterator[Optional[Dict[str, Any]]]:
         seen = set()
