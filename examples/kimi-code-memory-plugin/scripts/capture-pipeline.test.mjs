@@ -10,10 +10,10 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { extractUnseenKimicodeTurns } from "./kimicode-transcript.mjs";
 import { buildMessagePayloads, planCapture, turnDedupKey } from "./ov-session.mjs";
@@ -21,8 +21,14 @@ import { shapeKimicodeTurns } from "./capture-shape.mjs";
 
 const cfg = { captureAssistantTurns: true, captureMaxLength: 24000 };
 
+const FIXTURE_DIRS = [];
+after(() => {
+  for (const dir of FIXTURE_DIRS) rmSync(dir, { recursive: true, force: true });
+});
+
 function wireWith(rows) {
   const dir = mkdtempSync(join(tmpdir(), "kimicode-pipeline-"));
+  FIXTURE_DIRS.push(dir);
   const path = join(dir, "wire.jsonl");
   writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
   return path;

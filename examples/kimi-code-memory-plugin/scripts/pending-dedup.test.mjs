@@ -5,10 +5,9 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
+
+import { withPendingDir } from "../../memory-plugin-shared/testing/support.mjs";
 
 import { buildMessagePayloads, planCapture, sendPlannedCapture } from "./ov-session.mjs";
 import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
@@ -20,21 +19,8 @@ const turn = (id, text) => ({
   parts: [{ type: "text", text }],
 });
 
-async function withQueue(fn) {
-  const dir = await mkdtemp(join(tmpdir(), "ov-pending-test-"));
-  const previous = process.env.OPENVIKING_PENDING_DIR;
-  process.env.OPENVIKING_PENDING_DIR = dir;
-  try {
-    await fn();
-  } finally {
-    if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
-    else process.env.OPENVIKING_PENDING_DIR = previous;
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
 test("a live send removes the queued copy it just delivered", async () => {
-  await withQueue(async () => {
+  await withPendingDir(async () => {
     const plan = planCapture([turn(1, "queued earlier")], new Set());
     const payload = buildMessagePayloads([turn(1, "queued earlier")])[0];
     assert.equal((await enqueue("addMessage", "kc-dedup", payload)).ok, true);
@@ -52,7 +38,7 @@ test("a live send removes the queued copy it just delivered", async () => {
 });
 
 test("a failed send keeps the queued copy", async () => {
-  await withQueue(async () => {
+  await withPendingDir(async () => {
     const plan = planCapture([turn(2, "still offline")], new Set());
     const payload = buildMessagePayloads([turn(2, "still offline")])[0];
     await enqueue("addMessage", "kc-dedup", payload);
@@ -69,7 +55,7 @@ test("a failed send keeps the queued copy", async () => {
 });
 
 test("a queued copy for another session is untouched", async () => {
-  await withQueue(async () => {
+  await withPendingDir(async () => {
     const other = buildMessagePayloads([turn(3, "other session")])[0];
     await enqueue("addMessage", "kc-other", other);
 
@@ -83,7 +69,7 @@ test("a queued copy for another session is untouched", async () => {
 });
 
 test("a queued session-end commit replays after its messages", async () => {
-  await withQueue(async () => {
+  await withPendingDir(async () => {
     const first = buildMessagePayloads([turn(5, "one")])[0];
     const second = buildMessagePayloads([turn(6, "two")])[0];
     await enqueue("addMessage", "kc-order", first, { createdAt: 10 });
