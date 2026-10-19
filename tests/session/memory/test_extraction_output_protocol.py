@@ -1277,7 +1277,7 @@ sdk.commit()
 
 @pytest.mark.parametrize("memory_type", ["experiences", "entities"])
 @pytest.mark.parametrize("method", ['edit(search="old", replace="new")', 'drop(text="old")'])
-def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(memory_type, method):
+def test_python_builtin_content_edit_accepts_replace_but_keeps_update_guidance(memory_type, method):
     registry = MemoryTypeRegistry(load_schemas=False)
     registry.load_from_yaml(str(resolve_memory_templates_dir() / f"{memory_type}.yaml"))
     schema = registry.get(memory_type)
@@ -1301,11 +1301,10 @@ def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(m
     _bind(protocol, context)
     operations, error = protocol.parse(f"{memory_type}_1.content.{method}", context)
 
-    if memory_type == "entities":
-        assert error is None
-        assert operations is not None
-        assert operations.model_dump()[memory_type][0]["content"]["blocks"]
-    else:
+    assert error is None
+    assert operations is not None
+    assert operations.model_dump()[memory_type][0]["content"]["blocks"]
+    if memory_type == "experiences":
         contract = protocol.render_contract(context)
         rules = protocol.render_reference_rules(context)
         assert "obj.content.update(" in contract
@@ -1313,15 +1312,10 @@ def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(m
         assert "obj.content.drop(" not in contract
         assert "delete(replacement=canonical)" in rules
         assert "never drop a unique fact" in rules
-        assert operations is None
-        assert error is not None
-        assert "merge_op=replace" in error
-        retry = protocol.render_format_retry(error)
-        correction = retry.split("`")[1]
-        assert correction.startswith("experiences_1.content.update(")
-        operations, error = protocol.parse(correction, context)
+        operations, error = protocol.parse(
+            'experiences_1.content.update("complete new value")', context
+        )
         assert error is None
-        assert operations is not None
         assert operations.model_dump()[memory_type][0]["content"] == "complete new value"
 
 

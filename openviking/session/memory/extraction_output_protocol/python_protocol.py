@@ -344,6 +344,8 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             "use text from the conversation or the new facts you intend to add as a search anchor. "
             "If you copy from numbered read output, exclude the `line_number<TAB>` prefix. If the "
             "change is too broad for a clean snippet, use obj.field.update(complete_new_value) instead. "
+            "For fields marked [replace], use obj.field.update(complete_new_value), including "
+            "all unchanged text. "
             "Regenerate the complete restricted Python SDK program, including previous successful "
             "operations and fixed failed operations. Output only Python code."
             "\n\nFailed edits:\n" + details
@@ -1111,7 +1113,7 @@ class _PythonProgramCompiler:
             owner.fields[name] = handle.full_value
             owner.changed_fields[name] = handle.full_value
             return
-        # Local edit chain: only valid for existing PATCH string fields.
+        # Replace strings still advertise update(), but accept an explicit edit at runtime.
         if not owner.existing:
             self._error(
                 node,
@@ -1119,18 +1121,14 @@ class _PythonProgramCompiler:
                 "this program has no prior content — pass the complete value to field.update()",
             )
         if field_schema is None or not (
-            field_schema.merge_op == MergeOp.PATCH and field_schema.field_type == FieldType.STRING
+            field_schema.merge_op in {MergeOp.PATCH, MergeOp.REPLACE}
+            and field_schema.field_type == FieldType.STRING
         ):
-            guidance = "edit()/drop() require an editable string (merge_op=patch)"
-            if field_schema is not None and (
-                field_schema.merge_op == MergeOp.REPLACE
-                and field_schema.field_type == FieldType.STRING
-            ):
-                guidance = (
-                    "merge_op=replace requires the complete new value, including unchanged text; "
-                    f'use `{owner.name}.{_identifier_alias(name)}.update("""complete new value""")`'
-                )
-            self._error(node, f"field {name!r} does not support edit()/drop(): {guidance}")
+            self._error(
+                node,
+                f"field {name!r} does not support edit()/drop(): "
+                "edit()/drop() require a string with merge_op=patch or replace",
+            )
         # Do NOT apply here. Store the edits as a StrPatch so python mode flows through
         # the same resolve_operations -> _validate_patch_operations -> patch-repair path
         # as json mode: a failed snippet is isolated to its own operation and gets the
