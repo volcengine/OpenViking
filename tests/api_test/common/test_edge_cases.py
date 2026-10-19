@@ -95,7 +95,7 @@ class TestContentEdgeCases:
             mkdir_resp = api_client.fs_mkdir(test_uri.rsplit("/", 1)[0])
             assert mkdir_resp.status_code == 200
 
-            write_resp = api_client.fs_write(test_uri, "new file content", mode="create", wait=True)
+            write_resp = api_client.fs_write(test_uri, "new file content", mode="create", wait=False)
             assert write_resp.status_code == 200, (
                 f"write to new file with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
@@ -120,7 +120,7 @@ class TestContentEdgeCases:
             mkdir_resp = api_client.fs_mkdir(test_uri.rsplit("/", 1)[0])
             assert mkdir_resp.status_code == 200
 
-            write_resp = api_client.fs_write(test_uri, "", mode="create", wait=True)
+            write_resp = api_client.fs_write(test_uri, "", mode="create", wait=False)
             assert write_resp.status_code == 200, (
                 f"write empty content with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
@@ -135,7 +135,7 @@ class TestContentEdgeCases:
         try:
             api_client.fs_mkdir(test_uri)
             api_client.fs_write(
-                f"{test_uri}/test.md", "Download header test content", mode="create", wait=True
+                f"{test_uri}/test.md", "Download header test content", mode="create", wait=False
             )
 
             dl_resp = api_client.content_download(f"{test_uri}/test.md")
@@ -157,7 +157,7 @@ class TestContentEdgeCases:
         try:
             api_client.fs_mkdir(test_uri)
             api_client.fs_write(
-                f"{test_uri}/test.md", "Line1 content for offset test", mode="create", wait=True
+                f"{test_uri}/test.md", "Line1 content for offset test", mode="create", wait=False
             )
 
             read_resp = api_client._request_with_retry(
