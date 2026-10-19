@@ -42,19 +42,51 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## Kimi Code 记忆集成
 
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
+
+- **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本。
+- **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI。
+- **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
+- 原生插件 manifest 提供 OpenViking MCP server，不修改 Kimi 的旧式配置文件。
+
+### 安装
+
+前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
+```
+
+安装器会在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/`
+下组装自包含运行时（Kimi home 默认为 `~/.kimi-code/`），并且只更新
+`plugins/installed.json` 中的 `openviking-memory` 记录，不动其他插件。
+重跑同一命令可升级。只卸载该插件：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
+
+已验证的宿主契约和版本见
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
+
+## Kimi Code 原生插件
+
 源码：[examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin) | 文档：[README](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/README_CN.md)、[DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md)
 
-Kimi Code 集成是社区实现的原生 managed plugin，不是 Moonshot AI 或 Kimi Code 的官方插件。它复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
+`openviking-memory` 是社区实现、以 Kimi 原生插件形式分发，不是 Moonshot AI 或 Kimi Code 的官方插件。它自带 `kimi.plugin.json`（hooks 与 stdio MCP server），由 Kimi 直接安装和升级；复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
 
 - **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本；profile 与 skill 清单也在首次提问时经此事件注入，因为 Kimi 会丢弃 `SessionStart` 的 stdout。
 - **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI，引导模型改用 MCP 工具。
 - **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
 - **SessionStart** 有界重放此前发送失败的 pending 消息。
-- 原生插件 manifest 提供 OpenViking MCP server，不修改 Kimi 的旧式配置文件。
+- MCP server 由插件 manifest 声明，因此不修改 Kimi 自身的配置文件。
 
 已知局限：subagent 对话（`agents/<subagent>/wire.jsonl`）尚未捕获。
 
-### 安装（原生插件）
+### 安装
 
 前置条件：Kimi Code CLI ≥ 2.1.1（已在 2.2.0 上验证）、Node.js 18+、正在运行的 OpenViking 服务。在 Kimi TUI 里执行：
 
@@ -75,29 +107,6 @@ Kimi Code 集成是社区实现的原生 managed plugin，不是 Moonshot AI 或
 | MCP 工具调用报认证错误 | 凭据缺失或过期 | 修正 `~/.openviking/ovcli.conf` 或 `OPENVIKING_*` 凭据后重开会话 |
 | MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | 不确定哪里出问题 | — | 运行上面的 doctor；`OPENVIKING_DEBUG=1` 查看日志 |
-
-### 安装（legacy / 备选）
-
-新用户请改用上面的原生插件路径。以下说明保留给仍在使用 curl 安装器的现有用户。
-
-前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
-
-```bash
-curl -fsSL https://openviking.ai/install | bash
-# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
-```
-
-安装器会在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/`
-下组装自包含运行时（Kimi home 默认为 `~/.kimi-code/`），并且只更新
-`plugins/installed.json` 中的 `openviking-memory` 记录，不动其他插件。
-重跑同一命令可升级。只卸载该插件：
-
-```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
-```
-
-已验证的宿主契约和版本见
-[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
 
 ## AstrBot 插件
 

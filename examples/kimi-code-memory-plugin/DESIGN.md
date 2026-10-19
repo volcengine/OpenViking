@@ -33,9 +33,9 @@ library does not provide — the wire's `turn_id` on shaped turns, the host's
 envelope rules, the `captureMaxLength` cap on shipped parts, prefix-based
 send confirmation, reserved-tag neutralisation for recalled text, and the
 flat-manifest hook-budget check — lives in `capture-shape.mjs`,
-`recall-sanitize.mjs`, `ov-session.mjs` and `ov-memory-doctor.mjs`. That is
-also why `sync.mjs` does not register this plugin: registering it would mean
-editing shared tooling, and the copies are kept byte-identical by hand.
+`recall-sanitize.mjs`, `ov-session.mjs` and `ov-memory-doctor.mjs`. The
+vendored copies are declared in `sync.mjs` (`TARGETS` and `SKILL_TARGETS`),
+so they are generated from the shared sources rather than kept by hand.
 
 ## Contract
 
@@ -293,9 +293,8 @@ tool.result → { type: "function_call_output", call_id, output, isError?, durat
 `openviking-memory` (when/how to search, read, write), `openviking-skills`
 (the `add_skill` flow), and `ov-experience-memory` (the experience workflow —
 the full version applies because this plugin captures tool parts, so its reads
-feed trajectories back). They are copied from `examples/skills/` and kept
-byte-identical by hand: registering them in `SKILL_TARGETS` would mean editing
-shared tooling, which this plugin does not do.
+feed trajectories back). They are generated from `examples/skills/` through the
+`SKILL_TARGETS` entries in `sync.mjs`.
 Without the skills the model could only receive injected context, never
 actively use the MCP tools.
 

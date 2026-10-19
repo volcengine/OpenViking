@@ -93,11 +93,12 @@ it). See `DESIGN.md` for the full host contract and design record.
 
 ## Development
 
-`scripts/shared/` and `skills/` are copies of the shared sources. This plugin
-is not registered in `sync.mjs` and does not edit shared tooling, so the copies
-are kept byte-identical by hand (shared file + the `GENERATED FROM` header):
+`scripts/shared/` and `skills/` are generated. The plugin is registered in
+`sync.mjs` (`TARGETS` and `SKILL_TARGETS`), so change a shared source and run
+the generator instead of editing the copies:
 
 ```bash
+node ../memory-plugin-shared/sync.mjs   # after changing shared sources
 node --test scripts/*.test.mjs
 ```
 

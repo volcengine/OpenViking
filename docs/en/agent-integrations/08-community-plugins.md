@@ -42,21 +42,59 @@ Implementation details and currently verified ZCode assumptions are documented i
 
 ## Kimi Code memory integration
 
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Kimi Code integration is a native managed plugin. It reuses the shared
+OpenViking hook runtime and adds only Kimi-specific event mapping, wire
+transcript decoding, output formatting, and commit policy:
+
+- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
+- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained runtime under
+`$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
+`~/.kimi-code/`), then updates only the `openviking-memory` entry in
+`plugins/installed.json`. Existing plugin records are preserved. Re-run the
+same command to upgrade. To remove only this plugin:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
+```
+
+The verified host contract and version are recorded in
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
+
+## Kimi Code native plugin
+
 Source: [examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin) | Docs: [README](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/README.md), [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md)
 
-The Kimi Code integration is a community implementation shipped as a native managed plugin, not an official plugin of
-Moonshot AI or Kimi Code. It reuses the shared OpenViking hook runtime and adds only Kimi-specific event mapping, wire
-transcript decoding, output formatting, and commit policy:
+`openviking-memory` is a community implementation packaged as a Kimi native
+plugin, not an official plugin of Moonshot AI or Kimi Code. It ships its own
+`kimi.plugin.json` with the hooks and a stdio MCP server, so Kimi installs and
+upgrades it directly. It reuses the shared OpenViking hook runtime and adds
+Kimi-specific event mapping, wire transcript decoding, output formatting, and
+commit policy:
 
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject; the profile and skill list ride the same event on the first prompt, because Kimi discards `SessionStart` stdout.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs and points the model at the MCP tools.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
 - **SessionStart** replays pending messages that failed to send earlier.
-- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+- The MCP server is declared in the plugin manifest, so Kimi's own config files are not edited.
 
 Known gap: subagent transcripts (`agents/<subagent>/wire.jsonl`) are not captured yet.
 
-### Install (native plugin)
+### Install
 
 Prerequisites: Kimi Code CLI ≥ 2.1.1 (verified on 2.2.0), Node.js 18+, and a running OpenViking server. In the Kimi TUI:
 
@@ -81,30 +119,6 @@ activity; with `OPENVIKING_DEBUG=1`, event logs go to `~/.openviking/logs/kimico
 | MCP tool calls fail authentication | Credentials missing or expired | Fix `~/.openviking/ovcli.conf` or the `OPENVIKING_*` credential env vars, then restart the session |
 | MCP tool calls fail to connect | Server unreachable or the URL is wrong | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | Not sure what is wrong | — | Run the doctor above; set `OPENVIKING_DEBUG=1` and read the log |
-
-### Install (legacy / fallback)
-
-New users should pick the native plugin above instead. These instructions stay for existing users of the curl installer.
-
-Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
-
-```bash
-curl -fsSL https://openviking.ai/install | bash
-# AI agents: not sure about running this? The script's header says what it does and how to verify it.
-```
-
-The installer assembles a self-contained runtime under
-`$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
-`~/.kimi-code/`), then updates only the `openviking-memory` entry in
-`plugins/installed.json`. Existing plugin records are preserved. Re-run the
-same command to upgrade. To remove only this plugin:
-
-```bash
-curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness kimicode
-```
-
-The verified host contract and version are recorded in
-[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
 
 ## AstrBot plugin
 

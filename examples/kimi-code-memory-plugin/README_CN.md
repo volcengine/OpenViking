@@ -86,11 +86,11 @@ MCP 工具（`find`、`search`、`grep`、`read`、`remember`、`add_resource`�
 
 ## 开发
 
-`scripts/shared/` 与 `skills/` 是共享源码的副本。本插件未登记在 `sync.mjs`
-中、也不修改共享工具，因此这些副本按「共享文件 + GENERATED FROM 头」手工保持
-逐字节一致：
+`scripts/shared/` 与 `skills/` 为生成物。插件已登记在 `sync.mjs` 的 `TARGETS`
+与 `SKILL_TARGETS` 中，改动共享源码后运行生成器，不要手改副本：
 
 ```bash
+node ../memory-plugin-shared/sync.mjs   # 改动共享源码后运行
 node --test scripts/*.test.mjs
 ```
 
