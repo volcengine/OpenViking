@@ -76,7 +76,7 @@ MCP 工具（`find`、`search`、`grep`、`read`、`remember`、`add_resource`�
 | `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | 开 | 压缩前提交 |
 | `OPENVIKING_RECALL_LIMIT` / `OPENVIKING_SCORE_THRESHOLD` | 10 / 0.35 | 召回条数与分数阈值 |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` | `actor` 时只检索本工作区 peer 的记忆 |
-| `OPENVIKING_PENDING_REPLAY_LIMIT` | 2（manifest 设置） | 每次 SessionStart 重放的 pending 条数 |
+| `OPENVIKING_PENDING_REPLAY_LIMIT` | 2（代码内默认；manifest 无法携带该字段） | 每次 SessionStart 重放的 pending 条数 |
 
 完整开关清单见
 [`memory-plugin-shared`](https://github.com/volcengine/OpenViking/tree/main/examples/memory-plugin-shared)
@@ -104,6 +104,6 @@ node --test scripts/*.test.mjs
 
 ## 状态
 
-Beta。插件版本 0.2.3，已在 Windows 上对照 Kimi Code CLI 2.2.0 验证（macOS/Linux
+Beta。插件版本 0.2.4，已在 Windows 上对照 Kimi Code CLI 2.2.0 验证（macOS/Linux
 预期可用但尚未实测）。已知缺口：subagent 对话（`agents/<subagent>/wire.jsonl`）
 尚未捕获（v2），详见 `DESIGN.md`。

@@ -269,6 +269,27 @@ tool.result → { type: "function_call_output", call_id, output, isError?, durat
   truncation would drift it. The shared sender reports successes as a running
   count and stops at the first refusal, so the ack set advances by that
   prefix; the cursor never steps over a turn whose payload was not confirmed.
+  The cursor is compared **by turn id**, not by position: `repairWireJournal`
+  can truncate the tail, and an `indexOf` cursor would silently become -1 and
+  re-decode the whole session. Because the filter is numeric, ack keys at or
+  below the cursor can be pruned without losing that protection — they cannot
+  come back.
+
+### Replay after a partial send
+
+The server has no turn-id idempotency, so a replay is not free and the plugin
+says what it does instead of implying exactly-once:
+
+- Confirmed payloads are acked and persisted as they arrive; the cursor
+  advances over them.
+- A payload the server refuses is counted as `failed` and blocks the commit;
+  the turn it belongs to stays out of the ack set, so the next hook re-plans
+  the whole turn. Its already-confirmed siblings are therefore sent a second
+  time — accepted over dropping half a turn.
+- A confirmed send whose state write fails is repeated by the next hook for
+  the same reason: the ack set lives on disk, and a failed write never landed.
+- Losing the state file itself (corruption, a wiped state dir) resets both the
+  cursor and the ack set; that run re-appends the active chain.
 - Commit: only for a strand-free run — no `failed` payloads, nothing queued,
   and no older queue entry for the session. Then `interrupt`/`session-end`
   always, `pre-compact` unless `autoCommitOnCompact=false`, otherwise at

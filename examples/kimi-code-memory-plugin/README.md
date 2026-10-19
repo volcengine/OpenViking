@@ -55,7 +55,7 @@ and Kimi's registration of them change.
 | Hook | Behavior |
 |---|---|
 | `UserPromptSubmit` | searches OpenViking for memories related to your prompt and injects them as context (raw stdout text — the only channel Kimi reliably appends) |
-| `Stop` / `PreCompact` / `SessionEnd` / `Interrupt` | decodes the session's `wire.jsonl` incrementally and appends new user/assistant/tool messages to `kc-<session-id>`; commits on session end, before compaction, or at the token threshold |
+| `Stop` / `PreCompact` / `SessionEnd` / `Interrupt` | decodes the session's `wire.jsonl` incrementally and appends new user/assistant/tool messages to `kc-<session-id>`; commits on session end, before compaction, or once enough turns were captured (`commitTurnThreshold`) |
 | `SessionStart` | replays a bounded batch of anything that failed to send earlier |
 | `PreToolUse` | denies `Read`/`Glob`/`Grep` on `viking://` URIs and points the model at the MCP tools |
 
@@ -83,7 +83,7 @@ together). The ones you are most likely to touch:
 | `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | on | commit before compaction |
 | `OPENVIKING_RECALL_LIMIT` / `OPENVIKING_SCORE_THRESHOLD` | 10 / 0.35 | recall breadth and cutoff |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` | `actor` narrows recall to this workspace's peer |
-| `OPENVIKING_PENDING_REPLAY_LIMIT` | 2 (set by the manifest) | pending entries replayed per SessionStart |
+| `OPENVIKING_PENDING_REPLAY_LIMIT` | 2 (default in code; the manifest cannot carry it) | pending entries replayed per SessionStart |
 
 The full knob list is in
 [`memory-plugin-shared`](https://github.com/volcengine/OpenViking/tree/main/examples/memory-plugin-shared)
@@ -113,6 +113,6 @@ Layout, boundaries and the acceptance checklist follow
 
 ## Status
 
-Beta. Plugin version 0.2.3, verified against Kimi Code CLI 2.2.0 on Windows
+Beta. Plugin version 0.2.4, verified against Kimi Code CLI 2.2.0 on Windows
 (macOS/Linux expected but unverified). Known gap: subagent conversations
 (`agents/<subagent>/wire.jsonl`) are not captured yet (v2); see `DESIGN.md`.
