@@ -8,7 +8,7 @@ import pytest
 from conftest import replay_records
 
 from openviking_gateway import protocols
-from openviking_gateway.blocks import gateway_note
+from openviking_gateway.blocks import RECALL_PROVENANCE_NOTE, gateway_note
 from openviking_gateway.capture import CaptureWorker, capture_messages
 from openviking_gateway.capture_store import Document
 from openviking_gateway.client import VikingError
@@ -132,7 +132,7 @@ NOTE = (
     "Tool names in their descriptions omit the openviking_ prefix.\n"
     "- The gateway saves this conversation to the user's OpenViking memory."
 )
-LEAD = "Relevant memory from OpenViking."
+LEAD = "Relevant memory from OpenViking. " + RECALL_PROVENANCE_NOTE
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
@@ -149,6 +149,9 @@ async def test_first_injection_opens_with_gateway_note(setup_kernel, credential,
     note, recalled = context_blocks(one.body[field][0])
     assert note == NOTE + "\n</openviking-context>"
     assert LEAD + " Use the openviking_read tool to expand URIs.\n" in recalled
+    # Recalled history is labelled as internal context, not external evidence.
+    assert "user's own saved history" in recalled
+    assert "not an external source or established fact" in recalled
     assert "Deploy using the blue cluster." in recalled
     # The note is replayed with recall but stays outside the recall budget.
     decision = (await replay_records(store, one, "injection"))["injection", one.chain[0]]

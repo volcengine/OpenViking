@@ -472,6 +472,11 @@ function looksLikeUnknownField(res) {
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
 }
 
+// Recalled text is the user's own history. Without a provenance boundary a model
+// may cite an internal decision as external evidence or industry practice.
+export const RECALL_PROVENANCE_NOTE =
+  "It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact.";
+
 function wrapContext(body) {
   // Retrieved text cannot introduce a second capture delimiter inside ours.
   const text = String(body)
@@ -479,7 +484,7 @@ function wrapContext(body) {
     .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
   return [
     "<openviking-context>",
-    "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
+    `Relevant memory from OpenViking. ${RECALL_PROVENANCE_NOTE} Use the search/read MCP tools to expand URIs.`,
     text,
     "</openviking-context>",
   ].join("\n");
