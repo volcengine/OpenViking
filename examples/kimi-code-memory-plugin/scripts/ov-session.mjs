@@ -155,9 +155,10 @@ export async function sendPlannedCapture(fetchJSON, ovSessionId, plan, { peerId 
   );
   const keysByIndex = plan.map((item) => item.keys);
   const sentPayloads = [];
-  // The shared sender reports successes as a running count and stops at the
-  // first refusal, so `onSent(n)` always covers the next n payloads in plan
-  // order — the acknowledgement set can advance by that prefix.
+  // The shared sender reports each acceptance as an incremental count — the
+  // `n` it passes is the payloads it just accepted, not a running total — and
+  // stops at the first refusal, so the callbacks always cover the next prefix
+  // of plan order and the acknowledgement set can advance by that prefix.
   let delivered = 0;
   const result = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
     enqueueOnRetryable: true,

@@ -73,6 +73,74 @@ test("a stalled search is abandoned inside the hook budget", async () => {
   }
 });
 
+test("a finished recall is emitted when the profile request stalls", async () => {
+  const restore = scrubOpenVikingEnv();
+  const state = stateDir();
+  const recalled = "we decided the installer must validate the manifest at the repository root";
+  try {
+    const started = Date.now();
+    const { result, requests } = await withMockOpenViking(
+      async (req, res) => {
+        const path = new URL(req.url, "http://127.0.0.1").pathname;
+        if (path === "/health") {
+          writeJson(res, { status: "ok", result: { ok: true } });
+          return;
+        }
+        if (path.startsWith("/api/v1/search/")) {
+          // The context face answers the session-aware search route with an
+          // assembled block; without `rendered` the hook would read it as
+          // "nothing relevant" and never arm the deadline payload.
+          writeJson(res, {
+            status: "ok",
+            result: {
+              rendered: recalled,
+              entries: [
+                { uri: "viking://user/default/memories/installer-decision", category: "memory", text: recalled, score: 0.9 },
+              ],
+              digest: "",
+              stats: {},
+            },
+          });
+          return;
+        }
+        // The agent-profile request (and anything that follows) never answers.
+        await new Promise(() => {});
+      },
+      async (base, seen) => ({
+        requests: seen,
+        result: await runHookScript(join(SCRIPT_DIR, "auto-recall.mjs"), {
+          input: PROMPT,
+          env: {
+            OPENVIKING_URL: base,
+            OPENVIKING_RECALL_TIMEOUT_MS: "1200",
+            OPENVIKING_KIMICODE_STATE_DIR: join(state.dir, "state"),
+          },
+        }),
+      }),
+    );
+
+    assert.equal(result.code, 0);
+    assert.ok(
+      String(result.stdout || "").includes(recalled),
+      "the deadline must emit the recall that already finished"
+        + ` (stdout was ${JSON.stringify(String(result.stdout || ""))},`
+        + ` requests were ${requests.map((entry) => entry.path).join(", ")})`,
+    );
+    assert.ok(
+      requests.some((entry) => entry.path.startsWith("/api/v1/search/")),
+      `expected a search request, saw ${requests.map((entry) => entry.path).join(", ")}`,
+    );
+    assert.ok(
+      requests.some((entry) => entry.path === "/api/v1/system/status"),
+      "the profile request must have started and stalled",
+    );
+    assert.ok(Date.now() - started < 5000, "the hook must not outlive its 1200ms budget by seconds");
+  } finally {
+    state.cleanup();
+    restore();
+  }
+});
+
 test("the off switch removes the network side effect entirely", async () => {
   const restore = scrubOpenVikingEnv();
   const state = stateDir();

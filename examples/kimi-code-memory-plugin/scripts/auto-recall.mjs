@@ -169,7 +169,14 @@ runHookStage(
     const parts = [];
     // Retrieved text must not be able to emit a wrapper the host owns; the
     // shared wrapper only neutralises its own two envelopes.
-    if (recallBlock) parts.push(sanitizeHostTags(recallBlock));
+    if (recallBlock) {
+      const safeBlock = sanitizeHostTags(recallBlock);
+      // Armed for the deadline before the profile request starts: a profile
+      // call that never returns must not throw away a recall that already
+      // finished. Sanitised here so the deadline can never emit a raw wrapper.
+      collected = [safeBlock];
+      parts.push(safeBlock);
+    }
     if (kimiSessionId && !(await profileInjected(kimiSessionId).catch(() => false))) {
       const profile = await buildAgentProfile(fetchJSON, cfg, cwd);
       if (profile && await markProfileInjected(kimiSessionId).catch(() => false)) {

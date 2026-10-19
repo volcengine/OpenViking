@@ -353,18 +353,16 @@ actively use the MCP tools.
 1. **Subagent content** — `agents/<subagent>/wire.jsonl` is not captured; the
    main wire's `subagent.spawned/completed` mirrors are not yet turned into
    assistant steps either (v2).
-2. **Step-level message grouping** — an assistant step's text and its tool
-   calls are separate messages (text closes the turn) rather than one mixed
-   message. The server's retention handles both; grouping is a fidelity
-   nice-to-have, not a correctness issue.
-3. **System-origin marking** — `system_trigger`/`task`/`cron_job` prompts are
+2. **System-origin marking** — `system_trigger`/`task`/`cron_job` prompts are
    captured but the marker convention on the OV side (how extraction tells
    them apart from typed input) is not agreed yet.
 
 Closed since the first draft: undo/branch fidelity (wire-tree.mjs ports
-kimi-code's tree.ts activeChain — verified by fixture tests) and turn_id
+kimi-code's tree.ts activeChain — verified by fixture tests); turn_id
 propagation, which lives in this plugin's `capture-shape.mjs` rather than in
-the shared extractor.
+the shared extractor; and step-level message grouping, which was listed here as
+a gap while the decoder still emitted text and tool calls separately — one
+assistant message per step (§6.3) has been the behavior since.
 
 ## Evidence index
 

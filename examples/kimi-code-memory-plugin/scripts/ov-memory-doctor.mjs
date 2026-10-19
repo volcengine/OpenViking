@@ -197,10 +197,14 @@ function checkConfig(report, cfg, host) {
 /**
  * What the replay queue holds. Read before `runDoctor` because the shared
  * listing is async and the doctor's hooks are not.
+ *
+ * Claimed (`.processing`) entries count: one is a message a concurrent replayer
+ * is sending right now, so a report that hid it would call the queue empty while
+ * a commit is still correctly blocked on it.
  */
 async function pendingSnapshot() {
   try {
-    const entries = await listPending();
+    const entries = await listPending({ includeProcessing: true });
     const rows = entries.map(({ entry }) => ({
       sessionId: String(entry?.sessionId || "?"),
       type: String(entry?.type || "?"),

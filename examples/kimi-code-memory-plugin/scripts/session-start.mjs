@@ -76,10 +76,11 @@ async function recordReplayedDeliveries(results, kimiSessionId) {
       const acked = new Set(state.capturedTurnIds || []);
       const before = acked.size;
       for (const key of keys) acked.add(key);
-      if (acked.size === before) return 0;
+      const added = acked.size - before;
+      if (added === 0) return 0;
       state.capturedTurnIds = [...acked];
       await saveState(kimiSessionId, state);
-      return keys.length;
+      return added;
     },
     { waitMs: remainingMs() },
   );
