@@ -4,9 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import { Badge } from '#/components/ui/badge'
+import { Checkbox } from '#/components/ui/checkbox'
 import { Input } from '#/components/ui/input'
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -79,6 +81,10 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
   const [groupId, setGroupId] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [forceDelete, setForceDelete] = useState(false)
+  const hasMembers = groups.data?.some(
+    (group) => group.group_id === deleting && group.member_count > 0,
+  )
   const onError = (error: unknown) =>
     toast.error(t('groups.failed'), { description: getErrorMessage(error) })
   const create = useMutation({
@@ -92,7 +98,8 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
     },
   })
   const remove = useMutation({
-    mutationFn: (id: string) => deleteAdminGroup(connection, id),
+    mutationFn: ({ id, force }: { id: string; force: boolean }) =>
+      deleteAdminGroup(connection, id, force),
     onError: async (error) => {
       onError(error)
       await client.invalidateQueries({ queryKey })
@@ -178,24 +185,17 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
                         >
                           {t('groups.manage')}
                         </Button>
-                        <span
-                          title={
-                            group.member_count
-                              ? t('groups.deleteHint')
-                              : undefined
-                          }
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={remove.isPending}
+                          onClick={() => {
+                            setForceDelete(false)
+                            setDeleting(group.group_id)
+                          }}
                         >
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={
-                              group.member_count > 0 || remove.isPending
-                            }
-                            onClick={() => setDeleting(group.group_id)}
-                          >
-                            {t('groups.delete')}
-                          </Button>
-                        </span>
+                          {t('groups.delete')}
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -269,16 +269,38 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
               {t('groups.deleteDescription', { group: deleting })}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {hasMembers && (
+            <p className="text-sm text-muted-foreground">
+              {t('groups.deleteHint')}
+            </p>
+          )}
+          <Field orientation="horizontal">
+            <Checkbox
+              id="force-delete-group"
+              checked={forceDelete}
+              onCheckedChange={setForceDelete}
+              disabled={remove.isPending}
+            />
+            <FieldContent>
+              <FieldLabel htmlFor="force-delete-group">
+                {t('groups.forceDelete')}
+              </FieldLabel>
+              <FieldDescription>
+                {t('groups.forceDeleteDescription')}
+              </FieldDescription>
+            </FieldContent>
+          </Field>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>
               {t('actions.cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={remove.isPending}
+              disabled={remove.isPending || (hasMembers && !forceDelete)}
               onClick={(event) => {
                 event.preventDefault()
-                if (deleting) remove.mutate(deleting)
+                if (deleting)
+                  remove.mutate({ id: deleting, force: forceDelete })
               }}
             >
               {remove.isPending ? t('loading') : t('groups.delete')}

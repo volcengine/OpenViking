@@ -2033,8 +2033,14 @@ class AsyncHTTPClient:
         response = await self._http.get(f"/api/v1/admin/accounts/{account_id}/groups")
         return self._handle_response(response)
 
-    async def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
-        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}/groups/{group_id}")
+    async def admin_delete_group(
+        self, account_id: str, group_id: str, force: bool = False
+    ) -> Dict[str, Any]:
+        """Delete a group, optionally removing its memberships when it is not empty."""
+        response = await self._http.delete(
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}",
+            params={"force": "true"} if force else None,
+        )
         return self._handle_response(response)
 
     async def admin_list_group_members(self, account_id: str, group_id: str) -> Dict[str, Any]:
@@ -3107,8 +3113,11 @@ class SyncHTTPClient:
     def admin_list_groups(self, account_id: str) -> List[Any]:
         return run_async(self._async_client.admin_list_groups(account_id))
 
-    def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_delete_group(account_id, group_id))
+    def admin_delete_group(
+        self, account_id: str, group_id: str, force: bool = False
+    ) -> Dict[str, Any]:
+        """Delete a group, optionally removing its memberships when it is not empty."""
+        return run_async(self._async_client.admin_delete_group(account_id, group_id, force=force))
 
     def admin_list_group_members(self, account_id: str, group_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_list_group_members(account_id, group_id))

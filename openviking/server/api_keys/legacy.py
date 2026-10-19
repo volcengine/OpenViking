@@ -1129,12 +1129,12 @@ class FileStore(AccountStore):
             await self._replace_groups(account_id, account, groups)
             return True
 
-    async def _delete_group(self, account_id: str, group_id: str) -> None:
+    async def _delete_group(self, account_id: str, group_id: str, force: bool = False) -> None:
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
             group = self._require_group(account_id, group_id)
-            if group.get("members"):
+            if group.get("members") and not force:
                 raise FailedPreconditionError("Group must be empty before deletion")
             groups = copy.deepcopy(account.groups)
             del groups[group_id]
@@ -1675,9 +1675,9 @@ class FileStore(AccountStore):
         await self._refresh_accounts_for_management_read()
         return await self._remove_group_member(account_id, group_id, user_id)
 
-    async def delete_group(self, account_id: str, group_id: str) -> None:
+    async def delete_group(self, account_id: str, group_id: str, force: bool = False) -> None:
         await self._refresh_accounts_for_management_read()
-        await self._delete_group(account_id, group_id)
+        await self._delete_group(account_id, group_id, force=force)
 
     async def replace_active_user_api_key(
         self, account_id: str, user_id: str, api_key: str

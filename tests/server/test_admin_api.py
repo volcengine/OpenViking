@@ -346,6 +346,88 @@ async def template_account(lightweight_admin_client):
     return account_id, {"X-API-Key": response.json()["result"]["user_key"]}
 
 
+@pytest.mark.parametrize("delete_headers", ["root", "admin"])
+async def test_delete_group_requires_force_for_members(
+    lightweight_admin_client, lightweight_admin_app, template_account, delete_headers
+):
+    account_id, admin_headers = template_account
+    client = lightweight_admin_client
+    groups_url = f"/api/v1/admin/accounts/{account_id}/groups"
+    group_url = f"{groups_url}/engineering"
+    response = await client.post(
+        groups_url, json={"group_id": "engineering"}, headers=admin_headers
+    )
+    assert response.status_code == 200
+    response = await client.put(f"{group_url}/members/alice", headers=admin_headers)
+    assert response.status_code == 200
+    headers = root_headers() if delete_headers == "root" else admin_headers
+
+    for params in ({}, {"force": "false"}):
+        response = await client.delete(group_url, params=params, headers=headers)
+        assert response.status_code == 412
+        assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
+        members = await client.get(f"{group_url}/members", headers=headers)
+        assert members.json()["result"]["members"] == ["alice"]
+
+    response = await client.delete(group_url, params={"force": "true"}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["result"] == {"deleted": True}
+    groups = await client.get(groups_url, headers=admin_headers)
+    assert groups.status_code == 200
+    assert groups.json()["result"] == []
+    users = await client.get(f"/api/v1/admin/accounts/{account_id}/users", headers=admin_headers)
+    assert [user["user_id"] for user in users.json()["result"]] == ["alice"]
+    manager = lightweight_admin_app.state.api_key_manager
+    assert await manager.get_user_group_ids(account_id, "alice") == ()
+
+
+async def test_force_delete_group_preserves_access_checks(
+    lightweight_admin_client, template_account
+):
+    account_id, admin_headers = template_account
+    client = lightweight_admin_client
+    groups_url = f"/api/v1/admin/accounts/{account_id}/groups"
+    group_url = f"{groups_url}/engineering"
+    response = await client.post(
+        groups_url, json={"group_id": "engineering"}, headers=admin_headers
+    )
+    assert response.status_code == 200
+    user = await client.post(
+        f"/api/v1/admin/accounts/{account_id}/users",
+        json={"user_id": "bob"},
+        headers=admin_headers,
+    )
+    user_headers = {"X-API-Key": user.json()["result"]["user_key"]}
+    other_account = await client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": _uid(), "admin_user_id": "owner"},
+        headers=root_headers(),
+    )
+    other_headers = {"X-API-Key": other_account.json()["result"]["user_key"]}
+
+    for headers, status_code in (({}, 401), (user_headers, 403), (other_headers, 403)):
+        response = await client.delete(group_url, params={"force": "true"}, headers=headers)
+        assert response.status_code == status_code
+    groups = await client.get(groups_url, headers=admin_headers)
+    assert groups.json()["result"] == [{"group_id": "engineering", "member_count": 0}]
+
+
+@pytest.mark.parametrize("params", [{}, {"force": "true"}])
+async def test_delete_empty_group_and_missing_group(
+    lightweight_admin_client, template_account, params
+):
+    account_id, headers = template_account
+    client = lightweight_admin_client
+    groups_url = f"/api/v1/admin/accounts/{account_id}/groups"
+    response = await client.post(groups_url, json={"group_id": "engineering"}, headers=headers)
+    assert response.status_code == 200
+    group_url = f"{groups_url}/engineering"
+    response = await client.delete(group_url, params=params, headers=headers)
+    assert response.status_code == 200
+    response = await client.delete(group_url, params=params, headers=headers)
+    assert response.status_code == 404
+
+
 async def test_studio_file_configuration_permissions_revision_and_overrides(
     lightweight_admin_client,
     lightweight_admin_app,

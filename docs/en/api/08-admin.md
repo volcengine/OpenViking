@@ -59,13 +59,13 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
 
-The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. By default, a group must be empty before deletion. Passing `force=true` deletes a non-empty group and all its memberships without deleting users or rewriting resource ACL or context records.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"group_id":"engineering"}` |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group; optional query parameter `force=true` allows deleting a non-empty group (default: `false`) |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member idempotently; repeated calls return `added=true` |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
@@ -78,6 +78,8 @@ ov acl grant viking://resources/project-a \
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering
 ```
+
+To delete a group that still has members, use `ov --sudo admin delete-group acme engineering --force`, or call `DELETE /api/v1/admin/accounts/acme/groups/engineering?force=true`. The Python SDK equivalent is `admin_delete_group("acme", "engineering", force=True)`.
 
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 

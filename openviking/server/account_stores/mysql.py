@@ -1103,7 +1103,7 @@ class MySQLAccountStore(AccountStore):
             await session.delete(membership)
             return True
 
-    async def delete_group(self, account_id: str, group_id: str) -> None:
+    async def delete_group(self, account_id: str, group_id: str, force: bool = False) -> None:
         async with self._transaction() as session:
             account = await self._lock_account(session, account_id)
             self._require_active(account)
@@ -1118,7 +1118,7 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            if await session.scalar(
+            if not force and await session.scalar(
                 select(func.count())
                 .select_from(GroupMember)
                 .where(
@@ -1128,6 +1128,7 @@ class MySQLAccountStore(AccountStore):
                 )
             ):
                 raise FailedPreconditionError("Group must be empty before deletion")
+            # The membership foreign key cascades deletion without removing users.
             await session.delete(group)
 
     async def replace_active_user_api_key(

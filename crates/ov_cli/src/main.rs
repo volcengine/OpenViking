@@ -2190,12 +2190,15 @@ enum AdminCommands {
         #[arg(value_name = "user-id")]
         user_id: String,
     },
-    /// Delete an empty group
+    /// Delete a group (must be empty unless --force is set)
     DeleteGroup {
         #[arg(value_name = "account-id")]
         account_id: String,
         #[arg(value_name = "group-id")]
         group_id: String,
+        /// Remove memberships and delete the group even if it has members
+        #[arg(long)]
+        force: bool,
     },
     /// Remove a user from an account
     RemoveUser {
@@ -4039,6 +4042,31 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn admin_delete_group_force_is_opt_in() {
+        for force in [false, true] {
+            let mut args = vec!["ov", "admin", "delete-group", "acme", "engineering"];
+            if force {
+                args.push("--force");
+            }
+            let cli = Cli::try_parse_from(args).expect("delete-group should parse");
+            match cli.command {
+                Commands::Admin {
+                    action: AdminCommands::DeleteGroup {
+                        account_id,
+                        group_id,
+                        force: parsed_force,
+                    },
+                } => {
+                    assert_eq!(account_id, "acme");
+                    assert_eq!(group_id, "engineering");
+                    assert_eq!(parsed_force, force);
+                }
+                _ => panic!("expected admin delete-group"),
+            }
+        }
     }
 
     #[test]

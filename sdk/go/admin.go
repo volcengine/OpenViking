@@ -163,8 +163,17 @@ func (c *Client) AdminListGroups(ctx context.Context, accountID string) ([]any, 
 
 // AdminDeleteGroup deletes an empty group.
 func (c *Client) AdminDeleteGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	return c.AdminDeleteGroupWithOptions(ctx, accountID, groupID, nil)
+}
+
+// AdminDeleteGroupWithOptions deletes a group, optionally removing its memberships.
+func (c *Client) AdminDeleteGroupWithOptions(ctx context.Context, accountID, groupID string, opts *AdminDeleteGroupOptions) (map[string]any, error) {
+	query := url.Values{}
+	if opts != nil && opts.Force {
+		query.Set("force", "true")
+	}
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID), nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID), query, nil, &result)
 	return result, err
 }
 

@@ -104,6 +104,12 @@ type AdminRegenerateKeyOptions struct {
 	Seed *string
 }
 
+// AdminDeleteGroupOptions controls AdminDeleteGroupWithOptions.
+type AdminDeleteGroupOptions struct {
+	// Force removes the group's memberships so a non-empty group can be deleted.
+	Force bool
+}
+
 // ListSkillsOptions controls ListSkills.
 type ListSkillsOptions struct {
 	NodeLimit int
