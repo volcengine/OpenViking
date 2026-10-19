@@ -222,7 +222,7 @@ class SessionService:
         *,
         session_uri: Optional[str] = None,
     ) -> Session:
-        """Create a new session or load an existing one.
+        """Construct a Session handle without reading or creating persisted data.
 
         Args:
             session_id: Session ID, creates a new session (auto-generated ID) if None
@@ -317,24 +317,29 @@ class SessionService:
             self._record_lifecycle_metric("create", "error")
             raise
 
+    async def open(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
+        """Resolve a persisted Session without loading its messages or metadata.
+
+        Mutations load their state under their own lock. Archive and tool-result
+        readers only need a validated Session URI. Creation defaults live here
+        so those callers do not duplicate provisioning rules.
+        """
+        session = self.session(ctx, session_id)
+        if not await session.exists():
+            if not auto_create:
+                raise NotFoundError(session_id, "session")
+            session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
+            await session.ensure_exists()
+        return session
+
     async def get(
         self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
     ) -> Session:
-        """Get an existing session.
-
-        Args:
-            session_id: Session ID
-            ctx: Request context
-            auto_create: If True, create the session when it does not exist.
-                         Default is False (raise NotFoundError).
-        """
+        """Get a Session with its current messages and metadata loaded."""
         try:
-            session = self.session(ctx, session_id)
-            if not await session.exists():
-                if not auto_create:
-                    raise NotFoundError(session_id, "session")
-                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
-                await session.ensure_exists()
+            session = await self.open(session_id, ctx, auto_create=auto_create)
             await session.load()
             self._record_lifecycle_metric("get", "ok")
             return session
@@ -469,7 +474,7 @@ class SessionService:
             archive_uri, archived
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.open(session_id, ctx)
         commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
         optional_retention = {
             "enable_working_memory": enable_working_memory,
@@ -582,18 +587,17 @@ class SessionService:
         policy value of ``None`` disables automatic commits.
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.open(session_id, ctx)
         normalized_event_tags = (
             normalize_search_tags(event_tags, discard_invalid=True)
             if event_tags is not None
             else None
         )
-        if normalized_event_tags is not None or update_auto_commit_policy:
-            await session.update_config(
-                event_search_tags=normalized_event_tags,
-                auto_commit_policy=auto_commit_policy,
-                update_auto_commit_policy=update_auto_commit_policy,
-            )
+        await session.update_config(
+            event_search_tags=normalized_event_tags,
+            auto_commit_policy=auto_commit_policy,
+            update_auto_commit_policy=update_auto_commit_policy,
+        )
         return session
 
     async def maybe_schedule_auto_commit(
