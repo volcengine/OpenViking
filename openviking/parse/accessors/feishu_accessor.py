@@ -648,6 +648,7 @@ class FeishuAccessor(DataAccessor):
                     suffix=".md",
                     prefix="ov_feishu_",
                     delete=False,
+                    dir=get_parser_download_temp_dir(),
                     encoding="utf-8",
                 )
                 temp_file.write(markdown_content)
