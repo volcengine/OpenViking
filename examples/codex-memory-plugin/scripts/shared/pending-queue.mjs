@@ -231,10 +231,23 @@ export async function enqueue(type, sessionId, payload, options = {}) {
 }
 
 /**
- * List all pending queue entries.
- * Returns array of { filename, entry } sorted by createdAt ascending.
+ * List pending queue entries sorted by createdAt ascending.
+ *
+ * Default returns only the replayable `.json` files, which is what a replayer
+ * wants. Callers asking "is anything for this session still undelivered?"
+ * (a commit gate, a doctor) must pass `includeProcessing: true`: a file claimed
+ * by a concurrent replayer is renamed to `.processing`, and treating that
+ * window as "queue empty" would let a commit archive across a message nobody
+ * has delivered yet. Those entries carry `processing: true` so the caller can
+ * tell the two apart; the flag is absent otherwise, keeping the shape of the
+ * common case unchanged.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.includeProcessing=false] - also return claimed
+ *   entries, marked with `processing: true`.
  */
-export async function listPending() {
+export async function listPending(options = {}) {
+  const includeProcessing = options.includeProcessing === true;
   const dir = getPendingDir();
   let files;
   try {
@@ -246,10 +259,12 @@ export async function listPending() {
 
   const entries = [];
   for (const f of files) {
-    if (!f.endsWith(".json")) continue;
+    const claimed = f.endsWith(".processing");
+    if (!claimed && !f.endsWith(".json")) continue;
+    if (claimed && !includeProcessing) continue;
     try {
       const entry = await readEntry(dir, f);
-      entries.push({ filename: f, entry });
+      entries.push(claimed ? { filename: f, entry, processing: true } : { filename: f, entry });
     } catch {
       // Corrupted file - skip.
     }
@@ -366,6 +381,26 @@ export async function cleanStale() {
  * healthy. Each run processes at most OPENVIKING_PENDING_REPLAY_LIMIT items so
  * a just-recovered server is not hit with an unbounded replay burst.
  *
+ * Every entry the run looked at is reported once in `results`, with an outcome
+ * that says what actually happened to it:
+ *
+ *   sent                  server accepted it; the file is gone
+ *   rejected              server refused it for a non-retryable reason; gone
+ *   failed                retryable failure; retry counted, or the claim was
+ *                         released when consumeRetries is false
+ *   deferred              untouched; `reason` is "limit" (over the per-run
+ *                         bound) or "ordering" (a later addMessage, parked
+ *                         behind one that just failed so the server sees them
+ *                         in order)
+ *   dropped-exhausted     retry budget already spent; removed without sending
+ *   dropped-unknown-type  type this replayer does not know; removed
+ *   skipped-claimed       another process holds the claim
+ *
+ * The four counters are derived from `results`, so an aggregate can never
+ * disagree with the per-entry detail. A host that needs to advance its own
+ * delivery cursor after a replay reads `results` rather than guessing from
+ * the counters: only `sent` means the server has the message.
+ *
  * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
  * @param {Function} log - logger function
  * @param {object} [options]
@@ -374,40 +409,57 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
- * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
+ * @param {boolean} [options.includePayload=false] - attach the delivered
+ *   `payload` to `sent` addMessage results. A host that must advance its own
+ *   delivery cursor needs the body that was accepted; it is opt-in because the
+ *   payload is transcript content and most callers only log the counters.
+ * @returns {{ replayed: number, failed: number, skipped: number, deferred: number,
+ *   cleaned: number, results: Array<{ filename: string, type: string, sessionId: string,
+ *   outcome: string, status?: number, retries?: number, reason?: string, payload?: object }> }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
+  const includePayload = options.includePayload === true;
   const pending = await listPending();
 
   if (pending.length === 0) {
-    return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
+    return { replayed: 0, failed: 0, skipped: 0, deferred: 0, cleaned: 0, results: [] };
   }
 
   const replayLimit = getReplayLimit();
   log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
 
-  let replayed = 0;
-  let failed = 0;
-  let skipped = 0;
-  let deferred = 0;
+  const results = [];
+  const record = (item, outcome, extra = {}) => {
+    results.push({
+      filename: item.filename,
+      type: item.entry.type,
+      sessionId: item.entry.sessionId,
+      outcome,
+      ...extra,
+    });
+  };
+
   let processed = 0;
 
-  for (const { filename, entry } of pending) {
+  for (let i = 0; i < pending.length; i += 1) {
+    const item = pending[i];
+    const { filename, entry } = item;
+
     if (processed >= replayLimit) {
-      deferred++;
+      record(item, "deferred", { reason: "limit" });
       continue;
     }
 
     if ((entry.retries || 0) >= getMaxRetries()) {
       await dequeue(filename);
-      skipped++;
+      record(item, "dropped-exhausted");
       continue;
     }
 
     const claimedFilename = await claimForReplay(filename);
     if (!claimedFilename) {
-      skipped++;
+      record(item, "skipped-claimed");
       continue;
     }
     processed++;
@@ -427,7 +479,7 @@ export async function replayPending(fetchJSON, log, options = {}) {
         });
       } else {
         await dequeue(claimedFilename);
-        skipped++;
+        record(item, "dropped-unknown-type");
         continue;
       }
     } catch {
@@ -447,30 +499,50 @@ export async function replayPending(fetchJSON, log, options = {}) {
 
     if (res?.ok) {
       await dequeue(claimedFilename);
-      replayed++;
-    } else if (!isRetryableReplayFailure(res)) {
+      record(
+        item,
+        "sent",
+        includePayload && entry.type === "addMessage" ? { payload: entry.payload } : {},
+      );
+      continue;
+    }
+
+    if (!isRetryableReplayFailure(res)) {
       await dequeue(claimedFilename);
-      skipped++;
+      record(item, "rejected", { status: res?.result?.status || res?.status });
+      continue;
+    }
+
+    if (consumeRetries) {
+      await incrementRetry(claimedFilename, entry);
     } else {
-      if (consumeRetries) {
-        await incrementRetry(claimedFilename, entry);
-      } else {
-        const released = await releaseClaim(claimedFilename);
-        log("pending-queue", {
-          action: released ? "replay-deferred" : "release-failed",
-          sessionId: entry.sessionId,
-          type: entry.type,
-          status: res?.result?.status || res?.status,
-          retries: entry.retries || 0,
-        });
+      const released = await releaseClaim(claimedFilename);
+      log("pending-queue", {
+        action: released ? "replay-deferred" : "release-failed",
+        sessionId: entry.sessionId,
+        type: entry.type,
+        status: res?.result?.status || res?.status,
+        retries: entry.retries || 0,
+      });
+    }
+    record(item, "failed", { status: res?.result?.status || res?.status, retries: entry.retries || 0 });
+
+    // An addMessage that failed retryably keeps its successors parked: sending
+    // them now would reorder the transcript on the server.
+    if (entry.type === "addMessage") {
+      for (let j = i + 1; j < pending.length; j += 1) {
+        record(pending[j], "deferred", { reason: "ordering" });
       }
-      failed++;
-      if (entry.type === "addMessage") {
-        deferred += Math.max(0, pending.length - processed);
-        break;
-      }
+      break;
     }
   }
+
+  const count = (outcome) => results.filter((item) => item.outcome === outcome).length;
+  const replayed = count("sent");
+  const failed = count("failed");
+  const deferred = count("deferred");
+  const skipped =
+    count("rejected") + count("dropped-exhausted") + count("dropped-unknown-type") + count("skipped-claimed");
 
   const cleaned = await cleanStale();
 
@@ -483,5 +555,5 @@ export async function replayPending(fetchJSON, log, options = {}) {
     cleaned,
   });
 
-  return { replayed, failed, skipped, deferred };
+  return { replayed, failed, skipped, deferred, cleaned, results };
 }

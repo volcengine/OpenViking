@@ -1,5 +1,5 @@
 // GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -110,32 +110,93 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function withAgentHookLock(clientId, nativeSessionId, callback) {
-  const file = statePath(clientId, nativeSessionId);
-  const lock = `${file}.lock`;
-  await mkdir(dirname(file), { recursive: true, mode: STATE_DIR_MODE });
-  const deadline = Date.now() + 5000;
+const LOCK_OWNER_FILE = "owner";
+
+/**
+ * Clear a lock whose holder looks dead, without letting two waiters both clear
+ * one. Only one process can win the rename, and the loser leaves whatever the
+ * winner created alone. Clearing by `rm` instead would let both delete the
+ * directory a third waiter has just created and stamped.
+ *
+ * Returns true when the caller should retry immediately.
+ */
+async function reclaimStaleLock(lockDir, staleMs, token) {
+  let ageMs;
+  try {
+    ageMs = Date.now() - (await stat(lockDir)).mtimeMs;
+  } catch {
+    // Released between the failed mkdir and this stat: retry immediately.
+    return true;
+  }
+  if (ageMs <= staleMs) return false;
+
+  const retired = `${lockDir}.stale-${token}`;
+  try {
+    await rename(lockDir, retired);
+  } catch {
+    // Another waiter won the reclaim; wait for the lock it is about to take.
+    return false;
+  }
+  await rm(retired, { recursive: true, force: true }).catch(() => {});
+  return true;
+}
+
+/** Remove the lock only while this process still owns it. */
+async function releaseOwnedLock(lockDir, token) {
+  try {
+    if ((await readFile(join(lockDir, LOCK_OWNER_FILE), "utf-8")).trim() !== token) return false;
+  } catch {
+    return false;
+  }
+  try {
+    await rm(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run `callback` while holding an exclusive directory lock.
+ *
+ * `mkdir` is atomic everywhere we run, so the directory is the lock. The holder
+ * stamps an `owner` file inside it and only ever releases a lock that still
+ * carries its own stamp: a holder whose lock was reclaimed as stale must not
+ * delete the lock a newer holder is using. A lock whose directory is older than
+ * `staleMs` is abandoned, so a killed holder cannot wedge a session forever.
+ *
+ * `lockDir` is explicit because a host that keeps its own state layout still
+ * wants this algorithm rather than a second copy of it.
+ *
+ * @returns the callback's value, or `null` when the lock was never acquired.
+ */
+export async function withDirLock(lockDir, callback, { waitMs = 5000, staleMs = 60_000, pollMs = 50 } = {}) {
+  await mkdir(dirname(lockDir), { recursive: true, mode: STATE_DIR_MODE });
+  const deadline = Date.now() + Math.max(0, Number(waitMs) || 0);
+  const token = `${process.pid}-${randomUUID()}`;
+
   while (true) {
     try {
-      await mkdir(lock, { mode: STATE_DIR_MODE });
+      await mkdir(lockDir, { mode: STATE_DIR_MODE });
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - (await stat(lock)).mtimeMs > 60_000) {
-          await rm(lock, { recursive: true, force: true });
-          continue;
-        }
-      } catch {}
+      if (await reclaimStaleLock(lockDir, staleMs, token)) continue;
       if (Date.now() >= deadline) return null;
-      await sleep(50);
+      await sleep(pollMs);
     }
   }
+
   try {
+    await writeFile(join(lockDir, LOCK_OWNER_FILE), token, { flag: "wx" });
     return await callback();
   } finally {
-    await rm(lock, { recursive: true, force: true }).catch(() => {});
+    await releaseOwnedLock(lockDir, token);
   }
+}
+
+export async function withAgentHookLock(clientId, nativeSessionId, callback, options = {}) {
+  return withDirLock(`${statePath(clientId, nativeSessionId)}.lock`, callback, options);
 }
 
 export async function readHookState(clientId, nativeSessionId) {
@@ -265,8 +326,8 @@ export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget =
   return result.ok ? result.result : null;
 }
 
-export async function replayAgentPending(fetchJSON, log = () => {}) {
-  return replayPending(fetchJSON, log);
+export async function replayAgentPending(fetchJSON, log = () => {}, options = {}) {
+  return replayPending(fetchJSON, log, options);
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {

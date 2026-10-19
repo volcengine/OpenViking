@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,7 +15,113 @@ import {
   makeAgentFetchJSON,
   resolveNativeSessionId,
   runHookStage,
+  withDirLock,
 } from "./lib/agent-hook-runtime.mjs";
+
+test("a dir lock is released after the callback and reports a missed wait as null", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ov-dir-lock-"));
+  const lockDir = join(root, "session.lock");
+  try {
+    assert.equal(await withDirLock(lockDir, async () => "ran"), "ran");
+    assert.equal(await withDirLock(lockDir, async () => 2), 2);
+
+    let release;
+    let started;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const ready = new Promise((resolve) => { started = resolve; });
+    const holder = withDirLock(lockDir, async () => {
+      started();
+      await gate;
+      return "held";
+    });
+    await ready;
+    // waitMs: 0 is a try-lock: the caller must be told, not left running
+    // unserialized beside the holder.
+    assert.equal(await withDirLock(lockDir, async () => "second", { waitMs: 0 }), null);
+    release();
+    assert.equal(await holder, "held");
+    assert.throws(() => statSync(lockDir));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a stale holder cannot release the lock a newer owner holds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ov-dir-lock-race-"));
+  const lockDir = join(root, "session.lock");
+  try {
+    let releaseA;
+    let releaseB;
+    let startedA;
+    let startedB;
+    const gateA = new Promise((resolve) => { releaseA = resolve; });
+    const gateB = new Promise((resolve) => { releaseB = resolve; });
+    const readyA = new Promise((resolve) => { startedA = resolve; });
+    const readyB = new Promise((resolve) => { startedB = resolve; });
+
+    const holderA = withDirLock(lockDir, async () => {
+      startedA();
+      await gateA;
+      return "a";
+    });
+    await readyA;
+
+    // Age the lock past the stale window so B reclaims it while A is inside.
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lockDir, old, old);
+
+    const holderB = withDirLock(lockDir, async () => {
+      startedB();
+      await gateB;
+      return "b";
+    });
+    await readyB;
+
+    releaseA();
+    assert.equal(await holderA, "a");
+    // A finished late; the lock now belongs to B and must survive.
+    assert.equal(statSync(lockDir).isDirectory(), true);
+
+    releaseB();
+    assert.equal(await holderB, "b");
+    assert.throws(() => statSync(lockDir));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("two waiters reclaiming the same stale lock never both enter", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ov-dir-lock-double-"));
+  const lockDir = join(root, "session.lock");
+  try {
+    mkdirSync(lockDir, { recursive: true });
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lockDir, old, old);
+
+    let inside = 0;
+    let peak = 0;
+    const enter = async (value) => {
+      inside += 1;
+      peak = Math.max(peak, inside);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inside -= 1;
+      return value;
+    };
+
+    const results = await Promise.all([
+      withDirLock(lockDir, () => enter("b")),
+      withDirLock(lockDir, () => enter("c")),
+    ]);
+
+    assert.deepEqual(results.sort(), ["b", "c"]);
+    // The loser of the reclaim must not delete the winner's fresh lock and then
+    // take it too; that would put two holders in the critical section.
+    assert.equal(peak, 1);
+    assert.throws(() => statSync(lockDir));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("disabled Claude Code and Codex hooks make no requests or session writes", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "ov-disabled-hooks-"));
