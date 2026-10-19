@@ -29,8 +29,6 @@ import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mc
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { buildMcpConfig as dshMcpConfig } from "../dsh-memory-plugin/mcp-env.mjs";
 import { readProxyConfig as dshProxy } from "../dsh-memory-plugin/servers/mcp-proxy.mjs";
-import { loadConfig as loadKimicode } from "../kimi-code-memory-plugin/scripts/config.mjs";
-import { readProxyConfig as kimicodeProxy } from "../kimi-code-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { readProxyConfig as opencodeProxy } from "../opencode-plugin/servers/mcp-proxy.mjs";
 
@@ -91,16 +89,6 @@ const HARNESSES = [
     section: "dsh",
     hook: ({ env, cwd, host }) => loadDsh({ workspacePeer: false, ...host }, env, cwd),
     proxy: ({ env, hook, otherDir }) => dshProxy({ ...dshInherited(env), ...dshMcpConfig(hook).env }, otherDir),
-  },
-  // Kimi spawns stdio MCP children with mergeStdioEnv(): the full parent
-  // environment overlaid with the manifest's env entries
-  // (agent-core-v2/src/mcpCore/client-stdio.ts), so nothing is filtered.
-  {
-    name: "kimicode",
-    dir: "kimi-code-memory-plugin",
-    section: "kimicode",
-    hook: ({ env, cwd }) => loadKimicode(cwd, { env }),
-    proxy: ({ env }) => kimicodeProxy(env),
   },
 ];
 

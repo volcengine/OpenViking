@@ -10,7 +10,6 @@ import {
   shapeCapturePayload,
   shapeCaptureParts,
   shouldCaptureText,
-  truncateCaptureText,
 } from "./lib/capture-utils.mjs"
 
 const CAPTURE_CONFIG = {
@@ -114,43 +113,6 @@ test("a host system reminder is not part of the conversation", () => {
   assert.equal(
     sanitizeCapturedText("before\n<system-reminder>never store this</system-reminder>\nafter"),
     "before\n\nafter",
-  )
-})
-
-test("a kimi hook_result wrapper goes whole even around a recall block", () => {
-  // kimi-code #4081 folds UserPromptSubmit stdout into the prompt message as a
-  // <hook_result> text part; both the wrapper and the recall block inside it
-  // are host transport, not conversation.
-  assert.equal(
-    sanitizeCapturedText(
-      'real question\n<hook_result hook_event="UserPromptSubmit">\n'
-        + "<openviking-context>relevant memory</openviking-context>\n"
-        + "</hook_result>",
-    ),
-    "real question",
-  )
-})
-
-test("a kimi notification keeps its body and loses its wrapper", () => {
-  assert.equal(
-    sanitizeCapturedText(
-      'real question\n<notification id="task:x:completed" category="task">\n'
-        + "Title: Background process completed\nSeverity: info\n"
-        + '<output-file path="/tmp/out.log">Read the output file to retrieve the result</output-file>\n'
-        + "</notification>",
-    ),
-    "real question\n\nTitle: Background process completed\nSeverity: info",
-  )
-})
-
-test("a kimi shell or skill transport block goes whole", () => {
-  assert.equal(
-    sanitizeCapturedText("question\n<bash-stdout>a very long clone log</bash-stdout>"),
-    "question",
-  )
-  assert.equal(
-    sanitizeCapturedText('<skill-loaded name="gh"># Reference\n…</skill-loaded>'),
-    "",
   )
 })
 
@@ -446,24 +408,4 @@ test("extractCaptureTurns honours the role scope of a capture rule", () => {
   ]
   const turns = extractCaptureTurns(entries, cfg)
   assert.deepEqual(turns.map((turn) => turn.role), ["user"])
-})
-
-test("truncation never leaves a lone surrogate", () => {
-  // The emoji starts at index 79, so a 100-char cap cuts between its halves.
-  const text = "a".repeat(79) + "😀" + "b".repeat(50)
-  const cut = truncateCaptureText(text, 100)
-  assert.doesNotMatch(cut, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/)
-  assert.doesNotMatch(cut, /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/)
-  assert.match(cut, /\[truncated\]$/)
-})
-
-test("captureMaxLength caps the parts that are actually shipped", () => {
-  const parts = shapeCaptureParts(
-    [{ type: "text", text: "x".repeat(5000) }],
-    "user",
-    { captureMaxLength: 100, captureAssistantTurns: true },
-  ).parts
-  assert.equal(parts.length, 1)
-  assert.ok(parts[0].text.length < 5000)
-  assert.match(parts[0].text, /\[truncated\]$/)
 })

@@ -34,11 +34,6 @@ export const TARGETS = [
     committed: true,
   },
   {
-    root: join(ROOT, "examples", "kimi-code-memory-plugin"),
-    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "scripts", "shared"),
-    committed: true,
-  },
-  {
     root: join(ROOT, "agent-plugins"),
     dir: join(ROOT, "agent-plugins", "servers", "shared"),
     committed: true,
@@ -98,11 +93,6 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
-    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
     dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
     committed: true,
   },
@@ -132,11 +122,6 @@ export const SKILL_TARGETS = [
   {
     skill: "openviking-skills",
     dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "skills"),
     committed: true,
   },
   {
@@ -176,11 +161,6 @@ export const SKILL_TARGETS = [
   {
     skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "kimi-code-memory-plugin", "skills"),
     committed: true,
   },
   {

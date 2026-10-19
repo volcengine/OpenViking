@@ -19,7 +19,6 @@ import {
   lintBaseUrl,
   lintServerConf,
   readyCheckState,
-  reportTimeouts,
   scanDebugLog,
   unknownOvcliKeys,
   whichCommand,
@@ -495,37 +494,4 @@ test("credentialSources ranks the identity the way the credential chain does", (
     assert.equal(envOnly.user, "(unset)");
     assert.equal(envOnly.apiKey, "(none — env mode reads no file)");
   });
-});
-
-test("reportTimeouts reads Kimi's flat hook manifest", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ov-doctor-kimi-"));
-  writeFileSync(join(dir, "kimi.plugin.json"), JSON.stringify({
-    hooks: [
-      { event: "UserPromptSubmit", command: "node ./scripts/auto-recall.mjs", timeout: 20 },
-      { event: "Stop", command: "node ./scripts/auto-capture.mjs stop", timeout: 30 },
-    ],
-  }));
-  const report = createReport();
-  reportTimeouts(report, { recallTimeoutMs: 120000, captureTimeoutMs: 30000 }, {
-    pluginRoot: dir,
-    launcherHint: "Kimi Code",
-    timeoutBudgets: { UserPromptSubmit: "recallTimeoutMs", Stop: "captureTimeoutMs" },
-  });
-  const titles = report.problems().map((p) => p.title);
-  assert.ok(titles.some((t) => t.includes("recall timeout 120000ms exceeds the UserPromptSubmit hook budget 20000ms")));
-  assert.equal(titles.some((t) => t.includes("capture timeout")), false);
-});
-
-test("reportTimeouts still reads the nested hook manifest", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ov-doctor-nested-"));
-  mkdirSync(join(dir, "hooks"));
-  writeFileSync(join(dir, "hooks", "hooks.json"), JSON.stringify({
-    hooks: { Stop: [{ hooks: [{ type: "command", command: "node hook.mjs", timeout: 30 }] }] },
-  }));
-  const report = createReport();
-  reportTimeouts(report, { captureTimeoutMs: 45000 }, {
-    pluginRoot: dir,
-    timeoutBudgets: { Stop: "captureTimeoutMs" },
-  });
-  assert.ok(report.problems().some((p) => p.title.includes("capture timeout 45000ms exceeds the Stop hook budget 30000ms")));
 });

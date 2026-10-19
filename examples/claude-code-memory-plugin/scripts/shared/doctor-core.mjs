@@ -1301,33 +1301,6 @@ export function reportPeer(report, cfg, { cwd = process.cwd() } = {}) {
 const TIMEOUT_LABELS = { timeoutMs: "request", recallTimeoutMs: "recall", captureTimeoutMs: "capture" };
 
 /**
- * Hook budgets come in two manifest shapes: Claude Code nests them as
- * `hooks[event][0].hooks[0].timeout`, while Kimi declares a flat
- * `hooks: [{ event, timeout }]` array. Reading only the nested shape made the
- * budget check pass on the Kimi plugin without ever comparing a timeout.
- */
-function hookManifest(pluginRoot, hooksTemplate) {
-  const candidates = hooksTemplate
-    ? [hooksTemplate]
-    : [join(pluginRoot, "hooks", "hooks.json"), join(pluginRoot, "kimi.plugin.json")];
-  for (const file of candidates) {
-    const parsed = tryJson(file);
-    if (parsed && parsed.hooks) return parsed;
-  }
-  return null;
-}
-
-function hookBudgetMs(manifest, event) {
-  const hooks = manifest?.hooks;
-  if (Array.isArray(hooks)) {
-    const entry = hooks.find((item) => item?.event === event);
-    return Number(entry?.timeout) * 1000 || 0;
-  }
-  const entry = hooks?.[event]?.[0];
-  return Number(entry?.hooks?.[0]?.timeout ?? entry?.timeout) * 1000 || 0;
-}
-
-/**
  * The timeouts line and the hook-budget check. `timeoutBudgets` maps a hook
  * event to the knob that governs the request inside it, so each harness names
  * the knob its own recall and capture paths actually read — a request that
@@ -1340,9 +1313,10 @@ export function reportTimeouts(report, cfg, { pluginRoot = "", hooksTemplate = "
   const knobs = [...new Set(["timeoutMs", ...Object.values(timeoutBudgets)])];
   report.info(`timeouts ${knobs.map((knob) => `${cfg[knob]}ms ${TIMEOUT_LABELS[knob] || knob}`).join(", ")}; recall limit ${cfg.recallLimit}, threshold ${cfg.scoreThreshold}`);
 
-  const manifest = hookManifest(pluginRoot, hooksTemplate);
+  const hooks = tryJson(hooksTemplate || join(pluginRoot, "hooks", "hooks.json"))?.hooks || {};
   for (const [event, knob] of Object.entries(timeoutBudgets)) {
-    const budget = hookBudgetMs(manifest, event);
+    const entry = hooks[event]?.[0];
+    const budget = Number(entry?.hooks?.[0]?.timeout ?? entry?.timeout) * 1000 || 0;
     if (!budget || !(cfg[knob] > budget)) continue;
     report.warn(`${TIMEOUT_LABELS[knob] || knob} timeout ${cfg[knob]}ms exceeds the ${event} hook budget ${budget}ms`,
       `${launcherHint} kills the hook before the request can finish`,
