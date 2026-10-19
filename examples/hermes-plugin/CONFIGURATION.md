@@ -150,10 +150,15 @@ page are handled like `401`/`403`, but only on a connection that carries gateway
 authenticating gateway sits in front of the endpoint. Cloudflare Access returns `302` with
 `Location: https://<team>.cloudflareaccess.com/cdn-cgi/access/login/<host>`, and such a
 connection's probe is retried once with **only those gateway headers** — no API key, no
-peer identity, since a gateway never asks for them. Without that retry a protected server
-looks "reachable but not OpenViking", the client is dropped, and memory stays unavailable
-even though every authenticated request would have worked. A `401`/`403` is the server
-itself asking for credentials, so that retry keeps sending the key, unchanged.
+peer identity, since a gateway never asks for them, and no API key is required for that
+retry either, because none is sent. If the gateway then lets the probe through to a server
+that asks for credentials itself, that `401`/`403` is answered by the ordinary key retry
+(bounded: two retries at most). Without that retry a protected server looks "reachable but
+not OpenViking", the client is dropped, and memory stays unavailable even though every
+authenticated request would have worked. A `401`/`403` reaching the probe directly is the
+server itself asking for credentials, so that retry keeps sending the key, unchanged. A
+redirect that survives the gateway retry reports the gateway and points at `extra_headers`
+instead of "not valid OpenViking", and the login URL is never followed.
 
 A redirect on a connection with *no* gateway headers is not retried: a `3xx` from an
 endpoint that has not been shown to be OpenViking is not authorization to resend the API
