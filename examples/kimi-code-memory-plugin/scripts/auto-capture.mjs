@@ -215,7 +215,10 @@ runHookStage(
       // entry for this session would be archived across. A skipped commit
       // keeps capturedSinceCommit, so a later event commits once the queue
       // drains (§5.5: commit must not cross unreplayed messages).
-      const pendingForSession = (await listPending())
+      // Claimed (`.processing`) entries count too: a message a concurrent
+      // replayer is sending right now is not delivered yet, so a commit here
+      // would archive across it.
+      const pendingForSession = (await listPending({ includeProcessing: true }))
         .filter(({ entry }) => entry?.sessionId === ovSessionId);
       const pendingCount = pendingForSession.length;
       const stranded = result.failed > 0 || result.queued > 0 || result.enqueueFailed > 0;

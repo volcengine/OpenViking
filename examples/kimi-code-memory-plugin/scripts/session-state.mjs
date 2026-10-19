@@ -19,22 +19,18 @@
  * State directory: $OPENVIKING_KIMICODE_STATE_DIR or ~/.openviking/kimicode-plugin-state
  */
 
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { withDirLock } from "./shared/agent-hook-runtime.mjs";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
 
 const DEFAULT_STATE_DIR = join(homedir(), ".openviking", "kimicode-plugin-state");
-const LOCK_OWNER_FILE = "owner";
 
-// Same acquisition contract as the shared withAgentHookLock
-// (memory-plugin-shared/lib/agent-hook-runtime.mjs): wait briefly, recover
-// stale holders, and report `null` instead of running unserialized when the
-// lock never comes — two concurrent hook processes must never share the
-// critical section, and must never delete a lock they did not take.
+// The lock's wait bound. The acquisition algorithm, the owner stamp and the
+// stale takeover are the shared withDirLock's — this plugin only owns where its
+// lock lives, because its state layout is its own.
 const LOCK_WAIT_MS = 5000;
-const LOCK_STALE_MS = 60_000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,75 +101,18 @@ export async function saveState(sessionId, value) {
  * Serialize writers for one session. Returns the callback's result, or `null`
  * when the lock could not be acquired within LOCK_WAIT_MS (the caller must
  * treat that as "skip this hook", not as success — the next event retries).
- * A holder that died without releasing is reclaimed after LOCK_STALE_MS.
+ * A holder that died without releasing is reclaimed after the shared lock's
+ * stale window; the algorithm, the owner stamp and the takeover all live in
+ * withDirLock so this plugin cannot drift from the other hosts.
  */
 export async function withSessionLock(sessionId, callback, { waitMs = LOCK_WAIT_MS } = {}) {
-  const dir = join(getStateDir(), `${safeId(sessionId)}.lock`);
   // The lock can be the first thing a fresh install touches: auto-recall
   // creates the state directory through loadState, but a short first prompt,
   // or auto-recall disabled, reaches capture before that ever runs.
   await mkdir(getStateDir(), { recursive: true });
-  const deadline = Date.now() + Math.max(0, Math.min(Number(waitMs) || 0, LOCK_WAIT_MS));
-  const token = `${process.pid}-${randomUUID()}`;
-  let acquired = false;
-  while (true) {
-    try {
-      await mkdir(dir, { recursive: false });
-      acquired = true;
-      break;
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      let reclaimed = false;
-      try {
-        if (Date.now() - (await stat(dir)).mtimeMs > LOCK_STALE_MS) {
-          reclaimed = await reclaimStaleLock(dir, token);
-        }
-      } catch {}
-      if (reclaimed) continue;
-      if (Date.now() >= deadline) return null;
-      await sleep(50);
-    }
-  }
-  try {
-    // A stale reclaim can hand this directory to a new owner while the old
-    // holder is still inside its callback. The token is what lets that holder
-    // tell "my lock" from "someone else's" when it finally releases.
-    await writeFile(join(dir, LOCK_OWNER_FILE), token, { flag: "wx" });
-    return await callback();
-  } finally {
-    if (acquired) await releaseOwnedLock(dir, token);
-  }
-}
-
-/**
- * Take a stale lock out of the way without letting two waiters both wipe the
- * same fresh lock: only one process can win the rename, and the loser leaves
- * whatever the winner created alone.
- */
-async function reclaimStaleLock(dir, token) {
-  const retired = `${dir}.stale-${token}`;
-  try {
-    await rename(dir, retired);
-  } catch {
-    return false;
-  }
-  await rm(retired, { recursive: true, force: true }).catch(() => {});
-  return true;
-}
-
-/** Remove the lock only when this process still owns it. */
-async function releaseOwnedLock(dir, token) {
-  try {
-    if ((await readFile(join(dir, LOCK_OWNER_FILE), "utf-8")).trim() !== token) return false;
-  } catch {
-    return false;
-  }
-  try {
-    await rm(dir, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
+  return withDirLock(join(getStateDir(), `${safeId(sessionId)}.lock`), callback, {
+    waitMs: Math.max(0, Math.min(Number(waitMs) || 0, LOCK_WAIT_MS)),
+  });
 }
 
 function profileMarkerPath(sessionId) {

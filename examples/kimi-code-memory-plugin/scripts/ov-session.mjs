@@ -180,6 +180,44 @@ export async function sendPlannedCapture(fetchJSON, ovSessionId, plan, { peerId 
 }
 
 /**
+ * Ack keys a delivered payload produces, rebuilt from the body the server
+ * accepted. The queue stores only that body, so the keys have to be derived the
+ * way `planCapture` derives them: `turnId:role` for a text turn, one key per
+ * tool part otherwise, and a content hash when the entry carries no turn id.
+ *
+ * A colliding second occurrence gets a `#<identity>` suffix in `planCapture`,
+ * where the identity hashes the turn's text. A tool payload does not carry that
+ * text, so those keys are acknowledged in their bare form only: a colliding tool
+ * turn is re-sent rather than silently retired, which is the duplicate-over-loss
+ * policy DESIGN.md §Replay states.
+ */
+export function ackKeysForDeliveredPayload(payload) {
+  const role = payload?.role;
+  if (!role) return [];
+  const turnId = payload?.turn_id != null ? String(payload.turn_id) : "";
+  const content = typeof payload?.content === "string" ? payload.content : "";
+  const toolParts = (Array.isArray(payload?.parts) ? payload.parts : []).filter(
+    (part) => part?.type === "tool",
+  );
+
+  let baseKeys;
+  if (toolParts.length) {
+    baseKeys = toolParts.map((part) => {
+      const kind = part.tool_input !== undefined ? "call" : "result";
+      return `${turnId || "?"}:${role}:${part.tool_id || "?"}:${kind}`;
+    });
+  } else if (turnId) {
+    baseKeys = [`${turnId}:${role}`];
+  } else {
+    baseKeys = [stableHash(role, content)];
+  }
+
+  if (toolParts.length) return baseKeys;
+  const identity = stableHash(role, content, "[]");
+  return [...baseKeys, ...baseKeys.map((key) => `${key}#${identity}`)];
+}
+
+/**
  * Commit policy (ported from the previous adapter's
  * shouldCommitKimicodeCapture): interrupt and session-end always commit what
  * the session accumulated, even when this run confirmed nothing — SessionEnd

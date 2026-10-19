@@ -10,12 +10,41 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  ackKeysForDeliveredPayload,
   buildMessagePayloads,
   planCapture,
   sendPlannedCapture,
   shouldCommit,
   turnDedupKey,
 } from "./ov-session.mjs";
+
+test("a delivered payload rebuilds the keys planCapture would have made", () => {
+  // Text turn: the bare key plus the collision suffix planCapture derives from
+  // the same role and text.
+  const text = { role: "assistant", content: "done", turn_id: "7" };
+  const [bare, suffixed] = ackKeysForDeliveredPayload(text);
+  assert.equal(bare, "7:assistant");
+  assert.match(suffixed, /^7:assistant#/);
+  const turn = { role: "assistant", text: "done", turnId: "7" };
+  const plannedSuffix = planCapture([turn, turn], new Set())[1].keys[0];
+  assert.equal(suffixed, plannedSuffix);
+
+  // Tool turn: one key per tool part, bare form only — the payload carries no
+  // turn text to hash.
+  const tool = {
+    role: "assistant",
+    turn_id: "7",
+    parts: [{ type: "tool", tool_id: "tc1", tool_input: { command: "ls" } }],
+  };
+  assert.deepEqual(ackKeysForDeliveredPayload(tool), ["7:assistant:tc1:call"]);
+
+  // No turn id: the same content hash turnDedupKey falls back to.
+  const anonymous = { role: "user", content: "no id" };
+  const [hashed] = ackKeysForDeliveredPayload(anonymous);
+  assert.equal(hashed, turnDedupKey({ role: "user", text: "no id" }));
+
+  assert.deepEqual(ackKeysForDeliveredPayload({ content: "no role" }), []);
+});
 
 test("dedup keys distinguish turns, roles and tool parts", () => {
   const textTurn = { role: "user", text: "hi", turnId: "0" };

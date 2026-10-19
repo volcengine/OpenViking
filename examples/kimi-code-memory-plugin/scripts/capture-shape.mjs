@@ -41,30 +41,20 @@ export function stripHostEnvelopes(text) {
  * The turn id is what makes the acknowledgement set stable across hooks, so it
  * is attached per entry rather than derived from the shaped output — the
  * extractor drops entries it cannot shape, and zipping by index would shift
- * every id after the first drop. When the two passes disagree the ids are left
- * off and the dedup keys fall back to the content hash.
+ * every id after the first drop. The extractor reports the source entry for
+ * each turn it produces (`onTurn`), which keeps the two in step in one pass.
  */
 export function shapeKimicodeTurns(entries, cfg = {}) {
-  const list = entries || [];
-  const turns = extractCaptureTurns(list, cfg);
+  const turnIds = [];
+  const turns = extractCaptureTurns(entries || [], cfg, {
+    onTurn: (_turn, entry) => turnIds.push(entry?.payload?.turn_id ?? null),
+  });
   if (turns.length === 0) return [];
 
   const maxLength = Number(cfg.captureMaxLength) || knobDefault(CAPTURE_MAX_LENGTH);
-  const turnIds = [];
-  for (const entry of list) {
-    const produced = extractCaptureTurns([entry], cfg).length;
-    for (let i = 0; i < produced; i += 1) turnIds.push(entry?.payload?.turn_id ?? null);
-  }
-  // The shared extractor drops entries it cannot shape, so the two passes are
-  // expected to agree; when they do not, the ids are dropped rather than
-  // guessed, and the caller sees why in the hook log.
-  const aligned = turnIds.length === turns.length;
-  if (!aligned) {
-    console.error(`capture-shape: turn id alignment lost (${turnIds.length} ids for ${turns.length} turns)`);
-  }
 
   return turns.map((turn, index) => {
-    const turnId = aligned ? turnIds[index] : null;
+    const turnId = turnIds[index];
     const shaped = {
       role: turn.role,
       text: truncateCaptureText(stripHostEnvelopes(turn.text), maxLength),

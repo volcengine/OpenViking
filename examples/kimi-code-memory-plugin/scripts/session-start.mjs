@@ -23,7 +23,8 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { boundFetch, createRemainingMs } from "./hook-budget.mjs";
-import { deriveOvSessionId } from "./session-state.mjs";
+import { ackKeysForDeliveredPayload } from "./ov-session.mjs";
+import { deriveOvSessionId, loadState, saveState, withSessionLock } from "./session-state.mjs";
 import { replayAgentPending, runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 
@@ -46,17 +47,70 @@ let cfg;
 let fetchJSON;
 
 /**
+ * A replayed message reached the server, but it was the queue — not the ack set
+ * — that was holding it, so nothing in the capture state knows it arrived.
+ * Without this the next Stop plans the same turn again and the server, which
+ * has no turn-id idempotency, stores it twice. Only `sent` counts: `rejected`
+ * was refused outright and `failed`/`deferred` never arrived.
+ *
+ * The cursor's `lastTurnId` is deliberately left alone. Advancing it here would
+ * anchor the next decode past turns this hook cannot see; acking the keys is
+ * enough for the next decode to recognise them and advance the cursor itself.
+ */
+async function recordReplayedDeliveries(results, kimiSessionId) {
+  const ovSessionId = deriveOvSessionId(kimiSessionId);
+  const keys = [];
+  for (const item of results || []) {
+    if (item?.outcome !== "sent" || item?.type !== "addMessage") continue;
+    // The queue is shared by every session; another session's delivery must
+    // never move this session's cursor.
+    if (item.sessionId !== ovSessionId) continue;
+    keys.push(...ackKeysForDeliveredPayload(item.payload));
+  }
+  if (keys.length === 0) return;
+
+  const acknowledged = await withSessionLock(
+    kimiSessionId,
+    async () => {
+      const state = await loadState(kimiSessionId, (reason) => logError("state", reason));
+      const acked = new Set(state.capturedTurnIds || []);
+      const before = acked.size;
+      for (const key of keys) acked.add(key);
+      if (acked.size === before) return 0;
+      state.capturedTurnIds = [...acked];
+      await saveState(kimiSessionId, state);
+      return keys.length;
+    },
+    { waitMs: remainingMs() },
+  );
+
+  if (acknowledged === null) {
+    logError("pending-replay-ack", "state lock timeout; the replayed turns stay unacknowledged");
+    return;
+  }
+  log("pending-replay-ack", { sessionId: kimiSessionId, acknowledged });
+}
+
+/**
  * Drain writes an earlier hook queued while the server was unreachable.
  * SessionStart runs after a known-healthy check, so it is where the queue
  * gets its chance. A bypassed directory still replays: the entries were
  * recorded by sessions that were not bypassed.
  */
-async function replayPendingWrites() {
+async function replayPendingWrites(kimiSessionId) {
   try {
-    const result = await replayAgentPending(fetchJSON, log);
+    const result = await replayAgentPending(fetchJSON, log, { includePayload: true });
     if (result.replayed > 0 || result.failed > 0 || result.deferred > 0) {
-      log("pending-replay", result);
+      // The counters only: `results` carries transcript bodies.
+      log("pending-replay", {
+        replayed: result.replayed,
+        failed: result.failed,
+        skipped: result.skipped,
+        deferred: result.deferred,
+        cleaned: result.cleaned,
+      });
     }
+    if (kimiSessionId) await recordReplayedDeliveries(result.results, kimiSessionId);
   } catch (error) {
     logError("pending-replay", error?.message || String(error));
   }
@@ -87,7 +141,7 @@ runHookStage(
       return;
     }
 
-    await replayPendingWrites();
+    await replayPendingWrites(stage.sessionId);
   },
 ).catch((error) => {
   logError("session-start", error?.message || String(error));

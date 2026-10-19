@@ -22,6 +22,26 @@ test("the wire's turn id survives shaping", () => {
   assert.deepEqual(turns.map((turn) => turn.turnId), ["7", "7"]);
 });
 
+test("a dropped entry does not shift the turn ids that follow it", () => {
+  const turns = shapeKimicodeTurns(
+    [
+      entry("first", "1"),
+      // No recognisable role: the extractor drops it. The ids must come from
+      // each turn's own entry, not from its position in the transcript.
+      { type: "response_item", payload: { type: "noise" } },
+      entry("second", "2"),
+    ],
+    { captureAssistantTurns: true },
+  );
+  assert.deepEqual(turns.map((turn) => turn.turnId), ["1", "2"]);
+});
+
+test("a turn with no turn id on the wire is shaped without one", () => {
+  const turns = shapeKimicodeTurns([entry("hello", null)], { captureAssistantTurns: true });
+  assert.equal(turns.length, 1);
+  assert.equal("turnId" in turns[0], false);
+});
+
 test("host transport wrappers are dropped, a notification body is kept", () => {
   const text = [
     "<hook_result hook_event=\"UserPromptSubmit\">recalled memory</hook_result>",

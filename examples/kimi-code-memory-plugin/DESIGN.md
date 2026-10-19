@@ -290,15 +290,21 @@ says what it does instead of implying exactly-once:
   the same reason: the ack set lives on disk, and a failed write never landed.
 - Losing the state file itself (corruption, a wiped state dir) resets both the
   cursor and the ack set; that run re-appends the active chain.
-- A message the SessionStart replay delivered is **not** acknowledged: the
-  shared replay reports counts, not per-entry results, so the plugin cannot
-  tell a delivered entry from one the server refused outright. The next capture
-  hook therefore re-plans that turn and sends it once more. Acknowledging it
-  would hide the refused case, which is the worse error; removing the duplicate
-  needs a per-entry result from the shared replay.
-- The commit gate counts parked files. A message another process is replaying
-  right now is renamed `.processing` and invisible to that count, so a commit
-  landing in that window can cross it. The window is one request long.
+- A message the SessionStart replay delivered **is** acknowledged. The shared
+  replay reports one result per entry, and each `sent` addMessage for this
+  session contributes the ack keys the delivery covers, rebuilt from the body
+  the server accepted (`ackKeysForDeliveredPayload`). Without that the next
+  capture hook re-plans the turn and the server, which has no turn-id
+  idempotency, stores it twice. Only `sent` counts: `rejected` was refused and
+  `failed`/`deferred` never arrived. The replay's own cursor (`lastTurnId`) is
+  left alone — anchoring it here would skip turns this hook never saw; the ack
+  keys are enough for the next decode to recognise them and advance it.
+  A colliding second occurrence of a *tool* turn keeps only its bare key,
+  because a tool payload does not carry the turn text the suffix hashes: that
+  turn is re-sent rather than silently retired.
+- The commit gate counts parked files, including the ones a concurrent replayer
+  has claimed (`.processing`). A claimed entry is on its way but not delivered,
+  so counting it is what keeps a commit from archiving across it.
 - Commit: only for a strand-free run — no `failed` payloads, nothing queued,
   and no older queue entry for the session. Then `interrupt`/`session-end`
   always, `pre-compact` unless `autoCommitOnCompact=false`, otherwise at
