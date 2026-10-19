@@ -86,7 +86,7 @@ const HARNESSES = [
     proxy: ({ env }) => agentHookProxy(env),
   },
   {
-    name: "kimicode",
+    name: "kimi-code-native",
     dir: "kimi-code-memory-plugin",
     section: "kimicode",
     hook: ({ env, cwd }) => loadKimicode(cwd, { env }),

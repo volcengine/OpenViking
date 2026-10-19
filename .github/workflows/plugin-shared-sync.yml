@@ -19,6 +19,7 @@ on:
       - "examples/claude-code-memory-plugin/**"
       - "examples/codex-memory-plugin/**"
       - "examples/openclaw-plugin/**"
+      - "examples/kimi-code-memory-plugin/**"
       - "agent-plugins/**"
   workflow_dispatch:
 
