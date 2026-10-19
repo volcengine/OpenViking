@@ -290,6 +290,15 @@ says what it does instead of implying exactly-once:
   the same reason: the ack set lives on disk, and a failed write never landed.
 - Losing the state file itself (corruption, a wiped state dir) resets both the
   cursor and the ack set; that run re-appends the active chain.
+- A message the SessionStart replay delivered is **not** acknowledged: the
+  shared replay reports counts, not per-entry results, so the plugin cannot
+  tell a delivered entry from one the server refused outright. The next capture
+  hook therefore re-plans that turn and sends it once more. Acknowledging it
+  would hide the refused case, which is the worse error; removing the duplicate
+  needs a per-entry result from the shared replay.
+- The commit gate counts parked files. A message another process is replaying
+  right now is renamed `.processing` and invisible to that count, so a commit
+  landing in that window can cross it. The window is one request long.
 - Commit: only for a strand-free run — no `failed` payloads, nothing queued,
   and no older queue entry for the session. Then `interrupt`/`session-end`
   always, `pre-compact` unless `autoCommitOnCompact=false`, otherwise at
