@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { getOvResult, ovClient, OvClientError } from '#/lib/ov-client'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 
@@ -65,8 +66,7 @@ export async function fetchCompileTasks(
   if (!Array.isArray(page.items))
     throw new OvClientError({
       code: 'PAGINATION_UNSUPPORTED',
-      message:
-        'The server does not support paginated tasks. Update OpenViking and retry.',
+      message: i18n.t('compile:errors.upgrade'),
     })
   return { ...page, items: page.items.map(normalizeCompileTask) }
 }

@@ -1,3 +1,5 @@
+import i18n from '#/i18n/core'
+
 export function asRecord(v: unknown): Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
     ? (v as Record<string, unknown>)
@@ -17,7 +19,7 @@ export function asString(v: unknown): string {
 }
 
 export function formatNumber(value: unknown): string {
-  return asNumber(value).toLocaleString()
+  return asNumber(value).toLocaleString(i18n.resolvedLanguage ?? i18n.language)
 }
 
 export function parseDateKey(value: string | undefined): Date {
@@ -32,6 +34,7 @@ export function getViewerTimezone(): string {
   // Falls back to UTC when Intl is unavailable or returns an empty string
   // (e.g. very old Safari, jest jsdom edge cases).
   try {
+    // eslint-disable-next-line studio-i18n/explicit-locale -- Read the browser timezone; no date is displayed.
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   } catch {
     return 'UTC'
@@ -73,7 +76,7 @@ export function formatShortDate(value: string): string {
   if (!value) return '--'
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(i18n.resolvedLanguage ?? i18n.language, {
     day: '2-digit',
     month: '2-digit',
   })

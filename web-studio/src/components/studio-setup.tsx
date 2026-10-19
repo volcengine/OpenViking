@@ -124,7 +124,7 @@ export function StudioSetup({
     ) {
       profiles.push({
         id: 'local-openviking',
-        name: 'Local OpenViking',
+        name: 'local-openviking',
         connection: {
           ...newConnectionDraft('opensource'),
           baseUrl: 'http://127.0.0.1:1933',
@@ -171,9 +171,16 @@ export function StudioSetup({
     Partial<Record<(typeof PROVIDERS)[number][0], string>>
   >({})
   const [verified, setVerified] = useState<ConnectionDraft | null>(null)
-  const providerConnections = savedConnections.filter(
-    (profile) => profile.connection.serviceSelection === draft.serviceSelection,
-  )
+  const providerConnections = savedConnections
+    .map((profile) =>
+      profile.id === 'local-openviking'
+        ? { ...profile, name: t('studio:localConnection') }
+        : profile,
+    )
+    .filter(
+      (profile) =>
+        profile.connection.serviceSelection === draft.serviceSelection,
+    )
   const selectedProfile = providerConnections.find(
     (profile) => profile.id === selectedConnectionId,
   )

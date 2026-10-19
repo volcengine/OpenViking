@@ -1,3 +1,4 @@
+import studioI18n from '#/i18n/core'
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -24,7 +25,12 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { getOvResult, getTaskByTaskId } from '#/lib/ov-client'
-import { formatTaskDuration, formatTaskProcessingDuration, formatTaskWaitingDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
+import {
+  formatTaskDuration,
+  formatTaskProcessingDuration,
+  formatTaskWaitingDuration,
+  getTaskDate,
+} from '#/routes/tasks/-lib/task-time'
 
 import {
   hasTaskResult,
@@ -51,7 +57,7 @@ async function fetchTask(taskId: string): Promise<TaskRecord> {
   )
   const task = normalizeTaskRecord(result)
   if (task) return task
-  throw new Error('Invalid task response')
+  throw new Error(studioI18n.t('studio:errors.invalidTaskResponse'))
 }
 
 export function TaskDetailSheet({
@@ -204,13 +210,19 @@ export function TaskDetailSheet({
                     <DetailField
                       icon={<TimerResetIcon />}
                       label={t('labels.processingDuration')}
-                      value={formatTaskProcessingDuration(task) ?? t('labels.timingUnavailable')}
+                      value={
+                        formatTaskProcessingDuration(task) ??
+                        t('labels.timingUnavailable')
+                      }
                       mono
                     />
                     <DetailField
                       icon={<TimerResetIcon />}
                       label={t('labels.waitingDuration')}
-                      value={formatTaskWaitingDuration(task) ?? t('labels.timingUnavailable')}
+                      value={
+                        formatTaskWaitingDuration(task) ??
+                        t('labels.timingUnavailable')
+                      }
                       mono
                     />
                     <DetailField
@@ -227,9 +239,7 @@ export function TaskDetailSheet({
                     const steps = getTaskPipelineSteps(task, t)
 
                     return (
-                      <DetailSection
-                        title={t('pipeline.steps')}
-                      >
+                      <DetailSection title={t('pipeline.steps')}>
                         <div className="rounded-xl border bg-muted/20 p-3 text-xs">
                           <div className="grid gap-1.5">
                             {steps.map((st, i) => {

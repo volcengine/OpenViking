@@ -1,4 +1,12 @@
-import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react'
+import { editorPhrases } from '#/i18n/editor-phrases'
+import { useTranslation } from 'react-i18next'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useImperativeHandle,
+  forwardRef,
+} from 'react'
 import { Compartment, EditorState } from '@codemirror/state'
 import {
   EditorView,
@@ -150,6 +158,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     },
     ref,
   ) {
+    const { t } = useTranslation('studio')
+    const phrases = useMemo(() => editorPhrases(t), [t])
+    const phrasesRef = useRef(phrases)
+    phrasesRef.current = phrases
+    const phrasesCompartment = useRef(new Compartment())
+    const attributesRef = useRef(ariaLabel)
+    attributesRef.current = ariaLabel
+    const attributesCompartment = useRef(new Compartment())
     const containerRef = useRef<HTMLDivElement>(null)
     const viewRef = useRef<EditorView | null>(null)
     const onChangeRef = useRef(onChange)
@@ -176,9 +192,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           drawSelection(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           history(),
-          EditorView.contentAttributes.of(
-            ariaLabel ? { 'aria-label': ariaLabel } : {},
-          ),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !syncingRef.current)
               onChangeRef.current?.(update.state.doc.toString())
@@ -255,6 +268,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         if (destroyed) return
 
         extensions.push(
+          phrasesCompartment.current.of(
+            EditorState.phrases.of(phrasesRef.current),
+          ),
+          attributesCompartment.current.of(
+            EditorView.contentAttributes.of(
+              attributesRef.current
+                ? { 'aria-label': attributesRef.current }
+                : {},
+            ),
+          ),
           accessRef.current.of(accessExtensions(readOnlyRef.current)),
         )
         const state = EditorState.create({
@@ -284,8 +307,25 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       isDark,
       lineWrapping,
       language,
-      ariaLabel,
     ])
+
+    useEffect(() => {
+      viewRef.current?.dispatch({
+        effects: attributesCompartment.current.reconfigure(
+          EditorView.contentAttributes.of(
+            ariaLabel ? { 'aria-label': ariaLabel } : {},
+          ),
+        ),
+      })
+    }, [ariaLabel])
+
+    useEffect(() => {
+      viewRef.current?.dispatch({
+        effects: phrasesCompartment.current.reconfigure(
+          EditorState.phrases.of(phrases),
+        ),
+      })
+    }, [phrases])
 
     useEffect(() => {
       const view = viewRef.current

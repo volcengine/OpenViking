@@ -1,3 +1,5 @@
+import { formatDateTime } from '#/i18n/format'
+import i18n from '#/i18n/core'
 import {
   isValidElement,
   useEffect,
@@ -481,7 +483,7 @@ function MarkdownImage({
         if (!alive) return
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
         created = URL.createObjectURL(blob)
         setObjectUrl(created)
@@ -1008,7 +1010,7 @@ function formatJsonlTime(value: string): string {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString([], {
+  return formatDateTime(date, {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
@@ -1529,7 +1531,7 @@ export function FilePreview({
 
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
 
         const nextUrl = URL.createObjectURL(blob)
@@ -1928,7 +1930,9 @@ export function FilePreview({
                     src={imageSrc}
                     alt={file.name}
                     className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-                    onError={() => setImageError('direct img failed')}
+                    onError={() =>
+                      setImageError(t('studio:errors.imageLoadFailed'))
+                    }
                   />
                   {imageError ? (
                     <div className="text-xs text-muted-foreground">

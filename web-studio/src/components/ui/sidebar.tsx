@@ -70,6 +70,7 @@ const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
+    // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
     throw new Error("useSidebar must be used within a SidebarProvider.")
   }
 

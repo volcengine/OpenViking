@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { getOvResult, isOvClientError, ovClient } from '#/lib/ov-client'
 
 import {
@@ -39,7 +40,8 @@ export async function fetchExperiences(options: {
         url: '/api/v1/fs/ls',
       }),
     )
-    if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+    if (!Array.isArray(result))
+      throw new Error(i18n.t('studio:errors.invalidDirectoryResponse'))
     return {
       items: normalizeExperienceFiles(result.slice(0, pageSize)),
       hasMore: result.length > pageSize,

@@ -45,6 +45,7 @@ vi.mock('#/lib/sessions/api', () => ({
   sendChatStream: m.stream,
   addMessage: vi.fn(),
   serializeParts: vi.fn(),
+  interruptChatSession: vi.fn().mockResolvedValue({ interrupted: false }),
 }))
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()

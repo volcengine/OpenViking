@@ -61,6 +61,7 @@ export function ModelConnectionTest({
     setTesting(true)
     setResult(null)
     const timer = setTimeout(() => {
+      // eslint-disable-next-line studio-i18n/no-literal-message -- TimeoutError is mapped to the translated connection-test summary below.
       controller.abort(new DOMException('Timed out', 'TimeoutError'))
     }, 30_000)
     try {

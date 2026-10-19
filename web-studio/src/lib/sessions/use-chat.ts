@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ChatStatus, StreamToolCall } from './types/chat'
@@ -367,12 +368,12 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       if (abortRef.current) {
         const activeController = abortRef.current
         if (activeConnectionRef.current !== connectionSnapshot) {
-          throw new Error('Active request belongs to a different connection')
+          throw new Error(i18n.t('studio:errors.connectionChanged'))
         }
         setError(undefined)
         const appendInput = appendInputRef.current
         if (!appendInput) {
-          throw new Error('Session has no active request to steer')
+          throw new Error(i18n.t('studio:errors.noActiveRequest'))
         }
         let resolveAccepted!: (accepted: boolean) => void
         const accepted = new Promise<boolean>((resolve) => {
@@ -381,7 +382,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         const appended = appendInput(userMsg, accepted)
         try {
           const result = await steerChatSession(sessionId, { message })
-          if (!result.accepted) throw new Error('Bot did not accept the input')
+          if (!result.accepted) throw new Error(i18n.t('studio:errors.inputRejected'))
           resolveAccepted(true)
           await appended
         } catch (err) {
