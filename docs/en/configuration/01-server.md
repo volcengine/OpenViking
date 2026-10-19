@@ -197,7 +197,7 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
       "mode": "agfs"
     }
   },
-  "parser": {
+  "parsers": {
     "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
@@ -222,7 +222,7 @@ The same worker must commit the required bytes to the formal resource tree befor
 enqueueing downstream work. Artifacts are temporary and are removed after the
 content commit; provision `local_root` with enough space for concurrent imports.
 
-### `parser`
+### `parsers`
 
 | Field | Type / common values | Default | Purpose |
 |---|---|---|---|

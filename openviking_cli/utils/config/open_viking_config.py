@@ -565,6 +565,8 @@ class OpenVikingConfig(BaseModel):
 
             # Handle parser configurations from nested "parsers" section
             parser_configs = {}
+            missing_parser_download_temp_dir = object()
+            parser_download_temp_dir = missing_parser_download_temp_dir
             if "parsers" in config_copy:
                 parser_configs = config_copy.pop("parsers")
                 if parser_configs is None:
@@ -578,9 +580,12 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
+                parser_download_temp_dir = parser_configs.pop(
+                    "download_temp_dir", missing_parser_download_temp_dir
+                )
                 warn_unknown_fields(
                     data=parser_configs,
-                    valid_fields=set(parser_types),
+                    valid_fields=set(parser_types) | {"download_temp_dir"},
                     path_prefix="parsers",
                     logger=_get_config_logger(),
                 )
@@ -619,6 +624,9 @@ class OpenVikingConfig(BaseModel):
             instance._check_expiry_backend()
 
             # Apply parser configurations
+            if parser_download_temp_dir is not missing_parser_download_temp_dir:
+                instance.parser = ParserRuntimeConfig(download_temp_dir=parser_download_temp_dir)
+
             for parser_type in parser_types:
                 if parser_type in parser_configs:
                     parser_data = parser_configs[parser_type]

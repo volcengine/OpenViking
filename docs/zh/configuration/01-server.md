@@ -197,7 +197,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
       "mode": "agfs"
     }
   },
-  "parser": {
+  "parsers": {
     "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
@@ -221,7 +221,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 必须在下游任务入队前把所需字节提交到正式资源树。产物会在内容提交后清理；
 请为 `local_root` 预留足够空间以容纳并发导入。
 
-### `parser`
+### `parsers`
 
 | 字段 | 类型 / 常用值 | 默认值 | 作用 |
 |---|---|---|---|
