@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, utimes } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -76,6 +76,37 @@ test("a stale holder cannot release the new owner's lock", async () => {
 
     releaseB();
     assert.equal(await holderB, "b");
+    await assert.rejects(stat(lockDir));
+  });
+});
+
+test("two waiters reclaiming the same stale lock never both enter", async () => {
+  await withStateDir(async () => {
+    const id = "kc-double-stale";
+    const lockDir = join(getStateDir(), `${safeId(id)}.lock`);
+    await mkdir(lockDir, { recursive: true });
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lockDir, old, old);
+
+    let inside = 0;
+    let peak = 0;
+    const enter = async (value) => {
+      inside += 1;
+      peak = Math.max(peak, inside);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inside -= 1;
+      return value;
+    };
+
+    const results = await Promise.all([
+      withSessionLock(id, () => enter("b")),
+      withSessionLock(id, () => enter("c")),
+    ]);
+
+    assert.deepEqual(results.sort(), ["b", "c"]);
+    // The loser of the reclaim must not delete the winner's fresh lock and then
+    // take it too; that would put two capture hooks in the critical section.
+    assert.equal(peak, 1);
     await assert.rejects(stat(lockDir));
   });
 });

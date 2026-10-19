@@ -129,40 +129,45 @@ export async function sendPlannedCapture(fetchJSON, ovSessionId, plan, { peerId 
     { peerId },
   );
   const keysByIndex = plan.map((item) => item.keys);
-  const indexByPayload = new Map(payloads.map((payload, index) => [payload, index]));
   const sentPayloads = [];
+  // The shared sender reports successes as a running count and stops at the
+  // first refusal, so `onSent(n)` always covers the next n payloads in plan
+  // order — the acknowledgement set can advance by that prefix.
+  let delivered = 0;
   const result = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
     enqueueOnRetryable: true,
-    onConfirmed: async (confirmed) => {
+    onSent: async (count) => {
+      const end = Math.min(delivered + Math.max(0, Number(count) || 0), payloads.length);
       const keys = [];
-      for (const payload of confirmed) {
-        const index = indexByPayload.get(payload);
-        if (index === undefined) continue;
-        keys.push(...keysByIndex[index]);
-        sentPayloads.push(payload);
+      for (let i = delivered; i < end; i += 1) {
+        keys.push(...keysByIndex[i]);
+        sentPayloads.push(payloads[i]);
       }
+      delivered = end;
       if (keys.length) {
         await onSent?.({ confirmed: keys, confirmedPayloads: sentPayloads.length });
       }
     },
   });
-  // Serial isolation means confirmations are no longer a prefix: sweep exactly
-  // the payloads the server accepted, never the ones it rejected.
+  // Sweep exactly the payloads the server accepted, never the ones still queued.
   await dropQueuedCopies(ovSessionId, sentPayloads);
   return result;
 }
 
 /**
  * Commit policy (ported from the previous adapter's
- * shouldCommitKimicodeCapture): interrupt and session-end always commit;
- * pre-compact commits unless autoCommitOnCompact is false; otherwise the
- * turn threshold decides.
+ * shouldCommitKimicodeCapture): interrupt and session-end always commit what
+ * the session accumulated, even when this run confirmed nothing — SessionEnd
+ * usually arrives after the last Stop already sent every turn. pre-compact
+ * commits unless autoCommitOnCompact is false; otherwise the turn threshold
+ * decides.
  */
 export function shouldCommit(event, cfg = {}, previousCaptured = 0, captured = 0) {
-  if (captured <= 0) return false;
+  const progress = Number(previousCaptured || 0) + Number(captured || 0);
+  if (progress <= 0) return false;
   if (event === "interrupt" || event === "session-end") return true;
   if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return Number(previousCaptured || 0) + captured >= Number(cfg.commitTurnThreshold || Infinity);
+  return progress >= Number(cfg.commitTurnThreshold || Infinity);
 }
 
 /**
@@ -173,6 +178,33 @@ export function shouldCommit(event, cfg = {}, previousCaptured = 0, captured = 0
  */
 export function advanceCapturedSinceCommit(previousCaptured, confirmedPayloads) {
   return Number(previousCaptured || 0) + Math.max(0, Number(confirmedPayloads) || 0);
+}
+
+/**
+ * The turn the next decode may skip past.
+ *
+ * `turnOrder` lists every turn the decoder closed, and `plan` holds only the
+ * entries this run still has to send, each with the ack keys it produces. A
+ * turn counts as captured only when every key its entries produced is in
+ * `acked`; the walk stops at the first turn that is not, so an unacknowledged
+ * payload is never skipped over (it would be neither acked nor decoded again).
+ * Turns with no entry were acknowledged by an earlier run and are passed.
+ */
+export function nextCursor(plan, acked, turnOrder) {
+  const keysByTurnId = new Map();
+  for (const item of plan || []) {
+    const turnId = String(item.turn.turnId ?? "");
+    const keys = keysByTurnId.get(turnId);
+    if (keys) keys.push(...item.keys);
+    else keysByTurnId.set(turnId, [...item.keys]);
+  }
+  let advanceTo = null;
+  for (const turnId of turnOrder || []) {
+    const keys = keysByTurnId.get(String(turnId));
+    if (keys && !keys.every((key) => acked.has(key))) break;
+    advanceTo = turnId;
+  }
+  return advanceTo;
 }
 
 /**

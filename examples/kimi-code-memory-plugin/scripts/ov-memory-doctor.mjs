@@ -43,8 +43,10 @@ const HOST = {
   pluginRoot: PLUGIN_ROOT,
   cliName: "kimi",
   launcherHint: "Kimi Code",
-  // Recall has a timeout of its own here, so it is the knob the prompt hook spends.
-  timeoutBudgets: { UserPromptSubmit: "recallTimeoutMs", Stop: "captureTimeoutMs" },
+  // Recall has a timeout of its own here, so it is the knob the prompt hook
+  // spends. Capture spends `timeoutMs`: nothing in this plugin reads
+  // `captureTimeoutMs`, and checking it would never fire.
+  timeoutBudgets: { UserPromptSubmit: "recallTimeoutMs", Stop: "timeoutMs" },
   loadConfig,
   checkInstall,
   checkConfig,
@@ -112,6 +114,39 @@ function checkInstall(report) {
   }
 }
 
+/**
+ * The manifest declares hooks as a flat array, which the shared budget check
+ * does not read. Comparing each hook's own timeout against the knob that
+ * governs it is the difference between "the doctor checked the budget" and
+ * "the doctor printed a line".
+ */
+const HOOK_BUDGET_KNOBS = [
+  // Capture clamps every request to what remains of its own budget, so only
+  // recall's knob can claim more time than its hook is given.
+  ["UserPromptSubmit", "recallTimeoutMs"],
+];
+
+function reportHookBudgets(report, cfg) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, "kimi.plugin.json"), "utf-8"));
+  } catch {
+    return;
+  }
+  const hooks = Array.isArray(manifest?.hooks) ? manifest.hooks : [];
+  for (const [event, knob] of HOOK_BUDGET_KNOBS) {
+    const hook = hooks.find((item) => item?.event === event);
+    const budgetMs = Number(hook?.timeout) * 1000 || 0;
+    const value = Number(cfg[knob]) || 0;
+    if (!budgetMs || !value || value <= budgetMs) continue;
+    report.warn(
+      `${knob} ${value}ms exceeds the ${event} hook budget ${budgetMs}ms`,
+      "the host kills the hook before the request can finish",
+      `lower ${knob} or raise the manifest timeout`,
+    );
+  }
+}
+
 function checkConfig(report, cfg, host) {
   report.section("Configuration");
   const { cliConf, ovConf } = inspectConfigFiles(report, host);
@@ -123,6 +158,7 @@ function checkConfig(report, cfg, host) {
   report.info(`credential source: ${cfg.credentialSource} (auth mode ${cfg.authMode}; identity headers ${cfg.sendIdentityHeaders ? "sent" : "not sent"})`);
   const peer = reportPeer(report, cfg);
   reportTimeouts(report, cfg, host);
+  reportHookBudgets(report, cfg);
   // Same source of truth as pending-queue.mjs: OPENVIKING_PENDING_REPLAY_LIMIT
   // wins; SessionStart otherwise defaults the env to 2 in code (the shared
   // fallback when no entry point sets it is 50).

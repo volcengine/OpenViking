@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   advanceCapturedSinceCommit,
   canCommitCapture,
+  nextCursor,
   shouldQueueSessionEndCommit,
 } from "./ov-session.mjs";
 
@@ -43,6 +44,48 @@ test("an older pending item blocks the commit", () => {
 
 test("nothing new never commits", () => {
   assert.equal(canCommitCapture({ ...clean, sent: 0 }, { ...opts, event: "session-end" }), false);
+});
+
+test("session-end commits progress an earlier stop left uncommitted", () => {
+  // The last Stop already sent every turn, so this run plans nothing; the
+  // session still has to be archived rather than waiting for a commit that
+  // will never come.
+  assert.equal(
+    canCommitCapture(
+      { sent: 0, failed: 0, queued: 0, enqueueFailed: 0 },
+      { ...opts, event: "session-end", previousCaptured: 5 },
+    ),
+    true,
+  );
+});
+
+test("a stopped cursor never skips a turn whose payload was not confirmed", () => {
+  const plan = [
+    { turn: { turnId: "0" }, keys: ["0:user", "0:assistant"] },
+    { turn: { turnId: "1" }, keys: ["1:user"] },
+  ];
+  const acked = new Set(["0:user", "0:assistant", "1:user"]);
+  assert.equal(nextCursor(plan, acked, ["0", "1", "2"]), "2");
+  acked.delete("1:user");
+  assert.equal(nextCursor(plan, acked, ["0", "1", "2"]), "0");
+});
+
+test("one unconfirmed entry holds the cursor for its whole turn", () => {
+  // Two entries share turn 3; a map keyed by turnId would keep only the last
+  // one's keys and let the cursor walk past the unconfirmed first entry.
+  const plan = [
+    { turn: { turnId: "3" }, keys: ["3:user"] },
+    { turn: { turnId: "3" }, keys: ["3:assistant:tc1:call"] },
+  ];
+  assert.equal(nextCursor(plan, new Set(["3:assistant:tc1:call"]), ["3"]), null);
+});
+
+test("a tool-only turn the run could not confirm holds the cursor", () => {
+  const plan = [
+    { turn: { turnId: "1" }, keys: ["1:assistant:tc1:call"] },
+    { turn: { turnId: "2" }, keys: ["2:user"] },
+  ];
+  assert.equal(nextCursor(plan, new Set(["2:user"]), ["1", "2"]), null);
 });
 
 test("session-end still respects stranded payloads", () => {

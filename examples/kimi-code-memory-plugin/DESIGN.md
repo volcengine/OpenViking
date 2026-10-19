@@ -14,20 +14,30 @@ the #2805 refactor of 2026-08-19) is unchanged from what the previous adapter
 verified, but the hook chain is NOT frozen — two behavior changes landed
 recently and are reflected in this plugin: **#4081** folds UserPromptSubmit
 hook output into the prompt message as a `<hook_result hook_event="...">`
-text part (the shared sanitizer strips the wrapper — verified in
-`capture-utils.test.mjs`), and **#4242** passes the agent cwd to agent-level
-hooks (irrelevant here: plugin hooks always run with cwd = plugin root).
+text part (the plugin's own `capture-shape.mjs` strips the wrapper — verified
+in `kimicode-transcript.test.mjs`), and **#4242** passes the agent cwd to
+agent-level hooks (irrelevant here: plugin hooks always run with cwd = plugin
+root).
 
 ## Form choice (spec §2.1)
 
 Kimi loads native plugins from its managed directory with a `kimi.plugin.json`
 manifest — the same shape as Claude Code and Codex. This plugin is therefore a
 standalone native plugin whose entries call the shared runtime
-(`scripts/shared/`, generated from `examples/memory-plugin-shared/lib/`). It
+(`scripts/shared/`, a copy of `examples/memory-plugin-shared/lib/`). It
 replaces the previous `agent-hook-plugin/hosts/kimicode/` adapter, which
 shoehorned a native-plugin host into the config-file dispatcher family and
 could not be installed on Windows (its `install.sh` gates on
 `uname -s` ∈ {Darwin, Linux}).
+
+The shared library is used unmodified: everything this host needs and the
+library does not provide — the wire's `turn_id` on shaped turns, the host's
+envelope rules, the `captureMaxLength` cap on shipped parts, prefix-based
+send confirmation, reserved-tag neutralisation for recalled text, and the
+flat-manifest hook-budget check — lives in `capture-shape.mjs`,
+`recall-sanitize.mjs`, `ov-session.mjs` and `ov-memory-doctor.mjs`. That is
+also why `sync.mjs` does not register this plugin: registering it would mean
+editing shared tooling, and the copies are kept byte-identical by hand.
 
 ## Contract
 
@@ -231,8 +241,9 @@ turn's memory and the loop feeds on itself.
 
 Kimi writes each call exactly once (verified: 205 calls / 205 unique
 toolCallIds, 0 duplicates — unlike Codex's multiple representations, so no
-dedup machinery is needed). The adapter normalizes to OpenAI-shaped entries and
-the shared extractor does the rest:
+dedup machinery is needed). The adapter normalizes to OpenAI-shaped entries,
+the shared extractor shapes them, and `capture-shape.mjs` adds this host's
+three rules on top (turn id, envelope stripping, length cap):
 
 ```
 tool.call   → { type: "function_call",       call_id, name, arguments }
@@ -257,7 +268,9 @@ tool.result → { type: "function_call_output", call_id, output, isError?, durat
   keyed by tool id; a second entry that would collide gets a `#n` suffix),
   advanced only on server confirmation; failures go to the pending queue with
   the cursor untouched. An index cursor was rejected because journal
-  truncation would drift it.
+  truncation would drift it. The shared sender reports successes as a running
+  count and stops at the first refusal, so the ack set advances by that
+  prefix; the cursor never steps over a turn whose payload was not confirmed.
 - Commit: only for a strand-free run — no `failed` payloads, nothing queued,
   and no older queue entry for the session. Then `interrupt`/`session-end`
   always, `pre-compact` unless `autoCommitOnCompact=false`, otherwise at
@@ -278,11 +291,13 @@ tool.result → { type: "function_call_output", call_id, output, isError?, durat
 
 ## Skills
 
-`skills/` holds three sync-generated copies (`SKILL_TARGETS` in
-`examples/memory-plugin-shared/sync.mjs`, committed): `openviking-memory`
-(when/how to search, read, write), `openviking-skills` (the `add_skill` flow),
-and `ov-experience-memory` (the experience workflow — the full version applies
-because this plugin captures tool parts, so its reads feed trajectories back).
+`skills/` holds three copies of the shared skill sources (committed):
+`openviking-memory` (when/how to search, read, write), `openviking-skills`
+(the `add_skill` flow), and `ov-experience-memory` (the experience workflow —
+the full version applies because this plugin captures tool parts, so its reads
+feed trajectories back). They are copied from `examples/skills/` and kept
+byte-identical by hand: registering them in `SKILL_TARGETS` would mean editing
+shared tooling, which this plugin does not do.
 The previous adapter shipped no skills; the model could only receive injected
 context, never actively use the MCP tools.
 
@@ -315,8 +330,8 @@ context, never actively use the MCP tools.
 
 Closed since the first draft: undo/branch fidelity (wire-tree.mjs ports
 kimi-code's tree.ts activeChain — verified by fixture tests) and turn_id
-propagation (a small additive extension to the shared extractCaptureTurns,
-regenerated into every plugin's copies by sync.mjs).
+propagation, which lives in this plugin's `capture-shape.mjs` rather than in
+the shared extractor.
 
 ## Evidence index
 

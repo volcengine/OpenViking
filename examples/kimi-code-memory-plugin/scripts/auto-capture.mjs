@@ -26,24 +26,49 @@ import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { buildKimicodeTurns } from "./kimicode-transcript.mjs";
 import { deriveOvSessionId, loadState, saveState, withSessionLock } from "./session-state.mjs";
+import { createRemainingMs, boundFetch } from "./hook-budget.mjs";
 import {
   planCapture,
   sendPlannedCapture,
   canCommitCapture,
   advanceCapturedSinceCommit,
+  nextCursor,
   shouldQueueSessionEndCommit,
 } from "./ov-session.mjs";
 import { commitAgentSession, runHookStage } from "./shared/agent-hook-runtime.mjs";
-import { extractCaptureTurns } from "./shared/capture-utils.mjs";
+import { shapeKimicodeTurns } from "./capture-shape.mjs";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
+const EVENTS = new Set(["stop", "pre-compact", "session-end", "interrupt"]);
 const EVENT = process.argv[2] || "stop";
 const { log, logError } = createLogger(`auto-capture:${EVENT}`);
 
-let cfg = loadConfig();
-let fetchJSON = createOvHttp(cfg, { defaultTimeoutMs: cfg.timeoutMs });
+// An unknown subcommand is a wiring mistake, not a Stop: treating it as one
+// would skip the SessionEnd commit and the Interrupt budget silently.
+if (!EVENTS.has(EVENT)) {
+  logError("auto-capture", `unknown event: ${EVENT}`);
+  process.exit(0);
+}
+
+let cfg;
+let fetchJSON;
+
+/**
+ * Ack keys at or before the cursor are dead weight: the decoder never emits
+ * those turns again, so the set would grow by one entry per message part for
+ * the whole session. Keys without a numeric turn id (the content-hash
+ * fallback) are kept.
+ */
+function pruneAckedKeys(keys, lastTurnId) {
+  const cursor = Number(lastTurnId);
+  if (!Number.isFinite(cursor)) return keys;
+  return keys.filter((key) => {
+    const turnId = Number(String(key).split(":")[0]);
+    return !Number.isFinite(turnId) || turnId > cursor;
+  });
+}
 
 runHookStage(
   {
@@ -75,18 +100,19 @@ runHookStage(
     // a tighter budget than its 10s host timeout because the user is waiting
     // on the prompt; overflow parks in the pending queue for SessionStart.
     const BUDGET_MS = EVENT === "interrupt" ? 2000 : 8000;
-    const deadline = Date.now() + BUDGET_MS;
-    const remainingMs = () => Math.max(250, deadline - Date.now());
-    const fitBudget = () => {
-      fetchJSON = createOvHttp(cfg, {
-        defaultTimeoutMs: Math.min(cfg.timeoutMs, remainingMs()),
+    const remainingMs = createRemainingMs(BUDGET_MS);
+    fetchJSON = boundFetch(
+      createOvHttp(cfg, {
+        defaultTimeoutMs: cfg.timeoutMs,
         resolveActorPeerId: () => effectivePeer.peerId,
         requireJsonBody: true,
-      });
-    };
+      }),
+      remainingMs,
+      cfg.timeoutMs,
+    );
 
     const locked = await withSessionLock(stage.sessionId, async () => {
-      const state = await loadState(stage.sessionId);
+      const state = await loadState(stage.sessionId, (message) => logError("state_read_failed", message));
 
       const decoded = buildKimicodeTurns(input, state);
       if (decoded.status === "missing") {
@@ -114,19 +140,21 @@ runHookStage(
       }
 
       // Shape the decoded entries through the shared capture model — the
-      // adapter never re-implements sanitize/filter/part-building.
-      const turns = extractCaptureTurns(decoded.entries, cfg);
+      // adapter never re-implements sanitize/filter/part-building — then apply
+      // this host's turn id, envelope and cap rules (capture-shape.mjs).
+      const turns = shapeKimicodeTurns(decoded.entries, cfg);
       const plan = planCapture(turns, state.capturedTurnIds || []);
       if (plan.length === 0) {
+        // Not an exit: every turn may already be captured, and SessionEnd still
+        // has to commit what earlier hooks left uncommitted. The commit gate
+        // below decides, and a run with nothing to send is strand-free.
         log("nothing_new", { event: EVENT, ovSessionId, lastTurnId: state.lastTurnId });
-        return;
       }
 
       const acked = new Set(state.capturedTurnIds || []);
       const previousCaptured = Number(state.capturedSinceCommit || 0);
       let capturedSinceCommit = previousCaptured;
 
-      fitBudget(); // the send spends only what remains of the hook's budget
       const result = await sendPlannedCapture(fetchJSON, ovSessionId, plan, {
         peerId: effectivePeer.peerId,
         onSent: async ({ confirmed, confirmedPayloads }) => {
@@ -135,7 +163,11 @@ runHookStage(
           // Persist as we go: a crash mid-send must not re-send confirmed turns.
           state.capturedTurnIds = [...acked];
           state.capturedSinceCommit = capturedSinceCommit;
-          await saveState(stage.sessionId, state).catch(() => {});
+          try {
+            await saveState(stage.sessionId, state);
+          } catch (error) {
+            logError("state_write_failed", error?.message || String(error));
+          }
         },
       });
 
@@ -157,20 +189,17 @@ runHookStage(
       // or before it), so it may only anchor at the last turn whose keys are
       // all acked. Anchoring past an unacked turn would silence it: it is
       // neither in the ack set nor decoded again.
-      {
-        const keysByTurnId = new Map(
-          plan.map((item) => [String(item.turn.turnId ?? ""), item.keys]),
-        );
-        let advanceTo = null;
-        for (const turn of decoded.turns) {
-          if (turn.turnId == null) continue;
-          const keys = keysByTurnId.get(String(turn.turnId));
-          if (keys && !keys.every((key) => acked.has(key))) break;
-          advanceTo = turn.turnId;
-        }
-        if (advanceTo != null) state.lastTurnId = advanceTo;
+      const advanceTo = nextCursor(plan, acked, decoded.turnOrder);
+      if (advanceTo != null) state.lastTurnId = advanceTo;
+      // Keys at or before the cursor are never decoded again; keeping them
+      // grows the state file by one entry per message part, rewritten on every
+      // confirmation.
+      state.capturedTurnIds = pruneAckedKeys(state.capturedTurnIds, state.lastTurnId);
+      try {
+        await saveState(stage.sessionId, state);
+      } catch (error) {
+        logError("state_write_failed", `after-send: ${error?.message || String(error)}`);
       }
-      await saveState(stage.sessionId, state);
 
       // Commit only when nothing is stranded: `failed` payloads were rejected
       // and exist nowhere, queued ones are still on disk, and an older queue
@@ -182,11 +211,14 @@ runHookStage(
       const pendingCount = pendingForSession.length;
       const stranded = result.failed > 0 || result.queued > 0 || result.enqueueFailed > 0;
       if (canCommitCapture(result, { event: EVENT, cfg, previousCaptured, pendingCount })) {
-        fitBudget(); // the commit gets the remainder, not a fresh timeout
         const committed = await commitAgentSession(fetchJSON, ovSessionId, log);
         if (committed.ok) {
           state.capturedSinceCommit = 0;
-          await saveState(stage.sessionId, state);
+          try {
+            await saveState(stage.sessionId, state);
+          } catch (error) {
+            logError("state_write_failed", `after-commit: ${error?.message || String(error)}`);
+          }
           log("committed", { event: EVENT, ovSessionId });
         } else {
           logError("commit_failed", `status=${committed.status || "unknown"}`);
@@ -217,7 +249,7 @@ runHookStage(
     });
     if (locked === null) {
       // Lock never came: this hook did nothing. Fail open, the next event retries.
-      logError("lock_timeout", { event: EVENT, sessionId: stage.sessionId });
+      logError("lock_timeout", `event=${EVENT} sessionId=${stage.sessionId}`);
     }
   },
 ).catch((error) => {

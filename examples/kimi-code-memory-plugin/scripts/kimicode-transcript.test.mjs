@@ -15,7 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { extractUnseenKimicodeTurns } from "./kimicode-transcript.mjs";
-import { extractCaptureTurns } from "./shared/capture-utils.mjs";
+import { shapeKimicodeTurns } from "./capture-shape.mjs";
 
 function wireWith(rows) {
   const dir = mkdtempSync(join(tmpdir(), "kimicode-wire-"));
@@ -116,7 +116,7 @@ test("tool results land on the turn that issued the call, not the next one", () 
   const turn1User = byTurn("1").find((e) => e.payload.role === "user" && e.payload.type === "message");
   assert.match(turn1User.payload.content[0].text, /第二问/);
   assert.match(turn1User.payload.content[0].text, /Background process completed/);
-  const shaped = extractCaptureTurns(byTurn("1"), { captureAssistantTurns: true });
+  const shaped = shapeKimicodeTurns(byTurn("1"), { captureAssistantTurns: true });
   const shapedText = shaped.map((t) => t.text).join("\n");
   assert.match(shapedText, /第二问/);
   assert.match(shapedText, /Background process completed/);
@@ -146,6 +146,9 @@ test("an unclosed turn at the tail of the wire emits nothing", () => {
   assert.ok(r.entries.every((e) => e.payload.turn_id === "0"));
   assert.ok(r.turns.some((t) => /已结束/.test(t.content)));
   assert.ok(!r.turns.some((t) => /还在跑/.test(t.content)));
+  // The cursor view must agree with `entries`: a turn that never closed has no
+  // payloads, so anchoring past it would silence the turn for good.
+  assert.deepEqual(r.turnOrder, ["0"]);
 });
 
 test("incremental decode resumes after lastTurnId", () => {
@@ -183,19 +186,19 @@ test("missing wire reports missing, not ok", () => {
 test("undone branch records are not captured", () => {
   // Realistic journal shape (kimi-code names new branches b1, b2, … and never
   // switches back to "main"): main holds turn 0, then undo creates b1 based
-  // on main line 4 (keeping turn 0), b1 writes a turn the user then undoes by
-  // creating b2 based on the same line. Only main's turn 0 and b2's turn may
+  // on main line 5 (after turn 0 closed), b1 writes a turn the user then undoes
+  // by creating b2 based on the same line. Only main's turn 0 and b2's turn may
   // be captured; b1's turn was retracted.
   const rows = [
     { type: "metadata", protocol_version: "1.5", created_at: 1 },
     ...prompt(0, "第一回合"),
     { type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "p1", turnId: "0", step: 1, stepUuid: "s1", part: { type: "text", text: "回复一" } } },
     { type: "turn.ended", agentId: "main", turnId: 0, reason: "completed" },
-    { type: "agent.switched", branch: "b1", base: { branch: "main", line: 4 }, reason: "undo" },
+    { type: "agent.switched", branch: "b1", base: { branch: "main", line: 5 }, reason: "undo" },
     ...prompt(1, "第二回合（作废）"),
     { type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "p2", turnId: "1", step: 1, stepUuid: "s2", part: { type: "text", text: "回复二（作废）" } } },
     { type: "turn.ended", agentId: "main", turnId: 1, reason: "completed" },
-    { type: "agent.switched", branch: "b2", base: { branch: "main", line: 4 }, reason: "undo" },
+    { type: "agent.switched", branch: "b2", base: { branch: "main", line: 5 }, reason: "undo" },
     ...prompt(1, "第二回合（最终版）"),
     { type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "p3", turnId: "1", step: 1, stepUuid: "s3", part: { type: "text", text: "回复二（最终版）" } } },
     { type: "turn.ended", agentId: "main", turnId: 1, reason: "completed" },

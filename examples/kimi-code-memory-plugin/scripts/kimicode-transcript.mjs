@@ -156,20 +156,31 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
 
   const entries = [];       // OpenAI-shaped entries for the shared extractor
   const order = [];         // turnIds in first-seen order
+  const seenTurnIds = new Set();
   const turnsById = new Map();
   const unknownTypes = new Set();
   /** tool.call uuid / toolCallId → the turn that issued it (result correlation). */
   const turnIdByCallUuid = new Map();
   const turnIdByToolCallId = new Map();
+  /** promptId → turnId, so an append_message duplicate lands on its own turn. */
+  const turnIdByPromptId = new Map();
   let unresolvedResults = 0;
   let lateResults = 0;
-  let pendingUser = "";
-  let pendingSystem = "";
+  /**
+   * Prompts are buffered per turn, not globally: a turn whose `turn.ended` is
+   * missing must not hand its prompt to the next turn. `loose` holds records
+   * with no turn id at all, and is claimed by whichever turn closes next.
+   */
+  const pendingByTurn = new Map();
+  const pendingLoose = { user: "", system: "" };
   let protocolVersion = null;
 
   const remember = (value) => {
     const turnId = String(value);
-    if (!order.includes(turnId)) order.push(turnId);
+    if (!seenTurnIds.has(turnId)) {
+      seenTurnIds.add(turnId);
+      order.push(turnId);
+    }
     return turnId;
   };
   const ensureTurn = (value) => {
@@ -184,21 +195,44 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
   const pushEntry = (payload, turnId) => {
     entries.push({ type: "response_item", payload: { ...payload, turn_id: turnId } });
   };
-  // turn.prompt and the user-origin append_message carry the same text, so a
-  // repeat is a no-op rather than a duplicate line.
-  const offerPrompt = (text) => {
-    const value = String(text || "");
-    if (!value) return;
-    if (!pendingUser) {
-      pendingUser = value;
-      return;
+  /** Join fragments, dropping a repeat of what is already buffered. */
+  const mergeText = (...parts) => {
+    let out = "";
+    for (const part of parts) {
+      const value = String(part || "");
+      if (!value) continue;
+      if (!out) {
+        out = value;
+        continue;
+      }
+      if (out.includes(value)) continue;
+      if (value.includes(out)) {
+        out = value;
+        continue;
+      }
+      out = `${out}\n${value}`;
     }
-    if (!pendingUser.includes(value)) pendingUser = `${pendingUser}\n${value}`;
+    return out;
   };
-  const offerSystem = (text) => {
-    const value = String(text || "");
-    if (!value) return;
-    pendingSystem = pendingSystem ? `${pendingSystem}\n${value}` : value;
+  const pendingFor = (turnId) => {
+    if (turnId == null || turnId === "") return pendingLoose;
+    const key = String(turnId);
+    let slot = pendingByTurn.get(key);
+    if (!slot) {
+      slot = { user: "", system: "" };
+      pendingByTurn.set(key, slot);
+    }
+    return slot;
+  };
+  // turn.prompt and the user-origin append_message carry the same text, so a
+  // repeat collapses instead of becoming a second line.
+  const offerPrompt = (text, turnId) => {
+    const slot = pendingFor(turnId);
+    slot.user = mergeText(slot.user, text);
+  };
+  const offerSystem = (text, turnId) => {
+    const slot = pendingFor(turnId);
+    slot.system = mergeText(slot.system, text);
   };
   const stepKeyOf = (event) => event.stepUuid ?? event.uuid ?? `step:${event.step ?? ""}`;
   /** Consecutive records of one step share its item, so text then call merge. */
@@ -262,30 +296,34 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
     }
     if (row.type === "context.append_message" && row.message?.role === "user") {
       const kind = row.message.origin?.kind;
+      // The append duplicates a prompt and carries the same message id; using
+      // it keeps the duplicate on its own turn when a `turn.ended` is missing.
+      const turnId = turnIdByPromptId.get(row.message.id) ?? row.turnId ?? null;
       if (USER_ORIGINS.has(kind)) {
-        offerPrompt(textFromContent(row.message.content));
+        offerPrompt(textFromContent(row.message.content), turnId);
       } else if (SYSTEM_ORIGINS.has(kind)) {
-        offerSystem(textFromContent(row.message.content));
+        offerSystem(textFromContent(row.message.content), turnId);
       }
       // All other origins are host injection: dropped (§5.3).
       continue;
     }
     if (row.type === "turn.prompt") {
       const kind = row.origin?.kind;
-      if (USER_ORIGINS.has(kind)) offerPrompt(textFromContent(row.input));
-      else if (SYSTEM_ORIGINS.has(kind)) offerSystem(textFromContent(row.input));
+      const turnId = row.turnId == null ? null : remember(row.turnId);
+      if (turnId != null && row.promptId) turnIdByPromptId.set(row.promptId, turnId);
+      if (USER_ORIGINS.has(kind)) offerPrompt(textFromContent(row.input), turnId);
+      else if (SYSTEM_ORIGINS.has(kind)) offerSystem(textFromContent(row.input), turnId);
       continue;
     }
     if (row.type === "turn.ended") {
       const { turnId, turn } = ensureTurn(row.turnId ?? row.event?.turnId);
-      if (pendingUser) {
-        turn.user = turn.user ? `${turn.user}\n${pendingUser}` : pendingUser;
-        pendingUser = "";
-      }
-      if (pendingSystem) {
-        turn.system = turn.system ? `${turn.system}\n${pendingSystem}` : pendingSystem;
-        pendingSystem = "";
-      }
+      const slot = pendingByTurn.get(turnId) || {};
+      // Loose fragments carry no turn id at all; the closing turn claims them.
+      turn.user = mergeText(turn.user, slot.user, pendingLoose.user);
+      turn.system = mergeText(turn.system, slot.system, pendingLoose.system);
+      pendingByTurn.delete(turnId);
+      pendingLoose.user = "";
+      pendingLoose.system = "";
       closeTurn(turnId, turn);
       continue;
     }
@@ -307,7 +345,7 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
         name: event.name,
         arguments: event.args ?? {},
       });
-      turnIdByCallUuid.set(event.uuid, turnId);
+      if (event.uuid) turnIdByCallUuid.set(event.uuid, turnId);
       if (event.toolCallId) turnIdByToolCallId.set(event.toolCallId, turnId);
       continue;
     }
@@ -342,17 +380,24 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
   const lastIndex = lastTurnId == null || lastTurnId === ""
     ? -1
     : order.indexOf(String(lastTurnId));
+  const unseen = order.slice(lastIndex + 1);
+  // `turnOrder` is the cursor walk's map, so it only lists turns that actually
+  // produced entries. An unclosed turn has none: anchoring past it would make
+  // the decoder skip it once it closes.
+  const turnOrder = unseen.filter((turnId) => turnsById.get(turnId)?.closed);
   // Both views answer the same cursor: a turn already captured must not be
   // decoded again, or every hook re-shapes the whole session into payloads.
-  const unseenTurnIds = new Set(order.slice(lastIndex + 1));
+  const unseenTurnIds = new Set(unseen);
   const unseenEntries = entries.filter((entry) => {
     const turnId = entry?.payload?.turn_id;
     return turnId == null || unseenTurnIds.has(String(turnId));
   });
   const turns = [];
-  for (const turnId of order.slice(lastIndex + 1)) {
+  for (const turnId of turnOrder) {
     const turn = turnsById.get(turnId);
-    if (!turn) continue;
+    // `entries` only exists for a closed turn, so an open one must not appear
+    // here either: the cursor walk would anchor past entries never emitted.
+    if (!turn || !turn.closed) continue;
     const user = cleanKimicodeText([turn.user, turn.system].filter(Boolean).join("\n"));
     if (user) turns.push({ role: "user", content: user, turnId });
     const assistant = cleanKimicodeText(
@@ -365,6 +410,7 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null, options 
     protocolVersion,
     entries: unseenEntries,
     turns,
+    turnOrder,
     unknownTypes: [...unknownTypes],
     unresolvedResults,
     lateResults,

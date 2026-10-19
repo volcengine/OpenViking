@@ -89,12 +89,19 @@ it). See `DESIGN.md` for the full host contract and design record.
 
 ## Development
 
-`scripts/shared/` and `skills/` are generated — do not edit:
+`scripts/shared/` and `skills/` are copies of the shared sources. This plugin
+is not registered in `sync.mjs` and does not edit shared tooling, so the copies
+are kept byte-identical by hand (shared file + the `GENERATED FROM` header):
 
 ```bash
-node ../memory-plugin-shared/sync.mjs   # after changing shared sources
 node --test scripts/*.test.mjs
 ```
+
+Host-specific behaviour the shared library does not provide — `turn_id` on
+shaped turns, the host envelope rules, the length cap, prefix-based send
+confirmation, reserved-tag neutralisation and the flat-manifest budget check —
+lives in `capture-shape.mjs`, `recall-sanitize.mjs`, `ov-session.mjs` and
+`ov-memory-doctor.mjs`.
 
 Layout, boundaries and the acceptance checklist follow
 [the plugin development spec](../../docs/zh/agent-integrations/18-plugin-development.md).

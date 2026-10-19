@@ -17,7 +17,7 @@ import test from "node:test";
 
 import { extractUnseenKimicodeTurns } from "./kimicode-transcript.mjs";
 import { buildMessagePayloads, planCapture, turnDedupKey } from "./ov-session.mjs";
-import { extractCaptureTurns } from "./shared/capture-utils.mjs";
+import { shapeKimicodeTurns } from "./capture-shape.mjs";
 
 const cfg = { captureAssistantTurns: true, captureMaxLength: 24000 };
 
@@ -53,7 +53,7 @@ test("pipeline shapes sanitized turns with structured tool parts", () => {
   const decoded = extractUnseenKimicodeTurns(wireWith(ROWS), null);
   assert.equal(decoded.status, "ok");
 
-  const turns = extractCaptureTurns(decoded.entries, cfg);
+  const turns = shapeKimicodeTurns(decoded.entries, cfg);
   assert.ok(turns.length >= 4, `expected several turns, got ${turns.length}`);
 
   const userTurn = turns.find((t) => t.role === "user" && t.parts.some((p) => p.type === "text"));
@@ -103,7 +103,7 @@ test("pipeline shapes sanitized turns with structured tool parts", () => {
 
 test("pipeline cursor acks confirmed turns and resumes from the rest", () => {
   const decoded = extractUnseenKimicodeTurns(wireWith(ROWS), null);
-  const turns = extractCaptureTurns(decoded.entries, cfg);
+  const turns = shapeKimicodeTurns(decoded.entries, cfg);
 
   const firstPlan = planCapture(turns, []);
   assert.equal(firstPlan.length, turns.length);
@@ -127,7 +127,7 @@ test("pipeline cursor acks confirmed turns and resumes from the rest", () => {
     { type: "turn.ended", agentId: "main", turnId: 1, reason: "completed" },
   ];
   const decoded2 = extractUnseenKimicodeTurns(wireWith(extended), null);
-  const turns2 = extractCaptureTurns(decoded2.entries, cfg);
+  const turns2 = shapeKimicodeTurns(decoded2.entries, cfg);
   const plan2 = planCapture(turns2, acked);
   assert.ok(plan2.every((item) => item.turn.turnId === "1"));
   assert.ok(turnDedupKey(plan2[0].turn).startsWith("1:"));

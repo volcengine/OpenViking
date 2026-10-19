@@ -83,12 +83,18 @@ MCP 工具（`find`、`search`、`grep`、`read`、`remember`、`add_resource`�
 
 ## 开发
 
-`scripts/shared/` 与 `skills/` 为生成物——不要手改：
+`scripts/shared/` 与 `skills/` 是共享源码的副本。本插件未登记在 `sync.mjs`
+中、也不修改共享工具，因此这些副本按「共享文件 + GENERATED FROM 头」手工保持
+逐字节一致：
 
 ```bash
-node ../memory-plugin-shared/sync.mjs   # 改动共享源码后运行
 node --test scripts/*.test.mjs
 ```
+
+共享库没有提供、属于本宿主的能力（成形轮次上的 `turn_id`、宿主的信封规则、
+长度上限、按前缀推进的发送确认、保留标签清洗、扁平 manifest 的预算检查）分别
+在 `capture-shape.mjs`、`recall-sanitize.mjs`、`ov-session.mjs` 与
+`ov-memory-doctor.mjs` 中实现。
 
 目录结构、模块边界与验收清单遵循
 [插件开发规范](../../docs/zh/agent-integrations/18-plugin-development.md)。

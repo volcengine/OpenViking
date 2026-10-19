@@ -54,23 +54,51 @@ export function deriveOvSessionId(kimiSessionId) {
 
 async function statePath(sessionId) {
   const dir = getStateDir();
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   return join(dir, `${safeId(sessionId)}.json`);
 }
 
-export async function loadState(sessionId) {
+export async function loadState(sessionId, onError = () => {}) {
+  const empty = { sessionId, capturedTurnIds: [], capturedSinceCommit: 0, lastTurnId: null };
+  let raw;
   try {
-    return JSON.parse(await readFile(await statePath(sessionId), "utf-8"));
-  } catch {
-    return { sessionId, capturedTurnIds: [], capturedSinceCommit: 0, lastTurnId: null };
+    raw = await readFile(await statePath(sessionId), "utf-8");
+  } catch (error) {
+    // "no state yet" is normal; anything else means the cursor could not be
+    // read, and silently resetting it would re-send the whole session.
+    if (error?.code !== "ENOENT") onError(`state_unreadable code=${error?.code || "unknown"}`);
+    return empty;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    return parsed;
+  } catch (error) {
+    onError(`state_corrupt: ${error?.message || String(error)}`);
+    return empty;
   }
 }
 
 export async function saveState(sessionId, value) {
   const path = await statePath(sessionId);
-  const staging = `${path}.${process.pid}.tmp`;
-  await writeFile(staging, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-  await rename(staging, path);
+  const staging = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(staging, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+  // Windows refuses the rename while another process holds the destination — a
+  // scanner, the doctor reading it, a second hook. Retry briefly rather than
+  // dropping acks the server already confirmed.
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await rename(staging, path);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!["EPERM", "EBUSY", "EACCES"].includes(error?.code)) break;
+      await sleep(20 * (attempt + 1));
+    }
+  }
+  await rm(staging, { force: true }).catch(() => {});
+  throw lastError;
 }
 
 /**
@@ -95,12 +123,13 @@ export async function withSessionLock(sessionId, callback) {
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
+      let reclaimed = false;
       try {
         if (Date.now() - (await stat(dir)).mtimeMs > LOCK_STALE_MS) {
-          await rm(dir, { recursive: true, force: true });
-          continue;
+          reclaimed = await reclaimStaleLock(dir, token);
         }
       } catch {}
+      if (reclaimed) continue;
       if (Date.now() >= deadline) return null;
       await sleep(50);
     }
@@ -116,6 +145,22 @@ export async function withSessionLock(sessionId, callback) {
   }
 }
 
+/**
+ * Take a stale lock out of the way without letting two waiters both wipe the
+ * same fresh lock: only one process can win the rename, and the loser leaves
+ * whatever the winner created alone.
+ */
+async function reclaimStaleLock(dir, token) {
+  const retired = `${dir}.stale-${token}`;
+  try {
+    await rename(dir, retired);
+  } catch {
+    return false;
+  }
+  await rm(retired, { recursive: true, force: true }).catch(() => {});
+  return true;
+}
+
 /** Remove the lock only when this process still owns it. */
 async function releaseOwnedLock(dir, token) {
   try {
@@ -128,5 +173,38 @@ async function releaseOwnedLock(dir, token) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function profileMarkerPath(sessionId) {
+  return join(getStateDir(), `${safeId(sessionId)}.profile.json`);
+}
+
+/**
+ * Whether this session already received the one-time profile block. It lives
+ * in its own file because the prompt hook must not rewrite the capture state
+ * that the capture hook owns under its lock.
+ */
+export async function profileInjected(sessionId) {
+  try {
+    await stat(profileMarkerPath(sessionId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Claim the one-time profile injection; false when another hook claimed it. */
+export async function markProfileInjected(sessionId) {
+  await mkdir(getStateDir(), { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(profileMarkerPath(sessionId), `${JSON.stringify({ at: Date.now() })}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return true;
+  } catch (error) {
+    if (error?.code === "EEXIST") return false;
+    throw error;
   }
 }

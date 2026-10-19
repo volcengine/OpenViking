@@ -26,17 +26,22 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { deriveOvSessionId, loadState, saveState } from "./session-state.mjs";
+import { deriveOvSessionId, markProfileInjected, profileInjected } from "./session-state.mjs";
 import { buildAgentProfile, recallForPrompt, runHookStage, stableHash } from "./shared/agent-hook-runtime.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
-import { decideRecall, readRecallCache, writeRecallCache } from "./recall-cache.mjs";
+import { sanitizeRecallText } from "./recall-sanitize.mjs";
+import { claimRecall, decideRecall, readRecallCache, writeRecallCache } from "./recall-cache.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
+import { createRemainingMs, boundFetch } from "./hook-budget.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-let cfg = loadConfig();
+// The manifest gives UserPromptSubmit 20s; stop well short so the hook answers
+// before the host kills the process and the user waits on a dead prompt.
+const RECALL_BUDGET_MS = 15_000;
+
 const { log, logError } = createLogger("auto-recall");
+let cfg;
 let effectivePeer = { peerId: "", legacyPeerId: "" };
-let fetchJSON = createOvHttp(cfg, { defaultTimeoutMs: cfg.timeoutMs });
 
 let emitted = false;
 let recallDeadline = null;
@@ -62,12 +67,6 @@ function promptToText(prompt) {
   return "";
 }
 
-recallDeadline = setTimeout(() => {
-  logError("recall_timeout", `timed out after ${cfg.recallTimeoutMs}ms`);
-  emitText("");
-}, cfg.recallTimeoutMs);
-recallDeadline.unref?.();
-
 runHookStage(
   {
     clientId: "kimicode",
@@ -83,11 +82,25 @@ runHookStage(
     const { input, cwd } = stage;
     cfg = stage.cfg;
     effectivePeer = resolveEffectivePeerId({ cfg, cwd });
-    fetchJSON = createOvHttp(cfg, {
-      defaultTimeoutMs: cfg.timeoutMs,
-      resolveActorPeerId: () => effectivePeer.peerId,
-      requireJsonBody: true,
-    });
+    // One clock for health, search and profile: each of them used to get the
+    // full per-request timeout, so three slow calls outlived the host's 20s.
+    const budgetMs = Math.min(Number(cfg.recallTimeoutMs) || RECALL_BUDGET_MS, RECALL_BUDGET_MS);
+    const remainingMs = createRemainingMs(budgetMs);
+    const fetchJSON = boundFetch(
+      createOvHttp(cfg, {
+        defaultTimeoutMs: cfg.timeoutMs,
+        resolveActorPeerId: () => effectivePeer.peerId,
+        requireJsonBody: true,
+      }),
+      remainingMs,
+      cfg.timeoutMs,
+    );
+    recallDeadline = setTimeout(() => {
+      logError("recall_timeout", `budget ${budgetMs}ms exhausted`);
+      emitText("");
+      process.exit(0);
+    }, budgetMs);
+    recallDeadline.unref?.();
 
     const kimiSessionId = typeof input.session_id === "string" ? input.session_id.trim() : "";
     const recallSessionId = kimiSessionId ? deriveOvSessionId(kimiSessionId) : "";
@@ -135,6 +148,9 @@ runHookStage(
       recallBlock = cache.block;
       log("recall_cache_hit", { chars: recallBlock.length });
     } else {
+      // Claim before searching: a second event for the same prompt that
+      // overlaps this one backs off instead of paying for the same search.
+      if (kimiSessionId) await claimRecall(kimiSessionId, promptHash).catch(() => {});
       const health = await fetchJSON("/health");
       if (!health.ok) {
         logError("health_check", "server unreachable or unhealthy");
@@ -148,18 +164,19 @@ runHookStage(
     }
 
     // Profile rides the FIRST successful prompt of a session: Kimi discards
-    // SessionStart stdout (#2873), so the prompt hook is the only carrier.
+    // SessionStart stdout (#2873), so the prompt hook is the only carrier. It
+    // is wrapped like every other recall block, so the model does not read a
+    // bare memory body as host-authored text.
     const parts = [];
     if (recallBlock) parts.push(recallBlock);
-    const state = kimiSessionId ? await loadState(kimiSessionId) : {};
-    if (kimiSessionId && !state.profileInjected) {
+    if (kimiSessionId && !(await profileInjected(kimiSessionId).catch(() => false))) {
       const profile = await buildAgentProfile(fetchJSON, cfg, cwd);
-      if (profile) {
-        parts.unshift(profile);
+      if (profile && await markProfileInjected(kimiSessionId).catch(() => false)) {
+        parts.unshift(
+          `<openviking-context source="profile">\n${sanitizeRecallText(profile)}\n</openviking-context>`,
+        );
         log("profile_injected", { chars: profile.length });
       }
-      state.profileInjected = true;
-      await saveState(kimiSessionId, state).catch(() => {});
     }
 
     // Cache the answer (including "nothing relevant") so a repeated prompt
