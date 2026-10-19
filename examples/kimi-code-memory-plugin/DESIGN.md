@@ -10,8 +10,8 @@ against the Kimi source or a real run.
 
 **Verified against: Kimi Code CLI 2.2.0 (main @ 2026-10-17), Windows, Node.js 24.**
 The hook protocol core (`runHook.ts` spawn/exit-code/JSON-parse, stable since
-the #2805 refactor of 2026-08-19) is unchanged from what the previous adapter
-verified, but the hook chain is NOT frozen — two behavior changes landed
+the #2805 refactor of 2026-08-19) is not what this plugin has to worry about,
+but the hook chain is NOT frozen — two behavior changes landed
 recently and are reflected in this plugin: **#4081** folds UserPromptSubmit
 hook output into the prompt message as a `<hook_result hook_event="...">`
 text part (the plugin's own `capture-shape.mjs` strips the wrapper — verified
@@ -22,13 +22,11 @@ root).
 ## Form choice (spec §2.1)
 
 Kimi loads native plugins from its managed directory with a `kimi.plugin.json`
-manifest — the same shape as Claude Code and Codex. This plugin is therefore a
-standalone native plugin whose entries call the shared runtime
-(`scripts/shared/`, a copy of `examples/memory-plugin-shared/lib/`). It
-replaces the previous `agent-hook-plugin/hosts/kimicode/` adapter, which
-shoehorned a native-plugin host into the config-file dispatcher family and
-could not be installed on Windows (its `install.sh` gates on
-`uname -s` ∈ {Darwin, Linux}).
+manifest — the same shape as Claude Code and Codex. Kimi installs, upgrades and
+removes that manifest itself, so the integration needs no edit to Kimi's own
+config files and no shell installer. This plugin is therefore a standalone
+native plugin whose entries call the shared runtime (`scripts/shared/`, a copy
+of `examples/memory-plugin-shared/lib/`).
 
 The shared library is used unmodified: everything this host needs and the
 library does not provide — the wire's `turn_id` on shaped turns, the host's
@@ -163,9 +161,9 @@ source (`packages/agent-core-v2/src/wire/`):
 ### Process model ⚠️ (Windows degradation)
 
 Kimi's docs describe hook process groups and timeout signals for **non-Windows**
-platforms only. The previous adapter detached background writers on
-Stop/PreCompact/SessionEnd; on Windows a detached worker would die with its
-parent. This plugin therefore runs **everything synchronously** inside the hook
+platforms only. A detached background writer on Stop/PreCompact/SessionEnd
+would die with its parent on Windows, so this plugin runs **everything
+synchronously** inside the hook
 timeout with a short internal OV budget (~8s for capture; Interrupt 2s),
 overflowing to the pending queue for SessionStart replay. Two host facts shape
 this: the host kills a timed-out hook without a usable grace period on Windows
@@ -200,8 +198,8 @@ field. (CLI 2.2.0 additionally predates the agent-hook cwd fix `c1459a61`.)
   `openviking_`-free names the server reports.
 - Connection/credentials resolve through `buildPluginConfig("kimicode", …)` —
   `kimicode` is a registered harness key, so `ov config` overrides apply.
-- OV session id: `kc-<kimi-session-id>` (prefix kept from the previous adapter
-  for data compatibility).
+- OV session id: `kc-<kimi-session-id>` (the `kc-` prefix keeps existing
+  server-side session ids valid).
 - Peer (project memory scope): hooks resolve it via shared `workspace-peer`
   from Git identity; non-Git directories get no peer. The MCP proxy does not
   follow that rule — `toMcpProxyConfig` sends no peer unless
@@ -298,8 +296,8 @@ the full version applies because this plugin captures tool parts, so its reads
 feed trajectories back). They are copied from `examples/skills/` and kept
 byte-identical by hand: registering them in `SKILL_TARGETS` would mean editing
 shared tooling, which this plugin does not do.
-The previous adapter shipped no skills; the model could only receive injected
-context, never actively use the MCP tools.
+Without the skills the model could only receive injected context, never
+actively use the MCP tools.
 
 ## Open issues affecting this plugin (kimi-code, open on main at 2026-10-17)
 
@@ -353,6 +351,3 @@ buildToolPart/toolStatus/sanitizeCapturedText, `batch-send.mjs`,
 
 Reference implementations: `examples/codex-memory-plugin/`,
 `examples/claude-code-memory-plugin/`.
-
-Previous adapter (migration source, removed on merge):
-`examples/agent-hook-plugin/hosts/kimicode/`.

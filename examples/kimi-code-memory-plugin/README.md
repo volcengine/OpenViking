@@ -15,7 +15,7 @@ plugin.
 
 Requires: Kimi Code CLI ≥ 2.1.1 (verified on 2.2.0), Node.js ≥ 18, and a
 reachable OpenViking server (a local `127.0.0.1:1933` needs no credentials).
-Plugin version: **0.2.3** (`kimi.plugin.json`).
+Plugin version: **0.2.4** (`kimi.plugin.json`).
 
 ```text
 /plugins install <absolute-path-to-this-directory-or-a-zip-url>
@@ -24,6 +24,10 @@ Plugin version: **0.2.3** (`kimi.plugin.json`).
 The plugin lives in a monorepo subdirectory, so the GitHub-URL form does not
 apply (kimi-code installs from the repo root only); use the local directory
 or a zip with the manifest at the archive root.
+
+Do not install this host with the shared `install.sh`: it writes a different
+plugin under the same id, which would replace this copy. Install and upgrade
+through `/plugins install`.
 
 Then `/reload` (or start a new session). Verify with:
 
