@@ -27,15 +27,15 @@ test("clean run past the threshold commits", () => {
 });
 
 test("rejected payloads block the commit", () => {
-  assert.equal(canCommitCapture({ ...clean, sent: 7, failed: 1 }, opts), false);
+  assert.equal(canCommitCapture({ ...clean, sent: 8, failed: 1 }, opts), false);
 });
 
 test("queued payloads block the commit", () => {
-  assert.equal(canCommitCapture({ ...clean, sent: 7, queued: 1 }, opts), false);
+  assert.equal(canCommitCapture({ ...clean, sent: 8, queued: 1 }, opts), false);
 });
 
 test("enqueue failures block the commit", () => {
-  assert.equal(canCommitCapture({ ...clean, sent: 7, enqueueFailed: 1 }, opts), false);
+  assert.equal(canCommitCapture({ ...clean, sent: 8, enqueueFailed: 1 }, opts), false);
 });
 
 test("an older pending item blocks the commit", () => {

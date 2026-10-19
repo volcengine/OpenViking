@@ -4,9 +4,18 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-import { buildMessagePayloads, planCapture, shouldCommit, turnDedupKey } from "./ov-session.mjs";
+import {
+  buildMessagePayloads,
+  planCapture,
+  sendPlannedCapture,
+  shouldCommit,
+  turnDedupKey,
+} from "./ov-session.mjs";
 
 test("dedup keys distinguish turns, roles and tool parts", () => {
   const textTurn = { role: "user", text: "hi", turnId: "0" };
@@ -124,4 +133,39 @@ test("commit policy follows the event, then the threshold", () => {
   assert.equal(shouldCommit("stop", { commitTurnThreshold: 8 }, 5, 3), true);
   assert.equal(shouldCommit("stop", {}, 0, 1), false); // default threshold is 8
   assert.equal(shouldCommit("stop", {}, 0, 0), false); // nothing captured
+});
+
+test("a partial send acknowledges only what the server accepted", async () => {
+  const previous = process.env.OPENVIKING_PENDING_DIR;
+  const dir = await mkdtemp(join(tmpdir(), "kimi-send-"));
+  process.env.OPENVIKING_PENDING_DIR = dir;
+  try {
+    const acked = [];
+    const plan = [
+      { turn: { role: "user", text: "a", turnId: "0" }, keys: ["0:user"] },
+      { turn: { role: "assistant", text: "b", turnId: "0" }, keys: ["0:assistant"] },
+      { turn: { role: "user", text: "c", turnId: "1" }, keys: ["1:user"] },
+    ];
+    const result = await sendPlannedCapture(
+      async (path, init = {}) => {
+        if (path.endsWith("/messages/batch")) return { ok: false, status: 404, error: { message: "no batch route" } };
+        const body = JSON.parse(init.body || "{}");
+        if (body.content === "c") return { ok: false, status: 422, error: { message: "rejected" } };
+        return { ok: true, status: 200, result: { ok: true } };
+      },
+      "kc-partial",
+      plan,
+      { onSent: async ({ confirmed }) => acked.push(...confirmed) },
+    );
+
+    // The rejected payload must not acknowledge its neighbours, and the turn it
+    // belongs to must stay out of the ack set so the cursor cannot advance past it.
+    assert.deepEqual(acked, ["0:user", "0:assistant"]);
+    assert.equal(result.sent, 2);
+    assert.equal(result.failed, 1);
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+    else process.env.OPENVIKING_PENDING_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
 });

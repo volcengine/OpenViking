@@ -178,6 +178,37 @@ test("system-origin prompts are captured and marked, not dropped", () => {
   assert.ok(r.turns.some((t) => t.role === "user" && /goal 续跑指令/.test(t.content)));
 });
 
+test("a journal truncated below the cursor does not rewind it", () => {
+  // repairWireJournal can cut the tail away, including the turn the cursor
+  // points at. Re-decoding from the start would re-send the whole session.
+  const rows = [
+    { type: "metadata", protocol_version: "1.5", created_at: 1 },
+    ...prompt(0, "第一轮"),
+    { type: "turn.ended", turnId: 0 },
+    ...prompt(1, "第二轮"),
+    { type: "turn.ended", turnId: 1 },
+  ];
+  const r = extractUnseenKimicodeTurns(wireWith(rows), "2");
+  assert.equal(r.status, "ok");
+  assert.equal(r.turns.length, 0);
+  assert.equal(r.entries.length, 0);
+  assert.deepEqual(r.turnOrder, []);
+});
+
+test("turns above the cursor stay new when the cursor turn is gone", () => {
+  const rows = [
+    ...prompt(0, "第一轮"),
+    { type: "turn.ended", turnId: 0 },
+    ...prompt(1, "第二轮"),
+    { type: "turn.ended", turnId: 1 },
+    ...prompt(3, "第三轮"),
+    { type: "turn.ended", turnId: 3 },
+  ];
+  const r = extractUnseenKimicodeTurns(wireWith(rows), "2");
+  assert.deepEqual(r.turnOrder, ["3"]);
+  assert.ok(r.turns.every((turn) => turn.turnId === "3"));
+});
+
 test("missing wire reports missing, not ok", () => {
   const r = extractUnseenKimicodeTurns(join(tmpdir(), "no-such-wire.jsonl"), null);
   assert.equal(r.status, "missing");
