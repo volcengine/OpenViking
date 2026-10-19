@@ -15,7 +15,7 @@ plugin.
 
 Requires: Kimi Code CLI ≥ 2.1.1 (verified on 2.2.0), Node.js ≥ 18, and a
 reachable OpenViking server (a local `127.0.0.1:1933` needs no credentials).
-Plugin version: **0.2.4** (`kimi.plugin.json`).
+Plugin version: **0.2.5** (`kimi.plugin.json`).
 
 ```text
 /plugins install <absolute-path-to-this-directory-or-a-zip-url>
@@ -113,6 +113,6 @@ Layout, boundaries and the acceptance checklist follow
 
 ## Status
 
-Beta. Plugin version 0.2.4, verified against Kimi Code CLI 2.2.0 on Windows
+Beta. Plugin version 0.2.5, verified against Kimi Code CLI 2.2.0 on Windows
 (macOS/Linux expected but unverified). Known gap: subagent conversations
 (`agents/<subagent>/wire.jsonl`) are not captured yet (v2); see `DESIGN.md`.

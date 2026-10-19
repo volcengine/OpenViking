@@ -13,7 +13,7 @@ OpenViking 的 MCP 工具，让模型主动检索、记忆、导入。以 Kimi �
 ## 安装
 
 前置条件：Kimi Code CLI ≥ 2.1.1（已在 2.2.0 上验证）、Node.js ≥ 18、一个可达的
-OpenViking 服务（本地 `127.0.0.1:1933` 无需凭据）。插件版本：**0.2.4**
+OpenViking 服务（本地 `127.0.0.1:1933` 无需凭据）。插件版本：**0.2.5**
 （见 `kimi.plugin.json`）。
 
 ```text
@@ -104,6 +104,6 @@ node --test scripts/*.test.mjs
 
 ## 状态
 
-Beta。插件版本 0.2.4，已在 Windows 上对照 Kimi Code CLI 2.2.0 验证（macOS/Linux
+Beta。插件版本 0.2.5，已在 Windows 上对照 Kimi Code CLI 2.2.0 验证（macOS/Linux
 预期可用但尚未实测）。已知缺口：subagent 对话（`agents/<subagent>/wire.jsonl`）
 尚未捕获（v2），详见 `DESIGN.md`。
