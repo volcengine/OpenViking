@@ -6,7 +6,6 @@ import json
 import os
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -14,7 +13,6 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from openviking.server.account_stores.mysql_schema import Account, Base, Credential, GroupMember
-from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import FileStore
 from openviking.server.identity import Role
@@ -241,8 +239,8 @@ async def test_regenerate_key_preserves_management_not_found_errors():
         await manager.regenerate_key("acme", "missing")
 
 
-async def test_distributed_credentials_are_shared_and_service_scoped():
-    """Warm caches must reject rotated keys without crossing service boundaries."""
+async def test_distributed_authentication_state_is_shared_and_service_scoped():
+    """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
     if not raw_mysql or not redis_url:
@@ -306,9 +304,25 @@ async def test_distributed_credentials_are_shared_and_service_scoped():
             active_key = await writer.regenerate_key("acme", "alice")
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(old_key)
+        await writer.create_group("acme", "engineering")
+        await writer.add_group_member("acme", "engineering", "alice")
+        assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
+
+        await writer.delete_group("acme", "engineering")
+
+        assert await reader.get_groups("acme") == []
+        assert await reader.get_user_group_ids("acme", "alice") == ()
         assert (await reader.resolve_identity(active_key)).user_id == "alice"
         assert (await isolated.resolve_identity(isolated_key)).role == Role.ADMIN
         async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    select(func.count())
+                    .select_from(GroupMember)
+                    .where(GroupMember.service_name == service_name)
+                )
+                == 0
+            )
             assert (
                 await connection.scalar(
                     select(func.count())
@@ -446,90 +460,3 @@ async def test_group_deletion_preserves_users_and_persists_membership_removal():
     finally:
         await reloaded.close()
         await manager.close()
-
-
-async def test_redis_group_deletion_invalidates_member_caches():
-    mysql = SimpleNamespace(_service_name="test", delete_group=AsyncMock())
-    store = RedisMySQLAccountStore(
-        service_name="test",
-        mysql_store=mysql,
-        redis_client=AsyncMock(),
-        params={"cache": {"provider": "redis", "params": {}}},
-    )
-    store._clear_account_cache = AsyncMock()
-
-    await store.delete_group("acme", "engineering")
-
-    mysql.delete_group.assert_awaited_once_with("acme", "engineering")
-    store._clear_account_cache.assert_awaited_once_with("acme")
-
-
-@pytest.mark.parametrize("provider", ["mysql", "redis_mysql"])
-async def test_mysql_group_deletion_cascades_memberships_and_refreshes_caches(provider):
-    raw_mysql = os.environ.get("OV_TEST_MYSQL")
-    redis_url = os.environ.get("OV_TEST_REDIS")
-    if not raw_mysql or (provider == "redis_mysql" and not redis_url):
-        pytest.skip("Set OV_TEST_MYSQL and OV_TEST_REDIS for the distributed group contract")
-
-    service_name = f"test-{uuid4().hex}"
-    key_prefix = f"ov:test:{uuid4().hex}"
-    params = json.loads(raw_mysql)
-    if provider == "redis_mysql":
-        params = {
-            "mysql": params,
-            "cache": {
-                "provider": "redis",
-                "params": {"endpoints": [redis_url], "key_prefix": key_prefix},
-            },
-        }
-    writer, reader = [
-        build_api_key_manager(
-            "root",
-            None,
-            service_name=service_name,
-            account_store_provider=provider,
-            account_store_params=params,
-        )
-        for _ in range(2)
-    ]
-    mysql = writer._store._mysql if provider == "redis_mysql" else writer._store
-    engine = create_async_engine(mysql._url, **mysql._engine_options)
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        await writer.load()
-        await reader.load()
-        alice_key = await writer.create_account("acme", "alice")
-        await writer.create_group("acme", "engineering")
-        await writer.add_group_member("acme", "engineering", "alice")
-        assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
-
-        await writer.delete_group("acme", "engineering")
-
-        assert await reader.get_groups("acme") == []
-        assert await reader.get_user_group_ids("acme", "alice") == ()
-        assert (await reader.resolve_identity(alice_key)).user_id == "alice"
-        async with engine.connect() as connection:
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(GroupMember)
-                    .where(GroupMember.service_name == service_name)
-                )
-                == 0
-            )
-    finally:
-        try:
-            if provider == "redis_mysql" and writer._store._redis is not None:
-                redis = writer._store._redis
-                keys = [key async for key in redis.scan_iter(match=f"{key_prefix}:*")]
-                if keys:
-                    await redis.delete(*keys)
-            async with engine.begin() as connection:
-                await connection.execute(
-                    delete(Account).where(Account.service_name == service_name)
-                )
-        finally:
-            await reader.close()
-            await writer.close()
-            await engine.dispose()
