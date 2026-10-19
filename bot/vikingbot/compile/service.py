@@ -193,11 +193,7 @@ class CompileCapabilities:
 
 
 class _CompileProvider(LLMProvider):
-    """Share model-call capacity across Compile tasks, including streams and compaction.
-
-    A slot covers a complete model response and is released on failure or cancellation.
-    Workspace tools and waits do not hold slots. The underlying provider owns retries.
-    """
+    """Share model-call capacity across Compile tasks."""
 
     def __init__(self, provider: LLMProvider, slots: asyncio.Semaphore):
         super().__init__()
@@ -205,12 +201,12 @@ class _CompileProvider(LLMProvider):
         self._slots = slots
 
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
-        """Forward one non-streaming request under the shared capacity limit."""
+        """Forward a request under the shared capacity limit."""
         async with self._slots:
             return await self._provider.chat(*args, **kwargs)
 
     async def chat_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[LLMStreamEvent]:
-        """Hold capacity until the response stream finishes or its consumer closes it."""
+        """Hold capacity until the stream closes."""
         async with self._slots:
             async with aclosing(self._provider.chat_stream(*args, **kwargs)) as stream:
                 async for event in stream:
@@ -246,7 +242,7 @@ class BotCompileService:
         )
         self._semaphore = asyncio.Semaphore(self.limits.concurrent_tasks)
         self._model_slots = asyncio.Semaphore(model_concurrency)
-        self._target_locks: dict[str, tuple[asyncio.Lock, int]] = {}
+        self._target_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
         self._target_locks_guard = asyncio.Lock()
         self._admission_guard = asyncio.Lock()
         self._admitted_tasks = 0
@@ -315,6 +311,11 @@ class BotCompileService:
                     stage="queued",
                 )
             connection = connection or {}
+            account_id = connection.get("account_id")
+            if self._openviking_auth_mode() != "dev" and not (account_id or "").strip():
+                raise CompileFailure(
+                    "UNAUTHENTICATED", "Compile requires account_id.", stage="queued"
+                )
             normalized_request = await self._normalize_request(request, connection=connection)
             task_id = task_id or "cmp_" + uuid.uuid4().hex
             now = utc_now()
@@ -638,13 +639,15 @@ class BotCompileService:
             )
         return parts[-1], "viking://" + "/".join(parts[: index + 1])
 
-    async def _retain_target_lock(self, target: str) -> asyncio.Lock:
+    async def _retain_target_lock(self, target: tuple[str, str]) -> asyncio.Lock:
+        """Retain a task lock keyed by effective account and canonical target URI."""
         async with self._target_locks_guard:
             lock, references = self._target_locks.get(target, (asyncio.Lock(), 0))
             self._target_locks[target] = (lock, references + 1)
             return lock
 
-    async def _release_target_lock(self, target: str, lock: asyncio.Lock) -> None:
+    async def _release_target_lock(self, target: tuple[str, str], lock: asyncio.Lock) -> None:
+        """Remove an account-target lock after its last active or waiting task exits."""
         async with self._target_locks_guard:
             current, references = self._target_locks.get(target, (lock, 0))
             if current is not lock:
@@ -668,7 +671,11 @@ class BotCompileService:
         request: SanitizedCompileRequest,
         connection: dict[str, Any],
     ) -> None:
-        task_lock = await self._retain_target_lock(request.to)
+        account_id = (
+            "default" if self._openviking_auth_mode() == "dev" else connection["account_id"]
+        )
+        target = (account_id, request.to)
+        task_lock = await self._retain_target_lock(target)
         acquired = False
         try:
             await self._acquire_execution_slot(task_lock)
@@ -688,7 +695,7 @@ class BotCompileService:
             if acquired:
                 self._semaphore.release()
                 task_lock.release()
-            await self._release_target_lock(request.to, task_lock)
+            await self._release_target_lock(target, task_lock)
 
     async def _execute_task(
         self,
@@ -1362,9 +1369,7 @@ class BotCompileService:
                     skill_name, str(skill_dir), target_uri=target_uri, wait=True
                 )
             else:
-                published = await client.add_skill(
-                    str(skill_dir), target_uri=target_uri, wait=True
-                )
+                published = await client.add_skill(str(skill_dir), target_uri=target_uri, wait=True)
             result["updated" if exists else "created"].append(
                 str(published.get("root_uri") or published.get("uri") or root_uri)
             )

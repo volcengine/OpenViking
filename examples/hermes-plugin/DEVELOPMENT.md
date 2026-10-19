@@ -51,8 +51,8 @@ Quick Local adapts [Hermes PR #94851](https://github.com/NousResearch/hermes-age
 (head `d15e0e65d67a2dd6d3f3ab09a382c1f1684e2560`). Provisioning remains separate
 from the setup UI. The port uses current Hermes PM, authenticated server reuse,
 and paths derived from the provider's bound home. On Python 3.14, the private
-server uses LiteLLM 1.83.7, within OpenViking's supported range; later LiteLLM
-releases exclude that Python version. The profile server controller verifies
+server uses LiteLLM 1.83.7, within OpenViking's supported range; some other
+releases in that range exclude Python 3.14. The profile server controller verifies
 the PID, creation time, executable and config path before stopping a process.
 It repairs permissions on plugin-owned private files after backup restoration;
 no Hermes backup changes are required.
@@ -110,11 +110,18 @@ those helpers require compatibility checks. The plugin uses HTTP. Quick Local in
 profile runtime through Hermes PM, or the earlier Hermes uv installer on the
 tested release baseline. It does not add server dependencies to Hermes.
 Explicit Quick Local setup resolves the latest stable, Python/platform-compatible
-OpenViking 0.4 release from PyPI and verifies the wheel against PyPI's download
+OpenViking 0.5 release from PyPI and verifies the wheel against PyPI's download
 hash. The native embedding package remains pinned and hash-verified. The resolved
 requirements are recorded per profile; unchanged requirements reuse the runtime,
 while a new release follows the existing validation and restart path. Chat and
 recovery do not resolve or upgrade packages.
+
+Installation records a runtime-validation-pending marker that only setup consumes.
+After validation passes, setup uses the existing server controller to request a
+restart and clears the validation marker. Chat therefore keeps using a healthy
+existing server while it keeps running. If that process stops, recovery can start
+the installed runtime without clearing pending validation. Local status reports
+`runtime_validation_pending` separately from readiness and `restart_required`.
 
 ## Validation
 

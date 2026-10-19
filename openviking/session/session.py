@@ -3118,10 +3118,11 @@ class Session:
                 response = await vlm.get_completion_async(
                     prompt=prompt,
                     tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "create_working_memory"},
-                    },
+                    tool_choice=(
+                        "auto"
+                        if getattr(vlm, "thinking", False)
+                        else {"type": "function", "function": {"name": "create_working_memory"}}
+                    ),
                 )
                 if not (
                     getattr(response, "has_tool_calls", False)
@@ -3165,10 +3166,11 @@ class Session:
         resp = await vlm.get_completion_async(
             prompt=update_prompt,
             tools=[WM_UPDATE_TOOL],
-            tool_choice={
-                "type": "function",
-                "function": {"name": "update_working_memory"},
-            },
+            tool_choice=(
+                "auto"
+                if getattr(vlm, "thinking", False)
+                else {"type": "function", "function": {"name": "update_working_memory"}}
+            ),
         )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))

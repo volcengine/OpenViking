@@ -4,9 +4,10 @@ from typing import Literal
 
 from pydantic import Field
 
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.ops.common import payload
-from vikingbot.compile.pipeline_io import ModelCallError
+from vikingbot.compile.pipeline_io import ModelCallError, ModelCallLimitError
 from vikingbot.compile.results import FileResponse, Group
 
 
@@ -55,7 +56,15 @@ async def run(runtime, sources, context):
 
     try:
         response = await runtime.model.ask("compile", system, data, EntryResponse, validate)
-    except (ModelCallError, ValueError):
+    except ModelCallError as exc:
+        runtime.direct_output_format = None
+        if not isinstance(exc, ModelCallLimitError) and model_error_kind(exc) not in {
+            ModelErrorKind.INPUT_TOO_LARGE,
+            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+        }:
+            raise
+        return None
+    except ValueError:
         runtime.direct_output_format = None
         return None
     if response.needs_pipeline or any(

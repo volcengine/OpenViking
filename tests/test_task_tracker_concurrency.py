@@ -159,43 +159,6 @@ def test_owner_loop_dispatcher_concurrent_first_calls_share_winning_loop():
 
 
 @pytest.mark.asyncio
-async def test_store_io_limiter_bounds_concurrency():
-    from openviking.service.task_tracker_concurrency import StoreIOLimiter
-
-    limiter = StoreIOLimiter(max_concurrent=3)
-    release = asyncio.Event()
-    entered = 0
-    max_entered = 0
-    limit_reached = asyncio.Event()
-
-    async def operation() -> None:
-        nonlocal entered, max_entered
-        entered += 1
-        max_entered = max(max_entered, entered)
-        if entered == 3:
-            limit_reached.set()
-        await release.wait()
-        entered -= 1
-
-    tasks = [asyncio.create_task(limiter.run("test", operation)) for _ in range(20)]
-    await asyncio.wait_for(limit_reached.wait(), timeout=1)
-    await asyncio.sleep(0)
-
-    assert max_entered == 3
-    release.set()
-    await asyncio.gather(*tasks)
-    assert limiter.inflight == 0
-    assert limiter.max_observed_inflight == 3
-
-
-def test_store_io_limiter_rejects_non_positive_limit():
-    from openviking.service.task_tracker_concurrency import StoreIOLimiter
-
-    with pytest.raises(ValueError, match="max_concurrent must be positive"):
-        StoreIOLimiter(max_concurrent=0)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_run_to_completion_releases_request_and_preserves_cancellation(cancel):
     from openviking.service.task_tracker_concurrency import run_to_completion

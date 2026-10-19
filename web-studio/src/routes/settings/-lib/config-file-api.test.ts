@@ -180,3 +180,45 @@ it('accepts a verbatim file draft with a UTF-8 BOM', () => {
     true,
   )
 })
+
+it('uses the ROOT transport and abort signal for private model tests', async () => {
+  const requests: InternalAxiosRequestConfig[] = []
+  vi.spyOn(axios, 'create').mockReturnValue(
+    axios.create({
+      adapter: async (config) => {
+        requests.push(config)
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+          data: { status: 'ok', result: { ok: true, ms: 12 } },
+        }
+      },
+    }),
+  )
+  const controller = new AbortController()
+  const api = createConfigFileApi(
+    {
+      baseUrl: 'http://localhost:1933',
+      accountId: 'default',
+      userId: 'default',
+      adminApiKey: 'root-key',
+      apiKey: 'user-key',
+    },
+    false,
+  )
+  await api.testModel(
+    {
+      kind: 'vlm',
+      config: { provider: 'volcengine', api_key: 'model-key' },
+      fallback: {},
+    },
+    controller.signal,
+  )
+  expect(requests[0].url).toBe(
+    'http://localhost:1933/api/v1/admin/configuration/test-model',
+  )
+  expect(requests[0].headers.get('X-API-Key')).toBe('root-key')
+  expect(requests[0].signal).toBe(controller.signal)
+})

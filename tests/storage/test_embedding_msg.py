@@ -46,6 +46,18 @@ def test_embedding_msg_roundtrip_preserves_failure_requeue_count():
     assert EmbeddingMsg.from_dict(legacy).failure_requeue_count == 0
 
 
+def test_embedding_msg_roundtrip_preserves_ingestion_source_type():
+    msg = EmbeddingMsg.for_embed(
+        message="hello",
+        context_data={"uri": "viking://resources/demo", "account_id": "default"},
+        source_type="repository",
+    )
+
+    restored = EmbeddingMsg.from_json(msg.to_json())
+
+    assert restored.source_type == "repository"
+
+
 def test_legacy_embedding_msg_without_account_id_is_rejected():
     with pytest.raises(ValueError, match="account_id"):
         EmbeddingMsg.from_dict(

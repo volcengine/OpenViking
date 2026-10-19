@@ -121,6 +121,7 @@ jobs:
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
             .ci/hermes-agent/pm/lock.json
+            examples/hermes-plugin/local_packages.py
       - name: Install the reviewed host and test dependencies
         run: |
           if [ '${{ matrix.host }}' = release ]; then

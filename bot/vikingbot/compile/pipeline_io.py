@@ -103,7 +103,11 @@ def retry_allowed(failures: Counter, error: str) -> bool:
 
 
 class ModelCallError(OSError):
-    """A model timeout or provider failure; output validation errors remain separate."""
+    """A failed model request or stalled read loop; output validation errors remain separate."""
+
+
+class ModelCallLimitError(ModelCallError):
+    """A local deadline or no-progress limit allows direct generation to use the pipeline."""
 
 
 class TaskFiles:
@@ -228,20 +232,20 @@ class JsonModel:
         self.identity.update(
             batch_target_chars=self.budget, output_reserve_tokens=self.output_tokens
         )
-        self.identity["thinking"] = {"compile": True}
+        self.identity["thinking"] = {
+            "map": False,
+            "route": False,
+            "reduce": False,
+            "combine": False,
+        }
         underlying = getattr(provider, "_provider", provider)
         backend = getattr(underlying, "_vlm", underlying)
+        backend = getattr(backend, "primary", backend)
+        self.timeout = getattr(backend, "timeout", 600.0)
         self.identity["backend_settings"] = {
             name: getattr(backend, name, None)
             for name in ("model", "thinking", "temperature", "max_tokens", "reasoning_effort")
         }
-        # Explicit Ark configuration controls direct generation without changing other stages.
-        self.identity["reasoning_effort"] = (
-            {"compile": backend.reasoning_effort}
-            if getattr(backend, "provider", None) == "volcengine"
-            and getattr(backend, "reasoning_effort", None) is not None
-            else {}
-        )
         configured_tokens = self.identity["backend_settings"]["max_tokens"]
         self.max_tokens = (
             configured_tokens
@@ -276,12 +280,17 @@ class JsonModel:
         self.metrics[f"{stage}_calls"] += 1
         number = self.metrics[f"{stage}_calls"]
         started = time.monotonic()
+        seconds = max(600, self.timeout)
+        thinking = self.identity["thinking"].get(stage.split("_", 1)[0])
         report = {
             "stage": stage,
             "call": number,
             "max_tokens": max_tokens,
-            "timeout_seconds": self.limits.pipeline_call_seconds,
-            "thinking": self.identity["thinking"].get(stage, False),
+            "timeout_seconds": seconds,
+            "thinking": thinking
+            if thinking is not None
+            else self.identity["backend_settings"]["thinking"],
+            "reasoning_effort": self.identity["backend_settings"]["reasoning_effort"],
             "message_chars": sum(len(json.dumps(m, ensure_ascii=False)) for m in messages),
             "tool_schema_chars": len(json.dumps(tools, ensure_ascii=False)),
             "tool_result_chars": sum(
@@ -295,19 +304,14 @@ class JsonModel:
             json.dumps([messages, tools], ensure_ascii=False), text_type="mixed"
         )
         try:
-            completion_overrides = {}
-            if stage in self.identity["reasoning_effort"]:
-                report["reasoning_effort"] = self.identity["reasoning_effort"][stage]
-                completion_overrides["reasoning_effort"] = report["reasoning_effort"]
-            async with asyncio.timeout(self.limits.pipeline_call_seconds):
+            async with asyncio.timeout(seconds):
                 response = await self.provider.chat(
                     messages=messages,
                     tools=tools,
                     model=self.model,
                     temperature=self.temperature,
                     max_tokens=max_tokens,
-                    thinking=report["thinking"],
-                    **completion_overrides,
+                    thinking=thinking,
                 )
             report.update(
                 finish_reason=response.finish_reason,
@@ -331,8 +335,8 @@ class JsonModel:
             return response
         except TimeoutError as exc:
             report["error"] = "TimeoutError"
-            raise ModelCallError(
-                f"{stage}: model call wall-clock budget exhausted ({self.limits.pipeline_call_seconds:g}s)"
+            raise ModelCallLimitError(
+                f"{stage}: model call wall-clock budget exhausted ({seconds:g}s)"
             ) from exc
         except Exception as exc:
             report["error"] = type(exc).__name__
@@ -356,21 +360,20 @@ class JsonModel:
         agent=False,
         readers=None,
     ) -> R:
-        """Bound an assignment; readers adds scoped tools for direct calls without widening worker access."""
-        seconds = (
-            self.limits.pipeline_plan_seconds
-            if stage in {"plan", "review"}
-            else self.limits.pipeline_agent_seconds
-        )
+        """Bound each assignment to twice the model timeout, with a 1200-second minimum."""
+        seconds = max(1200, 2 * self.timeout)
         try:
             async with asyncio.timeout(seconds):
                 return await self._ask(
                     stage, system, data, schema, validate, agent=agent, readers=readers
                 )
         except TimeoutError as exc:
-            raise ModelCallError(f"{stage}: wall-clock budget exhausted ({seconds:g}s)") from exc
+            raise ModelCallLimitError(
+                f"{stage}: assignment wall-clock budget exhausted ({seconds:g}s)"
+            ) from exc
 
     async def _ask(self, stage, system, data, schema, validate, *, agent, readers):
+        """Run a stage with scoped readers; return validated output and cache eligible results."""
         if schema is FileResponse and stage != "skill_repair":
             # Inline original excerpts when located; unlocated records retain full shards.
             # The scoped reader can expand partial evidence without catalog access.
@@ -429,7 +432,7 @@ class JsonModel:
         return result
 
     async def direct(self, stage, system, data, schema, validate, key, *, readers=None):
-        """Allow scoped reads; each Review gets three repairs, Skill repair three submissions."""
+        """Return validated output; reject three consecutive rounds of repeated tool results."""
         tools = [
             {
                 "type": "function",
@@ -477,6 +480,8 @@ class JsonModel:
         ]
         failures = 0
         retries = Counter()
+        seen_results = set()
+        stalled_rounds = 0
         while True:
             response = await self.call(stage, messages, tools, max_tokens=self.max_tokens)
             raw = None
@@ -507,12 +512,34 @@ class JsonModel:
                             ],
                         }
                     )
+                    progress = False
                     for call in calls:
                         try:
                             value = await readers[call.name].execute(**call.arguments)
                         except (ValueError, OSError, NotFoundError) as exc:
+                            # Changing error details do not reset a reader's failure budget.
+                            if not retry_allowed(retries, f"read:{call.name}"):
+                                raise ModelCallLimitError(
+                                    f"{stage}: reader {call.name} failed repeatedly"
+                                ) from exc
                             value = "Error: " + str(exc)[:800]
+                        else:
+                            retries.pop(f"read:{call.name}", None)
+                        try:
+                            content = json.loads(
+                                value, object_hook=lambda v: v.get("text", v.get("excerpts", v))
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            content = value
+                        fingerprint = digest([call.name, content])
+                        progress = progress or fingerprint not in seen_results
+                        if fingerprint in seen_results:
+                            value = "Unchanged: same tool result. Use previous results or submit."
+                        seen_results.add(fingerprint)
                         messages.append({"role": "tool", "tool_call_id": call.id, "content": value})
+                    stalled_rounds = 0 if progress else stalled_rounds + 1
+                    if stalled_rounds >= 3:
+                        raise ModelCallLimitError(f"{stage}: tool calls made no progress")
                     continue
                 if calls:
                     if len(calls) != 1 or calls[0].name != "emit":
@@ -564,7 +591,7 @@ class JsonModel:
                 )
                 self.metrics["validation_failures"] += 1
                 if stage == "compile" and category == "truncated":
-                    raise ModelCallError(f"{stage}: {error}") from exc
+                    raise ValueError(f"{stage}: {error}") from exc
                 # Routing owns retries per primary record, including malformed responses.
                 if schema is RouteBatchResponse or (
                     failures > 3
