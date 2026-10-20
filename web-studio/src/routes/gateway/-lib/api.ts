@@ -207,6 +207,32 @@ export type OpenVikingHealth = {
   reason?: string
 }
 
+/** A conversation whose latest long model calls all missed the prompt cache. */
+export type CacheMiss = {
+  upstream_id: string
+  model: string
+  /** Long calls in a row without a cache hit. */
+  streak: number
+  /** Epoch seconds of the newest call. */
+  last_at: number
+}
+
+export type CacheAlerts = {
+  /** Conversations missing the cache; null without any. */
+  misses: {
+    conversations: number
+    /** Shortest streak and smallest first-call input among them. */
+    streak: number
+    input_tokens: number
+    /** All are Anthropic conversations that never wrote the cache either. */
+    no_writes: boolean
+    /** The newest three conversations. */
+    recent: CacheMiss[]
+  } | null
+  /** Ids of upstreams whose long calls have not hit the cache lately, sorted. */
+  unreported: string[]
+}
+
 export type Overview = {
   /** Model requests in the sample (memory-sync events excluded). */
   requests: number
@@ -226,6 +252,8 @@ export type Overview = {
   sample_limit: number
   /** Days the request log keeps records. */
   log_retention_days: number
+  /** Conversations and upstreams missing the prompt cache; null without any. */
+  cache_alerts: CacheAlerts | null
 }
 
 /** One request-log record (metadata only); every field but `time` is optional. */
@@ -264,7 +292,10 @@ export type LogRecord = {
   degradation?: string
   /** Anchor of the cut whose replacement this request used. */
   compaction_applied?: string
-  /** Why generating a summary failed; the full history was sent. */
+  /**
+   * Why compaction failed. The full history was sent, except for
+   * `still_over_threshold`, where the summary was written and kept.
+   */
   compaction_failed?: string
   /** Estimated size of the summary written for this request. */
   compaction_tokens?: number

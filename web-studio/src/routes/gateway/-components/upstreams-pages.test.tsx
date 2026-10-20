@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
 import type { GatewayKey, Upstream, UpstreamInput } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type { Translate } from '../-lib/localize'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { UpstreamEditor } from './upstreams-editor'
@@ -204,6 +205,12 @@ const rowOf = (name: string) => {
   return within(row)
 }
 
+/** Hrefs of every link with this text (Base UI gives button links the button role). */
+const hrefsOf = (text: string) =>
+  screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   for (const fn of [...Object.values(api), ...Object.values(toast)]) {
@@ -257,6 +264,7 @@ describe('UpstreamsPage', () => {
     expect(blocked.getByText('upstreams.credentials.keyMissing')).toBeTruthy()
     expect(blocked.getByText('upstreams.credentials.blocked')).toBeTruthy()
     expect(blocked.getByText('upstreams.notUsed')).toBeTruthy()
+    expect(hrefsOf('docs.link')).toEqual([gatewayDocsUrl('upstreams', 'en')])
   })
 
   it('explains an empty account', async () => {
@@ -350,6 +358,9 @@ describe('UpstreamsPage', () => {
       expect(api.testUpstream).toHaveBeenCalledWith(expect.anything(), 'u1'),
     )
     await screen.findByText('upstreams.test.result.connected')
+    expect(hrefsOf('docs.learnMore')).toEqual([
+      gatewayDocsUrl('testUpstream', 'en'),
+    ])
     fireEvent.click(
       screen.getByRole('button', {
         name: 'upstreams.test.dialog.run',
@@ -533,6 +544,12 @@ describe('UpstreamEditor', () => {
     expect(
       screen.getByText('https://api.openai.com/v1/chat/completions'),
     ).toBeTruthy()
+    // One docs link per section, after its description.
+    expect(hrefsOf('docs.learnMore')).toEqual(
+      (['endpoint', 'credentials', 'models', 'routing'] as const).map(
+        (section) => gatewayDocsUrl(section, 'en'),
+      ),
+    )
 
     const save = screen.getByRole('button', { name: 'actions.save' })
     expect(save.hasAttribute('disabled')).toBe(true)
@@ -1157,6 +1174,10 @@ describe('upstream access and import', () => {
       screen.getByText('lite: upstreams.import.reasons.litellm_no_api_base'),
     ).toBeTruthy()
     expect(screen.getByText('upstreams.import.repeat')).toBeTruthy()
+    // Skipped credentials link the import docs.
+    expect(hrefsOf('docs.learnMore')).toEqual([
+      gatewayDocsUrl('importModels', 'en'),
+    ])
     fireEvent.click(
       screen.getByRole('button', { name: 'upstreams.import.dismiss' }),
     )

@@ -8,12 +8,14 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GatewayError } from '../-lib/api'
 import type * as Api from '../-lib/api'
 import type { IssuedKey, KeyUser, Profile, Upstream } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type { Translate } from '../-lib/localize'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
@@ -721,6 +723,11 @@ describe('KeysIssueDialog', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('keys.errors.title')
     expect(alert.textContent).toContain('keys.errors.unavailable')
+    expect(
+      within(alert)
+        .getByRole('link', { name: 'docs.troubleshoot' })
+        .getAttribute('href'),
+    ).toBe(gatewayDocsUrl('issueKeyFails', 'en'))
   })
 })
 

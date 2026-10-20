@@ -444,6 +444,7 @@ class OpenVikingService:
             return
 
         self._ensure_data_dir_lock_acquired()
+        await get_task_tracker().load()
 
         if self._vikingdb_manager is None:
             self._init_storage(
@@ -658,7 +659,12 @@ class OpenVikingService:
             # Register durable cleanup work before restoring tracked tasks;
             # the deletion service binds consumers once auth is ready.
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
-            restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            tracker = get_task_tracker()
+            await self._queue_manager.prepare_task_tracking(tracker)
+            # Target reservations need recovery even when Work is already durable.
+            restored_tasks = await self._queue_manager.get_queued_tasks(
+                tracker, self._queue_manager.EXTERNAL_TASK
+            )
             await self._external_task_service.restore_tasks(restored_tasks)
 
         if self._config.enable_watch_scheduler:
@@ -764,6 +770,10 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        # Queue workers and scheduled producers persist their final Task/Work
+        # transitions while stopping, so keep their store open until they drain.
+        await get_task_tracker().close()
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
         if callable(close_vlm_resolver):

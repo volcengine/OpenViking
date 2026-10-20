@@ -67,15 +67,33 @@ def test_cursor_is_bound_to_identity_and_filters():
 
 @pytest.mark.asyncio
 async def test_concurrent_submission_retry_and_restart(monkeypatch):
+    import ragfs_python
+
     import openviking.service.external_task_service as module
+    from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.queue_manager import QueueManager
 
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     monkeypatch.setattr(module, "get_task_tracker", lambda: tracker)
-    monkeypatch.setattr(module, "get_queue_manager", lambda: SimpleNamespace(enqueue=AsyncMock()))
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount("queuefs", "/queue", {"backend": "memory"})
+    manager = QueueManager(transport)
+    manager.get_queue(manager.EXTERNAL_TASK, allow_create=True)
+    monkeypatch.setattr(module, "get_queue_manager", lambda: manager)
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="external-task"),
+        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"done": True})),
+    )
     service = ExternalTaskService()
-    service.register(SimpleNamespace(task_type="compile", task_id_prefix="cmp_"))
+    service.register(provider)
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
     params = {
         "resource_id": None,
@@ -84,15 +102,38 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         "ctx": ctx,
         "idempotency_key": "test-submission-123",
     }
-    results = await asyncio.gather(*(service.create("compile", **params) for _ in range(5)))
-    assert len({t.task_id for t in results}) == 1
-    tracker = TaskTracker(store)
-    again = await service.create("compile", **params)
-    assert again.task_id == results[0].task_id
-    with pytest.raises(ConflictError):
-        await service.create("compile", **{**params, "payload": {"to": "different"}})
-    other = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
-    assert (await service.create("compile", **{**params, "ctx": other})).task_id != again.task_id
+    try:
+        results = await asyncio.gather(*(service.create("compile", **params) for _ in range(5)))
+        assert len({t.task_id for t in results}) == 1
+        tracker = TaskTracker(PersistentTaskStore(agfs))
+        again = await service.create("compile", **params)
+        assert again.task_id == results[0].task_id
+        with pytest.raises(ConflictError):
+            await service.create("compile", **{**params, "payload": {"to": "different"}})
+        other = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
+        waiting = await service.create("compile", **{**params, "ctx": other})
+        assert waiting.task_id != again.task_id
+
+        owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+        await tracker.start(again.task_id, stage="polling", **owner)
+        await tracker.update_task_auth(again.task_id, {"external_task_id": "submitted"}, **owner)
+        tracker = TaskTracker(PersistentTaskStore(agfs))
+        service = ExternalTaskService()
+        service.register(provider)
+        await manager.prepare_task_tracking(tracker)
+        recovered = await manager.get_queued_tasks(tracker, manager.EXTERNAL_TASK)
+        assert {task.task_id for task in recovered} == {again.task_id, waiting.task_id}
+        await service.restore_tasks(recovered)
+
+        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        provider.submit.assert_not_awaited()
+        assert await service.execute(again.task_id, ctx.account_id, ctx.user.user_id)
+        assert await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        assert (await tracker.get(waiting.task_id, account_id="acme", user_id="bob")).result == {
+            "done": True
+        }
+    finally:
+        transport.close()
 
 
 @pytest.mark.asyncio

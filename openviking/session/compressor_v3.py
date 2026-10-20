@@ -40,7 +40,11 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import get_default_registry
-from openviking.session.memory.memory_updater import ExtractContext, write_stored_links
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateError,
+    write_stored_links,
+)
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -782,6 +786,8 @@ class SessionCompressorV3:
         result = update_result.apply_result
         patch_operations = update_result.operations
         _report_extraction_telemetry(result, patch_operations)
+        if strict_extract_errors and result.errors:
+            raise MemoryUpdateError(result, has_link_updates=bool(patch_operations.resolved_links))
 
         memory_diff = None
         if archive_uri and viking_fs and result is not None:

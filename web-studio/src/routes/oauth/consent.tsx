@@ -249,7 +249,9 @@ function ConsentPage() {
   }
 
   const clientName =
-    pendingInfo?.client_name || pendingInfo?.client_id || 'MCP client'
+    pendingInfo?.client_name ||
+    pendingInfo?.client_id ||
+    t('studio:oauthClient')
   const fallbackHref = `/oauth/authorize/page?pending=${encodeURIComponent(pending)}`
   const hasAnyKey = Boolean(
     resolveEffectiveApiKey(identityValue, connection.apiKey),

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Optional
 
@@ -26,7 +27,7 @@ from openviking.core.namespace import (
 )
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_work_index import bind_task_context, get_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
@@ -210,50 +211,13 @@ class ReindexExecutor:
             raise InvalidArgumentError(
                 f"recursive=false is not supported for namespace reindex target {uri}"
             )
-        ingest_options = self._resolve_ingest_options(
+        self._resolve_ingest_options(
             mode=mode,
             tags=tags,
             tag_mode=tag_mode,
         )
 
         tracker = get_task_tracker()
-        if wait:
-            task = await tracker.create_if_no_running(
-                REINDEX_TASK_TYPE,
-                uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-            if task is None:
-                raise OpenVikingError(
-                    f"URI {uri} already has a reindex in progress",
-                    code="CONFLICT",
-                    details={"uri": uri},
-                )
-
-            async def execute_run() -> dict[str, Any]:
-                return await self._run(
-                    uri=uri,
-                    object_type=object_type,
-                    mode=mode,
-                    force=force,
-                    recursive=recursive,
-                    ingest_options=ingest_options,
-                    ctx=ctx,
-                )
-
-            result, _task_id = await run_tracked_operation(
-                REINDEX_TASK_TYPE,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                operation=execute_run,
-                wait=True,
-                resource_id=uri,
-                existing_task=task,
-                accept_failed_result=self._accept_partial_result,
-            )
-            return result
-
         task = await tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
@@ -303,7 +267,7 @@ class ReindexExecutor:
                 lock_handoff=handoff,
             )
             queue_manager = get_queue_manager()
-            with bind_task_context(task.task_id, task.account_id, task.user_id):
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
                 await queue_manager.enqueue(queue_manager.REINDEX, msg.to_dict())
             enqueued = True
             await service.viking_fs._async_agfs.pathlock_handoff(lease)
@@ -322,6 +286,27 @@ class ReindexExecutor:
                     user_id=ctx.user.user_id,
                 )
             raise
+        if wait:
+            terminal = await tracker.wait(
+                task.task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            result = deepcopy(terminal.result or {})
+            if terminal.status == TaskStatus.FAILED and not self._accept_partial_result(result):
+                raise OpenVikingError(
+                    terminal.error or "Task processing failed",
+                    code=result.get("code") or "PROCESSING_ERROR",
+                    details={"task_id": task.task_id, **result.get("details", {})},
+                )
+            if terminal.status == TaskStatus.CANCELLED:
+                raise OpenVikingError(
+                    "Task processing was cancelled",
+                    code="PROCESSING_ERROR",
+                    details={"task_id": task.task_id, "status": "cancelled"},
+                )
+            result.pop("task_id", None)
+            return result
         return {
             "task_id": task.task_id,
             "status": "accepted",

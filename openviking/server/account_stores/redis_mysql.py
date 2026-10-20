@@ -865,6 +865,8 @@ class RedisMySQLAccountStore(AccountStore):
             account_id,
             lambda: self._mysql.delete_group(account_id, group_id),
             lambda: (),
+            # Clear all member caches, including memberships added concurrently.
+            account_wide=True,
         )
 
     async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:

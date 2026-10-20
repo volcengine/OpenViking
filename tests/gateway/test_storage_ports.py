@@ -200,6 +200,7 @@ async def test_kernel_and_capture_work_with_kv_ports(credential, protocol):
         K.DISABLED,
         K.TOOLS,
         K.TOOLS_CLOSED,
+        K.CLIENT_TOOLS,
         K.HIDDEN,
         K.REPLACEMENT,
         K.REPLY,

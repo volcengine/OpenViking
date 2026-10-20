@@ -42,7 +42,7 @@ class HiddenToolLoop:
         seconds = self.policy.get("tool_total_seconds")
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
-        self.transcript, self.usage = [], {}
+        self.transcript, self.usage, self.counted = [], {}, {}
         self.final, self.hidden, self.window = None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
@@ -95,7 +95,7 @@ class HiddenToolLoop:
     def observe(self):
         self.transcript.extend(self.round.output)
         add_usage(self.usage, self.round.usage)
-        normalized = usage_of({"usage": self.round.usage})
+        normalized = usage_of({"usage": self.round.usage}, self.adapter.usage_excludes_cache)
         if normalized["input_tokens"]:
             # The latest round measures the window best; native tools read it here.
             self.capture.context_usage = normalized
@@ -106,6 +106,9 @@ class HiddenToolLoop:
         prefix = "hidden_upstream_" if self.rounds else "first_upstream_"
         for key, value in normalized.items():
             self.prepared.metrics[prefix + key] = self.prepared.metrics.get(prefix + key, 0) + value
+            if self.round.usage:
+                # Rounds may report usage in different forms, so the log sums them read one by one.
+                self.counted[key] = self.counted.get(key, 0) + value
 
     def stream(self, events):
         # Adapters update visible history either way; only streams send events.
@@ -229,6 +232,7 @@ class HiddenToolLoop:
         # The combined reply reads like any relayed one: calls left for the client
         # hand the turn off, and the continuation that ends it is captured.
         self.capture.nonstream(self.final)
+        self.capture.usage = self.counted or self.capture.usage
         self.prepared.metrics["hidden_rounds"] = self.rounds
 
     def error(self, message: str) -> bytes:

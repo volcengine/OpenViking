@@ -290,6 +290,7 @@ function SemanticAdvancedControls({
               <CheckPill
                 checked={options.levels.includes(level)}
                 key={level}
+                // eslint-disable-next-line studio-i18n/no-literal-message -- L plus a number is the retrieval level identifier.
                 label={`L${level}`}
                 onCheckedChange={(checked) => toggleLevel(level, checked)}
               />

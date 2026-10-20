@@ -1133,9 +1133,7 @@ class FileStore(AccountStore):
         async with self._reload_lock:
             account = self._require_account(account_id)
             await self._load_account_groups_if_needed(account_id, account)
-            group = self._require_group(account_id, group_id)
-            if group.get("members"):
-                raise FailedPreconditionError("Group must be empty before deletion")
+            self._require_group(account_id, group_id)
             groups = copy.deepcopy(account.groups)
             del groups[group_id]
             await self._replace_groups(account_id, account, groups)

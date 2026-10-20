@@ -1,10 +1,11 @@
 use super::backend::{Message, QueueState, StoredMessage};
 use super::cache_protocol::{
     heartbeat_key, instance_key_prefix, last_enqueue_time_from_pending_payloads, queue_key_prefix,
-    queue_names_key, unix_secs, QueueKeys, ACK_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT,
-    DEQUEUE_SCRIPT, ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS,
-    LIST_UNACKED_SCRIPT, PEEK_SCRIPT, RECOVER_STALE_SCRIPT, REMOVE_QUEUE_SCRIPT,
-    STARTUP_RECOVERY_SWEEPS, STATUS_SCRIPT,
+    queue_names_key, recovery_leader_key, unix_secs, QueueKeys, ACK_SCRIPT,
+    ACQUIRE_RECOVERY_LEADER_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT, DEQUEUE_SCRIPT,
+    ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS, LIST_UNACKED_SCRIPT, PEEK_SCRIPT,
+    RECOVERY_INTERVAL_SECS, RECOVERY_LEADER_TTL_SECS, RECOVER_STALE_SCRIPT,
+    RELEASE_RECOVERY_LEADER_SCRIPT, REMOVE_QUEUE_SCRIPT, STATUS_SCRIPT,
 };
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
@@ -17,7 +18,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 use uuid::Uuid;
 
 const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v1";
@@ -30,6 +30,8 @@ const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v1";
 const ACK_ID: &str = "queuefs.ack.v1";
 const CLEAR_ID: &str = "queuefs.clear.v1";
 const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v1";
+const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
+const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
 const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
     ScriptDefinition {
@@ -72,7 +74,34 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
         id: RECOVER_STALE_ID,
         redis_lua: RECOVER_STALE_SCRIPT,
     },
+    ScriptDefinition {
+        id: ACQUIRE_RECOVERY_LEADER_ID,
+        redis_lua: ACQUIRE_RECOVERY_LEADER_SCRIPT,
+    },
+    ScriptDefinition {
+        id: RELEASE_RECOVERY_LEADER_ID,
+        redis_lua: RELEASE_RECOVERY_LEADER_SCRIPT,
+    },
 ];
+
+#[derive(Clone, Copy)]
+struct BackgroundTiming {
+    heartbeat_interval: Duration,
+    heartbeat_ttl: Duration,
+    recovery_interval: Duration,
+    recovery_leader_ttl: Duration,
+}
+
+impl Default for BackgroundTiming {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
+            heartbeat_ttl: Duration::from_secs(HEARTBEAT_TTL_SECS),
+            recovery_interval: Duration::from_secs(RECOVERY_INTERVAL_SECS),
+            recovery_leader_ttl: Duration::from_secs(RECOVERY_LEADER_TTL_SECS),
+        }
+    }
+}
 
 pub(super) struct CacheQueueStorage {
     runtime: Arc<CacheRuntime>,
@@ -87,6 +116,14 @@ pub(super) struct CacheQueueStorage {
 
 impl CacheQueueStorage {
     pub(super) async fn open(runtime: Arc<CacheRuntime>, key_prefix: String) -> Result<Self> {
+        Self::open_with_timing(runtime, key_prefix, BackgroundTiming::default()).await
+    }
+
+    async fn open_with_timing(
+        runtime: Arc<CacheRuntime>,
+        key_prefix: String,
+        timing: BackgroundTiming,
+    ) -> Result<Self> {
         runtime
             .require_operations(&[
                 CacheOperation::Set,
@@ -106,19 +143,22 @@ impl CacheQueueStorage {
         }
         let instance_id = Uuid::new_v4().to_string();
         let heartbeat = heartbeat_key(&key_prefix, &instance_id);
-        refresh_heartbeat(&runtime, &heartbeat).await?;
+        refresh_heartbeat(&runtime, &heartbeat, timing.heartbeat_ttl).await?;
 
         let (heartbeat_stop, heartbeat_receiver) = watch::channel(false);
         let heartbeat_task = tokio::spawn(run_heartbeat(
             Arc::clone(&runtime),
             heartbeat,
             heartbeat_receiver,
+            timing,
         ));
         let (recovery_stop, recovery_receiver) = watch::channel(false);
-        let recovery_task = tokio::spawn(run_startup_recovery(
+        let recovery_task = tokio::spawn(run_continuous_recovery(
             Arc::clone(&runtime),
             key_prefix.clone(),
+            instance_id.clone(),
             recovery_receiver,
+            timing,
         ));
 
         Ok(Self {
@@ -354,10 +394,7 @@ impl CacheQueueStorage {
             )
             .await?;
         if matches!(value, ScriptValue::Null) {
-            return Err(Error::NotFound(format!(
-                "queue '{}' not found",
-                queue_name
-            )));
+            return Err(Error::NotFound(format!("queue '{}' not found", queue_name)));
         }
         let ScriptValue::Array(values) = value else {
             return Err(invalid_result("queue status", value));
@@ -499,13 +536,18 @@ impl Drop for CacheQueueStorage {
     }
 }
 
-async fn run_heartbeat(runtime: Arc<CacheRuntime>, key: String, mut stop: watch::Receiver<bool>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
+async fn run_heartbeat(
+    runtime: Arc<CacheRuntime>,
+    key: String,
+    mut stop: watch::Receiver<bool>,
+    timing: BackgroundTiming,
+) {
+    let mut interval = tokio::time::interval(timing.heartbeat_interval);
     interval.tick().await;
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(error) = refresh_heartbeat(&runtime, &key).await {
+                if let Err(error) = refresh_heartbeat(&runtime, &key, timing.heartbeat_ttl).await {
                     tracing::warn!("queuefs cache heartbeat failed: {error}");
                 }
             }
@@ -518,13 +560,13 @@ async fn run_heartbeat(runtime: Arc<CacheRuntime>, key: String, mut stop: watch:
     }
 }
 
-async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str) -> Result<()> {
+async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str, ttl: Duration) -> Result<()> {
     runtime
         .set(
             key,
             Bytes::from_static(b"1"),
             SetOptions {
-                expiration: Some(Expiration::After(Duration::from_secs(HEARTBEAT_TTL_SECS))),
+                expiration: Some(Expiration::After(ttl)),
                 ..SetOptions::default()
             },
         )
@@ -533,35 +575,56 @@ async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str) -> Result<()> {
         .map_err(|error| cache_error("heartbeat", error))
 }
 
-async fn run_startup_recovery(
+async fn run_continuous_recovery(
     runtime: Arc<CacheRuntime>,
     key_prefix: String,
+    leader_token: String,
     mut stop: watch::Receiver<bool>,
+    timing: BackgroundTiming,
 ) {
-    let started_at = Instant::now();
-    for sweep_index in 0..STARTUP_RECOVERY_SWEEPS {
-        let deadline = started_at + startup_recovery_delay_before_sweep(sweep_index);
-        if deadline > Instant::now() {
-            tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => {}
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow() {
-                        return;
+    let mut interval = tokio::time::interval(timing.recovery_interval);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                match acquire_or_renew_recovery_leader(
+                    &runtime,
+                    &key_prefix,
+                    &leader_token,
+                    timing.recovery_leader_ttl,
+                ).await {
+                    Ok(true) => {
+                        if let Err(error) = recover_stale(
+                            &runtime,
+                            &key_prefix,
+                            &leader_token,
+                            timing.recovery_leader_ttl,
+                        ).await {
+                            tracing::warn!("queuefs cache recover_stale failed: {error}");
+                        }
                     }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!("queuefs cache recovery leader lease failed: {error}"),
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
                 }
             }
         }
-        if let Err(error) = recover_stale(&runtime, &key_prefix).await {
-            tracing::warn!("queuefs cache startup recover_stale failed: {error}");
-        }
+    }
+
+    if let Err(error) = release_recovery_leader(&runtime, &key_prefix, &leader_token).await {
+        tracing::warn!("queuefs cache recovery leader release failed: {error}");
     }
 }
 
-fn startup_recovery_delay_before_sweep(sweep_index: usize) -> Duration {
-    Duration::from_secs(HEARTBEAT_TTL_SECS * sweep_index as u64)
-}
-
-async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize> {
+async fn recover_stale(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+    leader_ttl: Duration,
+) -> Result<usize> {
     let queues = runtime
         .smembers(&queue_names_key(key_prefix))
         .await
@@ -569,6 +632,9 @@ async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize
         .and_then(bytes_array_to_strings)?;
     let mut recovered = 0;
     for queue in queues {
+        if !acquire_or_renew_recovery_leader(runtime, key_prefix, leader_token, leader_ttl).await? {
+            break;
+        }
         let keys = QueueKeys::new(key_prefix, &queue);
         recovered += usize::try_from(integer(
             execute_runtime(
@@ -583,6 +649,41 @@ async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize
         .map_err(|_| Error::internal("redis recover_stale returned an invalid value"))?;
     }
     Ok(recovered)
+}
+
+async fn acquire_or_renew_recovery_leader(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+    ttl: Duration,
+) -> Result<bool> {
+    boolean(
+        execute_runtime(
+            runtime,
+            "acquire recovery leader",
+            ACQUIRE_RECOVERY_LEADER_ID,
+            vec![recovery_leader_key(key_prefix)],
+            vec![bytes(leader_token), bytes(ttl.as_millis().to_string())],
+        )
+        .await?,
+    )
+}
+
+async fn release_recovery_leader(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+) -> Result<bool> {
+    boolean(
+        execute_runtime(
+            runtime,
+            "release recovery leader",
+            RELEASE_RECOVERY_LEADER_ID,
+            vec![recovery_leader_key(key_prefix)],
+            vec![bytes(leader_token)],
+        )
+        .await?,
+    )
 }
 
 async fn execute_runtime(
@@ -672,11 +773,8 @@ mod tests {
 
     fn lifecycle_test_runtime() -> Arc<CacheRuntime> {
         let provider = Arc::new(
-            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|request| {
-                panic!(
-                    "script execution is outside this lifecycle test's scope: {}",
-                    request.script_id
-                )
+            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|_| {
+                crate::cache_runtime::ScriptResult::encode(&ScriptValue::Integer(1))
             }),
         );
         CacheRuntime::memory_with_provider(provider)
@@ -697,18 +795,23 @@ mod tests {
     }
 
     #[test]
-    fn startup_recovery_uses_original_zero_thirty_sixty_second_offsets() {
+    fn default_background_timing_matches_recovery_contract() {
+        let timing = BackgroundTiming::default();
         assert_eq!(
-            startup_recovery_delay_before_sweep(0),
-            Duration::from_secs(0)
+            timing.heartbeat_interval,
+            Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
         );
         assert_eq!(
-            startup_recovery_delay_before_sweep(1),
-            Duration::from_secs(30)
+            timing.heartbeat_ttl,
+            Duration::from_secs(HEARTBEAT_TTL_SECS)
         );
         assert_eq!(
-            startup_recovery_delay_before_sweep(2),
-            Duration::from_secs(60)
+            timing.recovery_interval,
+            Duration::from_secs(RECOVERY_INTERVAL_SECS)
+        );
+        assert_eq!(
+            timing.recovery_leader_ttl,
+            Duration::from_secs(RECOVERY_LEADER_TTL_SECS)
         );
     }
 
@@ -769,9 +872,13 @@ mod tests {
         assert_eq!(first.dequeue("jobs").await.unwrap().unwrap().id, message_id);
 
         first.shutdown().await.unwrap();
-        let second = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone())
-            .await
-            .unwrap();
+        let second = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
         let recovered = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some(message) = second.dequeue("jobs").await.unwrap() {
@@ -784,8 +891,87 @@ mod tests {
         .unwrap();
 
         assert_eq!(recovered.id, message_id);
+        second.remove_queue("jobs").await.unwrap();
         second.shutdown().await.unwrap();
         runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
         runtime.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_node_recovers_processing_after_peer_crash() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime = CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+            endpoints: vec![endpoint],
+            connect_timeout_ms: 5_000,
+            command_timeout_ms: 1_000,
+            default_ttl_seconds: 60,
+            ..crate::cache_runtime::RedisProviderConfig::default()
+        })
+        .await
+        .unwrap();
+        let prefix = format!("queuefs-continuous-recovery-test:{}", Uuid::new_v4());
+        let survivor = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
+        let failed = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
+        failed.create_queue("jobs").await.unwrap();
+        let message = Message::new(b"payload".to_vec());
+        let message_id = message.id.clone();
+        failed.enqueue("jobs", message).await.unwrap();
+        assert_eq!(
+            failed.dequeue("jobs").await.unwrap().unwrap().id,
+            message_id
+        );
+
+        let heartbeat = heartbeat_key(&prefix, &failed.instance_id);
+        for task in [
+            failed.heartbeat_task.lock().await.take(),
+            failed.recovery_task.lock().await.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task.abort();
+        }
+        runtime.del(&[heartbeat]).await.unwrap();
+        drop(failed);
+
+        let recovered = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(message) = survivor.dequeue("jobs").await.unwrap() {
+                    break message;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(recovered.id, message_id);
+        survivor.remove_queue("jobs").await.unwrap();
+        survivor.shutdown().await.unwrap();
+        runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    fn fast_background_timing() -> BackgroundTiming {
+        BackgroundTiming {
+            heartbeat_interval: Duration::from_millis(20),
+            heartbeat_ttl: Duration::from_millis(100),
+            recovery_interval: Duration::from_millis(20),
+            recovery_leader_ttl: Duration::from_millis(100),
+        }
     }
 }

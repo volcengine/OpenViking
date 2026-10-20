@@ -27,6 +27,12 @@
     "You are a helpful AI assistant tasked with summarizing",
     "Generate a concise.{0,40}title",
     "Create a short.{0,40}title",
-    "You are a permission classifier"
+    "You are a permission classifier",
+    "Generate the session title from"
+  ],
+  "noise_patterns": [
+    "\\A\\s*Attached image\\(s\\) from tool result:\\s*\\Z",
+    "\\A\\s*Current runtime context\\. This snapshot supersedes earlier runtime-context snapshots\\.[\\s\\S]*",
+    "\\A\\s*Time sampled while preparing turn \\d+, step \\d+: [\\s\\S]*"
   ]
 }

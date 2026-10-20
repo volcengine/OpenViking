@@ -350,7 +350,10 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   function createSessionState(opencodeSessionId, event = {}) {
-    const parentId = event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? ""
+    const isSessionEvent = typeof event?.type === "string" && event.type.startsWith("session.")
+    const parentId = isSessionEvent
+      ? (event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? "")
+      : ""
     const ovSessionId = parentId
       ? deriveHarnessSessionId("oc-", parentId, `subagent-${opencodeSessionId}`)
       : deriveHarnessSessionId("oc-", opencodeSessionId)

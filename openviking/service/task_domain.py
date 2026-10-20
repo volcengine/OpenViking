@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
+from openviking.service.task_events import append_task_event
+
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -194,6 +196,8 @@ class WorkRecord:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     updated_at: float = field(default_factory=time.time)
+    account_id: Optional[str] = None
+    user_id: Optional[str] = None
 
     def is_open(self) -> bool:
         return self.state not in TERMINAL_WORK_STATES
@@ -254,3 +258,92 @@ def first_work_error(works: Iterable[WorkRecord]) -> Optional[str]:
         (work.error for work in works if work.state == WorkState.FAILED and work.error),
         None,
     )
+
+
+def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None:
+    """Append lifecycle events shared by all TaskStore implementations."""
+    recorded_at = datetime.now(timezone.utc).isoformat()
+    if previous is None:
+        kinds = ["created"]
+    else:
+        kinds = []
+        if task.error is not None and previous.error is None:
+            kinds.append("error_recorded")
+        if task.status == TaskStatus.CANCELLED and previous.status != TaskStatus.CANCELLING:
+            task.execution_events = append_task_event(
+                task.execution_events,
+                kind="status_changed",
+                status=TaskStatus.CANCELLING.value,
+                stage=sanitize_error(previous.stage) if previous.stage else None,
+                recorded_at=recorded_at,
+            )
+        if task.status != previous.status:
+            kinds.append("status_changed")
+        if task.stage != previous.stage and task.status not in TERMINAL_TASK_STATUSES:
+            kinds.append("stage_changed")
+
+    stage = previous.stage if previous and task.status in TERMINAL_TASK_STATUSES else task.stage
+    for kind in kinds:
+        task.execution_events = append_task_event(
+            task.execution_events,
+            kind=kind,
+            status=task.status.value,
+            stage=sanitize_error(stage) if stage else None,
+            error=sanitize_error(task.error)
+            if kind == "error_recorded" and task.error
+            else None,
+            recorded_at=recorded_at,
+        )
+
+
+def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
+    """Project queue aggregates into the public Task result shape."""
+    summary = summary or QueueWorkSummary()
+    return {
+        "processed": summary.processed,
+        "requeue_count": summary.requeue_count,
+        "error_count": summary.error_count,
+        "errors": [{"message": error} for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]],
+    }
+
+
+def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
+    """Apply the shared Task terminal-state and result projection rules."""
+    works = list(works)
+    if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
+        return False
+    if task.status == TaskStatus.CANCELLING:
+        task.status = TaskStatus.CANCELLED
+    else:
+        work_error = first_work_error(works)
+        if work_error and task.error is None:
+            task.error = sanitize_error(work_error)
+        if task.error is not None:
+            task.status = TaskStatus.FAILED
+        elif task.result is not None:
+            task.status = TaskStatus.COMPLETED
+        else:
+            task.error = "Task operation interrupted before its result was persisted"
+            task.status = TaskStatus.FAILED
+    if isinstance(task.result, dict):
+        summary = summarize_works(works)
+        projected = {
+            queue_name: queue_result(summary.queues.get(queue_name))
+            for queue_name in ("Semantic", "Embedding")
+        }
+        if any(work.queue_name in projected for work in works):
+            task.result["queue_status"] = projected
+        for queue_name, field_name in (
+            ("Semantic", "semantic_status"),
+            ("Embedding", "vector_status"),
+        ):
+            if task.result.get(field_name) == "queued":
+                task.result[field_name] = (
+                    "failed"
+                    if projected.get(queue_name, {}).get("error_count", 0)
+                    else "complete"
+                )
+    task.stage = task.status.value
+    task.auth = {}
+    task.processing_seconds = processing_seconds(works)
+    return True

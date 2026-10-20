@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import threading
 import time
@@ -304,6 +305,22 @@ class TaskTracker:
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return self._store.work_recovery_mode
+
+    async def load(self) -> None:
+        """Load backend resources without exposing backend transaction details."""
+        loader = getattr(self._store, "load", None)
+        if loader is not None:
+            result = loader()
+            if inspect.isawaitable(result):
+                await result
+
+    async def close(self) -> None:
+        """Release backend resources owned by the tracker."""
+        closer = getattr(self._store, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
 
     async def restore_work_tasks(self, owners: Dict[str, tuple[str, str]]) -> List[TaskRecord]:
         restored = []
@@ -701,6 +718,17 @@ class TaskTracker:
         task = await self._store.get_task(task_id, account_id=account_id, user_id=user_id)
         return self._public(task) if task is not None else None
 
+    async def get_with_events(
+        self,
+        task_id: str,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[TaskRecord]:
+        task = await self._store.get_task_with_events(
+            task_id, account_id=account_id, user_id=user_id
+        )
+        return self._public(task) if task is not None else None
+
     async def get_task_status(
         self, task_id: str, *, account_id: str, user_id: str
     ) -> Optional[TaskStatus]:
@@ -723,11 +751,29 @@ class TaskTracker:
         with _consume_wait_budget(task_id, timeout) as remaining:
             deadline = None if remaining is None else time.monotonic() + remaining
             while True:
-                task = await self.get(task_id, account_id=account_id, user_id=user_id)
-                if task is None:
-                    raise KeyError(f"Task not found: {task_id}")
-                if task.status in TERMINAL_TASK_STATUSES:
-                    return task
+                if account_id is not None and user_id is not None:
+                    status = await self.get_task_status(
+                        task_id,
+                        account_id=account_id,
+                        user_id=user_id,
+                    )
+                    if status is None:
+                        raise KeyError(f"Task not found: {task_id}")
+                    if status in TERMINAL_TASK_STATUSES:
+                        task = await self.get(
+                            task_id,
+                            account_id=account_id,
+                            user_id=user_id,
+                        )
+                        if task is None:
+                            raise KeyError(f"Task not found: {task_id}")
+                        return task
+                else:
+                    task = await self.get(task_id, account_id=account_id, user_id=user_id)
+                    if task is None:
+                        raise KeyError(f"Task not found: {task_id}")
+                    if task.status in TERMINAL_TASK_STATUSES:
+                        return task
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError(f"Timed out waiting for Task {task_id}")
@@ -830,7 +876,7 @@ class TaskTracker:
                 task_type=task_type,
                 status=status,
                 resource_id=resource_id,
-                limit=None,
+                limit=source_limit,
                 before=before,
                 include_internal=include_internal,
                 q=q,
@@ -868,7 +914,13 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> WorkRegistration:
-        work = WorkRecord(work_id=work_id, task_id=task_id, queue_name=queue_name)
+        work = WorkRecord(
+            work_id=work_id,
+            task_id=task_id,
+            queue_name=queue_name,
+            account_id=account_id,
+            user_id=user_id,
+        )
 
         async def register() -> WorkRegistration:
             try:
@@ -901,7 +953,13 @@ class TaskTracker:
         account_id: str,
         user_id: str,
     ) -> None:
-        work = WorkRecord(work_id=work_id, task_id=task_id, queue_name=queue_name)
+        work = WorkRecord(
+            work_id=work_id,
+            task_id=task_id,
+            queue_name=queue_name,
+            account_id=account_id,
+            user_id=user_id,
+        )
         await self._store.reconcile_delivery(work, account_id=account_id, user_id=user_id)
 
     async def get_work_state(

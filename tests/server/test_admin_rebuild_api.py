@@ -1,5 +1,6 @@
 """Tests for reindex admin endpoint and executor behavior."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -175,67 +176,114 @@ async def test_reindex_root_requires_explicit_account(admin_client: httpx.AsyncC
 
 
 @pytest.mark.asyncio
-async def test_reindex_resource_vectors_only_wait_true(monkeypatch):
+async def test_reindex_resource_vectors_only_wait_true(tmp_path, monkeypatch):
+    import asyncio
+
+    import ragfs_python
+
     from openviking.server.routers.content import ReindexRequest, reindex
+    from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.service.task_store import PersistentTaskStore
+    from openviking.service.task_tracker import TaskStatus, TaskTracker
+    from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+    from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+    from openviking.storage.queuefs.queue_manager import QueueManager
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+    from openviking.storage.viking_fs import VikingFS
 
-    seen = {}
+    agfs = ragfs_python.RAGFSBindingClient()
+    agfs.mount("localfs", "/local", {"local_dir": str(tmp_path)})
+    agfs.mount("queuefs", "/queue", {"backend": "memory"})
+    fs = VikingFS(agfs=agfs)
+    tracker = TaskTracker(PersistentTaskStore(agfs))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    manager = QueueManager(agfs)
+    queue = manager.get_queue("Reindex", ReindexProcessor(fs), allow_create=True)
+    child_enqueued, child_started, release_child = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
-    class FakeService:
-        async def reindex(
-            self,
-            *,
-            uri,
-            mode,
-            wait,
-            ctx,
-            tags=None,
-            tag_mode="replace",
-        ):
-            seen["uri"] = uri
-            seen["mode"] = mode
-            seen["wait"] = wait
-            seen["ctx"] = ctx
-            seen["tags"] = tags
-            seen["tag_mode"] = tag_mode
-            return {
-                "status": "completed",
-                "uri": uri,
-                "object_type": "resource",
-                "mode": mode,
-                "rebuilt_records": 1,
-                "scanned_records": 1,
-                "unsupported_records": 0,
-                "failed_records": 0,
-                "duration_ms": 12,
-                "warnings": [],
-            }
+    class EmbeddingHandler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            child_started.set()
+            await release_child.wait()
+            return ProcessResult.success({"vector_written": True})
 
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice"),
-        role=Role.ROOT,
+    embedding = manager.get_queue("Embedding", EmbeddingHandler(), allow_create=True)
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.ROOT)
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    uri = "viking://resources/demo.md"
+    service = SimpleNamespace(
+        viking_fs=fs,
+        vikingdb_manager=SimpleNamespace(has_queue_manager=True),
+        _vlm_resolver=None,
+        _vector_config_resolver=None,
+        reindex=ReindexExecutor().execute,
     )
-    request = ReindexRequest(
-        uri="viking://resources/demo",
-        mode="vectors_only",
-        wait=True,
-        tags=["Team=Search", "env=prod"],
-        tag_mode="append",
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: service)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    monkeypatch.setattr("openviking.server.dependencies.get_service", lambda: service)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+
+    async def rebuild(_self, *, uri, mode, run):
+        assert mode == "vectors_only"
+        assert run.ingest_options.search_tags == ["team=search", "env=prod"]
+        assert run.ingest_options.search_tag_mode == "append"
+        await embedding.enqueue(
+            EmbeddingMsg(message="source", context_data={"uri": uri, "account_id": ctx.account_id})
+        )
+        run.counters.scanned_records = run.counters.rebuilt_records = 1
+        child_enqueued.set()
+
+    monkeypatch.setattr(ReindexExecutor, "_reindex_resource", rebuild)
+    await fs.write_file(uri, "source", ctx=ctx)
+    request = asyncio.create_task(
+        reindex(
+            body=ReindexRequest(
+                uri=uri,
+                mode="vectors_only",
+                wait=True,
+                tags=["Team=Search", "env=prod"],
+                tag_mode="append",
+            ),
+            ctx=ctx,
+        )
     )
-
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-    response = await reindex(body=request, ctx=ctx)
-
-    assert response.status == "ok"
-    assert response.result["status"] == "completed"
-    assert response.result["object_type"] == "resource"
-    assert response.result["rebuilt_records"] == 1
-    assert seen["uri"] == "viking://resources/demo"
-    assert seen["mode"] == "vectors_only"
-    assert seen["wait"] is True
-    assert seen["ctx"] == ctx
-    assert seen["tags"] == ["Team=Search", "env=prod"]
-    assert seen["tag_mode"] == "append"
-    assert "reason" not in response.result
+    processing = child = None
+    try:
+        deadline = asyncio.get_running_loop().time() + 2
+        while not (messages := await queue.snapshot()):
+            if request.done():
+                request.result()
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.001)
+        task_id = json.loads(messages[0]["data"])["task_id"]
+        while (await tracker.get(task_id, **owner)).stage != "queued":
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.001)
+        processing = asyncio.create_task(queue.dequeue())
+        await asyncio.wait_for(child_enqueued.wait(), 2)
+        child = asyncio.create_task(embedding.dequeue())
+        await asyncio.wait_for(child_started.wait(), 2)
+        assert not request.done()
+        assert (await tracker.get(task_id, **owner)).status is TaskStatus.RUNNING
+        release_child.set()
+        await asyncio.wait_for(asyncio.gather(processing, child), 2)
+        response = await asyncio.wait_for(request, 2)
+        assert response.status == "ok"
+        assert response.result["status"] == "completed"
+        assert response.result["object_type"] == "resource"
+        assert response.result["rebuilt_records"] == 1
+        assert response.result["failed_records"] == 0
+        assert "task_id" not in response.result
+        assert (await tracker.get(task_id, **owner)).status is TaskStatus.COMPLETED
+        assert await queue.snapshot() == await embedding.snapshot() == []
+    finally:
+        release_child.set()
+        pending = [task for task in (request, processing, child) if task is not None]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        agfs.close()
 
 
 @pytest.mark.asyncio

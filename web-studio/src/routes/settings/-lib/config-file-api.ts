@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { createOvClient, getOvResult, OvClientError } from '#/lib/ov-client'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
@@ -56,7 +57,7 @@ export async function waitForServerRestart(
     }
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
-  throw new Error('Restart timed out')
+  throw new Error(i18n.t('studio:errors.restartTimeout'))
 }
 export const embeddingModes = ['dense', 'sparse', 'hybrid'] as const
 export const embeddingCredentialFields = [
@@ -181,7 +182,7 @@ export function createConfigFileApi(
         !models ||
         modelKinds.some((kind) => !models[kind])
       )
-        throw new Error('Model configuration response is unavailable')
+        throw new Error(i18n.t('studio:errors.modelResponseUnavailable'))
       return { ...result, models: models as ConfigFileConfiguration['models'] }
     },
     preview: (content: string, changes: ModelChanges = {}) =>

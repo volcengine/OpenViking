@@ -650,6 +650,34 @@ class _MemTaskStore(PersistentTaskStore):
         return await super().create(task, reject_if_active=reject_if_active)
 
 
+@pytest.fixture
+async def restore_reindex_queue(vfs, monkeypatch):
+    from types import SimpleNamespace
+
+    from openviking.storage.queuefs.queue_manager import QueueManager
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+
+    vfs.agfs.mount("queuefs", "/queue", {"backend": "memory"})
+    manager = QueueManager(agfs=vfs.agfs)
+    queue = manager.get_queue("Reindex", ReindexProcessor(vfs), allow_create=True)
+    service = SimpleNamespace(viking_fs=vfs, _vlm_resolver=None, _vector_config_resolver=None)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    monkeypatch.setattr("openviking.server.dependencies.get_service", lambda: service)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+
+    async def consume():
+        while True:
+            await queue.dequeue()
+            await asyncio.sleep(0.001)
+
+    worker = asyncio.create_task(consume())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatch):
     """When a restore only changes a directory `.abstract.md` (source file
@@ -843,7 +871,7 @@ async def test_restore_relations_json_has_no_vector_side_effect(vfs, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
+async def test_restore_returns_pollable_task_id(vfs, monkeypatch, restore_reindex_queue):
     """An applied restore with vector side-effects returns a ``task_id`` that
     can be polled without leaving an orphaned admin reindex task.
     """
@@ -927,6 +955,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
 async def test_restore_task_registration_failure_falls_back_to_file_reindex(
     vfs,
     monkeypatch,
+    restore_reindex_queue,
 ):
     from openviking.service.reindex_executor import ReindexExecutor
     from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker

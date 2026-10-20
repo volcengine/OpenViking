@@ -12,13 +12,12 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from openviking.server.account_stores.mysql_schema import Account, Base, Credential
+from openviking.server.account_stores.mysql_schema import Account, Base, Credential, GroupMember
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import FileStore
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -240,8 +239,8 @@ async def test_regenerate_key_preserves_management_not_found_errors():
         await manager.regenerate_key("acme", "missing")
 
 
-async def test_distributed_credentials_are_shared_and_service_scoped():
-    """Warm caches must reject rotated keys without crossing service boundaries."""
+async def test_distributed_authentication_state_is_shared_and_service_scoped():
+    """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
     if not raw_mysql or not redis_url:
@@ -305,9 +304,25 @@ async def test_distributed_credentials_are_shared_and_service_scoped():
             active_key = await writer.regenerate_key("acme", "alice")
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(old_key)
+        await writer.create_group("acme", "engineering")
+        await writer.add_group_member("acme", "engineering", "alice")
+        assert await reader.get_user_group_ids("acme", "alice") == ("engineering",)
+
+        await writer.delete_group("acme", "engineering")
+
+        assert await reader.get_groups("acme") == []
+        assert await reader.get_user_group_ids("acme", "alice") == ()
         assert (await reader.resolve_identity(active_key)).user_id == "alice"
         assert (await isolated.resolve_identity(isolated_key)).role == Role.ADMIN
         async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    select(func.count())
+                    .select_from(GroupMember)
+                    .where(GroupMember.service_name == service_name)
+                )
+                == 0
+            )
             assert (
                 await connection.scalar(
                     select(func.count())
@@ -410,13 +425,38 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
     assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
 
 
-async def test_file_store_rejects_deleting_nonempty_group():
-    store = _file_store()
-    await store.load()
-    await store.create_account_with_api_key("acme", "alice", "alice-key")
-    await store.create_group("acme", "engineering")
-    await store.add_group_member("acme", "engineering", "alice")
+async def test_group_deletion_preserves_users_and_persists_membership_removal():
+    fs = SimpleNamespace(agfs=InMemoryAGFS())
+    manager = build_api_key_manager("root", fs)
+    reloaded = build_api_key_manager("root", fs)
+    await manager.load()
+    try:
+        alice_key = await manager.create_account("acme", "alice")
+        bob_key = await manager.register_user("acme", "bob")
+        await manager.create_group("acme", "engineering")
+        await manager.create_group("acme", "reviewers")
+        await manager.add_group_member("acme", "engineering", "alice")
+        await manager.add_group_member("acme", "engineering", "bob")
+        await manager.add_group_member("acme", "reviewers", "bob")
+        assert await manager.get_user_group_ids("acme", "bob") == (
+            "engineering",
+            "reviewers",
+        )
 
-    with pytest.raises(FailedPreconditionError, match="Group must be empty"):
-        await store.delete_group("acme", "engineering")
-    assert await store.get_group_members("acme", "engineering") == ["alice"]
+        await manager.delete_group("acme", "engineering")
+        await reloaded.load()
+
+        for reader in (manager, reloaded):
+            assert await reader.get_groups("acme") == [{"group_id": "reviewers", "member_count": 1}]
+            assert await reader.get_user_group_ids("acme", "alice") == ()
+            assert await reader.get_user_group_ids("acme", "bob") == ("reviewers",)
+            assert (await reader.resolve_identity(alice_key)).user_id == "alice"
+            assert (await reader.resolve_identity(bob_key)).user_id == "bob"
+            with pytest.raises(NotFoundError, match="Group not found"):
+                await reader.get_group_members("acme", "engineering")
+
+        with pytest.raises(NotFoundError, match="Group not found"):
+            await manager.delete_group("acme", "engineering")
+    finally:
+        await reloaded.close()
+        await manager.close()

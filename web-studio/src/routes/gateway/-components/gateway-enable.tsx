@@ -23,6 +23,7 @@ import {
 import { setManagementKey } from '../-lib/management-key'
 import { CodeBlock } from './code-block'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { Notice } from './notice'
 import { SetupCard } from './setup-card'
 
@@ -227,7 +228,12 @@ export function EnableGatewayCard({
       <SetupCard
         title={t('unavailable.notEnabled.title')}
         description={t('unavailable.enable.readOnly')}
-        actions={retry}
+        actions={
+          <>
+            {retry}
+            <DocsLink section="enableGateway" />
+          </>
+        }
       >
         <CodeBlock
           label={t('unavailable.environment')}

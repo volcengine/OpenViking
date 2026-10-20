@@ -23,6 +23,8 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **聊天客户端 / SDK 与 API 应用 / 其他没有插件的客户端** | [OpenViking 网关](../guides/15-gateway.md) — 能填 Base URL 和 API Key 的客户端都能接入网关，由网关召回记忆、保存对话，客户端里不用装任何东西 |
 | **ZCode / AstrBot / …** | [社区插件](./08-community-plugins.md) — 社区维护的各运行时集成 |
 
+Claude Code、Codex、OpenCode、pi、DSH 等 Agent 既能用自己的插件，也能接入 OpenViking 网关。两者怎么选，见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)。
+
 ## 横向对比各集成能力
 
 想知道各个集成在工具面、自动召回、会话与 commit、压缩接管、降级容错上的具体差异，见 [集成能力参考](./16-capability-reference.md)——一份覆盖全部集成的横向对照矩阵。

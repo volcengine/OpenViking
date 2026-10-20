@@ -214,6 +214,18 @@ class MemoryKernel:
         upstream = next((u for u in upstreams if u["id"] == root["upstream_id"]), upstream)
         policy = Policy.model_validate(root["policy"])
         kind, anchor = classify(body, headers, messages)
+        if body.get("tools"):
+            if (K.CLIENT_TOOLS, "") not in records:
+                await self.store.replay.put(scope, sid, K.CLIENT_TOOLS, "", {})
+        elif (
+            kind == "user"
+            and (K.CLIENT_TOOLS, "") in records
+            and not any(adapter.is_reply(m) for m in messages)
+        ):
+            # Clients such as Claude Code send side requests, like summarizing a fetched
+            # page, under the conversation's session header: a fresh exchange without
+            # tools. A turn of the conversation itself resends its replies.
+            kind = "auxiliary"
         disabled = (K.DISABLED, "") in records
         if plugin and not disabled:
             await self.store.replay.put(scope, sid, K.DISABLED, "", {"reason": "plugin_present"})

@@ -1377,7 +1377,7 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
             self.messages.append((role, parts, peer_id, created_at))
 
     fake_session = FakeSession()
-    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "open", AsyncMock(return_value=fake_session))
     monkeypatch.setattr(
         service.sessions,
         "commit_async",

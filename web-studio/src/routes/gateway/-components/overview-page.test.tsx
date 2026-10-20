@@ -32,8 +32,11 @@ import {
 import i18n from '#/i18n'
 
 import { GatewayError } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import type * as Api from '../-lib/api'
 import type {
+  CacheAlerts,
+  CacheMiss,
   GatewayAccess,
   IssuedKey,
   LogRecord,
@@ -112,6 +115,7 @@ const EMPTY_OVERVIEW: Overview = {
   capture_issues: { retrying: 0, paused: 0 },
   sample_limit: 10000,
   log_retention_days: 30,
+  cache_alerts: null,
 }
 
 const BUSY_OVERVIEW: Overview = {
@@ -140,6 +144,7 @@ const BUSY_OVERVIEW: Overview = {
   capture_issues: { retrying: 1, paused: 2 },
   sample_limit: 10000,
   log_retention_days: 7,
+  cache_alerts: null,
 }
 
 const LOGS: LogRecord[] = [
@@ -171,6 +176,34 @@ const LOGS: LogRecord[] = [
   },
 ]
 
+const UPSTREAMS = [
+  { id: 'u1', name: 'OpenAI production' },
+  { id: 'u2', name: 'Kimi relay' },
+] as Upstream[]
+
+function cacheMiss(fields: Partial<CacheMiss>): CacheMiss {
+  return {
+    upstream_id: 'u1',
+    model: 'gpt-5',
+    streak: 5,
+    last_at: NOW - 60,
+    ...fields,
+  }
+}
+
+function cacheMisses(
+  fields: Partial<NonNullable<CacheAlerts['misses']>>,
+): CacheAlerts['misses'] {
+  return {
+    conversations: 1,
+    streak: 5,
+    input_tokens: 50000,
+    no_writes: false,
+    recent: [cacheMiss({})],
+    ...fields,
+  }
+}
+
 /** Pages the overview links to; links only get an href for known routes. */
 const LINK_TARGETS = [
   '/gateway/upstreams',
@@ -185,6 +218,13 @@ const LINK_TARGETS = [
 /** Href of a button-styled link (Base UI gives those the button role). */
 function hrefOf(text: string) {
   return screen.getByText(text).closest('a')?.getAttribute('href')
+}
+
+/** Hrefs of every link with this text, in page order. */
+function hrefsOf(text: string) {
+  return screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
 }
 
 function renderOverview() {
@@ -351,6 +391,13 @@ describe('OverviewPage', () => {
       '/gateway/requests?filter=issues',
       '/gateway/requests?filter=issues',
     ])
+    // Each problem links the docs section that troubleshoots it.
+    expect(hrefsOf('Troubleshooting')).toEqual([
+      gatewayDocsUrl('openvikingDegraded', 'en'),
+      gatewayDocsUrl('notSaved', 'en'),
+      gatewayDocsUrl('degradedRequests', 'en'),
+    ])
+    expect(hrefOf('Docs')).toBe(gatewayDocsUrl('overview', 'en'))
 
     const reasons = screen
       .getAllByText(/^(Upstream switched|OpenViking plugin in use)$/, {
@@ -372,12 +419,111 @@ describe('OverviewPage', () => {
     expect(screen.queryByText('Memory sync')).toBeNull()
     expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.getByText('502')).toBeTruthy()
+    // No cache alerts, so no notice and no upstream list to load.
+    expect(screen.queryByText(/prompt cache|cache hits lately/)).toBeNull()
     expect(hrefOf('View all')).toBe('/gateway/requests')
     expect(
       screen.getByText(
         'Figures cover the latest 10,000 entries of the request log. Entries are kept for 7 days.',
       ),
     ).toBeTruthy()
+  })
+
+  it('warns about long conversations that keep missing the prompt cache', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({
+          conversations: 25,
+          streak: 3,
+          input_tokens: 33950,
+          recent: [
+            cacheMiss({ model: 'claude-sonnet-4-5', streak: 7 }),
+            cacheMiss({ upstream_id: 'deadbeefcafe0001', streak: 5 }),
+            cacheMiss({ model: 'kimi-k2', streak: 9, last_at: NOW - 7200 }),
+          ],
+        }),
+        unreported: [],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        '25 long conversations keep missing the prompt cache',
+      ),
+    ).toBeTruthy()
+    // The summary speaks for every conversation, listed or not, rounded down.
+    expect(
+      screen.getByText(
+        /^Their last 3 model calls each sent at least 33K input tokens and got a 0% cache hit rate\./,
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/^Compare with your provider's cache records\./),
+    ).toBeTruthy()
+    // The newest conversations, upstreams by name.
+    expect(screen.getByText('7 misses in a row')).toBeTruthy()
+    expect(screen.getByText('5 misses in a row')).toBeTruthy()
+    expect(screen.getByText('9 misses in a row')).toBeTruthy()
+    expect(screen.getAllByText('claude-sonnet-4-5').length).toBeGreaterThan(0)
+    expect(screen.getByText('2 hours ago')).toBeTruthy()
+    expect(await screen.findAllByText('OpenAI production')).toHaveLength(2)
+    expect(screen.getByText('deadbeef…').getAttribute('title')).toBe(
+      'deadbeefcafe0001',
+    )
+    expect(screen.queryByText(/cache hits lately/)).toBeNull()
+    expect(hrefsOf('Troubleshooting')).toContain(
+      gatewayDocsUrl('cacheHitRate', 'en'),
+    )
+  })
+
+  it('points Anthropic conversations that never write the cache at cache_control', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({ streak: 3, no_writes: true }),
+        unreported: [],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        '1 long conversation keeps missing the prompt cache',
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/^Its last 3 model calls each sent at least 50K/),
+    ).toBeTruthy()
+    expect(
+      screen.getByText(/the client most likely doesn't set cache_control/),
+    ).toBeTruthy()
+    expect(screen.queryByText(/^Compare with your provider's/)).toBeNull()
+  })
+
+  it('lists every upstream that reports no cache hits in one note', async () => {
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: null,
+        unreported: ['deadbeefcafe0001', 'u1', 'u2'],
+      },
+    })
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
+    renderOverview()
+
+    expect(
+      await screen.findByText(
+        "deadbeef…, OpenAI production, Kimi relay haven't reported any cache hits lately",
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.getAllByText(/^Long conversations through them keep showing/),
+    ).toHaveLength(1)
+    expect(screen.queryByText(/prompt cache$/)).toBeNull()
   })
 
   it('shows the error with a retry when the overview fails', async () => {
@@ -411,11 +557,28 @@ describe('OverviewPage', () => {
     expect(api.saveProfile.mock.calls[0][2].name).toBe('默认')
     cleanup()
 
-    api.getOverview.mockResolvedValue(BUSY_OVERVIEW)
+    api.getOverview.mockResolvedValue({
+      ...BUSY_OVERVIEW,
+      cache_alerts: {
+        misses: cacheMisses({
+          streak: 6,
+          recent: [cacheMiss({ model: 'kimi-k2', streak: 6 })],
+        }),
+        unreported: ['u1'],
+      },
+    })
     api.listLogs.mockResolvedValue(LOGS)
+    api.listUpstreams.mockResolvedValue(UPSTREAMS)
     const busy = renderOverview()
     expect(await screen.findByText('claude-sonnet-4-5')).toBeTruthy()
     expect(screen.getByText('1,234 条新消息')).toBeTruthy()
+    expect(screen.getByText('有 1 段长对话连续没有命中提示词缓存')).toBeTruthy()
+    expect(screen.getByText('连续 6 次未命中')).toBeTruthy()
+    expect(
+      await screen.findByText('上游 OpenAI production 最近没有返回过缓存命中'),
+    ).toBeTruthy()
+    // Chinese has no singular form, so the copy reads right for any count.
+    expect(screen.getByText(/^相关长对话的缓存命中率一直是 0%/)).toBeTruthy()
     expect(busy.container.textContent).not.toMatch(
       /overview\.|enums\.|states\.|actions\./,
     )
@@ -494,6 +657,7 @@ describe('OverviewPage quick mode', () => {
     ).toBeTruthy()
     expect(screen.getByText('Context profile: use “Default”')).toBeTruthy()
     expect(screen.getByText('Or set up step by step')).toBeTruthy()
+    expect(hrefsOf('Learn more')).toContain(gatewayDocsUrl('quickMode', 'en'))
     api.listKeys.mockResolvedValue([ISSUED])
     fireEvent.click(await quickButton())
 

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type * as Api from '../-lib/api'
 import type { GatewayKey, IssuedKey, Profile, Upstream } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { PROFILE_DEFAULTS } from '../-lib/profile-schema'
 import { UPSTREAM_DEFAULTS } from '../-lib/upstream-schema'
 import { KeysPage } from './keys-page'
@@ -194,6 +195,9 @@ describe('KeysPage', () => {
     expect(within(rows[2]).getByText('CI bot')).toBeTruthy()
     expect(within(rows[2]).getByText('keys.missing')).toBeTruthy()
     expect(within(rows[2]).getByText('deepseek-chat')).toBeTruthy()
+    expect(
+      screen.getByText('docs.link').closest('a')?.getAttribute('href'),
+    ).toBe(gatewayDocsUrl('keys', 'en'))
   })
 
   it('revokes a key after confirmation', async () => {

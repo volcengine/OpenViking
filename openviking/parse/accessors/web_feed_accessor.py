@@ -37,6 +37,7 @@ from urllib.parse import unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 from openviking.parse.base import lazy_import
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.utils.logger import get_logger
 
@@ -288,7 +289,11 @@ class WebFeedAccessor(DataAccessor):
         include = kwargs.get("include")
         exclude = kwargs.get("exclude")
 
-        temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_webfeed_")
+        temp_dir = await asyncio.to_thread(
+            tempfile.mkdtemp,
+            prefix="ov_webfeed_",
+            dir=get_parser_download_temp_dir(),
+        )
         try:
             client_kwargs = _build_httpx_client_kwargs(request_validator, cfg["request_timeout"])
             httpx = lazy_import("httpx")

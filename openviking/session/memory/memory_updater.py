@@ -9,6 +9,7 @@ to the storage system.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import re
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 from openviking.core.context import ContextLevel
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -757,6 +759,43 @@ class MemoryUpdateResult:
         )
 
 
+class MemoryReadError(Exception):
+    """A fresh upsert read failed before this target could be written."""
+
+    def __init__(self, uri: str, cause: Exception, *, write_started: bool = False):
+        super().__init__(f"Failed to refresh memory {uri}: {cause}")
+        self.retryable = not write_started and (
+            isinstance(
+                cause,
+                (TimeoutError, ConnectionError, AGFSConnectionError, AGFSTimeoutError, AGFSIoError),
+            )
+            or (
+                isinstance(cause, OSError)
+                and cause.errno in {errno.EAGAIN, errno.EBUSY, errno.EINTR, errno.EIO}
+            )
+        )
+
+
+class MemoryUpdateError(Exception):
+    """Report apply failures without treating a partial write as safe to replay."""
+
+    def __init__(self, result: MemoryUpdateResult, *, has_link_updates: bool = False):
+        super().__init__(
+            f"Memory update failed ({result.summary()}): "
+            + "; ".join(f"{uri}: {error}" for uri, error in result.errors)
+        )
+        self.retryable = (
+            bool(result.errors)
+            and not (result.written_uris or result.edited_uris or result.deleted_uris)
+            # Link writes are best-effort and absent from the URI result lists.
+            and not has_link_updates
+            and all(
+                isinstance(error, MemoryReadError) and error.retryable
+                for _uri, error in result.errors
+            )
+        )
+
+
 def _same_batch_delete_conflict_key(uri: str) -> str:
     """Return a conservative key for detecting same-batch upsert/delete URI conflicts.
 
@@ -1378,6 +1417,7 @@ class MemoryUpdater:
 
         memory_type = resolved_op.memory_type
         schema = self._registry.get(memory_type)
+        write_started = False
         # Process each URI independently
         for uri in resolved_op.uris:
             source_content = resolved_op.old_memory_file_content
@@ -1401,12 +1441,10 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError):
                 # File doesn't exist yet, that's okay
                 pass
-            except Exception:
-                if is_uri_migration:
-                    raise
-                # Preserve the legacy in-place update fallback to the prefetched
-                # snapshot when a fresh disk read is unavailable.
-                pass
+            except Exception as exc:
+                # Preserve the read stage so callers can regenerate from fresh
+                # inputs, but never replay an operation that already wrote a URI.
+                raise MemoryReadError(uri, exc, write_started=write_started) from exc
             if is_uri_migration:
                 try:
                     source_raw = await viking_fs.read_file(source_content.uri, ctx=ctx)
@@ -1530,6 +1568,7 @@ class MemoryUpdater:
                 ),
                 extract_context=extract_context,
             )
+            write_started = True
             await viking_fs.write_file(
                 uri,
                 new_full_content,

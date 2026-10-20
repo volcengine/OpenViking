@@ -306,7 +306,7 @@ it('offers the local development service when only a hosted link is saved', () =
   fireEvent.click(screen.getByLabelText('studio:providers.opensource'))
   expect(
     screen.getByRole('combobox', { name: 'connectionChoice' }).textContent,
-  ).toContain('Local OpenViking')
+  ).toContain('studio:localConnection')
   expect(screen.getAllByTitle('http://127.0.0.1:1933').length).toBeGreaterThan(
     0,
   )

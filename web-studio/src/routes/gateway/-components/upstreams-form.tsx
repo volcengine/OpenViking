@@ -244,6 +244,7 @@ export function UpstreamForm({
         icon={<GlobeIcon />}
         title={t('upstreams.sections.endpoint.title')}
         description={t('upstreams.sections.endpoint.description')}
+        docs="endpoint"
       >
         <SettingField
           label={t('upstreams.form.name.label')}
@@ -411,6 +412,7 @@ export function UpstreamForm({
         icon={<KeyRoundIcon />}
         title={t('upstreams.sections.credentials.title')}
         description={t('upstreams.sections.credentials.description')}
+        docs="credentials"
       >
         {readOnly ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -589,6 +591,7 @@ export function UpstreamForm({
         icon={<BoxesIcon />}
         title={t('upstreams.sections.models.title')}
         description={t('upstreams.sections.models.description')}
+        docs="models"
       >
         <SettingField
           label={t('upstreams.form.models.label')}
@@ -638,6 +641,7 @@ export function UpstreamForm({
         icon={<RouteIcon />}
         title={t('upstreams.sections.routing.title')}
         description={t('upstreams.sections.routing.description')}
+        docs="routing"
       >
         <SettingField
           label={t('upstreams.form.priority.label')}

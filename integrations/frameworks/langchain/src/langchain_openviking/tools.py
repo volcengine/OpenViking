@@ -25,6 +25,7 @@ from langchain_openviking.client import (
     call_openviking,
     compact_json,
     ensure_client,
+    extract_message_text,
     item_value,
     iter_result_items,
     stringify,
@@ -683,7 +684,10 @@ def _normalize_messages(messages: str | list[dict[str, Any]]) -> list[dict[str, 
                 }
             )
             continue
-        content = str(message.get("content", ""))
+        raw_content = message.get("content", "")
+        content = (
+            extract_message_text(raw_content) if isinstance(raw_content, list) else str(raw_content)
+        )
         if role == "tool":
             normalized.append(
                 {

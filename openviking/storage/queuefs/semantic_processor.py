@@ -570,26 +570,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     logger.debug("Processing semantic message id=%s uri=%s", msg.id, msg.uri)
 
-                    # Resolving a deleted root can recreate it for lock metadata.
-                    # Settle queued ownership before acknowledging skipped work.
-                    if not await get_viking_fs().exists(msg.uri, ctx=current_ctx):
-                        logger.info("Skipping semantic message for missing root: uri=%s", msg.uri)
-                        await work.skip()
-                        return ProcessResult.success()
-
-                    if (
-                        not msg.wait_for_embeddings_only
-                        and not msg.wait_for_request_completion
-                        and self._vlm_resolver is None
-                    ):
-                        raise RuntimeError(
-                            "SemanticProcessor requires a VLM resolver for account-owned work"
-                        )
-                    if not await work.acquire_lock(current_ctx):
-                        return ProcessResult.success()
-                    semantic_lock = work.scope
-                    assert semantic_lock is not None
                     task_context = get_task_context()
+                    enqueue_complete = True
                     if msg.wait_for_request_completion and task_context is not None:
                         tracker = get_task_tracker()
                         enqueue_complete = await tracker.is_enqueue_complete(
@@ -604,29 +586,43 @@ class SemanticProcessor(DequeueHandlerBase):
                             account_id=task_context.account_id,
                             user_id=task_context.user_id,
                         )
-                    else:
-                        enqueue_complete = True
-                        siblings_pending = False
-                    if not enqueue_complete and not tracker.has_active_producer(
-                        task_context.task_id
+                        if siblings_pending or (
+                            not enqueue_complete
+                            and tracker.has_active_producer(task_context.task_id)
+                        ):
+                            # Leave ownership with the producer until it finishes
+                            # submission and hands off, without occupying a worker.
+                            await asyncio.sleep(0.05)
+                            await work.reenqueue()
+                            execute_status = "requeued"
+                            return ProcessResult.requeued()
+
+                    # Resolving a deleted root can recreate it for lock metadata.
+                    # Settle queued ownership before acknowledging skipped work.
+                    if not msg.wait_for_request_completion and not await get_viking_fs().exists(
+                        msg.uri, ctx=current_ctx
                     ):
+                        logger.info("Skipping semantic message for missing root: uri=%s", msg.uri)
+                        await work.skip()
+                        return ProcessResult.success()
+
+                    if not msg.wait_for_request_completion and self._vlm_resolver is None:
+                        raise RuntimeError(
+                            "SemanticProcessor requires a VLM resolver for account-owned work"
+                        )
+                    if not await work.acquire_lock(current_ctx):
+                        return ProcessResult.success()
+                    semantic_lock = work.scope
+                    assert semantic_lock is not None
+                    if not enqueue_complete:
                         return ProcessResult.failed(
                             "Content write producer ended before child Work enqueue completed"
                         )
-                    if not enqueue_complete or siblings_pending:
-                        # Keep a single-worker semantic queue moving while this
-                        # coordinator retains the producer's lease.
-                        await asyncio.sleep(0.05)
-                        await work.reenqueue()
-                        execute_status = "requeued"
-                        return ProcessResult.requeued()
                     dag_stats = None
                     processing_succeeded = False
                     try:
-                        if msg.wait_for_embeddings_only or msg.wait_for_request_completion:
-                            # SemanticMessageWork drains embeddings for the single-write
-                            # coordinator; the batch coordinator reaches this point only
-                            # after every sibling root has settled.
+                        if msg.wait_for_request_completion:
+                            # The coordinator only releases the lease after sibling work settles.
                             pass
                         elif msg.plan is not None:
                             if msg.uri.rstrip("/") != msg.plan.root_uri:
@@ -752,12 +748,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 incremental_update=is_incremental,
                                 target_uri=target_uri,
                                 recursive=msg.recursive,
-                                lock=(
-                                    None
-                                    if msg.generation_trigger == "content_write"
-                                    and msg.lock_handoff is not None
-                                    else semantic_lock.lock
-                                ),
+                                lock=semantic_lock.lock,
                                 is_code_repo=msg.is_code_repo,
                                 changes=changes,
                                 skip_vectorization=msg.skip_vectorization,

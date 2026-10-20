@@ -28,6 +28,7 @@ import type {
   Profile,
   ProfileSettings,
 } from '../-lib/api'
+import { gatewayDocsUrl } from '../-lib/client-guides'
 import { PROFILE_DEFAULTS, WRITE_TOOLS } from '../-lib/profile-schema'
 import { parseProfileEditorSearch } from '../-lib/search'
 import { ProfilesPage } from './profiles-page'
@@ -194,6 +195,12 @@ const saveButton = () =>
   })
 const nameInput = () =>
   screen.getByLabelText<HTMLInputElement>('profiles.name.label')
+/** Hrefs of every link with this text (Base UI gives button links the button role). */
+const hrefsOf = (text: string) =>
+  screen
+    .getAllByText(text)
+    .map((node) => node.closest('a')?.getAttribute('href'))
+
 const sectionSwitch = (section: string) =>
   screen.getByRole('switch', { name: `profiles.${section}.title` })
 /** A tool checkbox's accessible name starts with the tool name; its description follows. */
@@ -254,6 +261,7 @@ describe('profile list', () => {
       chatCard.getByText('profiles.summary.compactionOn {"percent":"90%"}'),
     ).toBeTruthy()
     expect(chatCard.getByText('profiles.unused')).toBeTruthy()
+    expect(hrefsOf('docs.link')).toEqual([gatewayDocsUrl('profiles', 'en')])
   })
 
   it('keeps tool counts unknown until the catalog loads', async () => {
@@ -377,6 +385,19 @@ describe('profile editor', () => {
   it('hides settings of switched-off sections and switches long-conversation features on their own', async () => {
     renderAt('/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
+    // Every section links its docs, switched on or not, and so does the
+    // experimental agent-managed windows setting.
+    expect(hrefsOf('docs.learnMore')).toEqual(
+      (
+        [
+          'recall',
+          'capture',
+          'longConversations',
+          'agentWindows',
+          'tools',
+        ] as const
+      ).map((section) => gatewayDocsUrl(section, 'en')),
+    )
 
     expect(
       screen.queryByLabelText('profiles.recall.maxTokens.label'),

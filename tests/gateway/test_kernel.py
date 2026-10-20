@@ -18,6 +18,7 @@ from openviking_gateway.protocols import (
     LOWERED_AUXILIARY,
     REI_CASE_EXCEPTIONS,
     auxiliary,
+    canonical_arguments,
     classify,
     client_openviking_tools,
     normalize,
@@ -696,6 +697,99 @@ def test_client_openviking_tools_outside_tool_list():
     assert not client_openviking_tools({"messages": [reply]}, OV_NAMES)
     assert not client_openviking_tools({"tools": [{"name": "Read"}]}, [])
     assert not client_openviking_tools({"tools": None, "mcp_servers": None}, OV_NAMES)
+
+
+def test_tool_arguments_compact_in_their_own_order():
+    assert (
+        canonical_arguments('{"b": 1, "a": ["x", {"c": null}]}') == '{"b":1,"a":["x",{"c":null}]}'
+    )
+    assert canonical_arguments('{"q": "\\u84dd"}') == '{"q":"蓝"}'
+    # Partial or free-form arguments, and the parsed objects some protocols carry, stay as sent.
+    for value in ('{"b": 1', "pwd", {"b": 1}, None):
+        assert canonical_arguments(value) == value
+
+
+def test_text_clients_add_for_the_user_is_not_a_user_turn():
+    # As DSH sends a turn over Chat Completions: the runtime-context snapshot follows the
+    # prompt, and pi-ai sends a tool result's image as a user message after the tool result.
+    prompt = {"role": "user", "content": "Read red.png"}
+    snapshot = {
+        "role": "user",
+        "content": "Current runtime context. This snapshot supersedes earlier runtime-context "
+        'snapshots.\n\nCurrent working directory: "/work".',
+    }
+    call = {"id": "1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+    image = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Attached image(s) from tool result:"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    turn = [prompt, snapshot]
+    assert classify({}, {}, turn) == ("user", 0)
+    turn += [
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "1", "content": "(see attached image)"},
+        image,
+    ]
+    assert classify({}, {}, turn) == ("continuation", 0)
+    # DSH's time context, appended before a step once ten minutes have passed.
+    time = "Time sampled while preparing turn 1, step 4: 2026-10-19T17:02:11+08:00[Asia/Shanghai]"
+    turn += [
+        {"role": "user", "content": time + "\nElapsed since the preceding step context: 10m 2s."}
+    ]
+    assert classify({}, {}, turn) == ("continuation", 0)
+    # The user quoting the label is still the user.
+    quoted = {"role": "user", "content": 'Why does it say "Attached image(s) from tool result:"?'}
+    assert classify({}, {}, [*turn, quoted])[0] == "user"
+    title = {
+        "role": "user",
+        "content": 'Generate the session title from this JSON array:\n[{"seq":8}]',
+    }
+    assert classify({}, {}, [title])[0] == "auxiliary"
+
+
+async def test_tool_less_request_in_a_session_with_client_tools_is_auxiliary(
+    setup_kernel, credential, policy
+):
+    kernel, _, viking, _ = setup_kernel
+    policy = {**policy, "show_recall": True}
+
+    def body(text, tools=()):
+        return {
+            "model": "m",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": text}],
+            **({"tools": list(tools)} if tools else {}),
+        }
+
+    bash = {"name": "Bash", "input_schema": {"type": "object"}}
+    # A helper request may come first; until the client sends tools, nothing changes.
+    first = await prepare(kernel, body("Say hi"), credential, policy, "anthropic")
+    assert first.kind == "user"
+    main = await prepare(
+        kernel, body("Deploy the blue cluster", [bash]), credential, policy, "anthropic"
+    )
+    assert main.kind == "user" and main.reply_lead
+    # Claude Code summarizes a fetched page under the conversation's session header.
+    page = body("Web page content:\n---\nExample Domain\n---\n\nWhat is the title?")
+    side = await prepare(kernel, page, credential, policy, "anthropic")
+    assert side.kind == "auxiliary" and not side.reply_lead
+    assert not context_blocks(side.body["messages"][0]) and len(viking.recalls) == 2
+    # The conversation's own turn with tools switched off resends its replies and is a turn.
+    off = body("Deploy the blue cluster")
+    off["messages"] += [
+        {"role": "assistant", "content": "Which region?"},
+        {"role": "user", "content": "Singapore"},
+    ]
+    assert (await prepare(kernel, off, credential, policy, "anthropic")).kind == "user"
+    assert len(viking.recalls) == 3
+    # A session that never sent client tools, such as one-shot SDK questions, recalls each time.
+    for question in ("Where do I deploy?", "Who owns the cluster?"):
+        sdk = await prepare(kernel, body(question), credential, policy, "anthropic", session="sdk")
+        assert sdk.kind == "user"
+    assert len(viking.recalls) == 5
 
 
 def test_capture_pairs_tools_and_strips_noise():

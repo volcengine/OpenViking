@@ -114,6 +114,29 @@ const overview = {
       none: 'No recalls yet',
     },
   },
+  cacheMiss: {
+    title_one: '{{count}} long conversation keeps missing the prompt cache',
+    title_other: '{{count}} long conversations keep missing the prompt cache',
+    description_one:
+      'Its last {{streak}} model calls each sent at least {{tokens}} input tokens and got a 0% cache hit rate. This usually means the start of the request (system prompt or tool definitions) changes every time, or the upstream spreads requests across different accounts or channels.',
+    description_other:
+      'Their last {{streak}} model calls each sent at least {{tokens}} input tokens and got a 0% cache hit rate. This usually means the start of the request (system prompt or tool definitions) changes every time, or the upstream spreads requests across different accounts or channels.',
+    action:
+      "Compare with your provider's cache records. If they show hits, the upstream isn't passing cache usage back to the gateway. If not, check the system prompt for timestamps or other content that changes on every request, and make sure your relay isn't rotating between channels.",
+    noWrites:
+      "The upstream didn't write the cache either, so the client most likely doesn't set cache_control. Compare with your provider's cache records: hits there mean the upstream isn't passing cache usage back to the gateway.",
+    streak_one: '{{count}} miss in a row',
+    streak_other: '{{count}} misses in a row',
+  },
+  cacheUnreported: {
+    title_one: "{{upstreams}} hasn't reported any cache hits lately",
+    title_other: "{{upstreams}} haven't reported any cache hits lately",
+    description_one:
+      'Long conversations through it keep showing a 0% cache hit rate, and they count as misses in the stats. The provider may not support prompt caching, the client may not enable it, or a relay may not pass cache usage back to the gateway.',
+    description_other:
+      'Long conversations through them keep showing a 0% cache hit rate, and they count as misses in the stats. The providers may not support prompt caching, the client may not enable it, or a relay may not pass cache usage back to the gateway.',
+    separator: ', ',
+  },
   openviking: {
     title: 'OpenViking',
     description:

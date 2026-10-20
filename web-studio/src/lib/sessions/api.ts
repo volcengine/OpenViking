@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { parseSessionArchive, parseSessionMessages } from './parse-messages'
 import {
   deleteSessionBySessionId,
@@ -109,7 +110,7 @@ async function fetchArchiveFileMessages(
   if (!session.uri) {
     throw new OvClientError({
       code: 'INVALID_SESSION_ARCHIVE',
-      message: 'Session URI is missing',
+      message: i18n.t('studio:errors.sessionUriMissing'),
     })
   }
   const result = await getOvResult<unknown>(
@@ -432,7 +433,8 @@ function extractErrorMessage(text: string, fallback: string): string {
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
+  const apiKey = conn.apiKey || conn.adminApiKey
+  if (apiKey) headers['X-API-Key'] = apiKey
   if (conn.identityHeaders) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
@@ -453,7 +455,7 @@ export async function fetchBotHealth(): Promise<unknown> {
       code: response.status === 503 ? 'BOT_MODE_DISABLED' : 'BOT_HEALTH_FAILED',
       message: extractErrorMessage(
         text,
-        `Bot health check failed (${response.status})`,
+        i18n.t('studio:errors.botHealth', { status: response.status }),
       ),
       responseBody: text,
       statusCode: response.status,
@@ -536,7 +538,7 @@ export async function steerChatSession(
       code: 'BOT_STEER_FAILED',
       message: extractErrorMessage(
         text,
-        `Bot steer failed (${response.status})`,
+        i18n.t('studio:errors.botSteer', { status: response.status }),
       ),
       responseBody: text,
       statusCode: response.status,
@@ -564,7 +566,7 @@ export async function interruptChatSession(
       code: 'BOT_INTERRUPT_FAILED',
       message: extractErrorMessage(
         text,
-        `Bot interrupt failed (${response.status})`,
+        i18n.t('studio:errors.botInterrupt', { status: response.status }),
       ),
       responseBody: text,
       statusCode: response.status,

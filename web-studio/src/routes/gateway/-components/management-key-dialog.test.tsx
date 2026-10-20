@@ -64,7 +64,7 @@ function open() {
   )
   requestManagementUnlock()
 }
-it('explains where to find a lost key and links to the operations guide', async () => {
+it('explains where to find a lost key and links to how to reset it', async () => {
   open()
   fireEvent.click(await screen.findByText('management.where'))
   expect(screen.getByText('management.studio')).toBeTruthy()
@@ -73,7 +73,7 @@ it('explains where to find a lost key and links to the operations guide', async 
     screen
       .getByRole('link', { name: 'management.resetDocs' })
       .getAttribute('href'),
-  ).toBe(gatewayDocsUrl('operations', 'en'))
+  ).toBe(gatewayDocsUrl('lostManagementKey', 'en'))
 })
 it('rejects client keys in the management field without sending them', async () => {
   open()

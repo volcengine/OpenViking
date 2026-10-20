@@ -33,18 +33,21 @@ async def get_task(
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
+    get_task_record = tracker.get_with_events if include_events else tracker.get
     if _ctx.role == Role.ROOT:
-        task = await tracker.get(task_id)
+        task = await get_task_record(task_id)
         if task is None:
-            task = await tracker.get(task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
+            task = await get_task_record(
+                task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id
+            )
         if task is None:
-            task = await tracker.get(
+            task = await get_task_record(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
             )
     else:
-        task = await tracker.get(
+        task = await get_task_record(
             task_id,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,

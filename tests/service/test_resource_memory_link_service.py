@@ -167,7 +167,7 @@ class _FakeSessionService:
         )
         return self.session
 
-    async def get(self, session_id, ctx, auto_create=False):
+    async def open(self, session_id, ctx, auto_create=False):
         self.got.append(
             {
                 "ctx": ctx,
@@ -297,8 +297,8 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
     worker_waiting = threading.Event()
 
     class BlockingSessionService(_FakeSessionService):
-        async def get(self, session_id, ctx, auto_create=False):
-            session = await super().get(session_id, ctx, auto_create=auto_create)
+        async def open(self, session_id, ctx, auto_create=False):
+            session = await super().open(session_id, ctx, auto_create=auto_create)
             if len(self.got) == 1:
                 entered.set()
                 await release.wait()

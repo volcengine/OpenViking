@@ -189,6 +189,32 @@ class QueueManager:
                 )
         return await tracker.restore_work_tasks(owners)
 
+    async def get_queued_tasks(self, tracker: Any, queue_name: str) -> list[Any]:
+        """Read Tasks referenced by a queue's unacknowledged deliveries."""
+        from openviking.service.task_work_index import extract_task_metadata
+
+        queue = self._queues.get(queue_name)
+        if queue is None:
+            return []
+        tasks = []
+        seen: set[tuple[str, str, str]] = set()
+        for message in await queue.snapshot():
+            metadata = extract_task_metadata(message)
+            if metadata is None or not metadata.account_id or not metadata.user_id:
+                continue
+            key = (metadata.task_id, metadata.account_id, metadata.user_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            task = await tracker.get(
+                metadata.task_id,
+                account_id=metadata.account_id,
+                user_id=metadata.user_id,
+            )
+            if task is not None:
+                tasks.append(task)
+        return tasks
+
     def setup_standard_queues(
         self,
         vector_store: Any,
@@ -427,10 +453,16 @@ class QueueManager:
             stop_event.set()
         if self.EMBEDDING not in self._queue_threads:
             self._embedding_worker_stopped.set()
+        alive_workers = []
         for name, thread in self._queue_threads.items():
             thread.join(timeout=10.0)
             if thread.is_alive():
                 logger.warning(f"[QueueManager] Worker thread {name} did not exit in time")
+                alive_workers.append(name)
+        if alive_workers:
+            # Keep queues and dependencies available for pending finalizers and
+            # let the caller retry shutdown once the workers have terminated.
+            raise RuntimeError(f"Queue workers did not stop: {', '.join(alive_workers)}")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
 

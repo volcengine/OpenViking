@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UseQueryOptions } from '@tanstack/react-query'
@@ -149,8 +150,7 @@ function useGatewayQuery<T>(
     ...options,
     queryKey: gatewayQueryKey(scope, resource, ...params),
     queryFn: () => {
-      if (!allowed)
-        throw new Error('Gateway is unavailable for this connection')
+      if (!allowed) throw new Error(i18n.t('studio:errors.gatewayUnavailable'))
       return load(connection)
     },
     enabled: allowed && options.enabled !== false,

@@ -486,6 +486,7 @@ JSON 输出 - 错误：
 |------|------|------|
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
+| POST | `/api/v1/admin/configuration/test-model` | 测试草稿模型或 Embedding 连接，不保存配置 |
 | POST | `/api/v1/admin/restart` | 请求支持该能力的服务进程优雅重启（仅 ROOT） |
 | GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
@@ -577,6 +578,8 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
+| POST | `/bot/v1/sessions/{session_id}/interrupt` | 中断活跃或排队中的 VikingBot 会话 |
+| POST | `/bot/v1/sessions/{session_id}/steer` | 向活跃流式会话发送追加输入 |
 | POST | `/bot/v1/compile` | 已停用；返回新接口迁移提示 |
 | GET | `/bot/v1/compile/{task_id}` | 已停用；返回 Task 接口迁移提示 |
 | POST | `/bot/v1/compile/{task_id}/cancel` | 已停用；返回 Task 取消接口迁移提示 |

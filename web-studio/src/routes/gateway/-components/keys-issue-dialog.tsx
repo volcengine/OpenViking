@@ -47,6 +47,7 @@ import { requestManagementUnlock } from '../-lib/management-key'
 import { NEW_ID } from '../-lib/search'
 import { servedModels } from '../-lib/upstream-schema'
 import { useGateway, useKeyUsers } from '../-lib/use-gateway'
+import { DocsLink } from './docs-link'
 import { SettingField } from './setting-field'
 import { ProtocolBadge, ToneBadge } from './status-badges'
 import { TagInput } from './tag-input'
@@ -616,7 +617,12 @@ export function KeysIssueDialog({
             <Alert variant="destructive">
               <CircleAlertIcon />
               <AlertTitle>{t('keys.errors.title')}</AlertTitle>
-              <AlertDescription>{problem.message}</AlertDescription>
+              <AlertDescription>
+                {problem.message}{' '}
+                <DocsLink section="issueKeyFails" variant="text">
+                  {t('docs.troubleshoot')}
+                </DocsLink>
+              </AlertDescription>
             </Alert>
           ) : null}
         </form>

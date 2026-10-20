@@ -6,6 +6,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import type { GatewayError } from '../-lib/api'
 import { gatewayErrorMessage } from '../-lib/localize'
 import { CodeBlock } from './code-block'
+import { DocsLink } from './docs-link'
 import { EnableGatewayCard } from './gateway-enable'
 import { SetupCard } from './setup-card'
 
@@ -54,6 +55,13 @@ export function GatewayUnavailable({
       {t('actions.retry')}
     </Button>
   )
+  // For the cards that ask whoever runs the server to change something.
+  const fix = (
+    <>
+      {retry}
+      <DocsLink section="setupCard">{t('docs.troubleshoot')}</DocsLink>
+    </>
+  )
   if (error.status === 401 && error.reason !== 'management_key_invalid')
     return <GatewayConnect invalid />
   if (error.reason === 'not_enabled' || error.status === 404) {
@@ -69,7 +77,12 @@ export function GatewayUnavailable({
       <SetupCard
         title={t('unavailable.notEnabled.title')}
         description={t('unavailable.notEnabled.description')}
-        actions={retry}
+        actions={
+          <>
+            {retry}
+            <DocsLink section="enableGateway" />
+          </>
+        }
       >
         <CodeBlock
           label={t('unavailable.terminal')}
@@ -94,7 +107,7 @@ export function GatewayUnavailable({
       <SetupCard
         title={t('unavailable.trusted.title')}
         description={t('unavailable.trusted.description')}
-        actions={retry}
+        actions={fix}
       >
         <CodeBlock
           label={CONFIG_FILE}
@@ -110,14 +123,14 @@ export function GatewayUnavailable({
           url: openvikingUrl,
         })}
         description={t('unavailable.openvikingUnreachable.description')}
-        actions={retry}
+        actions={fix}
       />
     )
   return (
     <SetupCard
       title={t('unavailable.failed.title')}
       description={gatewayErrorMessage(t, error)}
-      actions={retry}
+      actions={fix}
     />
   )
 }

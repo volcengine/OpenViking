@@ -644,8 +644,12 @@ function TasksRoute() {
               {kpiData.avgDurationSec === undefined
                 ? '-'
                 : kpiData.avgDurationSec < 1
-                  ? `${(kpiData.avgDurationSec * 1000).toFixed(0)}ms`
-                  : `${kpiData.avgDurationSec.toFixed(1)}s`}
+                  ? t('studio:duration.milliseconds', {
+                      value: (kpiData.avgDurationSec * 1000).toFixed(0),
+                    })
+                  : t('studio:duration.seconds', {
+                      value: kpiData.avgDurationSec.toFixed(1),
+                    })}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">

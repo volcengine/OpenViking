@@ -1285,6 +1285,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `skip_process_lock` | bool | Skip the exclusive `.openviking.lock` file lock on `storage.workspace` for embedded vector backends (`local`, `cuvs`). Other backends do not acquire this lock. Skipping it does not make embedded vector storage safe for multiple processes. | `false` |
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
+| `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
 
 
 ```json
@@ -1301,6 +1302,41 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
   }
 }
 ```
+
+#### task_store
+
+Task records use the local FileStore by default. To share Task/Work state across
+OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
+MySQL and select the relational backend:
+
+```json
+{
+  "storage": {
+    "task_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_tasks"
+      }
+    }
+  }
+}
+```
+
+`params.table` is the table prefix. It must start with an ASCII letter, contain
+only ASCII letters, digits, or underscores, and be at most 38 characters so
+derived table, index, and constraint names fit MySQL's 64-character limit.
+Replace `ov_tasks` consistently in the provisioning SQL when using a custom prefix.
+
+The MySQL backend requires the `openviking[mysql]` extra. Its mutations,
+Task finalization, and execution-event updates commit in one database
+transaction. `task_id` is globally unique; `account_id` and `user_id` scope
+authorization and queries. Do not use the FileStore tables and MySQL tables as
+active writers for the same deployment.
 
 #### agfs (RAGFS)
 
@@ -1456,7 +1492,7 @@ Notes:
 - All Redis reads go to the primary. Replica reads are not configurable.
 - `tls_insecure_skip_verify=true` requires `rediss://` endpoints.
 - QueueFS cache keys use `{service_name}:ov:*`; use different service names for deployments sharing one Redis cluster.
-- Redis backend runs three bounded `recover_stale` sweeps in a dedicated startup recovery thread at startup, 30 seconds, and 60 seconds to cover the heartbeat-expiry window after a container restart; it does not run long-lived periodic recovery.
+- Cache instances renew a 30-second heartbeat every 10 seconds. One live instance per QueueFS cache namespace holds a token-checked 30-second leader lease and scans for stale `processing` messages every 10 seconds. If that instance stops, another instance takes over after the lease expires; a normal shutdown removes its heartbeat so recovery can begin immediately.
 - If both `storage.agfs.queuefs.db_path` and legacy `storage.agfs.queue_db_path` are set, `storage.agfs.queuefs.db_path` wins.
 - If QueueFS backend is `memory`, any `db_path` or legacy `queue_db_path` is ignored.
 
