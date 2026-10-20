@@ -37,7 +37,10 @@ import {
   savedSetupConnections,
   verifyStudioSetup,
 } from '#/lib/connection/onboarding'
-import { isValidConnectionUrl } from '#/lib/connection/profiles'
+import {
+  connectionProfileFingerprint,
+  isValidConnectionUrl,
+} from '#/lib/connection/profiles'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
 const LANGUAGES = [
@@ -321,27 +324,15 @@ export function StudioSetup({
         return
       }
       try {
-        const matchingHostedProfile =
-          verified.serviceSelection === 'volcengine'
-            ? savedSetupConnections().find(
-                (profile) =>
-                  profile.connection.serviceSelection === 'volcengine' &&
-                  new URL(profile.connection.baseUrl).href.replace(
-                    /\/+$/,
-                    '',
-                  ) === new URL(verified.baseUrl).href.replace(/\/+$/, '') &&
-                  typeof profile.connection.apiKey === 'string' &&
-                  profile.connection.apiKey.trim() === verified.apiKey,
-              )
-            : undefined
+        const matchingProfile = savedSetupConnections().find(
+          (profile) =>
+            connectionProfileFingerprint(profile.connection) ===
+            connectionProfileFingerprint(verified),
+        )
         completeStudioSetup(
           verified,
           t(`studio:providers.${verified.serviceSelection}`),
-          verified.serviceSelection === 'volcengine'
-            ? matchingHostedProfile?.id
-            : selectedConnectionId === NEW_CONNECTION
-              ? undefined
-              : selectedConnectionId,
+          matchingProfile?.id,
         )
         onComplete(verified)
       } catch {
