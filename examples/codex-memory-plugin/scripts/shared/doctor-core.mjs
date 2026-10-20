@@ -1294,7 +1294,7 @@ export function reportPeer(report, cfg, { cwd = process.cwd() } = {}) {
         : "already covered by the server's cross-peer sweep under peer_scope all",
     );
   }
-  for (const p of lintPeerScopeDowngrade()) report[p.level](p.message, p.detail, p.fix);
+  for (const p of lintPeerScopeDowngrade(peerScopeMemoPath(cfg))) report[p.level](p.message, p.detail, p.fix);
   return peer;
 }
 

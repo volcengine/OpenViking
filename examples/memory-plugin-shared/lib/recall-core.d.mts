@@ -55,6 +55,7 @@ export type RecallOptions = {
   runCompressor?: ((prompt: string) => Promise<string | null>) | null;
   digestCachePath?: string;
   legacyCachePath?: string;
+  peerScopeMemoPath?: string;
 };
 
 export type DetailedRecall = {
