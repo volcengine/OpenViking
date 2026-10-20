@@ -294,6 +294,7 @@ export function ConnectionProfilesList() {
                             ? CLOUD_SETUP_URL
                             : openSourceUrlRef.current,
                         serviceSelection: value,
+                        apiKey: '',
                       },
                     })
                   }}

@@ -390,6 +390,7 @@ function ConnectionSettingsPanel() {
     }
     updateDraft({
       serviceSelection: selection,
+      apiKey: '',
       baseUrl:
         selection === 'volcengine' ? CLOUD_SETUP_URL : openSourceUrlRef.current,
     })

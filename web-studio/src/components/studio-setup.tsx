@@ -139,14 +139,7 @@ export function StudioSetup({
       .filter((profile) => {
         const connection = profile.connection
         const address = new URL(connection.baseUrl).href.replace(/\/+$/, '')
-        const identity = JSON.stringify([
-          connection.serviceSelection,
-          address,
-          connection.accountId,
-          connection.userId,
-          connection.apiKey,
-          connection.adminApiKey,
-        ])
+        const identity = JSON.stringify([connection.serviceSelection, address])
         if (seen.has(identity)) return false
         seen.add(identity)
         return true

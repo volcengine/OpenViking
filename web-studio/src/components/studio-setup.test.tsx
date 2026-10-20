@@ -59,7 +59,7 @@ beforeEach(() => {
   localStorage.clear()
 })
 
-it('deduplicates identical saved connections and keeps the active profile', async () => {
+it('groups workspace choices by endpoint despite different identities and credentials, keeping the active profile', async () => {
   const connection = {
     serviceSelection: 'opensource',
     baseUrl: 'http://127.0.0.1:1933',
@@ -76,7 +76,12 @@ it('deduplicates identical saved connections and keeps the active profile', asyn
         {
           id: 'first',
           name: 'Default',
-          connection: { ...connection, userId: '' },
+          connection: {
+            ...connection,
+            baseUrl: connection.baseUrl + '/',
+            userId: 'alice',
+            apiKey: 'alice-key',
+          },
         },
         {
           id: 'second',

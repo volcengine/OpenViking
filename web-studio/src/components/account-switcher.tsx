@@ -726,8 +726,13 @@ export function AccountSwitcher() {
                               profile.id === activeProfileId && 'bg-accent',
                             )}
                           >
-                            <span className="min-w-0 flex-1 truncate">
-                              [{identity}]
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">
+                                {profile.name}
+                              </span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                [{identity}]
+                              </span>
                             </span>
                             {duplicateIdentity && (
                               <span
