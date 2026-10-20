@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import re
+import shlex
 import signal
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,107 @@ from loguru import logger
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend
+
+# On Windows the shell path uses COMSPEC (cmd.exe), which cannot parse the POSIX
+# commands Compile runs during sandbox setup (`mkdir -m 700 --`, `chmod 600`,
+# `mkdir -p`, and the `unset ...; export ...;` prefix). Only those fixed forms are
+# handled natively here; every other command keeps using the existing shell path.
+_POSIX_ENV_PREFIX = re.compile(
+    r"^unset\s+[^;]*;\s*export\s+OPENVIKING_CLI_CONFIG_FILE=.*?;\s*(.*)$",
+    re.DOTALL,
+)
+_SHELL_METACHARS = re.compile(r"[&|;<>$`]")
+
+
+def _resolve_windows_path(target: str, base: str) -> str:
+    """Resolve a sandbox path against the command working directory."""
+    return target if os.path.isabs(target) else os.path.join(base, target)
+
+
+async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
+    """Approximate POSIX 0700/0600 with an owner/SYSTEM/Administrators NTFS ACL.
+
+    Inherited entries are removed first (for example sandbox helper groups), then
+    explicit grants are applied. Returns error text on failure, None on success.
+    """
+    user = os.environ.get("USERNAME") or ""
+    domain = os.environ.get("USERDOMAIN") or ""
+    principal = f"{domain}\\{user}" if domain and user else user
+    if not principal:
+        return "STDERR:\nUSERNAME is not set\nExit code: 1"
+    suffix = ":(OI)(CI)F" if directory else ":F"
+    grants = [principal + suffix, "*S-1-5-18" + suffix, "*S-1-5-32-544" + suffix]
+    arguments = ["icacls", path, "/inheritance:r"]
+    for grant in grants:
+        arguments += ["/grant:r", grant]
+    process = await asyncio.create_subprocess_exec(
+        *arguments,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace")
+        return f"STDERR:\n{detail}Exit code: {process.returncode}"
+    return None
+
+
+async def _translate_windows_posix(command: str, cwd: str) -> str | None:
+    """Run the POSIX command forms Compile needs; return None to fall back to shell."""
+    match = _POSIX_ENV_PREFIX.match(command)
+    raw = (match.group(1) if match else command).strip()
+    if not raw or _SHELL_METACHARS.search(raw):
+        return None
+    try:
+        # posix=False keeps Windows backslashes; strip the quotes it preserves.
+        tokens = shlex.split(raw, posix=False)
+        tokens = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
+            else token
+            for token in tokens
+        ]
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    try:
+        if tokens[0] == "chmod":
+            targets = [token for token in tokens[1:] if not token.startswith("-")]
+            if not targets:
+                return None
+            target = _resolve_windows_path(targets[-1], cwd)
+            if not os.path.isfile(target):
+                return (
+                    f"STDERR:\nchmod: cannot access '{target}': "
+                    "No such file or directory\nExit code: 1"
+                )
+            error = await _restrict_windows_acl(target, directory=False)
+            return error if error else "(no output)"
+        if tokens[0] == "mkdir":
+            paths: list[str] = []
+            if "-p" in tokens:
+                paths = [token for token in tokens[1:] if not token.startswith("-")]
+            elif "--" in tokens:
+                index = tokens.index("--")
+                paths = tokens[index + 1 : index + 2]
+            elif len(tokens) == 2:
+                paths = tokens[1:2]
+            if not paths:
+                return None
+            restricted = "-m" in tokens
+            for path in paths:
+                absolute = _resolve_windows_path(path, cwd)
+                os.makedirs(absolute, exist_ok=True)
+                if restricted:
+                    error = await _restrict_windows_acl(absolute, directory=True)
+                    if error:
+                        return error
+            return "(no output)"
+    except OSError as exc:
+        return f"STDERR:\n{exc}\nExit code: 1"
+    return None
 
 
 @register_backend("direct")
@@ -39,6 +142,12 @@ class DirectBackend(SandboxBackend):
         logger.info("[Direct] Executing: {}", repr(command))
 
         cwd = kwargs.get("working_dir", str(self._workspace))
+
+        if os.name == "nt":
+            translated = await _translate_windows_posix(command, cwd)
+            if translated is not None:
+                logger.info("[Direct] Windows POSIX command translated: {}", repr(command))
+                return translated
 
         try:
             process = await asyncio.create_subprocess_shell(
