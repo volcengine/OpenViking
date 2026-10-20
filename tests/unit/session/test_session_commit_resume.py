@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.pyagfs.exceptions import AGFSConnectionError
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.session.session import Session
+from openviking.session.session import Session, SessionMeta
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from tests.test_task_tracker import _FakeAgfs
 
 
@@ -67,7 +69,8 @@ class _MemoryVikingFS:
     async def read_file(self, uri, ctx=None):
         if uri not in self.files:
             raise FileNotFoundError(uri)
-        return self.files[uri]
+        content = self.files[uri]
+        return content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
@@ -77,6 +80,11 @@ class _MemoryVikingFS:
 
     async def exists(self, uri, ctx=None):
         return uri in self.files or any(path.startswith(f"{uri}/") for path in self.files)
+
+    async def stat(self, uri, ctx=None, skip_count=False):
+        if not await self.exists(uri, ctx):
+            raise FileNotFoundError(uri)
+        return {"path": uri}
 
     async def ls(self, uri, ctx=None):
         prefix = f"{uri}/"
@@ -247,6 +255,234 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert [item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]] == [
         "archived"
     ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["transient_read", "legacy_meta", "missing_meta", "unavailable", "invalid_meta", "write"],
+)
+async def test_queued_phase2_uses_archive_and_preserves_live_state(monkeypatch, failure):
+    session_uri = "viking://user/default/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    meta_uri = f"{session_uri}/.meta.json"
+    archived = Message(id="archived", role="user", parts=[TextPart("archive input")])
+    # A newer commit and appends may already have changed the live session.
+    latest_meta = SessionMeta(
+        session_id="session-1",
+        message_count=7,
+        total_message_count=50,
+        commit_count=2,
+        pending_tokens=123,
+        memory_policy={"memory_types": ["events"]},
+        auto_commit_policy={"keep_recent_count": 3},
+    )
+    latest_meta.llm_token_usage["total_tokens"] = 100
+    latest_data = latest_meta.to_dict()
+    if failure == "legacy_meta":
+        latest_data.update(
+            pending_tokens="123",
+            keep_recent_count="3",
+            keep_recent_turn_count=None,
+            memories_extracted={"total": "4", "profile": "4"},
+        )
+    latest_content = json.dumps(latest_data)
+    files = {
+        f"{session_uri}/messages.jsonl": "{live file being rewritten",
+        meta_uri: json.dumps(SessionMeta(session_id="session-1").to_dict()),
+        f"{archive_uri}/messages.jsonl": archived.to_jsonl() + "\n",
+        f"{archive_uri}/.meta.json": json.dumps({"phase1": {"status": "ready"}}),
+    }
+    if failure == "missing_meta":
+        # Legacy jobs can lack the Phase 1 marker and root metadata. Their
+        # archived input remains sufficient to finish extraction.
+        files[f"{archive_uri}/.meta.json"] = "{}"
+
+    class Storage(_MemoryVikingFS):
+        meta_reads = 0
+        meta_writes = 0
+
+        async def read_file(self, uri, ctx=None):
+            assert uri != f"{session_uri}/messages.jsonl", "Phase 2 read live messages"
+            if uri == meta_uri:
+                self.meta_reads += 1
+                if failure == "unavailable" or (
+                    failure == "transient_read" and self.meta_reads == 1
+                ):
+                    raise AGFSConnectionError("metadata temporarily unavailable")
+            return await super().read_file(uri, ctx)
+
+        async def write_file(self, uri, content, ctx=None, lease_ref=None):
+            if uri == meta_uri:
+                self.meta_writes += 1
+                if failure == "write":
+                    raise OSError("metadata write failed")
+            await super().write_file(uri, content, ctx, lease_ref)
+
+    storage = Storage(files)
+    summary_inputs = []
+
+    async def summarize(messages, **kwargs):
+        summary_inputs.append([message.id for message in messages])
+        if failure == "missing_meta":
+            files.pop(meta_uri)
+        else:
+            files[meta_uri] = "{invalid metadata" if failure == "invalid_meta" else latest_content
+        return "# Session Summary\n\n## Current State\nArchive summarized."
+
+    extract = AsyncMock(return_value={"contexts": [SimpleNamespace(category="profile")]})
+    session = Session(
+        viking_fs=storage,
+        session_id="session-1",
+        session_uri=session_uri,
+        session_compressor=SimpleNamespace(extract_long_term_memories=extract),
+    )
+    # A stale instance must neither supply the response fallback nor be saved.
+    session.meta.llm_token_usage["total_tokens"] = 999
+    tracker = TaskTracker(_TaskStore())
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    monkeypatch.setattr(session, "_generate_archive_summary_async", summarize)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(extraction_enabled=True, session_skill_extraction_enabled=False)
+        ),
+    )
+    msg = SessionCommitMsg(
+        task_id="task-1",
+        session_id=session.session_id,
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user=session.user.to_dict(),
+        memory_policy=MemoryPolicy(memory_types={"profile"}, enable_working_memory=True).to_dict(),
+    )
+    processor = SessionCommitProcessor(SimpleNamespace(session=lambda *args, **kwargs: session))
+
+    await processor.on_dequeue(msg.to_dict())
+
+    task = await tracker.get(msg.task_id)
+    assert summary_inputs == [["archived"]]
+    assert [message.id for message in extract.await_args.kwargs["messages"]] == ["archived"]
+    assert extract.await_args.kwargs["allowed_memory_types"] == {"profile"}
+    assert not session._loaded
+    if failure == "write":
+        assert task.status is TaskStatus.FAILED
+        assert "metadata write failed" in task.error
+        assert f"{archive_uri}/.done" not in files
+        assert files[meta_uri] == latest_content
+    else:
+        assert task.status is TaskStatus.COMPLETED
+        assert f"{archive_uri}/.done" in files
+        assert f"{archive_uri}/.failed.json" not in files
+        assert "stats_update" not in task.result
+        expected_total = 100 if failure in {"transient_read", "legacy_meta"} else 0
+        assert task.result["token_usage"] == {
+            "llm": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": expected_total,
+                "cached_tokens": 0,
+                "reasoning_tokens": 0,
+            },
+            "embedding": {"total_tokens": 0},
+            "total": {
+                "total_tokens": expected_total,
+                "cached_tokens": 0,
+                "reasoning_tokens": 0,
+            },
+        }
+        if failure in {"transient_read", "legacy_meta"}:
+            saved = json.loads(files[meta_uri])
+            for field in (
+                "message_count",
+                "total_message_count",
+                "commit_count",
+                "pending_tokens",
+                "memory_policy",
+                "auto_commit_policy",
+            ):
+                assert saved[field] == latest_meta.to_dict()[field]
+            previous_count = 4 if failure == "legacy_meta" else 0
+            assert saved["memories_extracted"] == {
+                "total": previous_count + 1,
+                "profile": previous_count + 1,
+            }
+            if failure == "legacy_meta":
+                assert saved["keep_recent_count"] == 3
+                assert saved["keep_recent_turn_count"] == 0
+            assert storage.meta_reads == (2 if failure == "transient_read" else 1)
+        else:
+            assert storage.meta_writes == 0
+            if failure == "missing_meta":
+                assert meta_uri not in files
+            else:
+                assert files[meta_uri] == (
+                    "{invalid metadata" if failure == "invalid_meta" else latest_content
+                )
+            assert storage.meta_reads == (3 if failure == "unavailable" else 1)
+
+    # Redelivery settles from archive markers without loading the live session
+    # or applying extraction/statistics a second time.
+    reads = storage.meta_reads
+    await processor.on_dequeue(msg.to_dict())
+    assert summary_inputs == [["archived"]]
+    extract.assert_awaited_once()
+    assert storage.meta_reads == reads
+
+
+async def test_queued_phase1_recovery_keeps_unreadable_metadata_and_blocks_extraction(monkeypatch):
+    session_uri = "viking://user/default/sessions/session-1"
+    archive_uri = f"{session_uri}/history/archive_001"
+    meta_uri = f"{session_uri}/.meta.json"
+    retained = Message(id="retained", role="user", parts=[TextPart("live tail")])
+    original_meta = json.dumps(
+        SessionMeta(session_id="session-1", memory_policy={"memory_types": ["events"]}).to_dict()
+    )
+    files = {
+        meta_uri: original_meta,
+        f"{session_uri}/messages.jsonl": retained.to_jsonl() + "\n",
+        f"{archive_uri}/.meta.json": json.dumps(
+            {
+                "phase1": {
+                    "status": "preparing",
+                    "queue_message": {"task_id": "task-1"},
+                    "retained_message_ids": ["retained"],
+                    "archived_message_ids": ["archived"],
+                }
+            }
+        ),
+    }
+    storage = _MemoryVikingFS(files)
+    original_read = storage.read_file
+
+    async def read(uri, ctx=None):
+        if uri == meta_uri:
+            raise AGFSConnectionError("metadata unavailable during recovery")
+        return await original_read(uri, ctx)
+
+    tracker = TaskTracker(_TaskStore())
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    monkeypatch.setattr(tracker, "has_work", AsyncMock(return_value=True))
+    monkeypatch.setattr(storage, "read_file", read)
+    session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+    extraction = AsyncMock()
+    monkeypatch.setattr(session, "_run_memory_extraction", extraction)
+    msg = SessionCommitMsg(
+        task_id="task-1",
+        session_id=session.session_id,
+        session_uri=session_uri,
+        archive_uri=archive_uri,
+        user=session.user.to_dict(),
+    )
+    processor = SessionCommitProcessor(SimpleNamespace(session=lambda *args, **kwargs: session))
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert (await tracker.get(msg.task_id)).status is TaskStatus.FAILED
+    assert files[meta_uri] == original_meta
+    assert json.loads(files[f"{archive_uri}/.meta.json"])["phase1"]["status"] == "preparing"
+    assert json.loads(files[f"{archive_uri}/.failed.json"])["stage"] == "phase1_recovery"
+    assert f"{archive_uri}/.done" not in files
+    extraction.assert_not_awaited()
 
 
 @pytest.mark.asyncio

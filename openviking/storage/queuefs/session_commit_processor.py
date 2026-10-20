@@ -75,7 +75,6 @@ class SessionCommitProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 return True
-            await session.load()
             processed = await session.resume_queued_commit(msg)
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
