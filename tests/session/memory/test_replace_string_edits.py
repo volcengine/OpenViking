@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 from test_extraction_output_protocol import _bind, _context
 
 from openviking.session.memory.dataclass import (
@@ -150,13 +151,27 @@ async def test_metadata_field_validates_against_its_own_value():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["content", "title"])
-async def test_runtime_uses_latest_stored_content_not_the_compiler_snapshot(field):
+@pytest.mark.parametrize("protocol_name", ["python", "json"])
+async def test_runtime_uses_latest_stored_content_not_the_compiler_snapshot(field, protocol_name):
     protocol, context, memory = bound()
     search = "old line" if field == "content" else "old title"
     replacement = "new line" if field == "content" else "new title"
-    parsed, error = protocol.parse(
-        f"notes_1.{field}.edit(search={search!r}, replace={replacement!r})", context
-    )
+    if protocol_name == "python":
+        code = f"notes_1.{field}.edit(search={search!r}, replace={replacement!r})"
+    else:
+        protocol = create_extraction_output_protocol("json")
+        code = json.dumps(
+            {
+                "notes": [
+                    {
+                        "page_id": 1,
+                        "key": "example",
+                        field: {"blocks": [{"search": search, "replace": replacement}]},
+                    }
+                ]
+            }
+        )
+    parsed, error = protocol.parse(code, context)
     assert error is None
     loop = validator(memory)
     loop.ctx = None
@@ -296,3 +311,157 @@ async def test_metadata_patch_diagnostic_searches_the_same_field(other_title):
     assert len(errors) == 1
     expected = [other_uri] if other_title == "missing title" else []
     assert errors[0]["found_in_other_uris"] == expected
+
+
+@pytest.mark.parametrize("field", ["content", "title"])
+@pytest.mark.parametrize("full_method", ["field", "object"])
+@pytest.mark.parametrize("patch_method", ["edit", "drop", "field_value", "object_value"])
+@pytest.mark.parametrize("patch_first", [False, True])
+def test_replace_rejects_mixed_full_and_partial_updates(
+    field, full_method, patch_method, patch_first
+):
+    protocol, context, memory = bound()
+    full_value = "before\nold line\nNEW EXTRA\nafter"
+    if full_method == "field":
+        full = f"notes_1.{field}.update({full_value!r})"
+    else:
+        full = f"notes_1.update({field}={full_value!r})"
+    patch_value = {"blocks": [{"search": "old line", "replace": "new line"}]}
+    partial = {
+        "edit": f'notes_1.{field}.edit(search="old line", replace="new line")',
+        "drop": f'notes_1.{field}.drop(text="old line")',
+        "field_value": f"notes_1.{field}.update({patch_value!r})",
+        "object_value": f"notes_1.update({field}={patch_value!r})",
+    }[patch_method]
+    statements = [partial, full] if patch_first else [full, partial]
+
+    parsed, error = protocol.parse("\n".join(statements), context)
+
+    assert parsed is None
+    assert error is not None and "cannot mix" in error
+    assert memory.content == OLD
+
+
+def test_replace_full_updates_and_edits_on_other_fields_are_independent():
+    protocol, context, _ = bound()
+    parsed, error = protocol.parse(
+        'notes_1.content.update("first value")\n'
+        'notes_1.update(content="complete final value")\n'
+        'notes_1.title.edit(search="old title", replace="new title")',
+        context,
+    )
+    assert error is None
+    assert parsed.notes[0].content == "complete final value"
+    assert isinstance(parsed.notes[0].title, StrPatch)
+
+
+@pytest.mark.asyncio
+async def test_replace_accumulates_edits_across_statements():
+    protocol, context, memory = bound()
+    parsed, error = protocol.parse(
+        'notes_1.content.edit(search="old line", replace="new line")\n'
+        'notes_1.content.drop(text="before")',
+        context,
+    )
+    assert error is None
+    operations = resolved(parsed, memory)
+    assert await validator(memory)._validate_patch_operations(operations) == []
+    assert await ReplaceOp().apply(OLD, parsed.notes[0].content) == "new line\nafter"
+
+
+def new_memory_updater():
+    fs = SimpleNamespace(read_file=AsyncMock(side_effect=FileNotFoundError), write_file=AsyncMock())
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(schema())
+    updater = MemoryUpdater(registry=registry)
+    updater._viking_fs = fs
+    return updater, fs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_name", ["python", "json"])
+@pytest.mark.parametrize("field", ["content", "title"])
+@pytest.mark.parametrize("block", [{"search": "old", "replace": "new"}, {"delete": "old"}])
+async def test_new_replace_patch_is_rejected_before_any_write(protocol_name, field, block):
+    _, context, memory = bound()
+    protocol = create_extraction_output_protocol(protocol_name)
+    fields = {"key": "fresh", "title": "full title", "content": "full body", "count": 0}
+    fields[field] = {"blocks": [block]}
+    if protocol_name == "python":
+        code = "sdk.create_notes(" + ", ".join(f"{k}={v!r}" for k, v in fields.items()) + ")"
+    else:
+        code = json.dumps({"notes": [{"page_id": 100, **fields}]})
+    parsed, error = protocol.parse(code, context)
+    updater, fs = new_memory_updater()
+    if parsed is not None:
+        for item in parsed.notes:
+            operation = ResolvedOperation(
+                memory_type="notes",
+                uris=[URI.replace("example.md", "fresh.md")],
+                page_id=item.page_id,
+                old_memory_file_content=None,
+                memory_fields=dict(item.model_dump(exclude={"page_id"})),
+            )
+            operations = ResolvedOperations(
+                upsert_operations=[operation], delete_file_contents=[], errors=[]
+            )
+            assert await validator(memory)._validate_patch_operations(operations) == []
+            await updater._apply_upsert(operation, None)
+
+    fs.write_file.assert_not_awaited()
+    # Both protocols reject the item at the shared schema boundary. JSON keeps
+    # its existing tolerant-parser policy of filtering invalid list items.
+    with pytest.raises(ValidationError, match="complete string"):
+        context.operations_model.model_validate({"notes": [{"page_id": 100, **fields}]})
+    if protocol_name == "python":
+        assert parsed is None
+        assert error is not None and "complete string" in error
+    else:
+        assert error is None
+        assert parsed.notes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_name", ["python", "json"])
+async def test_new_replace_full_strings_are_parsed_and_persisted(protocol_name):
+    _, context, _ = bound()
+    protocol = create_extraction_output_protocol(protocol_name)
+    fields = {"key": "fresh", "title": "full title", "content": "full body", "count": 0}
+    if protocol_name == "python":
+        code = "sdk.create_notes(" + ", ".join(f"{k}={v!r}" for k, v in fields.items()) + ")"
+    else:
+        code = json.dumps({"notes": [{"page_id": 100, **fields}]})
+    parsed, error = protocol.parse(code, context)
+    assert error is None
+    item = parsed.notes[0]
+    uri = URI.replace("example.md", "fresh.md")
+    operation = ResolvedOperation(
+        memory_type="notes",
+        uris=[uri],
+        page_id=item.page_id,
+        old_memory_file_content=None,
+        memory_fields=dict(item.model_dump(exclude={"page_id"})),
+    )
+    updater, fs = new_memory_updater()
+    await updater._apply_upsert(operation, None)
+    fs.write_file.assert_awaited_once()
+    written = MemoryFileUtils.read(fs.write_file.await_args.args[1], uri=uri)
+    assert written.content == "full body"
+    assert written.extra_fields["title"] == "full title"
+    assert written.extra_fields["count"] == 0
+
+
+def test_json_filters_new_replace_patch_without_dropping_valid_items():
+    _, context, _ = bound()
+    protocol = create_extraction_output_protocol("json")
+    invalid = {
+        "page_id": 100,
+        "key": "bad",
+        "content": {"blocks": [{"search": "old", "replace": "new"}]},
+    }
+    valid = {"page_id": 101, "key": "good", "content": "complete content"}
+    parsed, error = protocol.parse(json.dumps({"notes": [invalid, valid]}), context)
+    assert error is None
+    assert len(parsed.notes) == 1
+    assert parsed.notes[0].key == "good"
+    assert parsed.notes[0].content == "complete content"

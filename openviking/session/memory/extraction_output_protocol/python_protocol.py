@@ -1110,8 +1110,7 @@ class _PythonProgramCompiler:
             # Preserve established values, but allow filling a blank template field.
             return
         if handle.full_value is not _UNSET:
-            owner.fields[name] = handle.full_value
-            owner.changed_fields[name] = handle.full_value
+            self._set_changed_field(owner, name, handle.full_value, node)
             return
         # Replace strings still advertise update(), but accept an explicit edit at runtime.
         if not owner.existing:
@@ -1137,8 +1136,34 @@ class _PythonProgramCompiler:
         existing = owner.changed_fields.get(name)
         prior_blocks = existing.blocks if isinstance(existing, StrPatch) else []
         patch = StrPatch(blocks=[*prior_blocks, *handle.blocks])
-        owner.fields[name] = patch
-        owner.changed_fields[name] = patch
+        self._set_changed_field(owner, name, patch, node)
+
+    def _set_changed_field(
+        self, owner: _MemoryObject, name: str, value: Any, node: ast.AST
+    ) -> None:
+        field_schema = next(
+            (item for item in self.schemas[owner.memory_type].fields if item.name == name), None
+        )
+        previous = owner.changed_fields.get(name)
+        if (
+            owner.existing
+            and field_schema is not None
+            and field_schema.merge_op == MergeOp.REPLACE
+            and field_schema.field_type == FieldType.STRING
+            and (
+                isinstance(previous, str)
+                and isinstance(value, (StrPatch, dict))
+                or isinstance(previous, (StrPatch, dict))
+                and isinstance(value, str)
+            )
+        ):
+            self._error(
+                node,
+                f"replace field {name!r} cannot mix complete values and patches in one program; "
+                "use complete update() values or only edit()/drop() patches",
+            )
+        owner.fields[name] = value
+        owner.changed_fields[name] = value
 
     def _eval_keywords(
         self,
@@ -1192,8 +1217,7 @@ class _PythonProgramCompiler:
                 owner.changed_fields[name] = previous_delta + changes[name]
                 owner.fields[name] = value
                 continue
-            owner.fields[name] = value
-            owner.changed_fields[name] = value
+            self._set_changed_field(owner, name, value, node)
 
     def _build_operations(self) -> Any:
         payload: dict[str, Any] = {name: [] for name in self.context.operations_model.model_fields}
