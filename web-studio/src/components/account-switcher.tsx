@@ -133,9 +133,7 @@ export function AccountSwitcher() {
   const [selectedService, setSelectedService] = React.useState<string | null>(
     null,
   )
-  const [view, setView] = React.useState<'identities' | 'accounts'>(
-    'identities',
-  )
+  const [view, setView] = React.useState<'identities' | 'accounts'>('accounts')
   const [mobileDetails, setMobileDetails] = React.useState(false)
   const currentService = serviceKey(connection)
   const selectedIsActive =
@@ -405,11 +403,7 @@ export function AccountSwitcher() {
       setIdentitySearch('')
       setSearch('')
       setMobileDetails(false)
-      setView(
-        canManageAccounts && savedProfiles.length === 0
-          ? 'accounts'
-          : 'identities',
-      )
+      setView('accounts')
     }
   }
 
@@ -472,7 +466,9 @@ export function AccountSwitcher() {
                       title={group.connection.baseUrl}
                       onClick={() => {
                         setSelectedService(key)
-                        setView('identities')
+                        setView(
+                          key === currentService ? 'accounts' : 'identities',
+                        )
                         setIdentitySearch('')
                         setMobileDetails(true)
                       }}

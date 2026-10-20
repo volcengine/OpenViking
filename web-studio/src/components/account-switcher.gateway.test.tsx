@@ -153,6 +153,15 @@ it('keeps saved connections and server account switching available to a gateway 
   )
 
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  expect(
+    screen
+      .getByRole('button', { name: 'serverAccountsTitle' })
+      .getAttribute('aria-pressed'),
+  ).toBe('true')
+  expect(
+    screen.getByRole('textbox', { name: 'searchPlaceholder' }),
+  ).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'identities' }))
   expect(screen.getByTitle('Open-source default')).toBeTruthy()
   const hostedService = screen.getByRole('button', { name: 'provider.hosted' })
   fireEvent.click(hostedService)
