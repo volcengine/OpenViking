@@ -22,6 +22,17 @@ const connectionState = vi.hoisted(() => ({
   deleteProfile: vi.fn(),
 }))
 
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({
+    to,
+    children,
+    ...props
+  }: {
+    to: string
+    children: React.ReactNode
+  }) => React.createElement('a', { href: to, ...props }, children),
+}))
+
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => connectionState,
 }))
@@ -140,28 +151,11 @@ it('lets every record in an identical connection group be managed', () => {
   expect(connectionState.activateProfile).toHaveBeenCalledWith('duplicate')
 })
 
-it('creates a connection on HTTP origins without crypto.randomUUID', () => {
-  const getRandomValues = globalThis.crypto.getRandomValues.bind(
-    globalThis.crypto,
-  )
-  vi.stubGlobal('crypto', { getRandomValues })
-
+it('routes adding a profile to the connection wizard without creating a modal draft', () => {
   render(React.createElement(ConnectionProfilesList))
-  fireEvent.click(screen.getByRole('button', { name: 'profiles.add' }))
-  fireEvent.change(screen.getByLabelText('profiles.name'), {
-    target: { value: 'Local' },
-  })
-  fireEvent.change(screen.getByLabelText('profiles.fields.baseUrl'), {
-    target: { value: 'http://192.0.2.1:1933' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'profiles.save' }))
-
-  expect(connectionState.saveProfile).toHaveBeenCalledWith(
-    expect.objectContaining({
-      id: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      ),
-      name: 'Local',
-    }),
-  )
+  expect(
+    screen.getByRole('link', { name: 'profiles.add' }).getAttribute('href'),
+  ).toBe('/config')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(connectionState.saveProfile).not.toHaveBeenCalled()
 })

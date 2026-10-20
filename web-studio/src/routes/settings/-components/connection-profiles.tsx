@@ -1,7 +1,9 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDownIcon } from 'lucide-react'
-import { Button } from '#/components/ui/button'
+import { Button, buttonVariants } from '#/components/ui/button'
+import { Link } from '@tanstack/react-router'
+import { SetupIdentityDirectory } from '#/components/setup-identity-directory'
 import { Badge } from '#/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import {
@@ -21,7 +23,6 @@ import {
 } from '#/components/ui/select'
 import { Field, FieldLabel } from '#/components/ui/field'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { createRandomUuid } from '#/lib/browser-crypto'
 import { CLOUD_SETUP_URL } from '#/lib/connection/onboarding'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import type { ConnectionProfile } from '#/lib/connection/profiles'
@@ -70,10 +71,25 @@ export function ConnectionProfilesList() {
   } = useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionProfile | null>(null)
   const [error, setError] = React.useState('')
+  const [directoryScope, setDirectoryScope] = React.useState<string | null>(
+    null,
+  )
+  const currentDirectoryScope = draft
+    ? JSON.stringify([
+        draft.id,
+        draft.connection.serviceSelection,
+        draft.connection.baseUrl,
+        draft.connection.adminApiKey,
+      ])
+    : null
+  const hasControlKey =
+    draft?.connection.serviceSelection === 'opensource' &&
+    Boolean(draft.connection.adminApiKey.trim())
   const [deleting, setDeleting] = React.useState<ConnectionProfile | null>(null)
   const openSourceUrlRef = React.useRef('')
   const openEditor = (profile: ConnectionProfile) => {
     setError('')
+    setDirectoryScope(null)
     const hosted = profile.connection.serviceSelection === 'volcengine'
     openSourceUrlRef.current = hosted ? '' : profile.connection.baseUrl
     setDraft(
@@ -170,24 +186,9 @@ export function ConnectionProfilesList() {
       <Card>
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle>{t('profiles.title')}</CardTitle>
-          <Button
-            onClick={() =>
-              openEditor({
-                id: createRandomUuid(),
-                name: '',
-                connection: {
-                  serviceSelection: 'opensource',
-                  baseUrl: '',
-                  apiKey: '',
-                  adminApiKey: '',
-                  accountId: 'default',
-                  userId: 'default',
-                },
-              })
-            }
-          >
+          <Link to="/config" className={buttonVariants()}>
             {t('profiles.add')}
-          </Button>
+          </Link>
         </CardHeader>
         <CardContent className="grid gap-3">
           <p className="text-sm text-muted-foreground">{t('profiles.hint')}</p>
@@ -242,7 +243,7 @@ export function ConnectionProfilesList() {
           if (!open) setDraft(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
           <DialogHeader className="pr-8">
             <DialogTitle>
               {t(
@@ -317,9 +318,13 @@ export function ConnectionProfilesList() {
               </Field>
               {PROFILE_FIELDS.filter(
                 (field) =>
-                  draft.connection.serviceSelection === 'opensource' ||
-                  field === 'baseUrl' ||
-                  field === 'apiKey',
+                  (draft.connection.serviceSelection === 'opensource' ||
+                    field === 'baseUrl' ||
+                    field === 'apiKey') &&
+                  !(
+                    hasControlKey &&
+                    (field === 'accountId' || field === 'userId')
+                  ),
               ).map((key) => {
                 return (
                   <Field key={key} className="gap-2">
@@ -354,6 +359,44 @@ export function ConnectionProfilesList() {
                   </Field>
                 )
               })}
+              {hasControlKey && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setDirectoryScope(currentDirectoryScope)}
+                  >
+                    {t('onboarding:verify')}
+                  </Button>
+                  {directoryScope === currentDirectoryScope && (
+                    <SetupIdentityDirectory
+                      key={currentDirectoryScope}
+                      connection={draft.connection}
+                      disabled={false}
+                      onSelect={({ accountId, userId }) =>
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                connection: {
+                                  ...current.connection,
+                                  accountId,
+                                  userId,
+                                  apiKey:
+                                    current.connection.accountId ===
+                                      accountId &&
+                                    current.connection.userId === userId
+                                      ? current.connection.apiKey
+                                      : '',
+                                },
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                  )}
+                </>
+              )}
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
