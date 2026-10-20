@@ -158,11 +158,13 @@ export const register: Register = (on) => {
     return { text: "Usage: /openviking-usage expand | collapse" };
   });
 
-  // Each prompt starts an answer; openviking-memory's recall block says what it injected.
-  on("classic.UserPromptSubmit", async ($, e, next) => {
+  // prompt.submit settles after UserPromptSubmit command hooks and exposes their
+  // context. Unlike classic.*, it also reaches user modules under sec-default.
+  on("prompt.submit", async ($, e, next) => {
     const res = await next(e);
+    if ("drop" in res) return res;
     await safely($, "record prompt", async () => {
-      const block = (res.additionalContext ?? []).find(
+      const block = (res.context ?? []).find(
         (c) =>
           c.includes("<openviking-context") &&
           !/source="(startup|resume|compact|skill-experience)"/.test(c),
