@@ -23,6 +23,7 @@ import { EvolutionSettingsPopover } from './evolution-settings-popover'
 
 const INSTALL_COMMAND =
   'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/skills/ov-experience-memory'
+const LOCAL_INSTALL_COMMAND = 'npx skills add ./ov-experience-memory'
 
 export function ExperienceSetupGuide() {
   const [expanded, setExpanded] = useState(false)
@@ -116,6 +117,29 @@ export function ExperienceSetupGuide() {
                     <CopyIcon />
                     {t('setup.copy')}
                   </Button>
+                  <div className="space-y-3 border-t pt-3">
+                    <p className="text-sm text-muted-foreground">
+                      {t('setup.fallbackHint')}
+                    </p>
+                    <Button
+                      render={
+                        <a
+                          href="https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/skills/ov-experience-memory/SKILL.md"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        />
+                      }
+                      nativeButton={false}
+                      variant="outline"
+                      size="sm"
+                    >
+                      {t('setup.openSkillFile')}
+                      <ExternalLinkIcon />
+                    </Button>
+                    <pre className="rounded-lg border bg-muted/50 p-4 text-xs leading-6 whitespace-pre-wrap break-all select-text">
+                      <code>{LOCAL_INSTALL_COMMAND}</code>
+                    </pre>
+                  </div>
                 </PopoverContent>
               </Popover>
               <Button

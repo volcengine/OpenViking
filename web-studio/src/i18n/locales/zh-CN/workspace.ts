@@ -224,6 +224,9 @@ const workspace = {
       docs: '查看接入指南',
       install: '为你的 Agent 安装经验 Skill',
       hint: '在终端运行以下命令，并按提示选择你使用的 Agent。',
+      fallbackHint:
+        '如果克隆卡住，请创建 ov-experience-memory 文件夹，将下方链接的文件保存为该文件夹内的 SKILL.md，然后在该文件夹的上一级目录运行以下命令。',
+      openSkillFile: '打开 SKILL.md',
       copy: '复制安装命令',
       view: '查看命令',
       copied: '安装命令已复制',
