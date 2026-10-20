@@ -408,11 +408,7 @@ export function AccountSwitcher() {
       setIdentitySearch('')
       setSearch('')
       setMobileDetails(false)
-      setView(
-        canManageAccounts || isConnectionRoleLoading
-          ? 'accounts'
-          : 'identities',
-      )
+      setView('identities')
     }
   }
 
@@ -475,11 +471,7 @@ export function AccountSwitcher() {
                       title={group.connection.baseUrl}
                       onClick={() => {
                         setSelectedService(key)
-                        setView(
-                          key === currentService && canManageAccounts
-                            ? 'accounts'
-                            : 'identities',
-                        )
+                        setView('identities')
                         setIdentitySearch('')
                         setMobileDetails(true)
                       }}
