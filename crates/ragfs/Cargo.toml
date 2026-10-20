@@ -62,6 +62,7 @@ filelocks = "0.1.0"
 
 # Data structures
 radix_trie = "0.2"
+aho-corasick = "1.1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 # Error handling

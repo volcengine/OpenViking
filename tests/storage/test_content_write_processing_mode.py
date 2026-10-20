@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,8 +10,8 @@ import pytest
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
-from openviking.service.task_work_index import TaskWorkIndex, bind_task_context
+from openviking.service.task_tracker import TaskTracker, get_task_tracker
+from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import content_write as content_write_module
 from openviking.storage.abstract_overview import (
@@ -20,8 +21,7 @@ from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.context_update_plan import ContextUpdatePlan, FileRefreshIntent
 from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.telemetry.context import bind_telemetry
-from openviking.telemetry.operation import OperationTelemetry
+from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -31,7 +31,6 @@ from tests.test_task_tracker import _FakeAgfs
 @pytest.fixture(autouse=True)
 def run_content_write_operations_inline(monkeypatch):
     tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    tracker.attach_work_index(TaskWorkIndex())
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
 
     async def run_tracked_operation(_task_type, *, operation, **_kwargs):
@@ -276,66 +275,91 @@ async def test_direct_write_reads_target_once_after_lock_and_reuses_formal_state
 
 
 @pytest.mark.asyncio
-async def test_direct_write_hands_exact_lock_to_request_coordinator(monkeypatch, ctx):
+@pytest.mark.parametrize("write_error", [None, RuntimeError, asyncio.CancelledError])
+async def test_direct_write_holds_lock_until_submitted_work_settles(monkeypatch, ctx, write_error):
     uri = "viking://resources/demo.md"
     fake_fs = _FakeVikingFS()
-    fake_fs.stat = AsyncMock(return_value={"isDir": False})
+    fake_fs.stat = AsyncMock(return_value={"not_found": True})
+    fake_fs.exists = AsyncMock(return_value=False)
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    plan = ContextUpdatePlan(
-        uri,
-        "resource",
-        file_refresh=FileRefreshIntent(uri, "new-md5"),
-    )
     coordinator._prepare_inline_resource_plan = AsyncMock(
         return_value=SimpleNamespace(
-            plan=plan,
+            plan=ContextUpdatePlan(uri, "resource", file_refresh=FileRefreshIntent(uri, "new-md5")),
             store=None,
             artifact_ref=None,
             target=None,
         )
     )
-    monkeypatch.setattr(
-        content_write_module,
-        "commit_and_enqueue_plan",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                semantic_requested=True,
-                vector_requested=True,
-                semantic_action=FreshnessAction.REFRESH_NOW.value,
-            )
-        ),
-    )
     queue = SimpleNamespace(enqueue=AsyncMock(return_value=EnqueueReceipt("queued", "work-1")))
-    manager = SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *args, **kwargs: queue)
+    manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
     monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
-    telemetry = OperationTelemetry(operation="content.write", enabled=False)
-
-    with (
-        bind_telemetry(telemetry),
-        bind_task_context("test-task", "account-1", "user-1", enqueued_work=[]),
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs
+    )
+    scope = SimpleNamespace(lock={"id": "lock-1"}, close=AsyncMock())
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=scope),
+    )
+    processor = SemanticProcessor(vlm_resolver=None)
+    processor._reenqueue_semantic_msg = AsyncMock()
+    tracker = get_task_tracker()
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    task = await tracker.create("content_write", **owner)
+    for work_id, queue_name in (
+        ("producer", "Inline"),
+        ("work-1", "Semantic"),
+        ("embed", "Embedding"),
     ):
-        result = await coordinator._write_direct_with_refresh(
-            uri=uri,
-            root_uri="viking://resources",
-            content="updated",
-            mode="replace",
-            response_mode="replace",
-            context_type="resource",
-            wait=False,
-            ctx=ctx,
-            telemetry_id=telemetry.telemetry_id,
-            ingest_options=IngestOptions(),
+        await tracker.register_work(task.task_id, work_id, queue_name, **owner)
+
+    async def consume():
+        with bind_task_context(task.task_id, **owner, work_id="work-1", enqueued_work=[]):
+            return await processor.on_dequeue(queue.enqueue.await_args.args[0].to_dict())
+
+    async def commit(*args, **kwargs):
+        # The coordinator runs before the new file exists or the producer hands off.
+        assert (await consume()).outcome.value == "requeued"
+        scope.close.assert_not_awaited()
+        if write_error is not None:
+            raise write_error("submission interrupted")
+        return SimpleNamespace(
+            semantic_requested=True,
+            vector_requested=True,
+            semantic_action=FreshnessAction.REFRESH_NOW.value,
         )
 
-    coordinator_msg = queue.enqueue.await_args.args[0]
-    assert coordinator_msg.wait_for_request_completion is True
-    assert coordinator_msg.lock_handoff["covered_paths"] == [
-        {"path": "/fake/file", "kind": "exact"}
-    ]
+    monkeypatch.setattr(content_write_module, "commit_and_enqueue_plan", commit)
+    with bind_task_context(task.task_id, **owner, work_id="producer", enqueued_work=[]):
+        try:
+            result = await coordinator._write_direct_with_refresh(
+                uri=uri,
+                root_uri="viking://resources",
+                content="updated",
+                mode="replace",
+                response_mode="replace",
+                context_type="resource",
+                wait=False,
+                ctx=ctx,
+                telemetry_id="",
+                ingest_options=IngestOptions(),
+            )
+        except BaseException as exc:
+            assert write_error is not None and isinstance(exc, write_error)
+        else:
+            assert write_error is None
+            assert result["semantic_status"] == result["vector_status"] == "queued"
+
     assert fake_fs._async_agfs.release_calls == []
     assert fake_fs._async_agfs.handoff_calls == ["lock-1"]
-    assert result["semantic_status"] == "queued"
-    assert result["vector_status"] == "queued"
+    assert await tracker.is_enqueue_complete(task.task_id, "work-1", **owner)
+    await tracker.mark_work_done(task.task_id, "producer", **owner)
+    assert (await consume()).outcome.value == "requeued"
+    scope.close.assert_not_awaited()
+    await tracker.mark_work_done(task.task_id, "embed", **owner)
+    assert (await consume()).outcome.value == "success"
+    scope.close.assert_awaited_once()
+    await tracker.mark_work_done(task.task_id, "work-1", **owner)
 
 
 @pytest.mark.asyncio

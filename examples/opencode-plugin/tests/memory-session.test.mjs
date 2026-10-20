@@ -167,6 +167,46 @@ test("autoCapture=false skips lifecycle commits but preserves explicit commits",
   })
 })
 
+test("a session first seen via message.updated keeps its own session id (#6222)", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-first",
+            sessionID: "oc-child",
+            parentID: "msg-parent",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-first",
+            messageID: "msg-first",
+            sessionID: "oc-child",
+            type: "text",
+            text: "A message event must not derive a session id from the parent message id.",
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-child" })
+
+      const addMessage = requests.find((request) => request.url?.endsWith("/messages/batch"))
+      assert.ok(addMessage, "message.updated should flush the captured message")
+      assert.equal(addMessage.url, "/api/v1/sessions/oc-oc-child/messages/batch")
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("session.idle event flushes pending OpenCode capture", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-session-", async (dir) => {

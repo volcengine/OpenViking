@@ -21,6 +21,11 @@ _RULES = json.loads(files("openviking_gateway").joinpath("client-rules.json").re
 PLUGIN_TAGS = tuple(_RULES["plugin_tags"])
 NOISE_TAGS = tuple(_RULES["noise_tags"])
 AUXILIARY_PATTERNS = tuple(_RULES["auxiliary_patterns"])
+# Whole messages clients write on the user's behalf: pi-ai's label for a tool result's
+# images, which it sends as a user message after the tool result, and DSH's runtime and
+# time snapshots, which DSH can append mid-turn. Each is a message of its own, so a
+# snapshot pattern takes the rest of the text. Anchored, so other text fails at once.
+NOISE_PATTERNS = tuple(re.compile(p) for p in _RULES["noise_patterns"])
 # re.I tries a pattern at every offset; plain ASCII patterns (no escapes, sets or flags),
 # lowercased, get re's literal search instead, the same match unless the text has one of
 # the only letters where lower() and re.I differ against ASCII (checked in the tests).
@@ -38,6 +43,8 @@ def clean_text(text: str) -> str:
     for tag in NOISE_TAGS:
         text = re.sub(rf"<{tag}\b[^>]*>[\s\S]*?</{tag}>", " ", text, flags=re.I)
     text = re.sub(r"^\s*\[Subagent Context\][^\n]*", "", text, flags=re.M)
+    for pattern in NOISE_PATTERNS:
+        text = pattern.sub("", text)
     return text.replace("\0", "").strip()
 
 
@@ -101,6 +108,21 @@ def text_content(message: dict) -> str:
     return ""
 
 
+def canonical_arguments(value: Any) -> Any:
+    """Tool-call arguments as compact JSON in their own key order, else unchanged.
+
+    Clients such as pi-ai parse the arguments a reply streamed and send them back
+    re-serialized, so an upstream that spaces its JSON never matches its own reply.
+    Numbers keep their JSON spelling, so ``30.0`` and ``30`` still differ.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        return orjson.dumps(orjson.loads(value)).decode()
+    except orjson.JSONDecodeError:
+        return value
+
+
 def normalize(value: Any) -> Any:
     if isinstance(value, list):
         return [
@@ -123,6 +145,8 @@ def normalize(value: Any) -> Any:
             for k, v in value.items()
             if k != "cache_control"
         }
+        if "arguments" in out:
+            out["arguments"] = canonical_arguments(out["arguments"])
         if "content" in out:
             content = out["content"]
             if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
@@ -383,18 +407,39 @@ def replays_reasoning(upstream: dict) -> bool:
     return upstream.get("vendor") in REASONING_VENDORS if value is None else value
 
 
-def usage_of(value: dict) -> dict:
-    """Token counts from any protocol's usage, including compatible endpoints that mix forms."""
+# Fields relays put cache counts in, at the top of usage or in its token details.
+CACHE_READ = ("cache_read_input_tokens", "cached_tokens", "prompt_cache_hit_tokens")
+CACHE_WRITE = ("cache_creation_input_tokens", "cache_write_tokens", "cached_creation_tokens")
+
+
+def usage_of(value: dict, excludes_cache: bool = False) -> dict:
+    """Token counts from any protocol's usage, including compatible endpoints that mix forms.
+
+    ``input_tokens`` always includes cached and written tokens: Anthropic counts them apart
+    (``excludes_cache``), Chat and Responses totals already hold them.
+    """
     usage = value.get("usage") or {}
-    details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
-    cached = usage.get("cache_read_input_tokens", details.get("cached_tokens", 0)) or 0
-    written = usage.get("cache_creation_input_tokens", 0) or 0
-    input_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-    if "cache_read_input_tokens" in usage:
+    scopes = [
+        usage,
+        usage.get("prompt_tokens_details") or {},
+        usage.get("input_tokens_details") or {},
+    ]
+    # Relays copy one count into several fields and zero-fill the rest.
+    cached, written = (
+        max((s[k] for s in scopes for k in keys if s.get(k) is not None), default=0)
+        for keys in (CACHE_READ, CACHE_WRITE)
+    )
+    # Each protocol's own total first; compatible endpoints often fill both, one with zero.
+    own, other = (
+        ("input_tokens", "prompt_tokens") if excludes_cache else ("prompt_tokens", "input_tokens")
+    )
+    input_tokens = usage.get(own) or usage.get(other) or 0
+    # A total below its own cache counted the cache apart, as older relays do too.
+    if excludes_cache or input_tokens < cached + written:
         input_tokens += cached + written
     return {
         "input_tokens": input_tokens,
-        "output_tokens": usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0,
+        "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens") or 0,
         "cached_tokens": cached,
         "cache_write_tokens": written,
     }

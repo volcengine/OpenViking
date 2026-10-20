@@ -34,6 +34,7 @@ import { offeredTools, toProfileSettings } from '../-lib/profile-schema'
 import { NEW_ID } from '../-lib/search'
 import { useGateway, useKeys, useProfiles, useTools } from '../-lib/use-gateway'
 import { ConfirmDialog } from './confirm-dialog'
+import { DocsLink } from './docs-link'
 import { EmptyState, ErrorState, LoadingState } from './empty-state'
 import { ExplainedButton } from './explained-button'
 import { PROFILE_SECTIONS, isSectionOn } from './profiles-settings'
@@ -313,6 +314,7 @@ export function ProfilesPage() {
         description={t('profiles.description')}
         actions={
           <>
+            <DocsLink section="profiles" />
             <Button
               type="button"
               variant="outline"

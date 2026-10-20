@@ -20,6 +20,7 @@ from openviking.telemetry import (
     resolve_telemetry,
     unregister_telemetry,
 )
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -162,7 +163,13 @@ class ReindexProcessor(DequeueHandlerBase):
             return ProcessResult.success()
         except Exception as exc:
             await tracker.fail(
-                msg.task_id, str(exc), account_id=ctx.account_id, user_id=ctx.user.user_id
+                msg.task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                result={"code": exc.code, "details": exc.details}
+                if isinstance(exc, OpenVikingError)
+                else None,
             )
             return ProcessResult.failed(str(exc))
         finally:

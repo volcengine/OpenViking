@@ -16,6 +16,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.service.task_domain import WorkSummary
 from openviking.service.task_tracker import TaskStatus
 from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -1026,9 +1027,9 @@ async def test_add_resource_processor_records_paused_watch_result(
         fail=AsyncMock(),
         get_task_auth=AsyncMock(return_value={}),
         wait_for_task_work=AsyncMock(),
-        build_queue_status=Mock(return_value={}),
-        get_context_count=Mock(return_value=0),
-        get_queue_timing=Mock(return_value={}),
+        get_work_summary=AsyncMock(return_value=WorkSummary()),
+        format_queue_status=Mock(return_value={}),
+        format_queue_timing=Mock(return_value={}),
         get=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.CANCELLING)),
     )
     monkeypatch.setattr(

@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import axios, { AxiosHeaders } from 'axios'
 import { resolveApiKeyAuth } from '#/lib/connection/auth'
 import type { InternalAxiosRequestConfig } from 'axios'
@@ -229,7 +230,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 
       if (isEnvelopeError(response.data)) {
         const { error } = response.data
-        const message = error.message || 'OpenViking request failed'
+        const message = error.message || i18n.t('studio:errors.requestFailed')
 
         throw new OvClientError({
           code: error.code || 'ERROR',

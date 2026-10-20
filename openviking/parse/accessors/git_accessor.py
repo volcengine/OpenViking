@@ -35,6 +35,7 @@ from openviking.utils.git_auth import (
     parse_git_http_auth_config,
     raise_git_auth_error,
 )
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -113,7 +114,11 @@ class GitAccessor(DataAccessor):
 
         try:
             # Create local temp directory (non-blocking)
-            temp_local_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_git_")
+            temp_local_dir = await asyncio.to_thread(
+                tempfile.mkdtemp,
+                prefix="ov_git_",
+                dir=get_parser_download_temp_dir(),
+            )
             logger.info(f"[GitAccessor] Created local temp dir for git: {temp_local_dir}")
 
             # Fetch content (Clone or Extract)

@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ChatStatus, StreamToolCall } from './types/chat'
@@ -11,7 +12,13 @@ import type {
   ToolPart,
   ToolResultPart,
 } from './types/message'
-import { addMessage, sendChatStream, serializeParts } from './api'
+import {
+  addMessage,
+  interruptChatSession,
+  sendChatStream,
+  steerChatSession,
+  serializeParts,
+} from './api'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
 import { createBrowserId } from '../browser-crypto'
@@ -88,6 +95,18 @@ type SendOptions = {
   displayMessage?: string
 }
 
+type AbortOptions = {
+  discardPartial?: boolean
+  closeLocalStream?: boolean
+}
+
+function isSupersededRequest(
+  current: AbortController | null,
+  expected: AbortController,
+) {
+  return current !== null && current !== expected
+}
+
 function buildAssistantMessage(
   content: string,
   toolCalls: StreamToolCall[],
@@ -156,9 +175,10 @@ export interface UseChatReturn {
   streamingToolCalls: StreamToolCall[]
   streamingReasoning: string
   streamingParts: MessagePart[]
+  streamingInsertIndex: number | undefined
   iteration: number
   send: (message: string, options?: SendOptions) => Promise<void>
-  abort: () => void
+  abort: (options?: AbortOptions) => void
   reset: () => void
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>
 }
@@ -180,13 +200,75 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   >([])
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamingParts, setStreamingParts] = useState<MessagePart[]>([])
+  const [streamingInsertIndex, setStreamingInsertIndex] = useState<
+    number | undefined
+  >(undefined)
   const [iteration, setIteration] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
+  const activeSessionRef = useRef<string | null>(null)
+  const activeConnectionRef = useRef<string | null>(null)
+  const sessionIdRef = useRef(sessionId)
+  const appendInputRef = useRef<
+    ((message: Message, accepted: Promise<boolean>) => Promise<boolean>) | null
+  >(null)
+  const persistenceTailRef = useRef<Promise<void>>(Promise.resolve())
+  const discardPartialControllersRef = useRef(new WeakSet<AbortController>())
+  const interruptedControllersRef = useRef(new WeakSet<AbortController>())
   const messagesRef = useRef<Message[]>(messages)
+  const historyLoadedRef = useRef(Boolean(initialMessages))
   const lastSyncedInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   const pendingInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   messagesRef.current = messages
+  sessionIdRef.current = sessionId
+
+  const abort = useCallback((abortOptions?: AbortOptions) => {
+    const controller = abortRef.current
+    const activeSessionId = activeSessionRef.current
+    if (!controller || !activeSessionId) return
+
+    if (abortOptions?.discardPartial) {
+      discardPartialControllersRef.current.add(controller)
+    }
+
+    const closeLocalStream = () => {
+      controller.abort()
+      if (abortRef.current === controller) {
+        abortRef.current = null
+        activeSessionRef.current = null
+        activeConnectionRef.current = null
+        appendInputRef.current = null
+      }
+    }
+
+    const currentConnection = JSON.stringify([
+      ovClient.getOptions(),
+      ovClient.getConnection(),
+    ])
+    if (activeConnectionRef.current !== currentConnection) {
+      closeLocalStream()
+      return
+    }
+
+    void interruptChatSession(activeSessionId)
+      .then((result) => {
+        if (result.interrupted && abortRef.current === controller) {
+          interruptedControllersRef.current.add(controller)
+        }
+        if (!result.interrupted && abortRef.current === controller) {
+          closeLocalStream()
+        }
+      })
+      .catch(() => {
+        if (abortRef.current === controller) {
+          closeLocalStream()
+        }
+      })
+
+    if (abortOptions?.closeLocalStream) {
+      closeLocalStream()
+    }
+  }, [])
 
   const ownerRef = useRef(0)
 
@@ -201,8 +283,8 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
   // Reset state when sessionId changes
   useEffect(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
+    abort({ closeLocalStream: true, discardPartial: true })
+    historyLoadedRef.current = false
     lastSyncedInitialMessagesRef.current = undefined
     pendingInitialMessagesRef.current = undefined
     setMessages([])
@@ -212,8 +294,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setStreamingToolCalls([])
     setStreamingReasoning('')
     setStreamingParts([])
+    setStreamingInsertIndex(undefined)
     setIteration(0)
-  }, [identityScopeKey, sessionId])
+  }, [abort, identityScopeKey, sessionId])
 
   // Sync initialMessages into state when they load or when switching sessions.
   useEffect(() => {
@@ -232,16 +315,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     if (lastSyncedInitialMessagesRef.current === nextInitialMessages) return
 
     lastSyncedInitialMessagesRef.current = nextInitialMessages
-    setMessages(nextInitialMessages)
+    if (!historyLoadedRef.current) {
+      setMessages((current) => [...nextInitialMessages, ...current])
+      historyLoadedRef.current = true
+    }
   }, [initialMessages, sessionId, status])
 
-  const abort = useCallback(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
-  }, [])
-
   const reset = useCallback(() => {
-    abort()
+    abort({ closeLocalStream: true, discardPartial: true })
+    historyLoadedRef.current = Boolean(initialMessages)
     setMessages(initialMessages ?? [])
     setStatus('idle')
     setError(undefined)
@@ -249,17 +331,73 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setStreamingToolCalls([])
     setStreamingReasoning('')
     setStreamingParts([])
+    setStreamingInsertIndex(undefined)
     setIteration(0)
   }, [abort, initialMessages])
 
+  const queuePersistence = useCallback((operation: () => Promise<unknown>) => {
+    const queued = persistenceTailRef.current.then(async () => {
+      try {
+        await operation()
+      } catch {
+        // Session persistence is best-effort and must not fail the chat stream.
+      }
+    })
+    persistenceTailRef.current = queued
+    return queued
+  }, [])
+
+  useEffect(
+    () => () => {
+      abort({ closeLocalStream: true, discardPartial: true })
+    },
+    [abort],
+  )
+
   const send = useCallback(
     async (message: string, sendOptions?: SendOptions) => {
-      if (status === 'streaming') return
-
       const isFirstExchange = messagesRef.current.length === 0
       const displayMessage = sendOptions?.displayMessage ?? message
 
       const userMsg = createUserMessage(displayMessage)
+      const connectionSnapshot = JSON.stringify([
+        ovClient.getOptions(),
+        ovClient.getConnection(),
+      ])
+
+      if (abortRef.current) {
+        const activeController = abortRef.current
+        if (activeConnectionRef.current !== connectionSnapshot) {
+          throw new Error(i18n.t('studio:errors.connectionChanged'))
+        }
+        setError(undefined)
+        const appendInput = appendInputRef.current
+        if (!appendInput) {
+          throw new Error(i18n.t('studio:errors.noActiveRequest'))
+        }
+        let resolveAccepted!: (accepted: boolean) => void
+        const accepted = new Promise<boolean>((resolve) => {
+          resolveAccepted = resolve
+        })
+        const appended = appendInput(userMsg, accepted)
+        try {
+          const result = await steerChatSession(sessionId, { message })
+          if (!result.accepted) throw new Error(i18n.t('studio:errors.inputRejected'))
+          resolveAccepted(true)
+          await appended
+        } catch (err) {
+          resolveAccepted(false)
+          if (
+            abortRef.current === activeController &&
+            sessionIdRef.current === sessionId
+          ) {
+            setError(err instanceof Error ? err.message : String(err))
+          }
+          throw err
+        }
+        return
+      }
+
       setMessages((prev) => [...prev, userMsg])
       setStatus('streaming')
       setError(undefined)
@@ -267,27 +405,32 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       setStreamingToolCalls([])
       setStreamingReasoning('')
       setStreamingParts([])
+      setStreamingInsertIndex(messagesRef.current.length + 1)
       setIteration(0)
 
       const controller = new AbortController()
-      abortRef.current = controller
       const owner = ownerRef.current
-      const connectionSnapshot = JSON.stringify([
-        ovClient.getOptions(),
-        ovClient.getConnection(),
-      ])
+      abortRef.current = controller
+      activeSessionRef.current = sessionId
+      activeConnectionRef.current = connectionSnapshot
+      let streamingInsertIndexValue = messagesRef.current.length + 1
       const isCurrent = () =>
         owner === ownerRef.current &&
         connectionSnapshot ===
           JSON.stringify([ovClient.getOptions(), ovClient.getConnection()])
-      const canPersist = () => isCurrent() && !controller.signal.aborted
+      const isSameConnection = () =>
+        connectionSnapshot ===
+        JSON.stringify([ovClient.getOptions(), ovClient.getConnection()])
 
       // Accumulators (mutable for performance during streaming)
       let accContent = ''
       let accReasoning = ''
       const accToolCalls: StreamToolCall[] = []
       const accParts: MessagePart[] = []
-      let lastToolCall: StreamToolCall | null = null
+      const completedStreamMessages: Message[] = []
+      const activeAssistantMessages = new Set<Message>()
+      let pendingUserMessages: Message[] = []
+      let flushedStreamMessageCount = 0
       let currentReasoningPart: ReasoningPart | null = null
       let currentReasoningHasDelta = false
       let currentTextPart: TextPart | null = null
@@ -295,6 +438,27 @@ export function useChat(options: UseChatOptions): UseChatReturn {
       let lastPaintAt = 0
       let publishScheduled = false
       let publishFrameId: number | null = null
+      let interrupted = false
+      let timelineTail: Promise<void> = Promise.resolve()
+      let streamStarted = false
+      let initialUserPersistenceQueued = false
+      let persistedInitialUserMessage = false
+      const queueInitialUserPersistence = () => {
+        if (
+          !persistMessages ||
+          !streamStarted ||
+          initialUserPersistenceQueued ||
+          persistedInitialUserMessage
+        ) {
+          return
+        }
+        initialUserPersistenceQueued = true
+        void queuePersistence(async () => {
+          if (!isCurrent() || controller.signal.aborted) return
+          await addMessage(sessionId, 'user', displayMessage)
+          persistedInitialUserMessage = true
+        })
+      }
 
       const publishStreamingPartsNow = () => {
         if (publishFrameId !== null && typeof window !== 'undefined') {
@@ -313,6 +477,32 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           return
         }
         publishFrameId = window.requestAnimationFrame(publishStreamingPartsNow)
+      }
+
+      const clearStreamingSegmentView = () => {
+        if (publishFrameId !== null && typeof window !== 'undefined') {
+          window.cancelAnimationFrame(publishFrameId)
+        }
+        publishFrameId = null
+        publishScheduled = false
+        setStreamingContent('')
+        setStreamingToolCalls([])
+        setStreamingReasoning('')
+        setStreamingParts([])
+      }
+
+      const clearStreamingState = () => {
+        clearStreamingSegmentView()
+        setStreamingInsertIndex(undefined)
+      }
+
+      const finishActiveRequest = () => {
+        appendInputRef.current = null
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          activeSessionRef.current = null
+          activeConnectionRef.current = null
+        }
       }
 
       const yieldToRenderer = async () => {
@@ -367,6 +557,140 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         publishStreamingPartsNow()
       }
 
+      const resetAccumulators = () => {
+        accContent = ''
+        accReasoning = ''
+        accToolCalls.length = 0
+        accParts.length = 0
+        currentReasoningPart = null
+        currentReasoningHasDelta = false
+        currentTextPart = null
+      }
+
+      const hasAssistantSegment = () =>
+        accContent.length > 0 || accParts.length > 0 || accToolCalls.length > 0
+
+      const finalizeAssistantSegment = () => {
+        finishCurrentReasoning()
+        if (!hasAssistantSegment()) return null
+        const completedMessage = buildAssistantMessage(
+          accContent,
+          dedupeToolCalls(accToolCalls),
+          accParts,
+        )
+        completedStreamMessages.push(completedMessage)
+        resetAccumulators()
+        return completedMessage
+      }
+
+      const flushCompletedStreamMessages = () => {
+        const pendingMessages = completedStreamMessages.slice(
+          flushedStreamMessageCount,
+        )
+        if (pendingMessages.length === 0) return
+        flushedStreamMessageCount = completedStreamMessages.length
+        const pendingAssistantMessages = pendingMessages.filter(
+          (message) => message.role === 'assistant',
+        )
+        if (pendingAssistantMessages.length === 0) {
+          streamingInsertIndexValue += pendingMessages.length
+          setStreamingInsertIndex(streamingInsertIndexValue)
+          return
+        }
+        for (const message of pendingAssistantMessages) {
+          activeAssistantMessages.add(message)
+        }
+        setMessages((prev) => {
+          const insertAt = Math.min(streamingInsertIndexValue, prev.length)
+          const next = [
+            ...prev.slice(0, insertAt),
+            ...pendingAssistantMessages,
+            ...prev.slice(insertAt),
+          ]
+          streamingInsertIndexValue = insertAt + pendingMessages.length
+          setStreamingInsertIndex(streamingInsertIndexValue)
+          return next
+        })
+      }
+
+      const appendPendingUserMessagesToTimeline = () => {
+        if (pendingUserMessages.length === 0) return
+        completedStreamMessages.push(...pendingUserMessages)
+        pendingUserMessages = []
+      }
+
+      const commitAssistantSegment = () => {
+        finalizeAssistantSegment()
+        appendPendingUserMessagesToTimeline()
+        flushCompletedStreamMessages()
+        clearStreamingSegmentView()
+      }
+
+      const dropStreamingSegment = () => {
+        appendPendingUserMessagesToTimeline()
+        resetAccumulators()
+        clearStreamingState()
+        if (activeAssistantMessages.size > 0) {
+          setMessages((prev) =>
+            prev.filter((message) => !activeAssistantMessages.has(message)),
+          )
+        }
+      }
+
+      const persistTimeline = (userOnly: boolean) => {
+        if (!persistMessages) return Promise.resolve()
+        const timeline = userOnly
+          ? completedStreamMessages.filter((message) => message.role === 'user')
+          : [...completedStreamMessages]
+        return queuePersistence(async () => {
+          if (
+            !persistedInitialUserMessage &&
+            !initialUserPersistenceQueued &&
+            streamStarted
+          ) {
+            if (!isCurrent() || controller.signal.aborted) return
+            await addMessage(sessionId, 'user', displayMessage)
+            persistedInitialUserMessage = true
+          }
+          if (!isSameConnection()) return
+          for (const completedMessage of timeline) {
+            if (!isSameConnection()) return
+            if (completedMessage.role === 'user') {
+              await addMessage(
+                sessionId,
+                'user',
+                completedMessage.parts
+                  .filter((part): part is TextPart => part.type === 'text')
+                  .map((part) => part.text)
+                  .join('\n'),
+              )
+            } else if (!userOnly) {
+              if (!isCurrent() || controller.signal.aborted) return
+              await addMessage(
+                sessionId,
+                'assistant',
+                undefined,
+                serializeParts(completedMessage.parts),
+              )
+            }
+          }
+        })
+      }
+
+      appendInputRef.current = (inputMessage, accepted) => {
+        const decision = timelineTail.then(async () => {
+          const wasAccepted = await accepted
+          if (!wasAccepted) return false
+          pendingUserMessages.push(inputMessage)
+          if (abortRef.current === controller) {
+            setMessages((prev) => [...prev, inputMessage])
+          }
+          return true
+        })
+        timelineTail = decision.then(() => undefined)
+        return decision
+      }
+
       try {
         const response = await sendChatStream(
           { message, session_id: sessionId },
@@ -375,9 +699,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
         stream: for await (const event of parseSseStream(response)) {
           if (controller.signal.aborted) break
+          streamStarted = true
+          queueInitialUserPersistence()
 
           switch (event.event) {
             case 'iteration': {
+              await timelineTail
+              if (pendingUserMessages.length > 0) {
+                commitAssistantSegment()
+              }
               const data = streamEventDataToText(event.data)
               const match = data.match(/(\d+)/)
               if (match) {
@@ -448,16 +778,15 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                   tc.result === undefined,
               )
               if (duplicate) {
-                lastToolCall = duplicate
                 setStreamingToolCalls(dedupeToolCalls(accToolCalls))
                 break
               }
-              lastToolCall = {
+              const toolCall = {
                 name,
                 arguments: args,
                 iteration: currentIteration,
               }
-              accToolCalls.push(lastToolCall)
+              accToolCalls.push(toolCall)
               const toolPart: ToolPart = {
                 type: 'tool',
                 tool_id: createBrowserId('tool'),
@@ -517,7 +846,17 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               break
             }
 
+            case 'interrupt': {
+              appendInputRef.current = null
+              await timelineTail
+              dropStreamingSegment()
+              interrupted = true
+              break stream
+            }
+
             case 'response': {
+              appendInputRef.current = null
+              await timelineTail
               // Final complete response — overrides accumulated deltas
               accContent = streamEventDataToText(event.data)
               setStreamingContent(accContent)
@@ -527,40 +866,40 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           }
         }
 
+        // Build assistant message and finalize
+        await timelineTail
+        if (
+          discardPartialControllersRef.current.has(controller) ||
+          sessionIdRef.current !== sessionId ||
+          isSupersededRequest(abortRef.current, controller)
+        ) {
+          appendPendingUserMessagesToTimeline()
+          await persistTimeline(true)
+          return
+        }
         if (!isCurrent()) return
         if (controller.signal.aborted)
           throw new DOMException('Aborted', 'AbortError')
-
-        // Build assistant message and finalize
-        finishCurrentReasoning()
-        const assistantMsg = buildAssistantMessage(
-          accContent,
-          dedupeToolCalls(accToolCalls),
-          accParts,
-        )
-        setStreamingContent('')
-        setStreamingToolCalls([])
-        setStreamingReasoning('')
-        setStreamingParts([])
-        setStatus('idle')
-        setMessages((prev) => [...prev, assistantMsg])
-
-        // Persist to openviking session (bot doesn't do this automatically)
-        if (persistMessages && canPersist()) {
-          try {
-            // Sequential: user message must precede assistant message
-            await addMessage(sessionId, 'user', displayMessage)
-            if (!canPersist()) return
-            await addMessage(
-              sessionId,
-              'assistant',
-              undefined,
-              serializeParts(assistantMsg.parts),
-            )
-          } catch {
-            // Persistence failure is non-blocking
-          }
+        appendInputRef.current = null
+        if (interruptedControllersRef.current.has(controller)) {
+          dropStreamingSegment()
+          interrupted = true
         }
+        finishCurrentReasoning()
+        if (interrupted) {
+          const persistence = persistTimeline(true)
+          finishActiveRequest()
+          setStatus('idle')
+          await persistence
+          return
+        }
+        commitAssistantSegment()
+        const persistence = persistTimeline(false)
+        finishActiveRequest()
+        setStatus('idle')
+        clearStreamingState()
+
+        await persistence
 
         // Generate session title on first exchange
         if (isCurrent() && sessionId && isFirstExchange) {
@@ -572,38 +911,41 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           )
         }
       } catch (err) {
+        if (
+          discardPartialControllersRef.current.has(controller) ||
+          sessionIdRef.current !== sessionId ||
+          isSupersededRequest(abortRef.current, controller)
+        ) {
+          await timelineTail
+          appendPendingUserMessagesToTimeline()
+          await persistTimeline(true)
+          return
+        }
         if (!isCurrent()) return
+        appendInputRef.current = null
+        await timelineTail
+        dropStreamingSegment()
         if (controller.signal.aborted) {
-          // Aborted intentionally — still finalize any partial content
-          if (accContent || accParts.length > 0) {
-            finishCurrentReasoning()
-            const partialMsg = buildAssistantMessage(
-              accContent,
-              dedupeToolCalls(accToolCalls),
-              accParts,
-            )
-            setStreamingContent('')
-            setStreamingToolCalls([])
-            setStreamingReasoning('')
-            setStreamingParts([])
-            setMessages((prev) => [...prev, partialMsg])
-          } else {
-            setStreamingContent('')
-            setStreamingToolCalls([])
-            setStreamingReasoning('')
-            setStreamingParts([])
-          }
           setStatus('idle')
+          await persistTimeline(true)
         } else {
           const msg = err instanceof Error ? err.message : String(err)
           setError(msg)
           setStatus('error')
+          await persistTimeline(true)
         }
       } finally {
-        if (abortRef.current === controller) abortRef.current = null
+        discardPartialControllersRef.current.delete(controller)
+        interruptedControllersRef.current.delete(controller)
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          activeSessionRef.current = null
+          activeConnectionRef.current = null
+          appendInputRef.current = null
+        }
       }
     },
-    [identityScopeKey, persistMessages, sessionId, status],
+    [identityScopeKey, persistMessages, queuePersistence, sessionId],
   )
 
   return {
@@ -614,6 +956,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     streamingToolCalls,
     streamingReasoning,
     streamingParts,
+    streamingInsertIndex,
     iteration,
     send,
     abort,

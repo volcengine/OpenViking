@@ -192,7 +192,11 @@ class MemoryCompileRunner:
         ctx: RequestContext,
     ) -> None:
         tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
+        running_work_id = await tracker.register_running_task(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
         root_token = None
         if bind_root_observability_context is not None:
             root_attrs = create_root_span_attributes(
@@ -213,7 +217,12 @@ class MemoryCompileRunner:
                     user_id=ctx.user.user_id,
                     stage="consolidating",
                 )
-                with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+                with bind_task_context(
+                    task_id,
+                    ctx.account_id,
+                    ctx.user.user_id,
+                    work_id=running_work_id,
+                ):
                     result = await self._consolidate(
                         target=target,
                         memory_type=memory_type,

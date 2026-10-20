@@ -11,10 +11,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+from tests.test_task_tracker import _FakeAgfs
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -49,24 +51,9 @@ def test_legacy_queued_work_keeps_old_default_without_migrating_user_policy():
     assert message.memory_policy["memory_types"] == policy["memory_types"]
 
 
-class _TaskStore:
+class _TaskStore(PersistentTaskStore):
     def __init__(self):
-        self.tasks = {}
-
-    async def create(self, task):
-        self.tasks[task.task_id] = task
-
-    async def update(self, task):
-        self.tasks[task.task_id] = task
-
-    async def get(self, task_id, *, account_id=None, user_id=None):
-        return None
-
-    async def list(self, account_id, *, user_id=None):
-        return []
-
-    async def delete(self, task_id, *, account_id, user_id=None):
-        self.tasks.pop(task_id, None)
+        super().__init__(_FakeAgfs())
 
 
 class _MemoryVikingFS:

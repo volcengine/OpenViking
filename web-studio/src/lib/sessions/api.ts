@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { parseSessionArchive, parseSessionMessages } from './parse-messages'
 import {
   deleteSessionBySessionId,
@@ -109,7 +110,7 @@ async function fetchArchiveFileMessages(
   if (!session.uri) {
     throw new OvClientError({
       code: 'INVALID_SESSION_ARCHIVE',
-      message: 'Session URI is missing',
+      message: i18n.t('studio:errors.sessionUriMissing'),
     })
   }
   const result = await getOvResult<unknown>(
@@ -432,7 +433,8 @@ function extractErrorMessage(text: string, fallback: string): string {
 function buildFetchHeaders(): Record<string, string> {
   const conn = ovClient.getConnection()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (conn.apiKey) headers['X-API-Key'] = conn.apiKey
+  const apiKey = conn.apiKey || conn.adminApiKey
+  if (apiKey) headers['X-API-Key'] = apiKey
   if (conn.identityHeaders) {
     if (conn.accountId) headers['X-OpenViking-Account'] = conn.accountId
     if (conn.userId) headers['X-OpenViking-User'] = conn.userId
@@ -453,7 +455,7 @@ export async function fetchBotHealth(): Promise<unknown> {
       code: response.status === 503 ? 'BOT_MODE_DISABLED' : 'BOT_HEALTH_FAILED',
       message: extractErrorMessage(
         text,
-        `Bot health check failed (${response.status})`,
+        i18n.t('studio:errors.botHealth', { status: response.status }),
       ),
       responseBody: text,
       statusCode: response.status,
@@ -501,6 +503,77 @@ export async function sendChat(
   } as unknown as NonNullable<Parameters<typeof postBotV1Chat<true>>[0]>)
 
   return response.data as BotChatResponse
+}
+
+export type InterruptChatSessionResult = {
+  interrupted: boolean
+}
+
+export type SteerChatSessionResult = {
+  accepted: boolean
+}
+
+export async function steerChatSession(
+  sessionId: string,
+  request: BotChatRequest,
+): Promise<SteerChatSessionResult> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const conn = ovClient.getConnection()
+  const response = await fetch(
+    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
+    {
+      method: 'POST',
+      headers: buildFetchHeaders(),
+      body: JSON.stringify({
+        ...request,
+        session_id: sessionId,
+        user_id: request.user_id || conn.userId || undefined,
+      }),
+    },
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: 'BOT_STEER_FAILED',
+      message: extractErrorMessage(
+        text,
+        i18n.t('studio:errors.botSteer', { status: response.status }),
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ accepted: false }))
+}
+
+export async function interruptChatSession(
+  sessionId: string,
+): Promise<InterruptChatSessionResult> {
+  const baseUrl = ovClient.getOptions().baseUrl
+  const response = await fetch(
+    `${baseUrl}/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+    {
+      method: 'POST',
+      headers: buildFetchHeaders(),
+    },
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new OvClientError({
+      code: 'BOT_INTERRUPT_FAILED',
+      message: extractErrorMessage(
+        text,
+        i18n.t('studio:errors.botInterrupt', { status: response.status }),
+      ),
+      responseBody: text,
+      statusCode: response.status,
+    })
+  }
+
+  return response.json().catch(() => ({ interrupted: false }))
 }
 
 // ---------------------------------------------------------------------------

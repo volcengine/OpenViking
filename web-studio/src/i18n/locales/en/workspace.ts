@@ -910,6 +910,35 @@ const workspace = {
       dense: 'Dense',
       sparse: 'Sparse',
       hybrid: 'Hybrid',
+      connectionTest: {
+        action: 'Test connection',
+        testing: 'Testing…',
+        hint: 'Sends a small model request from the OpenViking server and may incur usage. Does not save the draft or switch running models.',
+        unsupported: 'Connection testing is unavailable for this provider.',
+        success: 'Connected: model returned a valid result ({{ms}} ms).',
+        network:
+          'The OpenViking server could not reach the model service. Check the URL, network or TLS.',
+        timeout:
+          'Test timed out after 25 seconds. Check the network and model response time.',
+        invalidResponse: 'The model service did not return a valid result.',
+        invalid_request: 'Invalid model configuration or request parameters.',
+        authentication_error:
+          'The model service rejected the API key. Check whether it is correct or expired.',
+        permission_denied: 'This key cannot access the selected model.',
+        rate_limit_error: 'Model service rate limit reached. Retry later.',
+        quota_exhausted:
+          'Model service quota exhausted. Check the plan or balance.',
+        model_not_found: 'Model or endpoint not found. Check the model ID.',
+        failed:
+          'Could not complete the test. Check the connection configuration and retry.',
+        input_too_large: 'The model service rejected the input size.',
+        content_safety:
+          'The model service content policy rejected the request.',
+      },
+      dragToReorder: 'Drag to reorder {{model}}',
+      dragHint: 'Drag to reorder, or use the up and down arrow keys.',
+      thinkingHint:
+        'Shared by all VLM models. Requires model/provider support; takes effect after saving and restarting.',
       priority: 'Order',
       preferred: 'Preferred',
       backup: 'Backup',

@@ -343,7 +343,9 @@ class ExternalTaskService:
             await self._execute_task(task, provider, payload, account_id, user_id)
             return True
         except asyncio.CancelledError:
-            if not tracker.is_cancellation_requested(task_id):
+            if not await tracker.is_cancellation_requested(
+                task_id, account_id=account_id, user_id=user_id
+            ):
                 raise
             await run_to_completion(lambda: self.cancel_recovered(task_id, account_id, user_id))
             raise

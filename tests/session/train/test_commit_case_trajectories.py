@@ -37,6 +37,8 @@ class CommitFS:
         self.files = {}
 
     async def read_file(self, uri, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri, content, ctx=None, **kwargs):

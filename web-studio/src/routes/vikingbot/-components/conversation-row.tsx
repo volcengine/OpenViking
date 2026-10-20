@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import { formatDateTime } from '#/i18n/format'
 import type { ReactNode } from 'react'
 
 export function ConversationRow({
@@ -17,6 +19,7 @@ export function ConversationRow({
   onSelect: () => void
   action?: ReactNode
 }) {
+  useTranslation()
   const date =
     time && !Number.isNaN(Date.parse(time)) ? new Date(time) : undefined
   return (
@@ -41,9 +44,9 @@ export function ConversationRow({
             <time
               className="shrink-0"
               dateTime={time}
-              title={date.toLocaleString()}
+              title={formatDateTime(date)}
             >
-              {date.toLocaleString(undefined, {
+              {formatDateTime(date, {
                 month: 'numeric',
                 day: 'numeric',
                 hour: '2-digit',

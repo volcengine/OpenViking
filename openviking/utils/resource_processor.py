@@ -20,6 +20,7 @@ from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
+from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     VECTORS_ONLY,
@@ -36,7 +37,7 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import bind_ingestion_source_type, get_current_telemetry
 from openviking.utils import is_github_url
 from openviking.utils.embedding_utils import (
     index_resource,
@@ -58,6 +59,17 @@ if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
+
+_PARSE_ARTIFACT_INTERNAL_NAMES = frozenset(
+    {
+        ".abstract.md",
+        ".overview.md",
+        ".relations.json",
+        ".source.json",
+        ".image_mappings.json",
+        ".artifact_manifest.json",
+    }
+)
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
@@ -115,6 +127,87 @@ class ResourceProcessor:
         self._vlm_processor = None
         self._media_processor = None
         self._summarizer = None
+        self._privacy_sanitizer: PrivacySanitizer | None = None
+
+    def set_privacy_sanitizer(self, sanitizer: PrivacySanitizer | None) -> None:
+        self._privacy_sanitizer = sanitizer
+
+    async def _sanitize_parse_artifact(
+        self,
+        *,
+        store: Any,
+        artifact_ref: Any,
+        doc_rel: str,
+        target_root_uri: str,
+        ctx: RequestContext,
+        root_is_file: bool = False,
+    ) -> None:
+        """Rewrite text in a temporary parse artifact before planning or persistence."""
+        if self._privacy_sanitizer is None:
+            return
+        from openviking.parse.output import read_artifact_manifest, write_artifact_manifest
+        from openviking.utils.content_hash import content_md5
+        from openviking_cli.exceptions import InvalidArgumentError
+
+        base = (doc_rel or "").strip("/")
+        prefix = f"{base}/" if base else ""
+        manifest = await read_artifact_manifest(store, artifact_ref)
+        changed = False
+
+        async def sanitize_file(artifact_path: str, relative: str) -> None:
+            nonlocal changed
+            data = await store.read_bytes(artifact_ref, artifact_path)
+            try:
+                content = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return
+            uri = (
+                target_root_uri.rstrip("/")
+                if not relative
+                else f"{target_root_uri.rstrip('/')}/{relative}"
+            )
+            result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
+            if result.ambiguous_references:
+                raise InvalidArgumentError(
+                    "Resource content contains a Privacy value mapped to multiple fields; "
+                    "insert the intended owner-bound reference explicitly",
+                    details={
+                        "uri": uri,
+                        "candidate_references": [
+                            list(candidates) for candidates in result.ambiguous_references
+                        ],
+                    },
+                )
+            if result.content == content:
+                return
+            final_bytes = result.content.encode("utf-8")
+            await store.write_bytes(artifact_ref, artifact_path, final_bytes)
+            manifest[artifact_path] = content_md5(final_bytes)
+            changed = True
+
+        async def walk(directory: str) -> None:
+            for entry in await store.list(artifact_ref, directory):
+                if entry.is_dir:
+                    await walk(entry.rel_path)
+                    continue
+                if entry.name in _PARSE_ARTIFACT_INTERNAL_NAMES or is_storage_internal_name(
+                    entry.name
+                ):
+                    continue
+                relative = (
+                    entry.rel_path[len(prefix) :]
+                    if prefix and entry.rel_path.startswith(prefix)
+                    else entry.rel_path
+                )
+                await sanitize_file(entry.rel_path, relative)
+
+        # A flattened document can be a file inside a directory artifact.
+        if root_is_file or getattr(artifact_ref, "root_type", "dir") == "file":
+            await sanitize_file(base, "")
+        else:
+            await walk(base)
+        if changed:
+            await write_artifact_manifest(store, artifact_ref, manifest)
 
     async def github_token_for(
         self,
@@ -338,6 +431,15 @@ class ResourceProcessor:
             lease_ref=lease_ref,
         )
         telemetry = get_current_telemetry()
+        await self._sanitize_parse_artifact(
+            store=output_store,
+            artifact_ref=artifact_ref,
+            doc_rel=doc_rel,
+            target_root_uri=root_uri,
+            ctx=ctx,
+            root_is_file=root_is_file,
+        )
+        commit_store = _DocRelStore(output_store, doc_rel)
         artifact_backend = str(getattr(artifact_ref, "backend", "unknown"))
         update_plan_started_at = time.perf_counter()
         try:
@@ -397,7 +499,7 @@ class ResourceProcessor:
             with telemetry.measure("resource.update_plan.diff_and_compile"):
                 diff, context_plan = await build_context_update_plan_from_snapshot(
                     snapshot=rnfv,
-                    store=_DocRelStore(output_store, doc_rel),
+                    store=commit_store,
                     artifact_ref=artifact_ref,
                     target=target,
                     vikingdb=self.vikingdb,
@@ -439,7 +541,7 @@ class ResourceProcessor:
             with telemetry.measure("resource.content_commit"):
                 await execute_content_tree_actions(
                     context_plan.content_tree_actions,
-                    store=_DocRelStore(output_store, doc_rel),
+                    store=commit_store,
                     artifact_ref=artifact_ref,
                     target=target,
                 )
@@ -1115,6 +1217,7 @@ class ResourceProcessor:
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
+        source_type = "repository" if bool(prepared.get("is_code_repo")) else "document"
         ingest_options = ingest_options or IngestOptions()
         if prepared.get("acl_update") is not None:
             ingest_options = replace(
@@ -1190,9 +1293,10 @@ class ResourceProcessor:
                     return result
 
                 if direct_index_actions:
-                    await self._enqueue_index_actions(
-                        direct_index_actions, ctx=ctx, ingest_options=ingest_options
-                    )
+                    with bind_ingestion_source_type(source_type):
+                        await self._enqueue_index_actions(
+                            direct_index_actions, ctx=ctx, ingest_options=ingest_options
+                        )
 
                 if should_summarize:
                     try:
@@ -1290,16 +1394,18 @@ class ResourceProcessor:
                     )
                 elif build_index and context_update_plan is None:
                     if root_is_file:
-                        await self._vectorize_resource_file(
-                            root_uri,
-                            ctx=ctx,
-                            ingest_options=ingest_options,
-                            file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
-                        )
+                        with bind_ingestion_source_type(source_type):
+                            await self._vectorize_resource_file(
+                                root_uri,
+                                ctx=ctx,
+                                ingest_options=ingest_options,
+                                file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
+                            )
                     elif vectors_only:
-                        await self._vectorize_resource_files(
-                            root_uri, ctx=ctx, ingest_options=ingest_options
-                        )
+                        with bind_ingestion_source_type(source_type):
+                            await self._vectorize_resource_files(
+                                root_uri, ctx=ctx, ingest_options=ingest_options
+                            )
             except BaseException:
                 await cleanup_artifact_if_owned()
                 raise
@@ -1321,12 +1427,13 @@ class ResourceProcessor:
                 raise
         elif build_index and context_update_plan is None and root_is_file:
             try:
-                await self._vectorize_resource_file(
-                    root_uri,
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                    file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
-                )
+                with bind_ingestion_source_type(source_type):
+                    await self._vectorize_resource_file(
+                        root_uri,
+                        ctx=ctx,
+                        ingest_options=ingest_options,
+                        file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
+                    )
             except BaseException:
                 await cleanup_artifact_if_owned()
                 raise
@@ -1335,15 +1442,16 @@ class ResourceProcessor:
                 artifact_store = (
                     self._build_parse_output_store() if artifact_ref is not None else None
                 )
-                await self._vectorize_resource_files(
-                    root_uri,
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                    artifact_store=artifact_store,
-                    artifact_ref=artifact_ref,
-                    artifact_files=prepared.get("artifact_files"),
-                    file_md5s=prepared.get("file_md5s"),
-                )
+                with bind_ingestion_source_type(source_type):
+                    await self._vectorize_resource_files(
+                        root_uri,
+                        ctx=ctx,
+                        ingest_options=ingest_options,
+                        artifact_store=artifact_store,
+                        artifact_ref=artifact_ref,
+                        artifact_files=prepared.get("artifact_files"),
+                        file_md5s=prepared.get("file_md5s"),
+                    )
             except BaseException:
                 await cleanup_artifact_if_owned()
                 raise

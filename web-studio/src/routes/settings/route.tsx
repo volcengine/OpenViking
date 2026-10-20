@@ -481,6 +481,16 @@ function ConnectionSettingsPanel() {
                     ? resolveConfiguredServiceProvider(draft.baseUrl)
                     : draft.serviceSelection
                 }
+                items={[
+                  {
+                    value: 'opensource',
+                    label: t('studio:providers.opensource'),
+                  },
+                  {
+                    value: 'volcengine',
+                    label: t('studio:providers.volcengine'),
+                  },
+                ]}
                 onValueChange={(value) =>
                   selectServiceType(value as 'opensource' | 'volcengine')
                 }

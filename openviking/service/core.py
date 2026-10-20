@@ -12,7 +12,8 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.privacy import UserPrivacyConfigService
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -107,6 +108,7 @@ class OpenVikingService:
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._privacy_sanitizer: Optional[PrivacySanitizer] = None
         self._runtime_config_manager: Optional[Any] = None
         self._vlm_resolver: Optional["VLMResolver"] = None
         self._vector_config_resolver: Optional[Any] = None
@@ -416,6 +418,11 @@ class OpenVikingService:
         return self._privacy_config_service
 
     @property
+    def privacy_sanitizer(self) -> Optional[PrivacySanitizer]:
+        """Get the shared PrivacySanitizer instance."""
+        return self._privacy_sanitizer
+
+    @property
     def debug(self) -> DebugService:
         """Get DebugService instance."""
         return self._debug_service
@@ -437,6 +444,7 @@ class OpenVikingService:
             return
 
         self._ensure_data_dir_lock_acquired()
+        await get_task_tracker().load()
 
         if self._vikingdb_manager is None:
             self._init_storage(
@@ -519,11 +527,15 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
+        self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
+        self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
 
         # Initialize processors
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
             vlm_resolver=self._vlm_resolver,
         )
         self._session_compressor = create_session_compressor(
@@ -544,6 +556,7 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
             resource_memory_link_service=self._resource_memory_link_service,
             watch_scheduler=self._watch_scheduler,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
@@ -646,7 +659,12 @@ class OpenVikingService:
             # Register durable cleanup work before restoring tracked tasks;
             # the deletion service binds consumers once auth is ready.
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
-            restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
+            tracker = get_task_tracker()
+            await self._queue_manager.prepare_task_tracking(tracker)
+            # Target reservations need recovery even when Work is already durable.
+            restored_tasks = await self._queue_manager.get_queued_tasks(
+                tracker, self._queue_manager.EXTERNAL_TASK
+            )
             await self._external_task_service.restore_tasks(restored_tasks)
 
         if self._config.enable_watch_scheduler:
@@ -752,6 +770,10 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        # Queue workers and scheduled producers persist their final Task/Work
+        # transitions while stopping, so keep their store open until they drain.
+        await get_task_tracker().close()
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
         if callable(close_vlm_resolver):

@@ -88,7 +88,10 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           creating.current = false
         }
       }
-      void chat.send(message)
+      const sending = chat.send(message)
+      if (chat.status === 'streaming') {
+        await sending
+      }
       return true
     },
     [canChat, chat, createSession, sessionId, onPersisted],
@@ -113,7 +116,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
     scrollRafRef.current = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     })
-  }, [chat.messages.length, chat.streamingParts])
+  }, [chat.messages.length, chat.streamingParts, chat.streamingInsertIndex])
 
   const [showBackground, setShowBackground] = useState(false)
 
@@ -181,6 +184,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
               isStreaming
                 ? {
                     parts: chat.streamingParts,
+                    insertIndex: chat.streamingInsertIndex,
                     iteration: chat.iteration,
                   }
                 : undefined

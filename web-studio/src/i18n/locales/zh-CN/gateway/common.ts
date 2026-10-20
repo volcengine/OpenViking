@@ -48,6 +48,11 @@ const common = {
     done: '已复制到剪贴板',
     failed: '复制失败，请选中文本后手动复制。',
   },
+  docs: {
+    link: '文档',
+    learnMore: '了解更多',
+    troubleshoot: '排查说明',
+  },
   access: {
     title: '先连接 OpenViking',
     invalid: 'OpenViking API 密钥无效',
@@ -68,7 +73,7 @@ const common = {
     environment: '也可能设在环境变量里，它优先于配置文件：',
     studio: 'Root 可以在“设置 → 服务端配置 → 文件编辑”中查看 ov.conf。',
     reset: '实在找不到，就在原来的位置换一个至少 32 个字符的新密钥，然后重启。',
-    resetDocs: '查看运维文档',
+    resetDocs: '如何重置',
     keyPlaceholder: '<至少 32 个字符>',
     session: '只保存在当前浏览器标签页，关闭后自动锁定。',
     wrongKey: '这是网关密钥（给客户端用的），请输入网关管理密钥。',
@@ -80,7 +85,7 @@ const common = {
     editing: '可修改上游和上下文配置',
     expired: '网关管理密钥已失效，上游和上下文配置恢复为只读。',
     readOnly:
-      '上游和上下文配置由网关管理员统一提供。你可以查看、测试连接，并在签发密钥时选用。',
+      '上游和上下文配置由网关管理员统一提供。你可以查看，并在签发密钥时选用。',
     adminReadOnly:
       'OpenViking 的管理员和 Root 也需要网关管理密钥才能修改。如果这台服务是你部署的，密钥在 ov.conf 的 gateway.management_key 里。',
     shared:
@@ -114,7 +119,6 @@ const common = {
     fixLabel: '需要修改的配置',
     terminal: '终端',
     environment: '环境变量',
-    docs: '部署说明',
     enable: {
       description: 'Studio 可以直接开启：把设置写入 ov.conf，然后重启服务。',
       descriptionManualRestart:

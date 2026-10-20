@@ -24,6 +24,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import lazy_import
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
@@ -626,7 +627,11 @@ class HTTPAccessor(DataAccessor):
                 # Create temp file after GET headers/content have had a chance
                 # to refine detection. This avoids routing extensionless signed
                 # URLs as HTML when HEAD is rejected by object storage.
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                temp_file = tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=ext,
+                    dir=get_parser_download_temp_dir(),
+                )
                 temp_path = temp_file.name
                 temp_file.close()
 

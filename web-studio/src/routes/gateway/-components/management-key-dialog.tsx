@@ -13,13 +13,13 @@ import {
   DialogFooter,
 } from '#/components/ui/dialog'
 import { getAccess, toGatewayError } from '../-lib/api'
-import { gatewayDocsUrl } from '../-lib/client-guides'
 import {
   MANAGEMENT_UNLOCK_EVENT,
   setManagementKey,
 } from '../-lib/management-key'
 import { useGateway } from '../-lib/use-gateway'
 import { gatewayErrorMessage } from '../-lib/localize'
+import { DocsLink } from './docs-link'
 import { SettingField } from './setting-field'
 
 const MANAGEMENT_CONFIGS = [
@@ -28,7 +28,7 @@ const MANAGEMENT_CONFIGS = [
 ]
 
 export function ManagementKeyDialog() {
-  const { t, i18n } = useTranslation('gateway')
+  const { t } = useTranslation('gateway')
   const { connection } = useGateway()
   const [open, setOpen] = React.useState(false)
   const [key, setKey] = React.useState('')
@@ -96,14 +96,9 @@ export function ManagementKeyDialog() {
               <li>{t('management.prefix')}</li>
               <li>
                 {t('management.reset')}{' '}
-                <a
-                  href={gatewayDocsUrl('operations', i18n.resolvedLanguage)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-medium text-foreground underline underline-offset-4"
-                >
+                <DocsLink section="lostManagementKey" variant="text">
                   {t('management.resetDocs')}
-                </a>
+                </DocsLink>
               </li>
             </ul>
           </details>

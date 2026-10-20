@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import type { ConnectionDraft } from './types'
 import { createConnectionHealthHeaders } from './auth'
 import { getHealth } from '#/lib/ov-client'
@@ -47,7 +48,7 @@ export async function fetchServerHealth(
 ): Promise<Record<string, unknown>> {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
   if (!normalizedBaseUrl) {
-    throw new Error('Missing server URL')
+    throw new Error(i18n.t('studio:errors.missingServerUrl'))
   }
 
   const key = JSON.stringify([

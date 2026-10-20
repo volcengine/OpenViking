@@ -386,6 +386,7 @@ function ResultRowContent({
           ) : null}
           <span
             className="shrink-0 font-mono text-[10px] font-medium tabular-nums text-muted-foreground/45"
+            // eslint-disable-next-line studio-i18n/no-literal-message -- Keep the retrieval level identifier after the translated label.
             title={`${t('detail.level')}: L${item.item.level}`}
           >
             L{item.item.level}

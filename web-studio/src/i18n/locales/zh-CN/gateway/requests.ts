@@ -84,6 +84,7 @@ const requests = {
     compactionApplied: '发送时较早的历史已被替换',
     compactionWritten: '生成了约 {{tokens}} Token 的摘要，用时 {{duration}}',
     compactionFailed: '压缩失败（{{reason}}），已发送完整历史',
+    compactionStillOver: '摘要已保留，但用量仍达到压缩时机（{{reason}}）',
     window: '第 {{number}} 个窗口，由模型管理',
     windowReset: '模型开启了新窗口',
     saving: '保存到 OpenViking',

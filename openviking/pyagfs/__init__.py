@@ -98,17 +98,16 @@ def _find_ragfs_so():
     return None
 
 
-def _load_rust_binding():
-    """Attempt to load the Rust (PyO3) binding client.
+def _load_rust_module():
+    """Load the complete Rust PyO3 module from the installed or vendored artifact.
 
     Prefers the pip-installed ``ragfs_python`` package (e.g. from maturin develop),
     then falls back to the vendored native extension in openviking/lib/.
     """
-    # Prefer pip-installed version (handles @rpath correctly)
     try:
-        from ragfs_python import RAGFSBindingClient as _Rust
+        import ragfs_python as rust_module
 
-        return _Rust, None
+        return rust_module
     except ImportError:
         pass
 
@@ -121,11 +120,17 @@ def _load_rust_binding():
                 raise ImportError(f"Unable to load Rust binding spec from {so_path}")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            return mod.RAGFSBindingClient, None
+            return mod
     except Exception:
         pass
 
     raise ImportError("Rust binding not available")
+
+
+def _load_rust_binding():
+    """Attempt to load the Rust (PyO3) binding client."""
+    module = _load_rust_module()
+    return module.RAGFSBindingClient, None
 
 
 def get_binding_client():
@@ -140,6 +145,17 @@ def get_binding_client():
         return client, fh
     except ImportError as exc:
         raise ImportError("ragfs_python native library is not available: " + str(exc)) from exc
+
+
+def get_privacy_matcher_class():
+    """Return the native RAGFS PrivacyMatcher class."""
+    try:
+        module = _load_rust_module()
+        return module.PrivacyMatcher
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python PrivacyMatcher is not available; rebuild the native extension"
+        ) from exc
 
 
 def reopen_rust_tracing_file() -> None:

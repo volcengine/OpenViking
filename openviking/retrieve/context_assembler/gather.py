@@ -211,7 +211,7 @@ async def gather_candidates(
     limit: int,
     score_threshold: Optional[float],
     filter: Optional[Dict[str, Any]] = None,
-    image_url: Optional[str] = None,
+    image_url: str | list[str] | None = None,
     events_time_decay_protection: Optional[str] = None,
     search_type: SearchType = "semantic",
     peer_scope: str = "all",

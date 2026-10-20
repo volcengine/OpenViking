@@ -505,6 +505,7 @@ export function summarizeConnectionIdentity(
 export function useAppConnection(): AppConnectionContextValue {
   const context = React.useContext(AppConnectionContext)
   if (!context) {
+    // eslint-disable-next-line studio-i18n/no-literal-message -- Developer invariant; retain the diagnostic for debugging.
     throw new Error(
       'useAppConnection must be used within AppConnectionProvider.',
     )

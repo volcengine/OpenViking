@@ -919,6 +919,7 @@ fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
 }
 
 mod git;
+mod privacy;
 
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
 where
@@ -3065,6 +3066,7 @@ impl RAGFSBindingClient {
 #[pymodule]
 fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RAGFSBindingClient>()?;
+    m.add_class::<privacy::PyPrivacyMatcher>()?;
     m.add_function(wrap_pyfunction!(reopen_tracing_file, m)?)?;
 
     // Import the Python business exception so native code raises the same type
@@ -3499,7 +3501,8 @@ mod tests {
         )
         .unwrap();
 
-        let cache_config = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap();
+        let cache_config =
+            cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap();
         let stack_config = cache_config.stack_config().unwrap();
 
         assert!(cache_config.runtime_enabled);
@@ -3698,7 +3701,8 @@ mod tests {
             )
             .unwrap();
 
-            let error = cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
+            let error =
+                cache_config_from_ov_conf(path.to_str().unwrap(), "test-service").unwrap_err();
 
             assert!(error.contains(field));
             fs::remove_file(path).unwrap();

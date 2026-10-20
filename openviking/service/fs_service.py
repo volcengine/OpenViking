@@ -19,11 +19,9 @@ from openviking.core.namespace import (
     uri_leaf_name,
     uri_parts,
 )
-from openviking.privacy import (
-    UserPrivacyConfigService,
-    get_skill_name_from_uri,
-    restore_skill_content,
-)
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
@@ -56,6 +54,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
+    ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -103,10 +102,14 @@ class FSService:
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer or (
+            PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
+        )
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
         self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
@@ -119,11 +122,15 @@ class FSService:
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ) -> None:
         """Set service dependencies (for deferred initialization)."""
         self._viking_fs = viking_fs
         self._vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer or (
+            PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
+        )
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
         if uri_mutation_coordinator is not None:
@@ -739,7 +746,7 @@ class FSService:
                 )
         except (TimeoutError, asyncio.TimeoutError) as exc:
             raise DeadlineExceededError("queue processing", None) from exc
-        return tracker.build_queue_status(
+        return await tracker.build_queue_status(
             context.task_id, work_ids if context.work_id is not None else None
         )
 
@@ -1116,10 +1123,35 @@ class FSService:
         # Resolve id to URI before classify_uri / visible_content which expect
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
-        if not classify_uri(resolved_uri).is_memory:
-            return await self.read(resolved_uri, ctx=ctx, offset=offset, limit=limit)
+        if self._privacy_sanitizer is not None:
+            stat = await self._ensure_initialized().stat(
+                resolved_uri,
+                ctx=ctx,
+                skip_count=True,
+            )
+            size = stat.get("size") if isinstance(stat, dict) else None
+            if isinstance(size, int) and size > self._privacy_sanitizer.max_content_bytes:
+                raise ResourceExhaustedError(
+                    "File exceeds the Privacy visible-read size limit",
+                    details={
+                        "uri": resolved_uri,
+                        "reason": "privacy_visible_read_limit_exceeded",
+                        "size_bytes": size,
+                        "max_bytes": self._privacy_sanitizer.max_content_bytes,
+                    },
+                )
         content = await self.read(resolved_uri, ctx=ctx)
-        return visible_content(content, uri=resolved_uri, offset=offset, limit=limit)
+        if classify_uri(resolved_uri).is_memory:
+            content = visible_content(content, uri=resolved_uri)
+        if self._privacy_sanitizer is not None:
+            content = (
+                await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=resolved_uri)
+            ).content
+        if offset == 0 and limit == -1:
+            return content
+        lines = content.splitlines(keepends=True)
+        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+        return "".join(sliced)
 
     async def abstract(self, uri: str, ctx: RequestContext) -> str:
         """Read L0 abstract (.abstract.md)."""
@@ -1236,7 +1268,11 @@ class FSService:
     ) -> Dict[str, Any]:
         """Create or update a file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
-        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
+        coordinator = ContentWriteCoordinator(
+            viking_fs=viking_fs,
+            vikingdb=self._vikingdb,
+            privacy_sanitizer=self._privacy_sanitizer,
+        )
         return await coordinator.write(
             uri=uri,
             content=content,
@@ -1261,7 +1297,11 @@ class FSService:
     ) -> Dict[str, Any]:
         """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
-        coordinator = ContentWriteCoordinator(viking_fs=viking_fs, vikingdb=self._vikingdb)
+        coordinator = ContentWriteCoordinator(
+            viking_fs=viking_fs,
+            vikingdb=self._vikingdb,
+            privacy_sanitizer=self._privacy_sanitizer,
+        )
         return await coordinator.batch_write(
             root_uri=root_uri,
             operations=operations,
@@ -1281,7 +1321,10 @@ class FSService:
     ) -> Dict[str, Any]:
         """Set explicit retrieval tags for a file or directory semantic nodes."""
         viking_fs = self._ensure_initialized()
-        coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+        coordinator = ContentWriteCoordinator(
+            viking_fs=viking_fs,
+            privacy_sanitizer=self._privacy_sanitizer,
+        )
         return await coordinator.set_tags(
             uri=uri,
             tags=tags,

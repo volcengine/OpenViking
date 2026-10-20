@@ -319,8 +319,13 @@ class DeletionService:
             if scheduler is not None:
                 await run_to_completion(lambda: scheduler.delete_tasks(account_id, user_id))
             await run_to_completion(lambda: self._cancel_tasks(account_id, user_id))
-            if user_id is not None:
-                await run_to_completion(lambda: tracker.delete_user_tasks(account_id, user_id))
+            await run_to_completion(
+                lambda: tracker.delete_tasks(
+                    account_id,
+                    user_id,
+                    allow_active_types={"user_delete"} if user_id is None else (),
+                )
+            )
 
             vectors = self._service.viking_fs.vector_store
             if vectors is not None:
@@ -383,7 +388,6 @@ class DeletionService:
             await agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                get_task_tracker().forget_account_tasks(account_id)
                 return
             raise
         raise RuntimeError("Account directory still exists after deletion")

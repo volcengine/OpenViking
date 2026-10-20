@@ -9,9 +9,10 @@ from openviking.core.namespace import canonical_user_root
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
+from openviking.privacy.validation import PRIVACY_MAX_FIELDS
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -126,6 +127,51 @@ async def test_privacy_config_concurrent_updates_keep_every_version():
 
     assert sorted(result.version for result in results) == list(range(1, 9))
     assert await privacy.list_versions(ctx, "skill", "concurrent-skill") == list(range(1, 9))
+
+
+@pytest.mark.asyncio
+async def test_privacy_config_concurrent_patches_do_not_lose_distinct_fields():
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_patch"), role=Role.ROOT)
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    results = await asyncio.gather(
+        *(
+            privacy.patch_values(
+                ctx=ctx,
+                category="credential",
+                target_key="github",
+                updates={f"key_{index}": f"value-{index}"},
+                updated_by=ctx.user.user_id,
+            )
+            for index in range(8)
+        )
+    )
+
+    assert sorted(result.version for result in results) == list(range(1, 9))
+    current = await privacy.get_current(ctx, "credential", "github")
+    assert current is not None
+    assert current.values == {f"key_{index}": f"value-{index}" for index in range(8)}
+
+
+@pytest.mark.asyncio
+async def test_privacy_config_patch_validates_final_snapshot_and_preserves_current_on_failure():
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_limit"), role=Role.ROOT)
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    original = {f"key_{index}": index for index in range(PRIVACY_MAX_FIELDS)}
+    await privacy.upsert(ctx, "credential", "full", original, updated_by=ctx.user.user_id)
+
+    with pytest.raises(InvalidArgumentError, match="at most 128"):
+        await privacy.patch_values(
+            ctx,
+            "credential",
+            "full",
+            {"one_more": "value"},
+            updated_by=ctx.user.user_id,
+        )
+
+    current = await privacy.get_current(ctx, "credential", "full")
+    assert current is not None
+    assert current.version == 1
+    assert current.values == original
 
 
 @pytest.mark.asyncio

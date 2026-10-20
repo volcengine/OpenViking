@@ -302,14 +302,19 @@ class AddResourceProcessor(DequeueHandlerBase):
                     msg.task_id,
                     exclude_work_id=metadata.work_id if metadata is not None else None,
                 )
-                result["queue_status"] = tracker.build_queue_status(msg.task_id)
+                work_summary = await tracker.get_work_summary(
+                    msg.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                result["queue_status"] = tracker.format_queue_status(work_summary)
                 if replay_result is None:
-                    result["context_count"] = tracker.get_context_count(msg.task_id)
+                    result["context_count"] = work_summary.context_count
                 record_resource_queue_metrics(
                     telemetry=telemetry,
                     telemetry_id=telemetry_id,
                     root_uri=result.get("root_uri"),
-                    queue_timing=tracker.get_queue_timing(msg.task_id),
+                    queue_timing=tracker.format_queue_timing(work_summary),
                 )
                 telemetry.set("resource.total.duration_ms", telemetry.elapsed_ms())
 

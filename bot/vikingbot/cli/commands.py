@@ -584,6 +584,7 @@ def gateway(
         enable_openapi=True,
         openapi_port=effective_port,
         compile_service=compile_service,
+        agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -793,6 +794,7 @@ def prepare_channel(
     enable_openapi: bool = False,
     openapi_port: int = 18790,
     compile_service=None,
+    agent_loop=None,
 ):
     """Prepare channels for the bot.
 
@@ -819,6 +821,7 @@ def prepare_channel(
             app=fastapi_app,  # Pass the external FastAPI app
             global_config=config,
             compile_service=compile_service,
+            agent_loop=agent_loop,
         )
         from vikingbot.studio.service import StudioService
 

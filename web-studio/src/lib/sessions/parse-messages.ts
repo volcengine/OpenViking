@@ -1,22 +1,23 @@
+import i18n from '#/i18n/core'
 import { OvClientError } from '#/lib/ov-client/errors'
 import type { Message } from './types/message'
 
 function invalidMessage(location: string): never {
   throw new OvClientError({
     code: 'INVALID_SESSION_MESSAGE',
-    message: `${location}: invalid message`,
+    message: i18n.t('studio:errors.invalidMessage', { location }),
   })
 }
 
 /** Both API and persisted JSONL messages cross the same validation seam. */
 export function parseSessionMessages(
   value: unknown,
-  location = 'Session messages',
+  location = i18n.t('studio:errors.sessionMessages'),
 ): Message[] {
   if (value === undefined) return []
   if (!Array.isArray(value)) invalidMessage(location)
   return value.flatMap((message: unknown, index): Message[] => {
-    const at = `${location}, message ${index + 1}`
+    const at = i18n.t('studio:errors.messageLocation', { location, index: index + 1 })
     if (
       !message ||
       typeof message !== 'object' ||
@@ -66,19 +67,19 @@ export function parseSessionArchive(
   if (typeof value !== 'string') {
     throw new OvClientError({
       code: 'INVALID_SESSION_ARCHIVE',
-      message: `${archiveId}: expected JSONL content`,
+      message: i18n.t('studio:errors.invalidJsonl', { archiveId }),
     })
   }
   return value.split(/\r?\n/).flatMap((line, index) => {
     if (!line.trim()) return []
-    const at = `${archiveId}: line ${index + 1}`
+    const at = i18n.t('studio:errors.archiveLine', { archiveId, index: index + 1 })
     let message: unknown
     try {
       message = JSON.parse(line)
     } catch {
       throw new OvClientError({
         code: 'INVALID_SESSION_ARCHIVE',
-        message: `${at}: invalid JSON`,
+        message: i18n.t('studio:errors.invalidJson', { location: at }),
       })
     }
     return parseSessionMessages([message], at)

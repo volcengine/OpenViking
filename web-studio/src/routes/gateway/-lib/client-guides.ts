@@ -357,12 +357,130 @@ export const SESSION_HEADERS = [
   'session-id',
 ]
 
-/** OpenViking docs page for the gateway, in the UI language. */
+/**
+ * Gateway docs pages, by their path under `docs/<language>`. The entry and
+ * deployment pages stay under `guides/` so links from released builds keep
+ * working; the rest live in the gateway section's own folder.
+ */
+export const DOCS_PAGES = {
+  guide: 'guides/15-gateway',
+  clients: 'gateway/03-connect-clients',
+  tools: 'gateway/04-openviking-tools',
+  longConversations: 'gateway/05-long-conversations',
+  studio: 'gateway/06-manage-in-studio',
+  upstreams: 'gateway/07-upstreams',
+  profiles: 'gateway/08-context-profiles',
+  keys: 'gateway/09-gateway-keys',
+  requests: 'gateway/10-overview-and-requests',
+  operations: 'guides/22-gateway-operations',
+  troubleshooting: 'gateway/12-troubleshooting',
+}
+
+type DocsPage = keyof typeof DOCS_PAGES
+
+/**
+ * Docs headings Studio links to. Each heading carries an explicit `{#id}`,
+ * the same in every docs language, so one id serves them all.
+ */
+export const DOCS_SECTIONS = {
+  // Overview
+  pluginDetected: { page: 'guide', id: 'when-both-are-in-use' },
+  // Connect clients
+  claudeCode: { page: 'clients', id: 'claude-code' },
+  codex: { page: 'clients', id: 'codex-cli' },
+  chat: { page: 'clients', id: 'chat-clients-and-sdks' },
+  openWebui: { page: 'clients', id: 'open-webui' },
+  opencode: { page: 'clients', id: 'opencode' },
+  pi: { page: 'clients', id: 'pi' },
+  dsh: { page: 'clients', id: 'dsh' },
+  ark: {
+    page: 'clients',
+    id: 'volcano-engine-ark-and-byteplus-modelark-sdks',
+  },
+  conversations: { page: 'clients', id: 'how-conversations-are-recognized' },
+  providerKey: { page: 'clients', id: 'bring-your-own-provider-key' },
+  // OpenViking tools
+  tools: { page: 'tools', id: 'choose-tools' },
+  toolsNotOffered: { page: 'tools', id: 'when-tools-are-not-offered' },
+  // Long conversations
+  longConversations: { page: 'longConversations', id: 'long-conversations' },
+  agentWindows: {
+    page: 'longConversations',
+    id: 'experimental-agent-managed-context-windows',
+  },
+  // Manage in Studio
+  studioAccess: { page: 'studio', id: 'who-can-change-what' },
+  quickMode: { page: 'studio', id: 'get-started-checklist' },
+  // Upstreams
+  upstreams: { page: 'upstreams', id: 'upstreams' },
+  endpoint: { page: 'upstreams', id: 'endpoint' },
+  credentials: { page: 'upstreams', id: 'credentials' },
+  models: { page: 'upstreams', id: 'models' },
+  routing: { page: 'upstreams', id: 'routing' },
+  testUpstream: { page: 'upstreams', id: 'test-and-delete' },
+  importModels: { page: 'upstreams', id: 'import-openviking-model-settings' },
+  // Context profiles
+  profiles: { page: 'profiles', id: 'context-profiles' },
+  recall: { page: 'profiles', id: 'recall-memory' },
+  capture: { page: 'profiles', id: 'save-conversations' },
+  // Gateway keys
+  keys: { page: 'keys', id: 'gateway-keys' },
+  // Overview and requests
+  overview: { page: 'requests', id: 'overview' },
+  requests: { page: 'requests', id: 'requests' },
+  savingStatus: { page: 'requests', id: 'saving-status' },
+  // Deployment and operations
+  enableGateway: { page: 'operations', id: 'enable-it-in-the-server' },
+  publicService: { page: 'operations', id: 'public-openviking-service' },
+  publicAddress: { page: 'operations', id: 'public-address' },
+  lostManagementKey: { page: 'operations', id: 'lost-the-management-key' },
+  // Troubleshooting
+  setupCard: { page: 'troubleshooting', id: 'studio-shows-a-setup-card' },
+  issueKeyFails: { page: 'troubleshooting', id: 'issuing-a-key-fails' },
+  upstreamError: {
+    page: 'troubleshooting',
+    id: 'the-upstream-returned-an-error',
+  },
+  openvikingDegraded: { page: 'troubleshooting', id: 'openviking-is-degraded' },
+  noMemory: { page: 'troubleshooting', id: 'no-memory-is-added' },
+  notSaved: {
+    page: 'troubleshooting',
+    id: 'conversations-do-not-appear-in-openviking',
+  },
+  cacheHitRate: {
+    page: 'troubleshooting',
+    id: 'the-first-call-cache-hit-rate-dropped',
+  },
+  contextLimit: {
+    page: 'troubleshooting',
+    id: 'long-conversations-hit-the-context-limit',
+  },
+  degradedRequests: {
+    page: 'troubleshooting',
+    id: 'issues-on-degraded-requests',
+  },
+} satisfies Record<string, { page: DocsPage; id: string }>
+
+export type DocsSection = keyof typeof DOCS_SECTIONS
+
+/** Each client's section on the connect-clients page. */
+export const CLIENT_DOCS: Record<ClientId, DocsSection> = {
+  'claude-code': 'claudeCode',
+  codex: 'codex',
+  chat: 'chat',
+  'open-webui': 'openWebui',
+  opencode: 'opencode',
+  pi: 'pi',
+  dsh: 'dsh',
+  ark: 'ark',
+}
+
+/** A gateway docs section, in the UI language. */
 export function gatewayDocsUrl(
-  page: 'guide' | 'operations',
+  section: DocsSection,
   language?: string,
 ): string {
   const locale = language?.startsWith('zh') ? 'zh' : 'en'
-  const slug = page === 'guide' ? '15-gateway' : '22-gateway-operations'
-  return `https://docs.openviking.ai/${locale}/guides/${slug}`
+  const { page, id } = DOCS_SECTIONS[section]
+  return `https://docs.openviking.ai/${locale}/${DOCS_PAGES[page]}#${id}`
 }

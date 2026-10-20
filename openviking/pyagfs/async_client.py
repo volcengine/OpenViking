@@ -92,22 +92,16 @@ class AsyncAGFSClient:
         self._client = client
 
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        """Run a sync client method in a worker thread, preserving ctx when supported."""
+        """Run a sync method off-thread, settling I/O before propagating cancellation."""
+        method = getattr(self._client, method_name)
         try:
-            return await run_to_completion(
-                lambda: asyncio.to_thread(getattr(self._client, method_name), *args, **kwargs)
-            )
+            return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
         except TypeError as exc:
             message = str(exc)
             if "ctx" not in kwargs or "unexpected keyword argument 'ctx'" not in message:
                 raise
-            legacy_kwargs = dict(kwargs)
-            legacy_kwargs.pop("ctx", None)
-            return await run_to_completion(
-                lambda: asyncio.to_thread(
-                    getattr(self._client, method_name), *args, **legacy_kwargs
-                )
-            )
+            kwargs.pop("ctx")
+            return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
 
     async def ls(
         self,
@@ -275,15 +269,17 @@ class AsyncAGFSClient:
         """
         from .helpers import cp
 
-        return await asyncio.to_thread(
-            cp,
-            self._client,
-            src_path,
-            dst_path,
-            recursive=recursive,
-            stream=True,
-            fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
-            allow_same_mount_fast_path=allow_same_mount_fast_path,
+        return await run_to_completion(
+            lambda: asyncio.to_thread(
+                cp,
+                self._client,
+                src_path,
+                dst_path,
+                recursive=recursive,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
+                allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
         )
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:

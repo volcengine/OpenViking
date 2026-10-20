@@ -20,6 +20,7 @@ from .capture import reset_capture
 from .client import VikingError
 from .config import MOUNT_PATH
 from .models import CaptureReset, KeyRequest, Policy, Upstream, UpstreamTestRequest
+from .overview import overview_summary
 from .protocols import text_content
 from .proxy import fill_key, upstream_headers, upstream_key, upstream_url
 from .records import RecordKind as K
@@ -248,7 +249,7 @@ def register_management(app):
         who = await caller(request)
         logs = await management.logs(who.account_id, 10000, user_id=who.log_user)
         return {
-            **overview_summary(logs),
+            **overview_summary(logs, time.time()),
             "openviking": app.state.health,
             "log_retention_days": app.state.config.log_retention_days,
         }
@@ -623,55 +624,3 @@ def keep_upstream_secrets(payload, previous):
             if value or name in stored
         }
     return payload
-
-
-def overview_summary(logs):
-    """Aggregate newest-first request-log records into the management overview."""
-    requests = [log for log in logs if log.get("kind") != "capture"]
-    groups = {}
-    for label, kinds in (("first_call", {"user"}), ("continuation", {"continuation"})):
-        subset = [log for log in requests if log.get("kind") in kinds]
-        total = sum(
-            log.get("first_upstream_input_tokens", log.get("input_tokens", 0)) for log in subset
-        )
-        cached = sum(
-            log.get("first_upstream_cached_tokens", log.get("cached_tokens", 0)) for log in subset
-        )
-        hidden_calls = 0
-        if label == "continuation":
-            total += sum(log.get("hidden_upstream_input_tokens", 0) for log in requests)
-            cached += sum(log.get("hidden_upstream_cached_tokens", 0) for log in requests)
-            hidden_calls = sum(log.get("hidden_upstream_calls", 0) for log in requests)
-        groups[label] = {
-            "requests": len(subset) + hidden_calls,
-            "input_tokens": total,
-            "cached_tokens": cached,
-            "cache_hit_ratio": cached / total if total else 0,
-        }
-    degradations = {}
-    for log in logs:
-        if reason := log.get("degradation"):
-            degradations[reason] = degradations.get(reason, 0) + 1
-    # "disabled" means recall was skipped (off, budget spent or query too short).
-    recalls = [log for log in requests if log.get("recall_reason", "disabled") != "disabled"]
-    capture = {}
-    for log in logs:
-        if log.get("session") and log.get("capture_status"):
-            capture.setdefault((log["session"], log.get("protocol")), log["capture_status"])
-    return {
-        "requests": len(requests),
-        "last_request_at": requests[0].get("time") if requests else None,
-        "output_tokens": sum(log.get("output_tokens", 0) for log in requests),
-        "cache": groups,
-        "degradations": degradations,
-        "recall_count": sum(log.get("recall_count", 0) for log in requests),
-        "recall_requests": len(recalls),
-        "recall_ms": sum(log.get("recall_ms", 0) for log in recalls) / len(recalls)
-        if recalls
-        else 0,
-        "capture_issues": {
-            status: sum(1 for value in capture.values() if value == status)
-            for status in ("retrying", "paused")
-        },
-        "sample_limit": 10000,
-    }

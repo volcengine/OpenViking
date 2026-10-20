@@ -820,12 +820,42 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
+        PrivacyCommands::Reference {
+            category,
+            target_key,
+            field,
+        } => {
+            commands::privacy::reference(
+                &client,
+                &category,
+                &target_key,
+                field.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Resolve {
+            selector_or_category,
+            target_key,
+            field,
+        } => {
+            commands::privacy::resolve(
+                &client,
+                &selector_or_category,
+                target_key.as_deref(),
+                field.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::Upsert {
             category,
             target_key,
             values_json,
             values_file,
-            key,
+            field,
             change_reason,
             labels_json,
         } => {
@@ -835,7 +865,7 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
                 &target_key,
                 values_json.as_deref(),
                 values_file.as_deref(),
-                &key,
+                &field,
                 &change_reason,
                 labels_json.as_deref(),
                 ctx.output_format,
@@ -881,6 +911,38 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
                 &category,
                 &target_key,
                 version,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Delete {
+            selector_or_category,
+            target_key,
+            field,
+            yes,
+        } => {
+            commands::privacy::delete(
+                &client,
+                &selector_or_category,
+                target_key.as_deref(),
+                field.as_deref(),
+                yes,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Scan {
+            uri,
+            fix,
+            node_limit,
+        } => {
+            commands::privacy::scan(
+                &client,
+                &uri,
+                fix,
+                node_limit,
                 ctx.output_format,
                 ctx.compact,
             )

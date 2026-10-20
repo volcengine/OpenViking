@@ -2463,9 +2463,18 @@ class ResourceService:
             await task_tracker.start(
                 task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
             )
-            task_tracker.register_running_task(task.task_id)
+            running_work_id = await task_tracker.register_running_task(
+                task.task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
             try:
-                with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                with bind_task_context(
+                    task.task_id,
+                    ctx.account_id,
+                    ctx.user.user_id,
+                    work_id=running_work_id,
+                ):
                     if isinstance(data, SkillProcessingPreparation):
                         result = await self._skill_processor.process_prepared_skill(
                             data,
@@ -2543,7 +2552,11 @@ class ResourceService:
                     "queue.wait.duration_ms",
                     round((time.perf_counter() - wait_start) * 1000, 3),
                 )
-                status = task_tracker.build_queue_status(task.task_id)
+                status = await task_tracker.build_queue_status(
+                    task.task_id,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
                 result["queue_status"] = status
                 self._raise_queue_status_errors(status)
                 # Cancellation settles queue entries without counting errors.
@@ -2582,7 +2595,11 @@ class ResourceService:
             return  # Synchronous preparation failed before the task was created.
         # This includes queued work that must be discarded and active handlers
         # that must finish their cancellation/write cleanup, not just task status.
-        while tracker.has_work(task_id):
+        while await tracker.has_work(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        ):
             await asyncio.sleep(0.05)
 
     async def build_index(

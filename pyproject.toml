@@ -102,8 +102,9 @@ gateway-fast = [
     "httptools>=0.6",
 ]
 mysql = [
-  "aiomysql>=0.2.0,<1",
-  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
+    "aiomysql>=0.2.0,<1",
+    "PyMySQL>=1.1,<1.2",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
 redis-mysql = [
   "aiomysql>=0.2.0,<1",

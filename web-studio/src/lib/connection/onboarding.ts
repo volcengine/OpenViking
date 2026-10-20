@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { resolveConnectionDataRoot } from './probe'
 import type { ConnectionDraft } from '#/lib/connection/types'
 import { createConnectionHealthHeaders } from './auth'
@@ -146,7 +147,7 @@ export async function verifyStudioSetup(
     adminApiKey: draft.adminApiKey.trim(),
   })
   if (!isValidConnectionUrl(connection.baseUrl))
-    throw new Error('Invalid server URL')
+    throw new Error(i18n.t('studio:errors.invalidServerUrl'))
   if (connection.serviceSelection === 'volcengine') connection.adminApiKey = ''
   const health = await fetchConnectionHealth(connection, signal).catch(
     (error: unknown) => {

@@ -5,6 +5,7 @@
 import asyncio
 import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -263,6 +264,84 @@ class TestOpenAPIAuth:
         assert response.status_code == 409
         assert message_bus.inbound_size == 0
 
+    def test_steer_requires_existing_in_flight_request(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+
+        response = _make_client(channel).post(
+            "/bot/v1/sessions/same-session/steer",
+            json={"message": "follow up"},
+        )
+
+        assert response.status_code == 409
+        assert message_bus.inbound_size == 0
+
+    def test_steer_attaches_message_to_active_turn(self, message_bus, temp_workspace):
+        class FakeAgentLoop:
+            def __init__(self):
+                self.msg = None
+
+            def steer(self, msg):
+                self.msg = msg
+                return True
+
+        agent_loop = FakeAgentLoop()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            temp_workspace,
+            agent_loop=agent_loop,
+        )
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, "same-session")
+        channel._pending[storage_key] = PendingResponse()
+
+        response = _make_client(channel).post(
+            "/bot/v1/sessions/same-session/steer",
+            json={"message": "follow up", "user_id": "user-1"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"accepted": True}
+        assert agent_loop.msg.session_key == SessionKey(
+            type="cli", channel_id="default", chat_id=storage_key
+        )
+        assert agent_loop.msg.content == "follow up"
+        assert agent_loop.msg.sender_id == "user-1"
+        assert message_bus.inbound_size == 0
+
+    def test_steer_rejects_pending_session_without_active_turn(
+        self, message_bus, temp_workspace
+    ):
+        class FakeAgentLoop:
+            def steer(self, msg):
+                return False
+
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            temp_workspace,
+            agent_loop=FakeAgentLoop(),
+        )
+        scope = channel._principal_scope("standalone")
+        storage_key = channel._scoped_session_id(scope, "same-session")
+        channel._pending[storage_key] = PendingResponse()
+        channel._sessions[storage_key] = {
+            "last_active": datetime.fromisoformat("2026-01-01T00:00:00"),
+            "message_count": 1,
+        }
+
+        response = _make_client(channel).post(
+            "/bot/v1/sessions/same-session/steer",
+            json={"message": "follow up", "user_id": "user-1"},
+        )
+
+        assert response.status_code == 409
+        assert channel._sessions[storage_key] == {
+            "last_active": datetime.fromisoformat("2026-01-01T00:00:00"),
+            "message_count": 1,
+        }
+        assert message_bus.inbound_size == 0
+
     def test_scoped_session_id_stays_logical_while_storage_path_is_portable(
         self, message_bus, temp_workspace
     ):
@@ -407,6 +486,63 @@ class TestOpenAPIAuth:
         )
         assert client.get(f"/bot/v1/sessions/{session_id}", headers=bob_headers).status_code == 404
         assert client.get("/bot/v1/sessions", headers=bob_headers).json()["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_openapi_interrupt_outbound_closes_pending_response(
+        self, message_bus, temp_workspace
+    ):
+        channel = OpenAPIChannel(OpenAPIChannelConfig(), message_bus, temp_workspace)
+        session_key = SessionKey(type="cli", channel_id="default", chat_id="local:session-1")
+        pending = PendingResponse()
+        channel._pending[session_key.chat_id] = pending
+
+        await channel.send(
+            OutboundMessage(
+                session_key=session_key,
+                content="",
+                event_type=OutboundEventType.INTERRUPT,
+                metadata={"reason": "user_interrupt"},
+            )
+        )
+
+        assert pending.final_content == ""
+        assert pending.event.is_set()
+        assert pending.events[0]["type"] == "interrupt"
+        assert pending.events[0]["data"] == {"reason": "user_interrupt"}
+        stream_event = await pending.stream_queue.get()
+        assert stream_event.event.value == "interrupt"
+        assert await pending.stream_queue.get() is None
+
+    def test_openapi_interrupt_route_targets_scoped_session(
+        self, message_bus, temp_workspace, monkeypatch
+    ):
+        class FakeAgentLoop:
+            def __init__(self):
+                self.session_key = None
+
+            async def interrupt(self, session_key):
+                self.session_key = session_key
+                return True
+
+        agent_loop = FakeAgentLoop()
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            temp_workspace,
+            agent_loop=agent_loop,
+        )
+        client = _make_client(channel)
+
+        response = client.post("/bot/v1/sessions/session-1/interrupt")
+
+        assert response.status_code == 200
+        assert response.json() == {"interrupted": True}
+        expected_scope = channel._principal_scope("standalone")
+        assert agent_loop.session_key == SessionKey(
+            type="cli",
+            channel_id="default",
+            chat_id=channel._scoped_session_id(expected_scope, "session-1"),
+        )
 
     def test_chat_accepts_requests_when_api_key_not_configured(
         self, message_bus, temp_workspace, monkeypatch

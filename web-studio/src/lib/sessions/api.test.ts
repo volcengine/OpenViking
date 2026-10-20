@@ -1,10 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+// @vitest-environment jsdom
 
-import { OvClientError } from '#/lib/ov-client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { OvClientError, ovClient } from '#/lib/ov-client'
 
 import {
   fetchSessionFirstTitle,
   fetchSessionMessages,
+  fetchBotHealth,
+  interruptChatSession,
+  sendChatStream,
+  steerChatSession,
   serializeParts,
 } from './api'
 
@@ -406,5 +412,140 @@ describe('fetchSessionFirstTitle', () => {
     expect(peak).toBe(4)
     expect(results.every((result) => result.status === 'rejected')).toBe(true)
     expect(getSessionBySessionIdMock).toHaveBeenCalledTimes(12)
+  })
+})
+
+describe('Bot fetch credentials', () => {
+  afterEach(() => {
+    ovClient.clearConnection()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    { apiKey: '', expectedKey: 'root-key' },
+    { apiKey: 'data-key', expectedKey: 'data-key' },
+  ])('uses $expectedKey for Bot requests', async ({ apiKey, expectedKey }) => {
+    ovClient.setOptions({ baseUrl: 'http://localhost:1933' })
+    ovClient.setConnection({
+      accountId: 'account-1',
+      adminApiKey: 'root-key',
+      apiKey,
+      identityHeaders: true,
+      userId: 'user-1',
+    })
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      url.endsWith('/stream')
+        ? new Response('data: hello\n\n', {
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+        : new Response(JSON.stringify({ accepted: true, interrupted: true })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchBotHealth()
+    const messages = []
+    for await (const event of await sendChatStream({ message: 'hello' })) {
+      messages.push(event.data)
+    }
+    expect(messages).toEqual(['hello'])
+    await steerChatSession('session 1', { message: 'next input' })
+    await interruptChatSession('session 1')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://localhost:1933/bot/v1/health',
+      'http://localhost:1933/bot/v1/chat/stream',
+      'http://localhost:1933/bot/v1/sessions/session%201/steer',
+      'http://localhost:1933/bot/v1/sessions/session%201/interrupt',
+    ])
+    for (const [, options] of fetchMock.mock.calls) {
+      expect(options.headers).toMatchObject({
+        'X-API-Key': expectedKey,
+        'X-OpenViking-Account': 'account-1',
+        'X-OpenViking-User': 'user-1',
+      })
+    }
+  })
+})
+
+describe('interruptChatSession', () => {
+  beforeEach(() => {
+    ovClient.setOptions({ baseUrl: 'http://localhost:1933' })
+    ovClient.setConnection({
+      accountId: 'account-1',
+      apiKey: 'api-key-1',
+      identityHeaders: true,
+      userId: 'user-1',
+    })
+  })
+
+  it('posts to the scoped bot interrupt endpoint with auth headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ interrupted: true }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(interruptChatSession('session 1')).resolves.toEqual({
+      interrupted: true,
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:1933/bot/v1/sessions/session%201/interrupt',
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': 'api-key-1',
+          'X-OpenViking-Account': 'account-1',
+          'X-OpenViking-User': 'user-1',
+        },
+        method: 'POST',
+      },
+    )
+  })
+})
+
+describe('steerChatSession', () => {
+  beforeEach(() => {
+    ovClient.setOptions({ baseUrl: 'http://localhost:1933' })
+    ovClient.setConnection({
+      accountId: 'account-1',
+      apiKey: 'api-key-1',
+      identityHeaders: true,
+      userId: 'user-1',
+    })
+  })
+
+  it('posts the message to the scoped bot steer endpoint with auth headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ accepted: true }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      steerChatSession('session 1', { message: 'next input' }),
+    ).resolves.toEqual({ accepted: true })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:1933/bot/v1/sessions/session%201/steer',
+      {
+        body: JSON.stringify({
+          message: 'next input',
+          session_id: 'session 1',
+          user_id: 'user-1',
+        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': 'api-key-1',
+          'X-OpenViking-Account': 'account-1',
+          'X-OpenViking-User': 'user-1',
+        },
+        method: 'POST',
+      },
+    )
   })
 })

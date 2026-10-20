@@ -1259,11 +1259,7 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
 
     assert result.outcome is ProcessOutcome.SUCCESS
     assert result.error is None
-    assert result.value == {
-        **queue_data["payload"]["context_data"],
-        "id": vector_record_id("default", "viking://resources/sample", 2),
-        "vector": [0.1, 0.2],
-    }
+    assert result.value == {"vector_written": True}
     assert "data" in captured
     assert captured["data"]["parent_uri"] == "viking://resources"
 
@@ -1324,17 +1320,8 @@ async def test_embedding_handler_honors_existing_record_id_override(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_generates_id_and_counts_written_context(monkeypatch):
-    from openviking.service.task_tracker import TaskTracker
-    from openviking.service.task_work_index import QueueTaskMetadata, TaskWorkIndex
-    from openviking.storage.vector_ids import vector_record_id
-
+async def test_embedding_handler_generates_id_and_reports_written_context(monkeypatch):
     captured = {}
-    tracker = TaskTracker(AsyncMock())
-    index = TaskWorkIndex()
-    tracker.attach_work_index(index)
-    index.register("Embedding", QueueTaskMetadata("task-1", "work-1"))
-    monkeypatch.setattr("openviking.storage.collection_schemas.get_task_tracker", lambda: tracker)
 
     class _CapturingVikingDB:
         is_closing = False
@@ -1355,11 +1342,10 @@ async def test_embedding_handler_generates_id_and_counts_written_context(monkeyp
     queue_data["_task_work_id"] = "work-1"
     payload["data"] = json.dumps(queue_data)
 
-    await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
+    result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
 
     assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
-    assert tracker.get_context_count("task-1") == 1
-    assert tracker.get_context_count("unrelated-task") == 0
+    assert result.value == {"vector_written": True}
 
 
 def test_context_collection_uses_acl_mode_and_excludes_parent_uri():

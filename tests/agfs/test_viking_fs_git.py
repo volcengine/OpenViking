@@ -21,9 +21,12 @@ from openviking.pyagfs.exceptions import (
     AGFSNotSupportedError,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_work_index import get_task_context
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from tests.test_task_tracker import _FakeAgfs
 
 ragfs_python = pytest.importorskip("ragfs_python")
 
@@ -635,26 +638,44 @@ def _patch_reindex_executor(monkeypatch, vfs, spy):
     monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
 
 
-class _MemTaskStore:
+class _MemTaskStore(PersistentTaskStore):
     def __init__(self, *, fail_creates: int = 0):
+        super().__init__(_FakeAgfs())
         self.fail_creates = fail_creates
 
-    async def create(self, task):
+    async def create(self, task, *, reject_if_active=False):
         if self.fail_creates:
             self.fail_creates -= 1
             raise OSError("task store temporarily unavailable")
+        return await super().create(task, reject_if_active=reject_if_active)
 
-    async def update(self, task):
-        return None
 
-    async def get(self, task_id, *, account_id=None, user_id=None):
-        return None
+@pytest.fixture
+async def restore_reindex_queue(vfs, monkeypatch):
+    from types import SimpleNamespace
 
-    async def list(self, account_id, *, user_id=None):
-        return []
+    from openviking.storage.queuefs.queue_manager import QueueManager
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 
-    async def delete(self, task_id, *, account_id, user_id=None):
-        return None
+    vfs.agfs.mount("queuefs", "/queue", {"backend": "memory"})
+    manager = QueueManager(agfs=vfs.agfs)
+    queue = manager.get_queue("Reindex", ReindexProcessor(vfs), allow_create=True)
+    service = SimpleNamespace(viking_fs=vfs, _vlm_resolver=None, _vector_config_resolver=None)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    monkeypatch.setattr("openviking.server.dependencies.get_service", lambda: service)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+
+    async def consume():
+        while True:
+            await queue.dequeue()
+            await asyncio.sleep(0.001)
+
+    worker = asyncio.create_task(consume())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -850,7 +871,7 @@ async def test_restore_relations_json_has_no_vector_side_effect(vfs, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
+async def test_restore_returns_pollable_task_id(vfs, monkeypatch, restore_reindex_queue):
     """An applied restore with vector side-effects returns a ``task_id`` that
     can be polled without leaving an orphaned admin reindex task.
     """
@@ -864,6 +885,14 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
     reindexed = []
 
     async def run_reindex(_executor, **kwargs):
+        context = get_task_context()
+        await get_task_tracker().wait_for_task_work(
+            context.task_id,
+            exclude_work_id=context.work_id,
+            timeout=0,
+            account_id=context.account_id,
+            user_id=context.user_id,
+        )
         reindexed.append(kwargs["uri"])
         return {
             "status": "completed",
@@ -926,6 +955,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
 async def test_restore_task_registration_failure_falls_back_to_file_reindex(
     vfs,
     monkeypatch,
+    restore_reindex_queue,
 ):
     from openviking.service.reindex_executor import ReindexExecutor
     from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker

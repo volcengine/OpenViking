@@ -6,6 +6,7 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
+import re
 import shutil
 import tempfile
 import time
@@ -21,10 +22,10 @@ from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
-from openviking.privacy import (
-    UserPrivacyConfigService,
-    extract_skill_privacy_values,
-)
+from openviking.privacy.reference import parse_privacy_field_reference
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -103,6 +104,7 @@ class SkillProcessor:
         vikingdb: VikingDBManager,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
         vlm_resolver: Optional[VLMResolver] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ):
         """Initialize skill processor."""
         if privacy_config_service is not None and vlm_resolver is None:
@@ -111,6 +113,11 @@ class SkillProcessor:
             )
         self.vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer or (
+            PrivacySanitizer(privacy_config_service)
+            if isinstance(privacy_config_service, UserPrivacyConfigService)
+            else None
+        )
         self._vlm_resolver = vlm_resolver
 
     async def process_skill(
@@ -483,10 +490,28 @@ class SkillProcessor:
         if not self._privacy_config_service:
             return skill_dict, {}
 
+        skill_uri = f"{canonical_user_root(ctx)}/skills/{skill_dict.get('name', '')}/SKILL.md"
         content = skill_dict.get("content", "")
+        sanitized_by_catalog = await self._sanitize_registered_privacy(
+            content,
+            ctx=ctx,
+            uri=skill_uri,
+        )
+        description = skill_dict.get("description", "")
+        sanitized_description = await self._sanitize_registered_privacy(
+            description,
+            ctx=ctx,
+            uri=skill_uri,
+        )
+        prepared_skill = skill_dict
+        if sanitized_by_catalog != content or sanitized_description != description:
+            prepared_skill = deepcopy(skill_dict)
+            prepared_skill["content"] = sanitized_by_catalog
+            prepared_skill["description"] = sanitized_description
+        content = sanitized_by_catalog
         extraction_kwargs = {
-            "skill_name": skill_dict.get("name", ""),
-            "skill_description": skill_dict.get("description", ""),
+            "skill_name": prepared_skill.get("name", ""),
+            "skill_description": prepared_skill.get("description", ""),
             "content": content,
         }
         if self._vlm_resolver is None:
@@ -494,11 +519,56 @@ class SkillProcessor:
         extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
         extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
         if not extraction_result.values:
-            return skill_dict, {}
+            return prepared_skill, {}
 
-        sanitized = deepcopy(skill_dict)
+        sanitized = deepcopy(prepared_skill)
         sanitized["content"] = extraction_result.sanitized_content
         return sanitized, extraction_result.values
+
+    async def _sanitize_registered_privacy(
+        self,
+        content: str,
+        *,
+        ctx: RequestContext,
+        uri: str,
+    ) -> str:
+        if self._privacy_sanitizer is None or not content:
+            return content
+        result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
+        if result.ambiguous_references:
+            raise InvalidArgumentError(
+                "Skill content contains a Privacy value mapped to multiple fields; "
+                "insert the intended owner-bound reference explicitly",
+                details={
+                    "uri": uri,
+                    "candidate_references": [
+                        list(candidates) for candidates in result.ambiguous_references
+                    ],
+                },
+            )
+        return result.content
+
+    @staticmethod
+    def _referenced_privacy_fields(skill_dict: Dict[str, Any], ctx: RequestContext) -> set[str]:
+        """Find references to this Skill's own config without resolving secrets."""
+        skill_name = skill_dict["name"]
+        legacy_prefix = f"{{{{ov_privacy:skill:{skill_name}:"
+        fields: set[str] = set()
+        for text in (skill_dict.get("content", ""), skill_dict.get("description", "")):
+            for placeholder in re.findall(r"\{\{[^{}\r\n]*\}\}", text or ""):
+                reference = parse_privacy_field_reference(placeholder)
+                if reference is not None:
+                    if (
+                        reference.owner_user_id == ctx.user.user_id
+                        and reference.category == "skill"
+                        and reference.target_key == skill_name
+                    ):
+                        fields.add(reference.field)
+                elif placeholder.startswith(legacy_prefix):
+                    field_name = placeholder[len(legacy_prefix) : -2]
+                    if field_name and ":" not in field_name:
+                        fields.add(field_name)
+        return fields
 
     async def apply_skill_privacy(
         self,
@@ -513,7 +583,8 @@ class SkillProcessor:
         if not self._privacy_config_service:
             return skill_dict
 
-        if privacy_values:
+        referenced_fields = self._referenced_privacy_fields(skill_dict, ctx)
+        if privacy_values or referenced_fields:
             await self._privacy_config_service.upsert(
                 ctx=ctx,
                 category="skill",
@@ -522,6 +593,7 @@ class SkillProcessor:
                 updated_by=ctx.user.user_id,
                 change_reason=change_reason,
                 **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
+                **({"preserve_fields": referenced_fields} if referenced_fields else {}),
             )
             return skill_dict
 
@@ -583,9 +655,25 @@ class SkillProcessor:
         """Write main skill content to VikingFS."""
         from openviking.storage.abstract_overview import write_abstract_overview
 
-        await viking_fs.write_file(
-            f"{skill_dir_uri}/SKILL.md",
+        skill_md_uri = f"{skill_dir_uri}/SKILL.md"
+        serialized = await self._sanitize_registered_privacy(
             SkillLoader.to_skill_md(skill_dict),
+            ctx=ctx,
+            uri=skill_md_uri,
+        )
+        abstract = await self._sanitize_registered_privacy(
+            abstract,
+            ctx=ctx,
+            uri=f"{skill_dir_uri}/.abstract.md",
+        )
+        overview = await self._sanitize_registered_privacy(
+            overview,
+            ctx=ctx,
+            uri=f"{skill_dir_uri}/.overview.md",
+        )
+        await viking_fs.write_file(
+            skill_md_uri,
+            serialized,
             ctx=ctx,
             lease_ref=lease_ref,
         )
@@ -626,9 +714,14 @@ class SkillProcessor:
                 is_text = False
 
             if is_text:
+                text_content = await self._sanitize_registered_privacy(
+                    file_bytes.decode("utf-8"),
+                    ctx=ctx,
+                    uri=aux_uri,
+                )
                 await viking_fs.write_file(
                     aux_uri,
-                    file_bytes.decode("utf-8"),
+                    text_content,
                     ctx=ctx,
                     lease_ref=lease_ref,
                 )

@@ -6,6 +6,7 @@ import type { SseMessage } from '#/lib/sse'
 
 const VALID_EVENT_TYPES = new Set<string>([
   'response',
+  'interrupt',
   'tool_call',
   'tool_result',
   'reasoning',

@@ -21,7 +21,6 @@ from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
 from openviking.storage.errors import (
@@ -43,7 +42,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     normalize_upsert_options,
 )
-from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, resolve_telemetry
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.log_correlation import log_correlation
 from openviking.utils.tags import merge_search_tags
@@ -701,19 +700,16 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 if self._vikingdb.is_closing:
                     logger.debug("Skip embedding dequeue during shutdown")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self._record_request_success(embedding_msg)
                     return ProcessResult.success()
 
                 if embedding_msg.action is IndexAction.NONE:
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self._record_request_success(embedding_msg)
                     logger.debug("Skipping no-op embedding message: %s", embedding_msg.id)
                     return ProcessResult.success()
 
                 if embedding_msg.action not in {IndexAction.UPSERT, IndexAction.MERGE}:
                     result = await self._apply_non_embedding_operation(embedding_msg, ctx)
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self._record_request_success(embedding_msg)
                     return ProcessResult.success(result)
 
                 if not isinstance(embedding_msg.message, (str, list)):
@@ -721,7 +717,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         f"Skipping unsupported message type: {type(embedding_msg.message)}"
                     )
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                    self._record_request_success(embedding_msg)
                     return ProcessResult.success(data)
 
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
@@ -736,11 +731,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
-                        result = await embed_compat(
-                            embedder,
-                            embedding_msg.message,
-                            is_query=False,
-                        )
+                        with bind_ingestion_source_type(embedding_msg.source_type):
+                            result = await embed_compat(
+                                embedder,
+                                embedding_msg.message,
+                                is_query=False,
+                            )
                         self._breaker_open_last_log_at.pop(account_id, None)
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
@@ -942,7 +938,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self._record_request_success(embedding_msg)
                         return ProcessResult.success()
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
@@ -960,7 +955,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                        self._record_request_success(embedding_msg)
                         return ProcessResult.success()
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
@@ -973,20 +967,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     return ProcessResult.failed(error_msg)
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
-                self._record_request_success(
-                    embedding_msg,
-                    vector_written=bool(record_id),
-                )
-                return ProcessResult.success(inserted_data)
+                return ProcessResult.success({"vector_written": bool(record_id)})
 
         except asyncio.CancelledError:
-            if (
-                embedding_msg is not None
-                and embedding_msg.context_data.get("context_type") == ContextType.SKILL.value
-            ):
-                # Active cancellation does not call on_cancelled in NamedQueue.
-                # Settle only after any already-started vector write has exited.
-                self._record_request_success(embedding_msg)
             raise
         except Exception as e:
             error_msg = self._embedding_error_msg(
@@ -1021,18 +1004,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Settle request-scoped waiting when a queued embedding is cancelled."""
-        embedding_msg: Optional[EmbeddingMsg] = None
         try:
             if data:
                 payload = data.get("data", data)
                 if isinstance(payload, str):
                     payload = json.loads(payload)
-                embedding_msg = EmbeddingMsg.from_dict(payload)
+                EmbeddingMsg.from_dict(payload)
         except (KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
 
-        if embedding_msg is not None:
-            self._record_request_success(embedding_msg)
         return ProcessResult.cancelled()
 
     async def _reenqueue_embedding_msg(self, msg: EmbeddingMsg) -> None:
@@ -1040,15 +1020,3 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             await run_to_completion(lambda: self._vikingdb.enqueue_embedding_msg(msg))
         else:
             await self._vikingdb.enqueue_embedding_msg(msg)
-
-    @staticmethod
-    def _record_request_success(
-        embedding_msg: EmbeddingMsg,
-        *,
-        vector_written: bool = False,
-    ) -> None:
-        if vector_written and embedding_msg.task_id and embedding_msg._task_work_id:
-            get_task_tracker().record_context_count(
-                embedding_msg.task_id,
-                embedding_msg._task_work_id,
-            )

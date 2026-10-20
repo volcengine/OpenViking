@@ -167,7 +167,6 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     from openviking.service.task_store import PersistentTaskStore
     from openviking.service.task_tracker import TaskStatus, TaskTracker
     from openviking.service.task_work_index import (
-        TaskWorkIndex,
         bind_task_context,
         extract_task_metadata,
     )
@@ -210,8 +209,6 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
     tracker = TaskTracker(PersistentTaskStore(agfs))
-    index = TaskWorkIndex()
-    tracker.attach_work_index(index)
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     entered_embedding_drain = asyncio.Event()
     original_wait_for_work = tracker.wait_for_work
@@ -227,7 +224,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         cast(AGFSSyncClientProtocol, agfs),
         "/queue",
         "Embedding",
-        middlewares=[TaskWorkQueueMiddleware(index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     enqueued = asyncio.Event()
 
@@ -296,8 +293,12 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         assert metadata.task_id != source.task_id
         if task:
             assert metadata.task_id == task.task_id
-        index.record_result(metadata, "completed")
-        await index.prepare_ack("Embedding", metadata)
+        await tracker.mark_work_done(
+            metadata.task_id,
+            metadata.work_id,
+            account_id=metadata.account_id,
+            user_id=metadata.user_id,
+        )
         result = await asyncio.wait_for(worker, 1)
         assert result.outcome is (
             ProcessOutcome.FAILED if fail_generation else ProcessOutcome.SUCCESS
@@ -319,6 +320,11 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         if payload:
             metadata = extract_task_metadata(json.loads(payload))
             if metadata:
-                index.record_result(metadata, "completed")
+                await tracker.mark_work_done(
+                    metadata.task_id,
+                    metadata.work_id,
+                    account_id=metadata.account_id,
+                    user_id=metadata.user_id,
+                )
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)

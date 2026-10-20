@@ -9,7 +9,7 @@ import io
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from PIL import Image, UnidentifiedImageError
 
@@ -94,19 +94,22 @@ def is_viking_uri(value: str) -> bool:
 
 def build_multimodal_embedding_input(
     text: str = "",
-    image_url: Optional[str] = None,
+    image_url: str | list[str] | None = None,
 ) -> List[Dict[str, Any]]:
     parts: List[Dict[str, Any]] = []
     if text.strip():
         parts.append({"type": "text", "text": text})
-    if image_url:
-        parts.append({"type": "image_url", "image_url": {"url": image_url}})
+    for url in image_url if isinstance(image_url, list) else [image_url]:
+        if url:
+            parts.append({"type": "image_url", "image_url": {"url": url}})
     return parts
 
 
-def normalize_client_image_input(image: Any) -> Optional[str]:
+def normalize_client_image_input(image: Any) -> str | list[str] | None:
     if image is None:
         return None
+    if isinstance(image, list):
+        return [normalize_client_image_input(item) for item in image]
     if isinstance(image, (bytes, bytearray, memoryview)):
         return image_bytes_to_data_uri(image)
 

@@ -47,8 +47,8 @@ OpenViking 是面向 AI 智能体的开源上下文数据库——用一个文�
 
 <a href="https://studio.openviking.ai" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
-    <img src="../images/studio-playground.png" alt="OpenViking Studio：浏览上下文，体验语义检索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-filesystem-dark.png">
+    <img src="../images/studio-filesystem.png" alt="OpenViking Studio 文件系统：浏览个人记忆与资源">
   </picture>
 </a>
 

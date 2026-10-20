@@ -1,5 +1,5 @@
 name: openviking
-version: 2.1.1
+version: 2.1.2
 description: "Long-term memory for Hermes with automatic capture, recall and tools to search and manage knowledge."
 pip_dependencies:
   - httpx

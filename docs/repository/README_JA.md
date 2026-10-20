@@ -47,8 +47,8 @@ OpenVikingは、AIエージェントのためのオープンソースのコン�
 
 <a href="https://studio.openviking.ai" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-playground-dark.png">
-    <img src="../images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
+    <source media="(prefers-color-scheme: dark)" srcset="../images/studio-filesystem-dark.png">
+    <img src="../images/studio-filesystem.png" alt="OpenViking Studio のファイルシステム：個人のメモリとリソースを閲覧">
   </picture>
 </a>
 

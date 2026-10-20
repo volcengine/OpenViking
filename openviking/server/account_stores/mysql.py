@@ -43,6 +43,13 @@ from openviking.server.account_stores.mysql_schema import (
     User,
 )
 from openviking.server.identity import Role
+from openviking.storage.mysql_runtime import (
+    MySQLRuntime,
+    get_shared_mysql_runtime,
+    mysql_runtime_store,
+    wait_mysql_cleanup,
+)
+from openviking.storage.mysql_session import MySQLAsyncSession
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     FailedPreconditionError,
@@ -122,6 +129,7 @@ def _deletion(record) -> DeletionRecord | None:
     )
 
 
+@mysql_runtime_store
 class MySQLAccountStore(AccountStore):
     """A manually provisioned relational account store scoped by service name."""
 
@@ -130,6 +138,7 @@ class MySQLAccountStore(AccountStore):
         *,
         service_name: str,
         params: dict[str, object] | None = None,
+        runtime: MySQLRuntime | None = None,
     ) -> None:
         values = dict(params or {})
         try:
@@ -148,6 +157,8 @@ class MySQLAccountStore(AccountStore):
             )
         self._url, engine_options = self._connection_options(values)
         self._engine_options = engine_options
+        self._mysql_runtime = runtime or get_shared_mysql_runtime()
+        self._mysql_lease = False
         self._engine: AsyncEngine | None = None
         self._sessions: async_sessionmaker[AsyncSession] | None = None
 
@@ -297,16 +308,29 @@ class MySQLAccountStore(AccountStore):
     async def load(self) -> None:
         if self._engine is not None:
             return
+        await self._mysql_runtime.acquire()
+        self._mysql_lease = True
+
+        async def cleanup_failed_load(engine: AsyncEngine | None = None) -> None:
+            if engine is not None:
+                await engine.dispose()
+            if self._mysql_lease:
+                self._mysql_lease = False
+                await self._mysql_runtime.release()
+
         try:
             engine = create_async_engine(self._url, **self._engine_options)
-            sessions = async_sessionmaker(engine, expire_on_commit=False)
+            sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
+                engine, class_=MySQLAsyncSession, expire_on_commit=False
+            )
             async with sessions() as session:
                 for model in (Account, User, Group, GroupMember, Credential):
                     await session.execute(select(*model.__table__.columns).limit(1))
         except ImportError:
+            await wait_mysql_cleanup(cleanup_failed_load())
             raise RuntimeError("MySQL account storage requires openviking[mysql]") from None
         except DBAPIError as exc:
-            await engine.dispose()
+            await wait_mysql_cleanup(cleanup_failed_load(engine if "engine" in locals() else None))
             original_args = getattr(exc.orig, "args", ())
             error_code = original_args[0] if original_args else None
             message = str(exc).lower()
@@ -320,17 +344,22 @@ class MySQLAccountStore(AccountStore):
                 ) from exc
             raise
         except BaseException:
-            if "engine" in locals():
-                await engine.dispose()
+            await wait_mysql_cleanup(cleanup_failed_load(engine if "engine" in locals() else None))
             raise
         self._engine = engine
         self._sessions = sessions
 
     async def close(self) -> None:
-        if self._engine is not None:
-            await self._engine.dispose()
-        self._engine = None
-        self._sessions = None
+        async def cleanup() -> None:
+            if self._engine is not None:
+                await self._engine.dispose()
+            self._engine = None
+            self._sessions = None
+            if self._mysql_lease:
+                self._mysql_lease = False
+                await self._mysql_runtime.release()
+
+        await wait_mysql_cleanup(cleanup())
 
     @property
     def _session_factory(self) -> async_sessionmaker[AsyncSession]:
@@ -1118,16 +1147,7 @@ class MySQLAccountStore(AccountStore):
             )
             if group is None:
                 raise NotFoundError(group_id, "group")
-            if await session.scalar(
-                select(func.count())
-                .select_from(GroupMember)
-                .where(
-                    GroupMember.service_name == self._service_name,
-                    GroupMember.account_pk == account.account_pk,
-                    GroupMember.group_pk == group.group_pk,
-                )
-            ):
-                raise FailedPreconditionError("Group must be empty before deletion")
+            # The membership foreign key cascades deletion without removing users.
             await session.delete(group)
 
     async def replace_active_user_api_key(

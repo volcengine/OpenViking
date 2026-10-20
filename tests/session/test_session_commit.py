@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from openviking.message import TextPart
 from openviking.scheduling.expiry import (
     CallbackRequest,
@@ -19,6 +21,11 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.memory.memory_updater import (
+    MemoryReadError,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -43,6 +50,35 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 
 class TestCommit:
     """Test commit"""
+
+    @pytest.mark.parametrize(
+        ("failure", "attempts"),
+        [("transient", 2), ("exhausted", 4), ("permission", 1), ("partial", 1), ("write", 1)],
+    )
+    async def test_memory_apply_failure_retries_only_before_any_write(
+        self, session_with_messages, monkeypatch, failure, attempts
+    ):
+        import openviking.session.session as session_module
+
+        monkeypatch.setattr(session_module, "_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS", 0)
+        session = session_with_messages
+        uri = "viking://user/default/memories/preferences/style.md"
+        cause = PermissionError("denied") if failure == "permission" else TimeoutError("timeout")
+        error = cause if failure == "write" else MemoryReadError(uri, cause)
+        result = MemoryUpdateResult()
+        result.add_error(uri, error)
+        if failure == "partial":
+            result.add_written("viking://user/default/memories/preferences/other.md")
+        error = MemoryUpdateError(result)
+        extract = AsyncMock(side_effect=[error, []] if failure == "transient" else error)
+        session._session_compressor.extract_long_term_memories = extract
+        committed = await session.commit_async()
+        task = await _wait_for_task(committed["task_id"])
+        assert extract.await_count == attempts
+        succeeded = failure == "transient"
+        assert task["status"] == ("completed" if succeeded else "failed")
+        meta = await session._archives.read_meta(committed["archive_uri"])
+        assert bool(meta.get("completed_memory_steps", {}).get("long_term")) is succeeded
 
     async def test_commit_preserves_unicode_separators_and_accepts_later_messages(
         self, wm_session_with_messages: Session

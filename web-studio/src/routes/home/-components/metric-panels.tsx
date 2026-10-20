@@ -77,7 +77,7 @@ function MetricPanel({
     const tick = (now: number) => {
       const progress = Math.min(1, (now - startedAt) / duration)
       const next = current + (target - current) * easeOutCubic(progress)
-      el.textContent = Math.round(next).toLocaleString()
+      el.textContent = formatNumber(Math.round(next))
       if (progress < 1) {
         frame = requestAnimationFrame(tick)
       } else {

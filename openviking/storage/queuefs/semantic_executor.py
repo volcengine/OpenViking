@@ -31,7 +31,7 @@ from openviking.storage.context_update_plan import FileVectorSource, SemanticAct
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry import bind_telemetry, get_current_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
@@ -216,6 +216,11 @@ class SemanticTreeExecutor:
                 and semantic_plan.file_vector_source is FileVectorSource.SUMMARY_WHEN_AVAILABLE
             )
         )
+        self._source_type = (
+            ("repository" if self._is_code_repo else "document")
+            if context_type == "resource"
+            else None
+        )
         self._changes_provided = changes is not None
         self._changes = changes or {}
         self._semantic_plan = semantic_plan
@@ -382,7 +387,8 @@ class SemanticTreeExecutor:
                 previous_incremental = self._incremental_update
                 self._incremental_update = False
                 try:
-                    await self._file_summary_task(root_uri, root_uri)
+                    with bind_ingestion_source_type(self._source_type):
+                        await self._file_summary_task(root_uri, root_uri)
                 finally:
                     self._incremental_update = previous_incremental
                 self._root_write_result = AbstractOverviewWriteResult(
@@ -522,7 +528,11 @@ class SemanticTreeExecutor:
             if self._task_context is not None
             else detach_task_context()
         )
-        with bind_telemetry(self._telemetry), task_context:
+        with (
+            bind_telemetry(self._telemetry),
+            bind_ingestion_source_type(self._source_type),
+            task_context,
+        ):
             await self._run_work_bound(work)
 
     async def _await_write(self, operation):

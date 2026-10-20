@@ -73,7 +73,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `log` | object | console | Log level, format, and file output |
 | `telemetry` | object | disabled | OpenTelemetry tracing |
 | `oauth` | object | disabled | MCP OAuth 2.1 |
-| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../guides/22-gateway-operations.md#configuration-reference) |
+| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | built-in templates | Custom prompt template directory |
 | `ingest` | object | built-in defaults | Conversation-log ingestion |
 | `output_language_override` | string | `""` | Force summary/memory language; empty means auto-detect |
@@ -196,6 +196,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     "parse_output": {
       "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -218,6 +221,14 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 The same worker must commit the required bytes to the formal resource tree before
 enqueueing downstream work. Artifacts are temporary and are removed after the
 content commit; provision `local_root` with enough space for concurrent imports.
+
+### `parsers`
+
+| Field | Type / common values | Default | Purpose |
+|---|---|---|---|
+| `download_temp_dir` | path or `null` | system temp directory | Temporary directory for built-in parser downloads, Git checkouts, and archive extraction |
+
+When configured, parsers create temporary directories with prefixes such as `ov_git_` and `ov_zip_` below this directory. When unset, the system temporary directory is used.
 
 ## Queue Worker Settings
 

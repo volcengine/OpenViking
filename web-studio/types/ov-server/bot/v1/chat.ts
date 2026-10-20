@@ -1,5 +1,6 @@
 export type ChatStreamEventType =
   | 'response'
+  | 'interrupt'
   | 'tool_call'
   | 'tool_result'
   | 'reasoning'

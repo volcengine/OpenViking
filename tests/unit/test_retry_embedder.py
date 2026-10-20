@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -214,15 +215,28 @@ async def test_composite_retries_only_failed_branch(monkeypatch):
         return None
 
     monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", no_sleep)
-    dense = FakeDenseEmbedder([[0.1, 0.2]])
+    dense = FakeDenseEmbedder([[0.1, 0.2], [0.3, 0.4]])
     sparse = FakeSparseEmbedder([ProviderError(503), {"term": 1.0}], max_retries=1)
+    monkeypatch.setattr(dense, "embed_async", AsyncMock(wraps=dense.embed_async))
+    monkeypatch.setattr(sparse, "embed_async", AsyncMock(wraps=sparse.embed_async))
     composite = CompositeHybridEmbedder(RetryEmbedder(dense), RetryEmbedder(sparse))
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
+    content = [{"type": "text", "text": "query"}, image]
 
-    result = await composite.embed_async("query")
+    result = await composite.embed_async(composite.prepare_embedding_input(content), is_query=True)
 
+    dense.embed_async.assert_awaited_once_with(content, is_query=True)
+    sparse.embed_async.assert_awaited_with("query", is_query=True)
     assert result.dense_vector == [0.1, 0.2]
     assert result.sparse_vector == {"term": 1.0}
     assert dense.calls == 1
+    assert sparse.calls == 2
+
+    # Removing text must skip sparse entirely, including its retry machinery.
+    image_result = await composite.embed_async([image], is_query=True)
+    assert image_result.dense_vector == [0.3, 0.4]
+    assert image_result.sparse_vector is None
+    assert dense.calls == 2
     assert sparse.calls == 2
 
 

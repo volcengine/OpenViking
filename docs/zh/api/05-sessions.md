@@ -1332,7 +1332,7 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 提交会话。归档消息（Phase 1）在响应返回前完成；有消息被归档时，摘要生成和记忆提取（Phase 2）在后台异步执行。产生归档的 commit 返回 `status: "accepted"` 和 `task_id`；没有可归档内容的 no-op commit 返回 `status: "skipped"` 和 `task_id: null`。
 
-原 `POST /api/v1/sessions/{session_id}/extract` 接口已移除，记忆提取统一使用 `commit`。迁移后消息会按保留策略归档；请通过返回的 `task_id` 查询后台提取结果，不能将 `accepted` 当作提取完成。
+原独立 session `extract` 接口已移除，记忆提取统一使用 `commit`。迁移后消息会按保留策略归档；请通过返回的 `task_id` 查询后台提取结果，不能将 `accepted` 当作提取完成。
 
 **两阶段提交流程**：
 - **Phase 1（同步）**: 按保留策略拆分消息，写入归档和恢复记录，入队 Phase 2，并将保留消息写回 live session

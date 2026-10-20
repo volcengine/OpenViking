@@ -4064,6 +4064,7 @@ name = "ragfs"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "aws-config",

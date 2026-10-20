@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 from types import SimpleNamespace
@@ -8,8 +9,12 @@ import pytest
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
-from openviking.service.task_work_index import TaskWorkIndex, bind_task_context
+from openviking.service.task_tracker import TaskTracker, get_task_tracker, run_tracked_operation
+from openviking.service.task_work_index import (
+    bind_task_context,
+    get_task_context,
+    record_enqueued_work,
+)
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
@@ -131,7 +136,6 @@ def _coordinator_queue_for_unit_tests(monkeypatch, request):
     )
     monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: queue_manager)
     tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
-    tracker.attach_work_index(TaskWorkIndex())
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
 
     async def run_tracked_operation(_task_type, *, operation, **_kwargs):
@@ -685,7 +689,25 @@ async def test_batch_hands_off_file_locks_after_one_aggregated_refresh(monkeypat
     locks = vfs._async_agfs
     coordinator = ContentWriteCoordinator(vfs)
     calls = []
-    queue = SimpleNamespace(enqueue=AsyncMock(return_value=EnqueueReceipt("queued", "work-1")))
+    workers = []
+    tracker = get_task_tracker()
+
+    async def enqueue(msg):
+        context = get_task_context()
+        owner = {"account_id": context.account_id, "user_id": context.user_id}
+        await tracker.register_work(context.task_id, "coordinator", "Semantic", **owner)
+        record_enqueued_work("Semantic", "coordinator")
+
+        async def finish_after_producer():
+            await tracker.wait_for_task_work(
+                context.task_id, exclude_work_id="coordinator", poll_interval=0.001, **owner
+            )
+            await tracker.mark_work_done(context.task_id, "coordinator", **owner)
+
+        workers.append(asyncio.create_task(finish_after_producer()))
+        return EnqueueReceipt("queued", "coordinator")
+
+    queue = SimpleNamespace(enqueue=AsyncMock(side_effect=enqueue))
     queue_manager = SimpleNamespace(
         SEMANTIC="semantic",
         get_queue=lambda *args, **kwargs: queue,
@@ -699,19 +721,29 @@ async def test_batch_hands_off_file_locks_after_one_aggregated_refresh(monkeypat
 
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: queue_manager)
+    monkeypatch.setattr(content_write_module, "run_tracked_operation", run_tracked_operation)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    with bind_telemetry(telemetry):
-        result = await coordinator.batch_write(
-            root_uri=root,
-            operations=[
-                {"uri": b, "content": "B", "mode": "upsert"},
-                {"uri": a, "content": "A", "mode": "upsert"},
-            ],
-            ctx=ctx,
-            wait=False,
-        )
+    try:
+        with bind_telemetry(telemetry):
+            result = await asyncio.wait_for(
+                coordinator.batch_write(
+                    root_uri=root,
+                    operations=[
+                        {"uri": b, "content": "B", "mode": "upsert"},
+                        {"uri": a, "content": "A", "mode": "upsert"},
+                    ],
+                    ctx=ctx,
+                    wait=True,
+                ),
+                timeout=1,
+            )
+    finally:
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
     assert vfs.writes == [a, b]
     assert result["created"] == [a, b]
+    assert result["queue_status"]["Semantic"]["processed"] == 1
     assert calls == [{a: "added", b: "added"}]
     assert locks.releases == 0
     assert locks.handoffs == 1

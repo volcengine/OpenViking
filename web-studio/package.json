@@ -10,10 +10,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "lint": "eslint src --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts' --ignore-pattern 'src/components/ui/**'",
+    "lint": "eslint src --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts'",
     "format": "prettier --check 'src/**/*.{ts,tsx}'",
-    "check": "prettier --write 'src/**/*.{ts,tsx}' && eslint src --fix --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts' --ignore-pattern 'src/components/ui/**'",
-    "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh"
+    "check": "prettier --write 'src/**/*.{ts,tsx}' && eslint src --fix --ignore-pattern 'src/gen/**' --ignore-pattern 'src/routeTree.gen.ts'",
+    "gen-server-client": "sh ./script/gen-server-client/gen-server-client.sh",
+    "test:i18n": "vitest run src/i18n src/components/code-editor.test.tsx script/eslint-i18n.test.ts",
+    "prebuild": "npm run lint && npm run test:i18n"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

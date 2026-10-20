@@ -60,3 +60,17 @@ class ResourceIngestionEventDataSource(EventMetricDataSource):
             "resource.wait",
             payload,
         )
+
+    @staticmethod
+    def record_import(*, pipeline: str, source_type: str, account_id: str | None = None) -> None:
+        """Emit one accepted resource-import task."""
+        payload = {
+            "pipeline": str(pipeline),
+            "source_type": str(source_type),
+        }
+        if account_id and str(account_id).strip():
+            payload["account_id"] = str(account_id).strip()
+        EventMetricDataSource._emit(
+            "resource.import",
+            payload,
+        )

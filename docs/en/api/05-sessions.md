@@ -1333,7 +1333,7 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 Commit a session. Message archiving (Phase 1) completes before the response returns. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
-The standalone `POST /api/v1/sessions/{session_id}/extract` endpoint has been removed. Use `commit` for memory extraction. This archives messages according to the retention policy; use the returned `task_id` to check the background extraction result. An `accepted` response does not mean extraction is complete.
+The former standalone session `extract` endpoint has been removed. Use `commit` for memory extraction. This archives messages according to the retention policy; use the returned `task_id` to check the background extraction result. An `accepted` response does not mean extraction is complete.
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
