@@ -16,6 +16,7 @@ import {
   readServerIdentity,
 } from '#/lib/connection/health'
 import type { ConnectionDraft } from '#/lib/connection/types'
+import { StudioSetupRequestError } from '#/lib/connection/onboarding'
 
 export function SetupIdentityDirectory({
   connection,
@@ -130,8 +131,11 @@ export function SetupIdentityDirectory({
       } else {
         setLoadedAccount('')
       }
-    } catch {
-      if (current()) setError(t('directoryLoadFailed'))
+    } catch (cause) {
+      if (current())
+        setError(
+          `${t('directoryLoadFailed')} ${new StudioSetupRequestError('data', cause, connection).message}`,
+        )
     } finally {
       if (current()) setLoading(false)
     }
@@ -156,8 +160,11 @@ export function SetupIdentityDirectory({
       if (!current()) return
       setUsers(nextUsers)
       setLoadedAccount(accountId)
-    } catch {
-      if (current()) setError(t('directoryLoadFailed'))
+    } catch (cause) {
+      if (current())
+        setError(
+          `${t('directoryLoadFailed')} ${new StudioSetupRequestError('data', cause, connection).message}`,
+        )
     } finally {
       if (current()) setLoading(false)
     }

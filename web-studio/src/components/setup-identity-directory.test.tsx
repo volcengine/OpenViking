@@ -216,9 +216,36 @@ it.each([403, 503])(
         onSelect={onSelect}
       />,
     )
-    await screen.findByText('directoryLoadFailed')
+    await screen.findByText(/directoryLoadFailed/)
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(mocks.users).not.toHaveBeenCalled()
     expect(onSelect).not.toHaveBeenCalled()
   },
 )
+
+it('shows useful directory failure details without exposing either credential', async () => {
+  mocks.health.mockResolvedValue({
+    version: 'test',
+    auth_mode: 'api_key',
+    role: 'root',
+  })
+  mocks.accounts.mockRejectedValue(
+    new Error('Service unavailable for root-secret and user-secret'),
+  )
+  render(
+    <SetupIdentityDirectory
+      connection={{
+        ...connection,
+        apiKey: ' user-secret ',
+        adminApiKey: ' root-secret ',
+      }}
+      disabled={false}
+      onSelect={vi.fn()}
+    />,
+  )
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('directoryLoadFailed')
+  expect(alert.textContent).toContain('Service unavailable')
+  expect(alert.textContent).not.toContain('root-secret')
+  expect(alert.textContent).not.toContain('user-secret')
+})

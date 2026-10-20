@@ -36,7 +36,9 @@ export class StudioSetupRequestError extends Error {
   ) {
     const error = normalizeOvClientError(cause)
     let message = error.message
-    for (const secret of [connection.apiKey, connection.adminApiKey]) {
+    for (const secret of [connection.apiKey, connection.adminApiKey].flatMap(
+      (key) => [key, key.trim()],
+    )) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
     super(`${error.statusCode ? `HTTP ${error.statusCode}: ` : ''}${message}`, {
