@@ -76,6 +76,7 @@ from openviking.session.working_memory import (
     WM_UPDATE_TOOL,
 )
 from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.storage.errors import LockAcquisitionError
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
@@ -1960,20 +1961,23 @@ class Session:
         if user_config_error is not None:
             user_config_error = str(user_config_error)
 
-        await self._run_memory_extraction(
-            task_id=msg.task_id,
-            archive_uri=msg.archive_uri,
-            messages=archive_messages,
-            first_message_id=archive_messages[0].id,
-            last_message_id=archive_messages[-1].id,
-            memory_policy=msg.memory_policy,
-            agent_evolution_enabled=agent_evolution_enabled,
-            agent_memory_skip_reason=agent_memory_skip_reason,
-            user_config_error=user_config_error,
-            record_auto_commit_success=msg.record_auto_commit_success,
-            event_search_tags=list(msg.event_search_tags or []),
-            auto_commit_policy=msg.auto_commit_policy,
-        )
+        try:
+            await self._run_memory_extraction(
+                task_id=msg.task_id,
+                archive_uri=msg.archive_uri,
+                messages=archive_messages,
+                first_message_id=archive_messages[0].id,
+                last_message_id=archive_messages[-1].id,
+                memory_policy=msg.memory_policy,
+                agent_evolution_enabled=agent_evolution_enabled,
+                agent_memory_skip_reason=agent_memory_skip_reason,
+                user_config_error=user_config_error,
+                record_auto_commit_success=msg.record_auto_commit_success,
+                event_search_tags=list(msg.event_search_tags or []),
+                auto_commit_policy=msg.auto_commit_policy,
+            )
+        except LockAcquisitionError:
+            return False  # requeued by SessionCommitProcessor
         return True
 
     async def _run_usage_reporting(
@@ -2584,6 +2588,13 @@ class Session:
                     stage="cancelled",
                     error="session commit cancelled",
                 )
+            raise
+        except LockAcquisitionError as e:
+            # Lock contention is transient and completed steps are checkpointed:
+            # hand the job back to the queue instead of failing the archive.
+            telemetry.set_error("session.commit.phase2", type(e).__name__, str(e))
+            _publish_telemetry_summary_best_effort(telemetry.finish("error"))
+            logger.warning("Phase 2 for %s hit lock contention, requeueing: %s", archive_uri, e)
             raise
         except Exception as e:
             telemetry.set_error("session.commit.phase2", type(e).__name__, str(e))

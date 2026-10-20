@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Queue consumer for restart-safe Session Phase 2 work."""
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -20,6 +21,10 @@ from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
     from openviking.service.session_service import SessionService
+
+# A commit that waits for its predecessor (or a lock) is requeued; without a pause
+# each waiting message cycles through the queue continuously.
+_REQUEUE_DELAY_S = 2.0
 
 
 class SessionCommitProcessor(DequeueHandlerBase):
@@ -80,6 +85,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
+                await asyncio.sleep(_REQUEUE_DELAY_S)
                 await get_queue_manager().enqueue(
                     QueueManager.SESSION_COMMIT,
                     msg.to_dict(),
