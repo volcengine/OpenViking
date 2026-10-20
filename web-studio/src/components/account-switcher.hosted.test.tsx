@@ -325,3 +325,21 @@ it('shows a single default for personal hosted connections', async () => {
   expect(activateProfile).toHaveBeenCalledWith('default')
   client.clear()
 })
+
+it('keeps the account tab discoverable when the active open-source identity lacks management access', () => {
+  activeState.provider = 'opensource'
+  const client = new QueryClient()
+  render(
+    <QueryClientProvider client={client}>
+      <AccountSwitcher />
+    </QueryClientProvider>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  expect(screen.getByRole('button', { name: 'identities' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'serverAccountsTitle' }))
+  expect(screen.getByText('accountsRootRequired')).toBeTruthy()
+  expect(
+    screen.queryByRole('textbox', { name: 'searchPlaceholder' }),
+  ).toBeNull()
+  client.clear()
+})

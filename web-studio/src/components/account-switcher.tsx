@@ -393,8 +393,13 @@ export function AccountSwitcher() {
       .toLowerCase()
       .includes(identitySearch.trim().toLowerCase()),
   )
-  const accountsVisible =
-    canManageAccounts && selectedKey === currentService && view === 'accounts'
+  const showAccountsTab =
+    resolveConfiguredServiceProvider(
+      selected.connection.baseUrl,
+      selected.connection.serviceSelection,
+    ) === 'opensource'
+  const accountsVisible = showAccountsTab && view === 'accounts'
+  const accountAccessReady = canManageAccounts && selectedKey === currentService
   function changeOpen(next: boolean) {
     setOpen(next)
     if (next) {
@@ -403,7 +408,11 @@ export function AccountSwitcher() {
       setIdentitySearch('')
       setSearch('')
       setMobileDetails(false)
-      setView('accounts')
+      setView(
+        canManageAccounts || isConnectionRoleLoading
+          ? 'accounts'
+          : 'identities',
+      )
     }
   }
 
@@ -467,7 +476,9 @@ export function AccountSwitcher() {
                       onClick={() => {
                         setSelectedService(key)
                         setView(
-                          key === currentService ? 'accounts' : 'identities',
+                          key === currentService && canManageAccounts
+                            ? 'accounts'
+                            : 'identities',
                         )
                         setIdentitySearch('')
                         setMobileDetails(true)
@@ -541,7 +552,7 @@ export function AccountSwitcher() {
                 >
                   {t('identities')}
                 </button>
-                {canManageAccounts && selectedKey === currentService && (
+                {showAccountsTab && (
                   <button
                     type="button"
                     aria-pressed={accountsVisible}
@@ -558,7 +569,29 @@ export function AccountSwitcher() {
                 )}
               </div>
               <div className="min-h-0 flex-1">
-                {accountsVisible ? (
+                {accountsVisible && !accountAccessReady ? (
+                  <div className="space-y-3 p-4 text-xs text-muted-foreground">
+                    <p>
+                      {t(
+                        selectedKey !== currentService
+                          ? 'accountsConnectFirst'
+                          : isConnectionRoleLoading
+                            ? 'accountsChecking'
+                            : 'accountsRootRequired',
+                      )}
+                    </p>
+                    {selectedKey === currentService &&
+                      !isConnectionRoleLoading && (
+                        <Link
+                          to="/settings"
+                          onClick={() => setOpen(false)}
+                          className="text-foreground underline underline-offset-4"
+                        >
+                          {t('manageConnections')}
+                        </Link>
+                      )}
+                  </div>
+                ) : accountsVisible ? (
                   <>
                     <div className="flex items-center gap-2 p-3">
                       <div className="relative min-w-0 flex-1">
@@ -723,11 +756,17 @@ export function AccountSwitcher() {
                 )}
               </div>
               <Link
-                to={accountsVisible ? '/users' : '/settings'}
+                to={
+                  accountsVisible && accountAccessReady ? '/users' : '/settings'
+                }
                 onClick={() => setOpen(false)}
                 className="mt-auto flex h-11 shrink-0 items-center border-t px-4 text-xs hover:bg-accent"
               >
-                {t(accountsVisible ? 'accountSettings' : 'manageConnections')}
+                {t(
+                  accountsVisible && accountAccessReady
+                    ? 'accountSettings'
+                    : 'manageConnections',
+                )}
               </Link>
             </div>
           </div>

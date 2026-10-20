@@ -657,6 +657,10 @@ const workspace = {
     },
   },
   accountSwitcher: {
+    accountsConnectFirst: '请先在已保存身份中连接此服务，再查看服务端账号。',
+    accountsChecking: '正在验证账号管理权限…',
+    accountsRootRequired:
+      '请在连接设置中配置 Root API Key，以浏览和切换服务端账号。已有身份仍可在旁边的页签切换。',
     servicesSearch: '搜索服务',
     identitiesSearch: '搜索已保存身份',
     identities: '已保存身份',

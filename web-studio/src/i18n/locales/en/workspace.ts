@@ -684,6 +684,11 @@ const workspace = {
     },
   },
   accountSwitcher: {
+    accountsConnectFirst:
+      'Select a saved identity to connect to this service before browsing its accounts.',
+    accountsChecking: 'Checking account management access…',
+    accountsRootRequired:
+      'Configure a Root API Key in Connection Settings to browse and switch server accounts. Saved identities remain available in the adjacent tab.',
     servicesSearch: 'Search services',
     identitiesSearch: 'Search saved identities',
     identities: 'Saved Identities',
