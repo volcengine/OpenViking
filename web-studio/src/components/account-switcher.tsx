@@ -497,7 +497,7 @@ export function AccountSwitcher() {
               <Link
                 to="/config"
                 onClick={() => setOpen(false)}
-                className="flex h-11 shrink-0 items-center gap-2 border-t px-3 text-xs hover:bg-accent"
+                className="mt-auto flex h-11 shrink-0 items-center gap-2 border-t px-3 text-xs hover:bg-accent"
               >
                 <PlusIcon className="size-3.5" />
                 {t('connections.add')}
@@ -729,7 +729,7 @@ export function AccountSwitcher() {
               <Link
                 to={accountsVisible ? '/users' : '/settings'}
                 onClick={() => setOpen(false)}
-                className="flex h-11 shrink-0 items-center border-t px-4 text-xs hover:bg-accent"
+                className="mt-auto flex h-11 shrink-0 items-center border-t px-4 text-xs hover:bg-accent"
               >
                 {t(accountsVisible ? 'accountSettings' : 'manageConnections')}
               </Link>
