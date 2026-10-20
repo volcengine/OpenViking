@@ -22,6 +22,7 @@ import {
 import { Field, FieldLabel } from '#/components/ui/field'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { createRandomUuid } from '#/lib/browser-crypto'
+import { CLOUD_SETUP_URL } from '#/lib/connection/onboarding'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import type { ConnectionProfile } from '#/lib/connection/profiles'
 import { formatHostedIdentity } from '#/lib/connection/identity-label'
@@ -70,9 +71,19 @@ export function ConnectionProfilesList() {
   const [draft, setDraft] = React.useState<ConnectionProfile | null>(null)
   const [error, setError] = React.useState('')
   const [deleting, setDeleting] = React.useState<ConnectionProfile | null>(null)
+  const openSourceUrlRef = React.useRef('')
   const openEditor = (profile: ConnectionProfile) => {
     setError('')
-    setDraft(profile)
+    const hosted = profile.connection.serviceSelection === 'volcengine'
+    openSourceUrlRef.current = hosted ? '' : profile.connection.baseUrl
+    setDraft(
+      hosted
+        ? {
+            ...profile,
+            connection: { ...profile.connection, baseUrl: CLOUD_SETUP_URL },
+          }
+        : profile,
+    )
   }
   function save(event: React.FormEvent) {
     event.preventDefault()
@@ -271,10 +282,17 @@ export function ConnectionProfilesList() {
                   ]}
                   onValueChange={(value) => {
                     if (value !== 'opensource' && value !== 'volcengine') return
+                    if (draft.connection.serviceSelection !== 'volcengine') {
+                      openSourceUrlRef.current = draft.connection.baseUrl
+                    }
                     setDraft({
                       ...draft,
                       connection: {
                         ...draft.connection,
+                        baseUrl:
+                          value === 'volcengine'
+                            ? CLOUD_SETUP_URL
+                            : openSourceUrlRef.current,
                         serviceSelection: value,
                       },
                     })
@@ -311,6 +329,10 @@ export function ConnectionProfilesList() {
                       id={`profile-${key}`}
                       className="h-10"
                       required={key === 'baseUrl'}
+                      readOnly={
+                        key === 'baseUrl' &&
+                        draft.connection.serviceSelection === 'volcengine'
+                      }
                       type={
                         key === 'apiKey' || key === 'adminApiKey'
                           ? 'password'
