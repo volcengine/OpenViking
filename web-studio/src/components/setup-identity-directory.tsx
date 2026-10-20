@@ -85,28 +85,36 @@ export function SetupIdentityDirectory({
       if (!current()) return
       if (
         !isUsableServerHealth(health) ||
-        (health.role !== 'root' && health.role !== 'admin')
+        (health.auth_mode !== 'trusted' &&
+          health.role !== 'root' &&
+          health.role !== 'admin')
       ) {
         setError(t('directoryControlRequired'))
         return
       }
+      // In trusted mode /health describes the selected data user, not the
+      // control key. Like detectConnectionIdentity, verify Root capability by
+      // actually listing accounts; a failed probe must not fall back to the
+      // data user's admin role and incorrectly pin the directory to one tenant.
+      const listRootAccounts =
+        health.auth_mode === 'trusted' || health.role === 'root'
+      const directoryRole = listRootAccounts ? 'root' : 'admin'
       const identity = readServerIdentity(health)
       const scopedConnection = {
         ...adminConnection,
         accountId:
-          health.role === 'admin' ? identity.accountId : connection.accountId,
+          directoryRole === 'admin' ? identity.accountId : connection.accountId,
       }
-      if (health.role === 'admin' && !scopedConnection.accountId) {
+      if (directoryRole === 'admin' && !scopedConnection.accountId) {
         setError(t('directoryControlRequired'))
         return
       }
-      const nextAccounts =
-        health.role === 'root'
-          ? await fetchAdminAccounts(scopedConnection)
-          : [{ accountId: identity.accountId, userCount: 0 }]
+      const nextAccounts = listRootAccounts
+        ? await fetchAdminAccounts(scopedConnection)
+        : [{ accountId: identity.accountId, userCount: 0 }]
       if (!current()) return
       setAccounts(nextAccounts)
-      setRole(health.role)
+      setRole(directoryRole)
       // Loading a list never silently switches the selected data identity.
       const account = nextAccounts.find(
         (item) => item.accountId === connection.accountId,

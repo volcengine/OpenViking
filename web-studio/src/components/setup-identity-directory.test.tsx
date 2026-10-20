@@ -74,8 +74,15 @@ it('loads root accounts and a credential-free user directory without changing id
   )
   expect(onSelect).not.toHaveBeenCalled()
   const user = userEvent.setup()
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole('combobox', { name: 'directoryAccount' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  )
   await user.click(screen.getByRole('combobox', { name: 'directoryAccount' }))
-  await user.click(screen.getByRole('option', { name: 'other' }))
+  await user.click(await screen.findByRole('option', { name: 'other' }))
   expect(onSelect).toHaveBeenCalledWith({ accountId: 'other', userId: '' })
 })
 it('restricts an admin key to its authoritative account instead of listing all accounts', async () => {
@@ -97,6 +104,13 @@ it('restricts an admin key to its authoritative account instead of listing all a
   expect(mocks.accounts).not.toHaveBeenCalled()
   expect(mocks.users).not.toHaveBeenCalled()
   const user = userEvent.setup()
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole('combobox', { name: 'directoryAccount' })
+        .hasAttribute('disabled'),
+    ).toBe(false),
+  )
   await user.click(screen.getByRole('combobox', { name: 'directoryAccount' }))
   expect(screen.queryByRole('option', { name: 'team' })).toBeNull()
   await user.click(screen.getByRole('option', { name: 'bound-account' }))
@@ -134,3 +148,77 @@ it('discards directory results after the control key changes', async () => {
   expect(mocks.accounts).not.toHaveBeenCalled()
   expect(screen.queryByRole('combobox')).toBeNull()
 })
+
+it.each(['user', 'admin'])(
+  'loads global accounts for a trusted Root key when the data role is %s',
+  async (role) => {
+    mocks.health.mockResolvedValue({
+      version: 'test',
+      auth_mode: 'trusted',
+      role,
+      account_id: 'team',
+      user_id: 'alice',
+    })
+    const onSelect = vi.fn()
+    render(
+      <SetupIdentityDirectory
+        connection={connection}
+        disabled={false}
+        onSelect={onSelect}
+      />,
+    )
+    await waitFor(() =>
+      expect(mocks.users).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: 'root-secret' }),
+        'team',
+      ),
+    )
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(mocks.accounts).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: 'root-secret' }),
+    )
+    const user = userEvent.setup()
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('combobox', { name: 'directoryAccount' })
+          .hasAttribute('disabled'),
+      ).toBe(false),
+    )
+    await user.click(screen.getByRole('combobox', { name: 'directoryAccount' }))
+    await user.click(await screen.findByRole('option', { name: 'other' }))
+    expect(onSelect).toHaveBeenCalledWith({ accountId: 'other', userId: '' })
+    await waitFor(() =>
+      expect(mocks.users).toHaveBeenLastCalledWith(
+        expect.objectContaining({ apiKey: 'root-secret', accountId: 'other' }),
+        'other',
+      ),
+    )
+  },
+)
+
+it.each([403, 503])(
+  'does not infer control permissions from a trusted admin data role when the account probe fails with %s',
+  async (status) => {
+    mocks.health.mockResolvedValue({
+      version: 'test',
+      auth_mode: 'trusted',
+      role: 'admin',
+      account_id: 'team',
+      user_id: 'alice',
+    })
+    mocks.accounts.mockRejectedValue({ response: { status } })
+    const onSelect = vi.fn()
+    render(
+      <SetupIdentityDirectory
+        connection={connection}
+        disabled={false}
+        onSelect={onSelect}
+      />,
+    )
+    await screen.findByText('directoryLoadFailed')
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(mocks.users).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+  },
+)
