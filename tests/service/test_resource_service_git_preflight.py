@@ -3,6 +3,7 @@
 """Regression tests for Git preflight process cleanup."""
 
 import asyncio
+import base64
 import os
 import signal
 from types import SimpleNamespace
@@ -12,7 +13,6 @@ import pytest
 
 from openviking.parse.mode import ParseMode
 from openviking.parse.network import (
-    ParserNetworkContext,
     ParserNetworkOperation,
     register_parser_network_adapter,
     reset_parser_network_adapter,
@@ -26,30 +26,16 @@ from openviking_cli.session.user_id import UserIdentifier
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
 
 
-class _PreflightNetworkAdapter:
-    def supports(self, context: ParserNetworkContext) -> bool:
-        return context.operation is ParserNetworkOperation.GIT_COMMAND
-
-    def create_httpx_transport(self, context: ParserNetworkContext):
-        return None
-
-    def create_urllib_opener(self, context: ParserNetworkContext):
-        return None
-
-    def subprocess_env_overlay(self, context: ParserNetworkContext):
-        return {"HTTPS_PROXY": "http://proxy.example:8118"}
-
-
-async def test_account_github_token_is_used_for_repository_preflight(monkeypatch):
+async def test_account_token_and_parser_proxy_reach_repository_preflight(monkeypatch):
     token_resolver = AsyncMock(return_value="account-token")
     processor = SimpleNamespace(github_token_for=token_resolver)
     service = ResourceService(resource_processor=processor)
-    service._preflight_git_source = AsyncMock(
-        return_value=SimpleNamespace(
-            source_name="private",
-            source_path="https://github.com/org/private",
-            source_format="repository",
-        )
+    process = Mock(returncode=0)
+    process.communicate = AsyncMock(return_value=(b"refs/heads/main\n", b""))
+    execute = AsyncMock(return_value=process)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", execute)
+    monkeypatch.setattr(
+        resource_service_module, "parse_code_hosting_url", lambda _source: "org/private"
     )
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
     monkeypatch.setattr(resource_service_module, "is_github_url", lambda _path: True)
@@ -58,19 +44,41 @@ async def test_account_github_token_is_used_for_repository_preflight(monkeypatch
         role=Role.USER,
     )
 
-    plan = await service._prepare_standard_source_plan(
-        path="https://github.com/org/private",
-        ctx=ctx,
-        mode=ParseMode.DEFAULT,
-        allow_local_path_resolution=False,
-        processor_kwargs={},
-        watch_auth_state=None,
+    register_parser_network_adapter(
+        SimpleNamespace(
+            supports=lambda context: context.operation is ParserNetworkOperation.GIT_COMMAND,
+            subprocess_env_overlay=lambda context: {"HTTPS_PROXY": "http://proxy.example:8118"},
+        )
     )
+    try:
+        plan = await service._prepare_standard_source_plan(
+            path="https://github.com/org/private",
+            ctx=ctx,
+            mode=ParseMode.DEFAULT,
+            allow_local_path_resolution=False,
+            processor_kwargs={},
+            watch_auth_state=None,
+        )
+    finally:
+        reset_parser_network_adapter()
 
     token_resolver.assert_awaited_once_with("https://github.com/org/private", ctx)
-    preflight_auth = service._preflight_git_source.await_args.kwargs["auth_config"]
-    assert preflight_auth.username == "oauth2"
-    assert preflight_auth.token == "account-token"
+    assert execute.await_args.args == (
+        "git",
+        "ls-remote",
+        "--heads",
+        "https://github.com/org/private",
+    )
+    env = execute.await_args.kwargs["env"]
+    assert env["HTTPS_PROXY"] == "http://proxy.example:8118"
+    entries = {
+        env[f"GIT_CONFIG_KEY_{index}"]: env[f"GIT_CONFIG_VALUE_{index}"]
+        for index in range(int(env["GIT_CONFIG_COUNT"]))
+    }
+    encoded = base64.b64encode(b"oauth2:account-token").decode("ascii")
+    assert entries["http.https://github.com/org/private.extraHeader"] == (
+        f"Authorization: Basic {encoded}"
+    )
     assert plan is not None
     assert plan.task_auth == {}
     assert "account-token" not in str(plan.processor_args)
@@ -179,46 +187,3 @@ async def test_git_preflight_cancellation_kills_process_group_and_bounds_reap(mo
         wait_timeouts,
     ) == (True, [call(process.pid, signal.SIGKILL)], [10.0, 1.0])
     process.kill.assert_not_called()
-
-
-async def test_git_preflight_merges_adapter_env_with_http_auth(monkeypatch):
-    process = Mock(returncode=0)
-    process.communicate = AsyncMock(return_value=(b"refs/heads/main\n", b""))
-    captured = {}
-
-    async def fake_exec(*args, **kwargs):
-        captured["args"] = args
-        captured.update(kwargs)
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(
-        resource_service_module,
-        "parse_code_hosting_url",
-        lambda _source: "org/private",
-    )
-    register_parser_network_adapter(_PreflightNetworkAdapter())
-    try:
-        await ResourceService()._preflight_git_source(
-            "https://github.com/org/private",
-            auth_config=resource_service_module.GitHttpAuthConfig(
-                username="oauth2",
-                token="secret-token",
-            ),
-        )
-    finally:
-        reset_parser_network_adapter()
-
-    assert captured["args"][:3] == ("git", "ls-remote", "--heads")
-    env = captured["env"]
-    assert env["HTTPS_PROXY"] == "http://proxy.example:8118"
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
-    assert env["GCM_INTERACTIVE"] == "Never"
-    entries = {
-        env[f"GIT_CONFIG_KEY_{index}"]: env[f"GIT_CONFIG_VALUE_{index}"]
-        for index in range(int(env["GIT_CONFIG_COUNT"]))
-    }
-    assert entries["credential.helper"] == ""
-    assert entries["http.https://github.com/org/private.extraHeader"].startswith(
-        "Authorization: Basic "
-    )
