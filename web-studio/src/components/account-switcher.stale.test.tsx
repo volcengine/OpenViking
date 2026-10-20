@@ -98,6 +98,7 @@ function renderSwitcher() {
 
 async function selectTeam() {
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  fireEvent.click(screen.getByRole('button', { name: 'serverAccountsTitle' }))
   await waitFor(() => expect(screen.getByText('team')).toBeTruthy())
   fireEvent.click(screen.getByText('team'))
   await waitFor(() => expect(fetchUsers).toHaveBeenCalledTimes(1))
