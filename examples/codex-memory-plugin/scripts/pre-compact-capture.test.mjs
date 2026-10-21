@@ -86,6 +86,10 @@ function mockHandler(calls) {
       writeJson(res, { status: "ok", result: { ok: true } });
       return;
     }
+    if (req.method === "GET" && /^\/api\/v1\/sessions\/[^/]+$/.test(url.pathname)) {
+      writeJson(res, { status: "ok", result: { session_id: url.pathname.split("/").at(-1) } });
+      return;
+    }
     if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
       call.body = await readRequestBody(req);
       writeJson(res, { status: "ok", result: { ok: true } });

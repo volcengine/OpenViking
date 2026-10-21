@@ -278,6 +278,19 @@ all (index `-1`), we fall back to capturing the whole transcript and log
 earlier `Stop` hooks failed to reach OV and compaction happened before they
 were retried, those turns are dropped rather than duplicated.
 
+### Server session loss with a retained cursor
+
+Before appending a new transcript suffix, capture verifies that the deterministic
+OpenViking session still exists whenever `capturedTurnCount` is non-zero. A 404
+or 410 means the server state was reset or removed while the local cursor
+survived. Capture persists a zero cursor first, then sends the complete readable
+transcript so the message endpoint can auto-create a complete replacement.
+
+Other lookup failures do not advance the cursor or send the suffix. A later hook
+retries after continuity can be verified. A successful commit keeps the server
+session and its archives, so normal commit-then-resume still sends only new
+turns.
+
 ### Commit failure
 
 When OV `/commit` returns non-2xx or times out, we log the `trace_id` and

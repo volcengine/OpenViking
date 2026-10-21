@@ -85,6 +85,10 @@ function profileHandler(requests, { archiveOverview = "" } = {}) {
       writeJson(res, { status: "ok", result: { user: "zeus" } });
       return;
     }
+    if (req.method === "GET" && /^\/api\/v1\/sessions\/[^/]+$/.test(url.pathname)) {
+      writeJson(res, { status: "ok", result: { session_id: url.pathname.split("/").at(-1) } });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
       writeJson(res, {
         status: "ok",

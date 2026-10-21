@@ -103,13 +103,22 @@ async function exists(path) {
   try { await stat(path); return true; } catch { return false; }
 }
 
-function mockHandler(calls, { commitStatus = 200 } = {}) {
+function mockHandler(calls, { commitStatus = 200, sessionStatus = 200 } = {}) {
   return async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     const call = { method: req.method, path: url.pathname, body: null };
     calls.push(call);
     if (req.method === "GET" && url.pathname === "/health") {
       writeJson(res, { status: "ok", result: { ok: true } });
+      return;
+    }
+    if (req.method === "GET" && /^\/api\/v1\/sessions\/[^/]+$/.test(url.pathname)) {
+      if (sessionStatus !== 200) {
+        res.writeHead(sessionStatus, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "error", error: { message: "session lookup failed" } }));
+        return;
+      }
+      writeJson(res, { status: "ok", result: { session_id: url.pathname.split("/").at(-1) } });
       return;
     }
     if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
@@ -163,6 +172,72 @@ test("session-end catches up the missing turns then commits", async () => {
     assert.equal(state.ovSessionId, null);
     assert.equal(state.capturedTurnCount, 4);
     assert.equal(await endedMarkerExists(stateDir, "s1"), false);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("session-end reconstructs the complete transcript when the server session is missing", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-missing-session-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    await writeState(stateDir, "missing-session", { capturedTurnCount: 4 });
+    await writeTranscript(transcriptPath, 6);
+    await withMockOpenViking(mockHandler(calls, { sessionStatus: 404 }), async (baseUrl) => {
+      await runSessionEnd(
+        { session_id: "missing-session", transcript_path: transcriptPath },
+        workerEnv(baseUrl, stateDir),
+      );
+    });
+
+    const messages = sentMessages(calls);
+    assert.deepEqual(
+      messages.map((message) => message.parts?.[0]?.text ?? message.content),
+      ["turn-0", "turn-1", "turn-2", "turn-3", "turn-4", "turn-5"],
+    );
+    assert.deepEqual(
+      calls
+        .filter((call) => /^\/api\/v1\/sessions\/cx-missing-session(?:\/messages\/batch)?$/.test(call.path))
+        .map((call) => [call.method, call.path]),
+      [
+        ["GET", "/api/v1/sessions/cx-missing-session"],
+        ["POST", "/api/v1/sessions/cx-missing-session/messages/batch"],
+      ],
+    );
+    assert.ok(calls.some((call) => call.path === "/api/v1/sessions/cx-missing-session/commit"));
+    const state = await readState(stateDir, "missing-session");
+    assert.equal(state.capturedTurnCount, 6);
+    assert.equal(state.ovSessionId, null);
+    assert.equal(await endedMarkerExists(stateDir, "missing-session"), false);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("session-end preserves the cursor when continuity cannot be verified", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-continuity-unavailable-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    await writeState(stateDir, "continuity-unavailable", { capturedTurnCount: 2 });
+    await writeTranscript(transcriptPath, 3);
+    await withMockOpenViking(mockHandler(calls, { sessionStatus: 503 }), async (baseUrl) => {
+      await runSessionEnd(
+        { session_id: "continuity-unavailable", transcript_path: transcriptPath },
+        workerEnv(baseUrl, stateDir),
+      );
+    });
+
+    assert.ok(calls.some((call) =>
+      call.method === "GET" && call.path === "/api/v1/sessions/cx-continuity-unavailable"
+    ));
+    assert.equal(calls.some((call) => call.path.endsWith("/messages/batch")), false);
+    assert.equal(calls.some((call) => call.path.endsWith("/commit")), false);
+    const state = await readState(stateDir, "continuity-unavailable");
+    assert.equal(state.capturedTurnCount, 2);
+    assert.equal(state.ovSessionId, "cx-continuity-unavailable");
+    assert.equal(await endedMarkerExists(stateDir, "continuity-unavailable"), true);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

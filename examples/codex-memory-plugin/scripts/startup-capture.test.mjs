@@ -49,7 +49,10 @@ async function catchUp(id, transcriptPath, sent, { oldCursor, fail = false } = {
     }
     const result = await catchUpTurns({
       state, transcriptPath, cfg,
-      fetchJSONRes: async (_path, init) => {
+      fetchJSONRes: async (_path, init = {}) => {
+        if (init.method !== "POST") {
+          return { ok: true, status: 200, result: { session_id: `cx-${id}` } };
+        }
         const persisted = await readFile(join(stateDir, `${id}.json`), "utf-8").then(JSON.parse, () => null);
         if (oldCursor !== undefined) {
           assert.equal(persisted.captureFormatVersion, CAPTURE_FORMAT_VERSION,
@@ -140,6 +143,85 @@ test("shortened transcript resumes at the latest human turn", async () => {
   assert.equal(result.added, 2);
   assert.deepEqual(sent.map((item) => item.parts[0].text), ["Current question", "Current answer"]);
   assert.equal(state.capturedTurnCount, 2);
+});
+
+test("missing OpenViking session resets the cursor before recreating it", async () => {
+  const id = "missing-server-session";
+  const sent = [];
+  const requests = [];
+  const path = await writeRollout(id, rollout(
+    message("user", "First question"), message("assistant", "First answer"),
+    message("user", "Second question"), message("assistant", "Second answer"),
+    message("user", "New question"), message("assistant", "New answer"),
+  ));
+  const state = {
+    codexSessionId: id,
+    ovSessionId: `cx-${id}`,
+    capturedTurnCount: 4,
+    captureFormatVersion: CAPTURE_FORMAT_VERSION,
+    createdAt: Date.now() - 1000,
+    lastUpdatedAt: Date.now(),
+  };
+  await saveState(state);
+
+  const result = await catchUpTurns({
+    state,
+    transcriptPath: path,
+    cfg,
+    fetchJSONRes: async (requestPath, init = {}) => {
+      requests.push({ path: requestPath, method: init.method || "GET" });
+      if (init.method !== "POST") return { ok: false, status: 404 };
+      sent.push(...JSON.parse(init.body).messages);
+      return { ok: true, status: 200, result: {} };
+    },
+  });
+
+  assert.deepEqual(requests, [
+    { path: `/api/v1/sessions/cx-${id}`, method: "GET" },
+    { path: `/api/v1/sessions/cx-${id}/messages/batch`, method: "POST" },
+  ]);
+  assert.equal(result.added, 6);
+  assert.deepEqual(
+    sent.map((item) => item.parts[0].text),
+    ["First question", "First answer", "Second question", "Second answer", "New question", "New answer"],
+  );
+  assert.equal(state.capturedTurnCount, 6);
+  assert.equal((await loadState(id)).capturedTurnCount, 6);
+});
+
+test("failed continuity check preserves the cursor and sends nothing", async () => {
+  const id = "continuity-unavailable";
+  const sent = [];
+  const path = await writeRollout(id, rollout(
+    message("user", "Already sent"), message("assistant", "Also sent"),
+    message("user", "Retry later"),
+  ));
+  const state = {
+    codexSessionId: id,
+    ovSessionId: null,
+    capturedTurnCount: 2,
+    captureFormatVersion: CAPTURE_FORMAT_VERSION,
+    createdAt: Date.now() - 1000,
+    lastUpdatedAt: Date.now(),
+  };
+  await saveState(state);
+
+  const result = await catchUpTurns({
+    state,
+    transcriptPath: path,
+    cfg,
+    fetchJSONRes: async (_requestPath, init = {}) => {
+      if (init.method === "POST") sent.push(...JSON.parse(init.body).messages);
+      return { ok: false, status: 503, error: { message: "temporarily unavailable" } };
+    },
+  });
+
+  assert.equal(result.newTurns.length, 1);
+  assert.equal(result.added, 0);
+  assert.deepEqual(sent, []);
+  assert.equal(state.capturedTurnCount, 2);
+  assert.equal(state.ovSessionId, null);
+  assert.equal((await loadState(id)).capturedTurnCount, 2);
 });
 
 test.after(async () => { await rm(stateDir, { recursive: true, force: true }); });

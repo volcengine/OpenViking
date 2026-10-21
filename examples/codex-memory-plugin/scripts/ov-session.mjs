@@ -12,7 +12,12 @@
 
 import { readFile } from "node:fs/promises";
 import { extractCaptureTranscript, findLastHumanTurnIndex } from "./capture-utils.mjs";
-import { CAPTURE_FORMAT_VERSION, resolveOvSessionId, saveState } from "./session-state.mjs";
+import {
+  CAPTURE_FORMAT_VERSION,
+  deriveOvSessionId,
+  resolveOvSessionId,
+  saveState,
+} from "./session-state.mjs";
 import { makeAgentFetchJSON } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 
@@ -83,6 +88,41 @@ export function hasCaptureKeyword(turns) {
   );
 }
 
+async function reconcileServerSession(state, turns, fetchJSONRes, log, logError) {
+  const capturedTurnCount = Math.max(0, Number(state.capturedTurnCount) || 0);
+  if (capturedTurnCount === 0) return { ok: true, reset: false };
+
+  const ovSessionId = deriveOvSessionId(state.codexSessionId);
+  const existing = await fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+  if (existing?.ok) return { ok: true, reset: false };
+
+  const status = Number(existing?.status || 0);
+  if (status !== 404 && status !== 410) {
+    logError?.("session_continuity_check", {
+      ovSessionId,
+      status,
+      capturedTurnCount,
+      error: existing?.error?.message || existing?.error?.code,
+    });
+    return { ok: false, reset: false };
+  }
+
+  // The cursor proves these turns once reached this server session. If that
+  // session no longer exists, keeping the cursor would let the message API
+  // auto-create an incomplete replacement containing only the new suffix.
+  // Persist zero before the retry so a failed write still retries the complete
+  // readable transcript on the next hook.
+  state.capturedTurnCount = 0;
+  await saveState(state, { touch: false });
+  log?.("server_session_missing", {
+    ovSessionId,
+    status,
+    previousCursor: capturedTurnCount,
+    replayTurns: turns.length,
+  });
+  return { ok: true, reset: true };
+}
+
 /**
  * Append every transcript turn past `state.capturedTurnCount`.
  *
@@ -151,7 +191,7 @@ export async function catchUpTurns({
     state.capturedTurnCount = Math.max(0, humanIndex);
   }
 
-  const newTurns = turns.slice(state.capturedTurnCount);
+  let newTurns = turns.slice(state.capturedTurnCount);
   log?.("transcript_parse", {
     totalTurns: turns.length,
     previouslyCaptured: state.capturedTurnCount,
@@ -163,6 +203,19 @@ export async function catchUpTurns({
     log?.("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
     return { newTurns, added: 0, ovSessionId: "", skipped: "capture_mode" };
   }
+
+  const continuity = await reconcileServerSession(
+    state,
+    turns,
+    fetchJSONRes,
+    log,
+    logError,
+  );
+  const pendingOvSessionId = deriveOvSessionId(state.codexSessionId);
+  if (!continuity.ok) {
+    return { newTurns, added: 0, ovSessionId: pendingOvSessionId };
+  }
+  if (continuity.reset) newTurns = turns;
 
   // Only revive the OV session id when there is something to send; otherwise
   // an already-committed session would look live again on every hook run.

@@ -391,6 +391,12 @@ Nothing is denied: Codex edits files through `apply_patch`, whose input is a pat
 
 `auto-capture.mjs` derives one long-lived OpenViking session id per Codex `session_id` as `cx-<safe-session-id>` and incrementally appends every new user/assistant turn via `/api/v1/sessions/{id}/messages`. The `/messages` endpoint auto-creates the session on first append. Per-codex-session state lives at `~/.openviking/codex-plugin-state/<safe-session-id>.json`. Capture sanitizes obvious hook noise, metadata wrappers, and plugin-injected `<openviking-context ...>` blocks before append. Tool calls and results become dedicated `tool` parts and `tool_output` is reported verbatim — the server externalizes anything larger than `tool_output_externalization.threshold_chars` (default `20000`) and leaves a synopsis stub plus `tool_output_ref`, so the original stays readable via `/api/v1/sessions/{id}/tool-results`. `OPENVIKING_CAPTURE_TOOL_MAX_CHARS` (default `1000000`) is only a guard against pathological payloads. Configured `captureFilters` rules run last, just before the payload is sent — see [Input filters](#input-filters).
 
+When the local cursor is non-zero, capture first verifies that its OpenViking
+session still exists. If the server was reset or the session was removed, it
+resets the cursor and recreates the session from the complete readable Codex
+transcript instead of silently creating a replacement with only the new suffix.
+Other lookup failures leave the cursor unchanged for a later retry.
+
 After a successful append, Stop reads the session meta and commits when `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default `20000`). Threshold commits pass `keep_recent_count=0`: Codex keeps its own transcript, so every captured message is archived and extracted. `PreCompact` also commits everything before compaction, whatever `pending_tokens` is.
 
 ### PreCompact (deterministic commit)
