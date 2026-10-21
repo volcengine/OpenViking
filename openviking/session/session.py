@@ -2336,9 +2336,8 @@ class Session:
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
                             is_retryable=lambda error: (
-                                error.retryable
-                                if isinstance(error, MemoryUpdateError)
-                                else is_retryable_api_error(error)
+                                not isinstance(error, MemoryUpdateError)
+                                and is_retryable_api_error(error)
                             ),
                             logger=logger,
                             operation_name=operation_name,

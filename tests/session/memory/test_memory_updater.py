@@ -1327,7 +1327,7 @@ class TestMemoryUpdater:
             (AGFSIoError("storage I/O failure"), True, False),
             (PermissionError("read denied"), False, False),
             (OSError("unclassified read failure"), False, False),
-            (TimeoutError("read after earlier write"), False, True),
+            (TimeoutError("read after earlier write"), True, True),
         ],
     )
     async def test_apply_operations_preserves_memories_when_fresh_reads_fail(
@@ -1339,7 +1339,11 @@ class TestMemoryUpdater:
         old_file = MemoryFile(uri=source_uri, memory_type="entities", content="source")
         mock_viking_fs = MagicMock()
         reads = [NotFoundError(target_uri, "file"), read_error]
+        if retryable:
+            reads.append(read_error)
         reads.extend([FileNotFoundError(), read_error] if write_first else [read_error])
+        if retryable:
+            reads.append(read_error)
         mock_viking_fs.read_file = AsyncMock(side_effect=reads)
         mock_viking_fs.write_file = AsyncMock()
         registry = MagicMock()
@@ -1384,6 +1388,7 @@ class TestMemoryUpdater:
         }
         assert all(error.__cause__ is read_error for error in read_errors.values())
         assert read_errors[update_uri].retryable is retryable
+        assert mock_viking_fs.read_file.await_count == len(reads)
         assert result.written_uris == []
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
@@ -2511,7 +2516,8 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_two_patches_same_uri_second_sees_first_patch(self):
+    @pytest.mark.parametrize("read_timeout", [False, True])
+    async def test_two_patches_same_uri_second_sees_first_patch(self, read_timeout):
         """Two patches to the same URI: second SEARCH/REPLACE must apply
         against the result of the first, not the original content."""
         uri = "viking://user/test/memories/notes.md"
@@ -2541,8 +2547,8 @@ class TestConsecutivePatchesSameURI:
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
 
-        mock_viking_fs.read_file = mock_read_file
-        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
+        mock_viking_fs.write_file = AsyncMock(side_effect=mock_write_file)
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
@@ -2566,6 +2572,8 @@ class TestConsecutivePatchesSameURI:
         # old_memory_file_content still has "alpha beta gamma" (stale),
         # but _apply_upsert reads from disk which now has "ALPHA beta gamma"
         patch2 = StrPatch(blocks=[SearchReplaceBlock(search="beta", replace="BETA")])
+        if read_timeout:
+            mock_viking_fs.read_file.side_effect = [TimeoutError("read timeout"), store[uri]]
         op2 = ResolvedOperation(
             old_memory_file_content=MemoryFile(
                 uri=uri,
@@ -2583,3 +2591,5 @@ class TestConsecutivePatchesSameURI:
         assert "ALPHA" in parsed["content"]
         assert "BETA" in parsed["content"]
         assert "gamma" in parsed["content"]
+        assert mock_viking_fs.read_file.await_count == 2 + int(read_timeout)
+        assert mock_viking_fs.write_file.await_count == 2

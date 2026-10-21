@@ -792,9 +792,8 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
         strict_extract_errors=True,
     )
     if apply_error:
-        with pytest.raises(MemoryUpdateError) as raised:
+        with pytest.raises(MemoryUpdateError):
             await extraction
-        assert raised.value.retryable is (apply_error != "links")
         assert trained_cases == []
         return
     contexts = await extraction
