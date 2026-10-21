@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "openviking-memory",
+  "version": "0.5.24",
+  "clients": [
+    "vscode"
+  ],
+  "capabilities": [
+    "hooks"
+  ]
+}

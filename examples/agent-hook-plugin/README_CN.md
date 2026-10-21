@@ -1,12 +1,12 @@
 # OpenViking 记忆：轻量 Hook 宿主
 
-Cursor、TRAE、TRAE CN 与 ZCode 使用宿主配置文件；Kimi Code 使用原生托管插件目录。它们共用同一个 dispatcher 和记忆运行时，安装脚本在安装时组装依赖，不在仓库里为每个宿主提交共享代码副本。
+Cursor、TRAE、TRAE CN、VS Code 与 ZCode 使用宿主配置文件；Kimi Code 使用原生托管插件目录。它们共用同一个 dispatcher 和记忆运行时，安装脚本在安装时组装依赖，不在仓库里为每个宿主提交共享代码副本。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 ```
 
-安装脚本会询问要安装哪些宿主以及 OpenViking 连接信息。要从仓库 checkout 安装，在仓库根目录运行 `bash examples/memory-plugin-shared/install.sh --harness <cursor|trae|trae-cn|zcode|kimicode>`。
+安装脚本会询问要安装哪些宿主以及 OpenViking 连接信息。要从仓库 checkout 安装，在仓库根目录运行 `bash examples/memory-plugin-shared/install.sh --harness <cursor|trae|trae-cn|vscode|zcode|kimicode>`。
 
 > **需要支持 `viking://~` home alias 的 OpenViking 服务端。** 召回通过 `viking://~/memories` 与 `viking://~/skills` 指向调用者自己的上下文空间；不带 uid 的 `viking://user/memories` 简写会被较新的服务端拒绝。
 
@@ -31,6 +31,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **Cursor** — 七个事件。`afterMCPExecution` 将 OpenViking 工具结果追加到本地 JSONL 日志，Stop 时与文本 transcript 一起上报；文本去重与工具上传位置分别管理，成功后推进捕获位置，失败由原记录重试。`capturedSinceCommit` 达到阈值才 commit，压缩前在消息完整上报后 commit。会话前缀 `cu-`。见 [Cursor 接入文档](../../docs/zh/agent-integrations/12-cursor.md)。
 - **TRAE / TRAE CN** — 采集直接读 Stop 事件的 `prompt`、`text_content`、`last_assistant_message`，不解析 transcript；每次带内容的 Stop 都 commit。会话前缀 `tr-` 与 `trcn-`。见 [TRAE 接入文档](../../docs/zh/agent-integrations/13-trae.md)。
+- **VS Code** — Local hooks 参考文档就是全部契约，而它很窄：UserPromptSubmit 只接受 common output（没有召回通道，因此 `skipsPromptRecall` 直接跳过请求）、Stop 不携带 assistant 响应、transcript 格式被明示为不稳定、也没有会话结束事件——所以捕获只含用户侧 turn 并立即 commit。读取用户级 Local hook 位置 `~/.copilot/hooks/openviking.json`。会话前缀 `vscode-`。见 [VS Code 接入文档](../../docs/zh/agent-integrations/20-vscode.md)。
 - **ZCode** — rollout 文件是权威增量对话源：稳定的 host `turnId` 用于去重，也让后续 Stop 能补回漏掉的回合，hook stdin 只是兜底。ZCode 不支持 `PreCompact` 与 `SessionEnd`，因此每次 Stop 都 commit 来补足这两个信号。它的输出 schema 是严格的，所以放行时不写任何内容。会话前缀 `zc-`。已验证的扩展面记录在 [DESIGN.md](./DESIGN.md)。
 - **Kimi Code** — `wire.jsonl` 是权威 transcript；UserPromptSubmit 输出原始上下文文本。Stop、PreCompact、SessionEnd 可后台写入，Interrupt 保持同步并共享 2 秒的 OpenViking 请求预算。安装脚本生成自包含原生插件，不修改旧的 `config.toml` 或 `mcp.json`。会话前缀 `kc-`。
 
@@ -48,7 +49,7 @@ Kimi 的 managed plugin 需要使用它的实际安装路径：
 node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs" kimicode --offline
 ```
 
-对于配置型安装副本，client 默认取安装时对应的宿主；传 `cursor`、`trae`、`trae-cn` 或 `zcode` 可以覆盖。去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。
+对于配置型安装副本，client 默认取安装时对应的宿主；传 `cursor`、`trae`、`trae-cn`、`vscode` 或 `zcode` 可以覆盖。去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。
 
 ## 测试
 

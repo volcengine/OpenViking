@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs SessionStart __OPENVIKING_CLIENT_ID__",
+        "timeout": 30
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs UserPromptSubmit __OPENVIKING_CLIENT_ID__",
+        "timeout": 20
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/uri-guard.mjs __OPENVIKING_CLIENT_ID__",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs Stop __OPENVIKING_CLIENT_ID__",
+        "timeout": 30
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs PreCompact __OPENVIKING_CLIENT_ID__",
+        "timeout": 30
+      }
+    ]
+  }
+}
