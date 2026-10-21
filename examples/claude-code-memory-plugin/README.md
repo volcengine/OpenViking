@@ -1,5 +1,7 @@
 # OpenViking Memory Plugin for Claude Code
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens automatically after every turn — no MCP tool calls required from the model.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -321,6 +323,7 @@ In `ovcli.conf` the rules are a JSON array, so backslashes are doubled:
 - **The env vars are comma-separated lists**, split before parsing, so a rule that needs a literal comma — a bounded `{10,}`, say — belongs in the array above. (`\x2c` covers a literal comma elsewhere in a pattern, but it is not quantifier syntax.)
 - **Order matters and drops win.** The first `d` that matches, or `k` that does not, ends the decision. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics, so a prefix stripped down to `ok` is discarded as an ack. Text a substitution empties is not a drop — an emptied query is simply too short to recall on.
 - **Filters shape what is sent, not what is stored.** Adding a `d`/`k` rule mid-session also shortens the turn list the capture cursor counts, which reads as a transcript rewrite and replays from the last user turn — the same thing toggling `OPENVIKING_CAPTURE_ASSISTANT_TURNS` does.
+- **Substitutions reach tool calls, verdicts do not.** On the capture path an `s` rule also rewrites every string value in a tool call's input and a tool result's output, so a redaction rule covers a secret that reached a command or its output. `d`/`k` rules look only at the turn's text.
 - **A bad rule is skipped, never fatal.** `ov-memory-doctor` lists the active rules and reports the exact parse or RegExp error for the ones it could not compile.
 
 ### Plugin settings in `ovcli.conf`
@@ -365,7 +368,7 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 
 ### Digest compression
 
-`recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Sonnet with low effort by default — Haiku ignores the effort knob, so its latency is unbounded), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
+`recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Haiku with low effort by default), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
 
 ### Legacy `claude_code` block in `ov.conf`
 
@@ -418,6 +421,44 @@ Disable / customize:
 - `NO_COLOR=1` (or non-TTY) — strip ANSI colors automatically.
 - Remove entirely: `jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`.
 - Already had a custom statusline? The installer prompts replace / skip / manual-compose.
+
+## Source cards
+
+Under each answer, the plugin adds a card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. The card is collapsed by default to one line:
+
+```
+OV · 14 sources · 6 past events · 5 work memories · 2 team docs · 1 skill · 1 read in full  [Expand]
+```
+
+Expanded, it lists every source and Claude's own lookups:
+
+```
+OV · 14 sources · … · 1 read in full  [Collapse]
+  ◷ 10/3 发版检查清单补充 · found by Claude · read in full
+  ⚙ openviking-release · auto-recalled
+  …
+Claude's own lookups
+  ⌕ Searched “lark-daemon release” · 6 results
+  ▤ Read 10/3 发版检查清单补充
+```
+
+- Groups: ★ preferences, ◷ past events, ◆ work memories (notes, lessons, your agents' memories), ▤ team docs, ⚙ skills.
+- **read in full**: Claude opened the file with `read`, through the MCP tool or `ov read`/`cat`/`abstract`/`overview`. A search hit doesn't count.
+- An answer that used nothing from OpenViking gets no card.
+- Expand or collapse one card with its button. Expand or collapse every card with `/openviking-usage expand` or `/openviking-usage collapse`.
+
+**Requirements.** Cards are a Claude Code hooks module (`modules` in `hooks/hooks.json`, code in `mods/usage/`). They need Claude Code 2.1.286 or newer with hooks modules enabled. Claude Code ignores the module and runs the command hooks as before in these cases:
+
+- On versions without modules.
+- When modules are switched off, for example with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` or by the rollout flag.
+
+On builds between the first modules release and 2.1.286 with modules switched on, the module fails to load because it uses `session.append`. Claude Code logs that failure and still registers the command hooks.
+
+**Data.** The module reads the `<openviking-context>` block this plugin's `UserPromptSubmit` hook returns, and the OpenViking MCP and `ov` CLI calls Claude makes. It makes no network calls and writes nothing to OpenViking.
+
+It keeps each answer's source URIs, scores, redacted search queries, and the transcript row id and a hash of the reply text it sits under (the desktop finds a card's reply by that hash) in Claude Code's plugin store, for the last 20 sessions, so cards survive `claude --continue`. Shell commands and prompt text are not stored. The card isn't sent to Claude, so it costs no tokens.
+
+**Development.** `claude plugin test examples/claude-code-memory-plugin` runs `mods/usage/sources.test.ts`. After `claude --plugin-dir examples/claude-code-memory-plugin` has generated `.claude-plugin/types/`, run `tsc -p examples/claude-code-memory-plugin/mods/usage` to type-check the module.
 
 ## Debug logging
 
@@ -486,7 +527,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
         context inject                                └──────────────┘
 ```
 
-There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint.
+There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint. The source-card module in `mods/usage/` is TypeScript that Claude Code compiles itself.
 
 A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 20000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
 

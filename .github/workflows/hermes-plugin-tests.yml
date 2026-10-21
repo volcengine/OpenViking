@@ -7,12 +7,14 @@ on:
       - 'examples/hermes-plugin/**'
       - '.github/workflows/hermes-plugin-tests.yml'
       - 'scripts/check-hermes-plugin-install.py'
+      - 'scripts/check-hermes-quick-local.py'
   push:
     branches: [main, develop]
     paths:
       - 'examples/hermes-plugin/**'
       - '.github/workflows/hermes-plugin-tests.yml'
       - 'scripts/check-hermes-plugin-install.py'
+      - 'scripts/check-hermes-quick-local.py'
   workflow_dispatch:
 
 permissions:
@@ -35,7 +37,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: NousResearch/hermes-agent
-          ref: 58d146e961108e84f41bfed59f586121ecb3372c
+          ref: db44c46208f1b421b4ecb7e56bf9d68b0423906f
           path: .ci/hermes-agent
           persist-credentials: false
 
@@ -49,20 +51,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             .ci/hermes-agent/uv.lock
-            examples/hermes-plugin/pyproject.toml
+            .ci/hermes-agent/pm/lock.json
 
-      - name: Install the host and plugin test dependencies
+      - name: Build the reviewed host test environment
         working-directory: .ci/hermes-agent
         run: |
-          uv sync --frozen --group dev --no-install-project
-          uv export --frozen --group dev --no-emit-project --no-hashes \
-            --output-file "$RUNNER_TEMP/hermes-plugin-constraints.txt"
-          # Keep plugin dependencies within the reviewed host pins. PyYAML
-          # is used by the test fixtures; its version matches Hermes's lock.
-          uv pip install --python .venv/bin/python \
-            --constraint "$RUNNER_TEMP/hermes-plugin-constraints.txt" \
-            --requirement "$GITHUB_WORKSPACE/examples/hermes-plugin/pyproject.toml" \
-            'PyYAML==6.0.3'
+          python -m pm.build_env --source . --out .venv --group dev --group test
 
       - name: Run the external memory provider tests
         working-directory: .ci/hermes-agent
@@ -88,4 +82,90 @@ jobs:
           path: |
             ${{ runner.temp }}/hermes-plugin-install/*.log
             ${{ runner.temp }}/hermes-plugin-install/evidence.json
+          if-no-files-found: ignore
+
+  quick-local-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, windows-2025]
+        host: [main]
+        include:
+          - os: ubuntu-24.04
+            host: release
+            python: '3.13'
+            hermes_ref: v2026.9.24
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: .ci/hermes-agent
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ matrix.hermes_ref || 'db44c46208f1b421b4ecb7e56bf9d68b0423906f' }}
+          path: .ci/hermes-agent
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python || '3.14' }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.3'
+          enable-cache: true
+          cache-dependency-glob: |
+            .ci/hermes-agent/uv.lock
+            .ci/hermes-agent/pm/lock.json
+            examples/hermes-plugin/local_packages.py
+      - name: Install the reviewed host and test dependencies
+        run: |
+          if [ '${{ matrix.host }}' = release ]; then
+            uv sync --python '${{ matrix.python }}' --frozen --extra dev --no-install-project
+            uv pip install --python .venv/bin/python PyYAML==6.0.3
+          else
+            python -m pm.build_env --source . --out .venv --group dev --group test
+          fi
+          if [ -x .venv/Scripts/python.exe ]; then
+            PYTHON="$PWD/.venv/Scripts/python.exe"
+          else
+            PYTHON="$PWD/.venv/bin/python"
+          fi
+          echo "HERMES_PYTHON=$PYTHON" >> "$GITHUB_ENV"
+      - name: Check process ownership and installer failures
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
+        run: |
+          scripts/run_tests.sh \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_local_lifecycle.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_routes.py" \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests/test_quick_local_preflight.py" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Run the complete provider suite on the release host
+        if: matrix.host == 'release'
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
+        run: |
+          scripts/run_tests.sh "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+      - name: Install and run real Quick Local services
+        run: |
+          ARGS=()
+          if [ '${{ matrix.host }}' = release ]; then ARGS+=(--legacy-uv); fi
+          "$HERMES_PYTHON" "$GITHUB_WORKSPACE/scripts/check-hermes-quick-local.py" \
+            --hermes-root "$PWD" --output-dir "$RUNNER_TEMP/quick-local" "${ARGS[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-local-${{ matrix.os }}-${{ matrix.host }}
+          path: |
+            ${{ runner.temp }}/quick-local/evidence.json
+            ${{ runner.temp }}/quick-local/*/logs/openviking-server.log
           if-no-files-found: ignore

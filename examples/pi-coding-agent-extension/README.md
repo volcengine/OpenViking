@@ -1,5 +1,7 @@
 # OpenViking Memory Extension for Pi Coding Agent
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -28,11 +30,13 @@ curl http://localhost:1933/health   # or your remote URL
 
 ### 2. Install the extension
 
-Use the shared installer:
+pi shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
 
 ```bash
-bash examples/memory-plugin-shared/install.sh --harness pi
+curl -fsSL https://openviking.ai/install | bash
 ```
+
+From a repository checkout, `bash examples/memory-plugin-shared/install.sh --harness pi` installs the checkout's extension instead.
 
 The installer installs the locked npm dependencies in a temporary directory before replacing the extension at `~/.pi/agent/extensions/openviking`, which is one of pi's auto-discovery roots, so pi loads it on the next `pi` invocation — no `packages` entry is needed. (Registering the same path with `pi install` would load it twice, so the installer avoids that and clears any stale entry left by older versions.)
 
@@ -75,7 +79,7 @@ Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the c
       "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000,
       "commitTokenThreshold": 20000,
-      "takeoverEnabled": true,
+      "takeoverEnabled": false,
       "takeoverTokenThreshold": 30000,
       "takeoverKeepRecentTurns": 3,
       "takeoverOverviewBudget": 3000,
@@ -183,11 +187,11 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
-| `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
+| `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 
 ### Context takeover
 
-Takeover is enabled by default. OpenViking commits archived history, reads the
+Takeover is disabled by default; Pi manages compaction. When explicitly enabled, OpenViking commits archived history, reads the
 overview of that exact archive, then the `context` hook replaces covered
 conversation turns with a synthetic `[OpenViking Session Context]` user message
 while keeping the recent live tail. The boundary advances only after every
@@ -209,7 +213,7 @@ filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `takeoverEnabled`        | `true`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
+| `takeoverEnabled`        | `false`     | Let OpenViking own long-term context through the `context` hook. Env: `OPENVIKING_TAKEOVER` |
 | `takeoverTokenThreshold` | `30000`    | Synced-token pressure that triggers commit and boundary advance           |
 | `takeoverKeepRecentTurns`| `3`        | Recent user turns retained in full fidelity                              |
 | `takeoverOverviewBudget` | `3000`     | Token budget for the injected archive overview                           |
@@ -302,16 +306,17 @@ Tool capture preserves structured tool parts with bounded inputs and outputs. Th
 
 The extension keeps no tool catalogue of its own. At session start it asks the server's `/mcp` endpoint for `tools/list` and registers one pi tool per descriptor it gets back, named `openviking_` + the server's own name, with the server's description and argument schema. A server that gains, drops or re-documents a tool changes pi's tool surface at the next session, with no extension release.
 
-Against a current server, that is these 15:
+Against a current server, that is these 16:
 
 | Tool                        | Description                                                             |
 |-----------------------------|-------------------------------------------------------------------------|
 | `openviking_find`           | Fast ranked retrieval across memories, resources and skills             |
 | `openviking_search`         | Deep retrieval with session context and intent analysis; `mode="context"` returns an assembled block |
 | `openviking_read`           | Read one or more `viking://` file URIs, with line-based `offset`/`limit` |
+| `openviking_download`       | Get a one-time URL for fetching a file's original bytes with `curl`     |
 | `openviking_list`           | List one sorted page under a `viking://` directory                      |
 | `openviking_tree`           | Show a recursive directory tree, optionally with abstracts              |
-| `openviking_remember`       | Store messages as long-term memory and commit them for extraction       |
+| `openviking_remember`       | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away |
 | `openviking_write`          | Write text to a `viking://` file                                        |
 | `openviking_edit`           | Replace an exact string in an existing `viking://` file                 |
 | `openviking_add_resource`   | Ingest a URL, repository or local file as a resource                    |

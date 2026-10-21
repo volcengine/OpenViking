@@ -24,7 +24,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 ### Agent-callable tools
 
-"Server MCP tools" means whatever the server's `tools/list` returns: 20 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
+"Server MCP tools" means whatever the server's `tools/list` returns: 21 tools on the current server, listed in [Server MCP tools](#server-mcp-tools).
 
 | Integration | How it connects | Tools the agent can call |
 |---|---|---|
@@ -54,15 +54,19 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Only when `SessionEnd` captures new messages | Commits newly captured messages |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
-| DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Not observed |
+| DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
 | pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
-| OpenClaw | Yes, not session-aware | None | At half the token budget (64,000 by default) | No | The plugin owns compaction |
+| OpenClaw | Yes, session-aware | Profile, every turn | At half the token budget (64,000 by default) | No | The plugin owns compaction |
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
 | ov CLI | No | No | Only `ov session commit` | Not applicable | Not applicable |
 
+Rows labeled **Hermes (bundled)** describe the pinned in-tree provider
+from earlier Hermes releases. Catalog-based releases use the external plugin.
+Its different lifecycle behavior is listed in [Hermes](#hermes).
+
 How to read this table:
 
-- **Session-aware recall** sends the session ID so the server can use the conversation to interpret the query. The shared plugins’ context mode also expands the query and tracks recently injected memories to avoid repeating them. Hermes uses list mode, which has no injection ledger; OpenClaw uses `/find`, which has no session field. See [How recall reaches the server](#how-recall-reaches-the-server) for the request paths and fallbacks.
+- **Session-aware recall** sends the session ID so the server can use the conversation to interpret the query. The shared plugins’ context mode also expands the query and tracks recently injected memories to avoid repeating them. Hermes uses list mode, which has no injection ledger. OpenClaw uses context search with the session ID but turns deduplication off, because its injected context is rebuilt every turn and never stored in the history. See [How recall reaches the server](#how-recall-reaches-the-server) for the request paths and fallbacks.
 - **Pending tokens** are server-side counts of captured but uncommitted messages. Most thresholds are client settings; [the commit table](#when-each-integration-commits) lists them.
 - **Commits at a normal exit** means the integration sends a commit request. Network errors, host exit budgets, or process termination can still interrupt it. [What happens at exit](#what-happens-at-exit) covers Ctrl+C, signals, and crashes.
 
@@ -78,7 +82,7 @@ Every MCP-based integration exposes the same server-defined tools and keeps no c
 
 | Group | Tools |
 |---|---|
-| Search and browse | `find`, `search`, `read`, `list`, `tree`, `grep`, `glob` |
+| Search and browse | `find`, `search`, `read`, `download`, `list`, `tree`, `grep`, `glob` |
 | Write | `remember`, `write`, `edit`, `add_resource`, `add_skill` |
 | Delete | `forget` |
 | Watched resources | `list_watches`, `cancel_watch` (not yet available on the commercial edition) |
@@ -87,7 +91,7 @@ Every MCP-based integration exposes the same server-defined tools and keeps no c
 
 Behavior to know before relying on a tool:
 
-- **`remember`** creates a one-shot session named `mcp-store-<id>`, adds the messages, and commits it at once. It is the only MCP tool that commits. No MCP tool commits the agent's current conversation; that is the job of the automatic hooks.
+- **`remember`** creates a one-shot session named `mcp-store-<id>`, adds the messages, and commits it at once. It is the only MCP tool that commits. It returns as soon as the commit is accepted, with the `task_id` of the background extraction; extraction then decides which memories to create or update. No MCP tool commits the agent's current conversation; that is the job of the automatic hooks.
 - **`find` and `search`**: `find` is a fast search without session context. `search` can take a `session_id` and run intent analysis (`retrieval.enable_intent`, on by default). `find` with `context_type="skill"` returns one hit per skill package, pointing at its `SKILL.md`, from both the user's and the account's skills.
 - **`write` and `edit`** can write only under `viking://resources`, `viking://user`, and `viking://agent`. A new file must end in `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, or `.ts`. The user's `skills/`, `peers/`, `privacy/`, and `sessions/` directories are read-only. A write under `viking://agent/skills` is accepted but skips skill installation, so use `add_skill` for skills.
 - **`add_resource` with a local path** returns a signed upload URL (valid for 600 seconds by default). The model must upload the file to it, for example with a shell command; ingestion then starts on its own. Remote URLs are ingested directly.
@@ -186,7 +190,7 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 | OpenCode | v1: every `chat.message`; v2: every prompt | Text parts of the message | v1 prepends a synthetic part. v2 stores the result in message metadata and injects it before that message at each model step, without a new request |
 | DSH | `agent/pre-step` | Every message in the claimed batch, minus its own injected content | Appended as a user message |
 | pi | Queued at `before_agent_start`, run in the `context` event | The prompt | Prepended to the last real user message, so this turn's prompt gets this turn's memories |
-| OpenClaw | Context assembly | Last user message, cleaned and cut to 4,000 characters | `<relevant-memories>` prepended to the last user message |
+| OpenClaw | Context assembly | The incoming prompt, cleaned and cut to 4,000 characters | `<relevant-memories>` in the system prompt, rebuilt every turn. On hosts that do not pass the prompt, it is prepended to the last user message |
 | Hermes | Before every model call | User input of 5 characters or more, with skill scaffolding removed | `<memory-context>` appended to the current user message in the request only; never stored |
 
 <a id="_3-2-3-profile-opening-injection"></a>
@@ -220,7 +224,7 @@ When each integration injects it:
 | OpenCode | The first message of each session; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
 | DSH | Once per session; not sent again after compaction |
 | pi | In the system prompt, rebuilt every turn |
-| OpenClaw | Not injected |
+| OpenClaw | In the system prompt, rebuilt every turn: `<user-profile>` for the user's profile and, with `peer_role`, the actor peer's profile. No memory index or skill catalog |
 | Hermes | Its own reader loads the profile and the preferences and entities listings, with a 6,000-token default budget |
 
 Budgets and limits:
@@ -246,7 +250,7 @@ The server stops query expansion after 5 seconds (`retrieval.recall_intent_timeo
 | OpenCode | 30 seconds |
 | DSH | 10 seconds, raised to at least 15 with query expansion. Recall blocks the pre-step |
 | pi | 15 seconds |
-| OpenClaw | 5 seconds for the whole recall, including a 500 ms health check. With the default `recallPreferAbstract=false`, each memory costs an extra read, which allows at most one find and six reads |
+| OpenClaw | 15 seconds by default for the context search (`autoRecallTimeoutMs`), after a 500 ms health check |
 | Hermes | 4 seconds in total and 3 seconds per request; configurable |
 
 OpenClaw and Hermes limit injected recall to 4,000 characters and skip an entry that does not fit instead of cutting it.
@@ -293,7 +297,7 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 
 - **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID. DSH is the only integration that creates its sessions explicitly.
 - **A commit has two phases.** `POST /api/v1/sessions/{id}/commit` returns after phase 1 archives the messages. Its response includes a `task_id` for phase 2, memory extraction, which runs in the background. A successful commit response does not mean extraction has finished.
-- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, and DSH send 10 on threshold commits; Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 10 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
+- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
 - **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send no policy, so without one of these settings the client is the only thing that commits.
 - **Writes are batched.** The shared plugins send up to 100 messages per `POST /messages/batch`, matching the server limit, and fall back to one message at a time when the batch endpoint returns 404 or 405.
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
@@ -315,7 +319,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
 | Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit when they capture new messages | `PreCompact` commits when it captures new messages |
 | OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
-| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | None |
+| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
 | pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
 | pi, takeover off | 20,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
 | OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default) | `/new`, `/reset`, and `memory_store` commit and wait | `compact()` commits and waits up to 5 minutes for extraction |
@@ -357,7 +361,8 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, Cursor, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Claude Code, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
 | Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
@@ -392,7 +397,7 @@ When the host shortens its context, most integrations make sure the dropped mess
 | TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
 | Kimi Code | Host summarizes | `PreCompact` commits newly captured messages | Nothing |
 | OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
-| DSH | Not observed | Nothing. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
+| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
 | pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
 | OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
 | Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |
@@ -576,10 +581,10 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Cursor
 
-[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 6 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 3 skills.
+[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 3 skills.
 
 - The URI guard runs on `beforeReadFile` only, independent of the plugin switch. Shell commands are not checked, and an upgrade removes the `beforeShellExecution` entry older installs registered.
-- Capture is text-only, so `ov-experience-memory` can find and apply Experience but cannot link its reads back to the Experience used.
+- `afterMCPExecution` retains completed OpenViking tool calls, uploaded with the conversation at Stop. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
 
@@ -666,28 +671,40 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Hermes
 
-[Hermes Agent](./05-hermes.md). Two OpenViking memory providers exist for Hermes, and both register under the provider name `openviking`:
+[Hermes Agent](./05-hermes.md). Depending on its version, Hermes uses the catalog
+plugin or the built-in provider named `openviking`:
 
-- The **bundled provider** ships inside Hermes under `plugins/memory/openviking` and needs no installation; `hermes memory setup openviking` configures it. The Hermes rows on this page describe the bundled provider as of [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
-- The **external plugin** is maintained in this repository under [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin) and installed with `hermes plugins install`. According to its README, a Hermes release that still bundles the provider loads the bundled copy, and the external plugin becomes active only after the bundled copy is removed. Configuration and stored data carry over.
+- The **catalog plugin** is maintained in this repository under
+  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).
+  Install it with `hermes plugins install openviking --enable`, then run
+  `hermes memory setup openviking`.
+- The **bundled provider** exists in earlier Hermes releases under
+  `plugins/memory/openviking` and needs no installation. The Hermes rows on this
+  page describe that provider at
+  [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
+
+A release that still includes the bundled provider loads it first. When an
+update removes the bundle from a profile already configured for OpenViking,
+Hermes attempts to install the catalog plugin automatically. The provider name,
+configuration, and stored data do not change.
 
 The two are separate code bases. Where their behavior differs:
 
 | | Bundled provider (Hermes `989798c`) | External plugin (this repository) |
 |---|---|---|
-| Commits during a session | None; only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
+| Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
 | `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |
-| Cron, subagent, and flush contexts | Not documented at that commit | Recall works; automatic writes and mirroring are skipped |
+| Cron, subagent, and flush contexts | Not documented at that commit | Recall works. Automatic writes and mirroring are skipped |
 
-Behavior of the bundled provider:
+Behavior of the pinned bundled provider:
 
 - Recall runs before every model call, through session-aware `search/search`, with `/find` as a fallback. Defaults: 6 results, score threshold 0.15, 4,000 characters, 4 seconds in total and 3 seconds per request.
-- `viking_remember` sends the fact unchanged through its own session and commits it; it returns `status: submitted`.
+- `viking_remember` sends the fact unchanged through its own session and commits it. It returns `status: submitted`.
 - Commits leave no live messages (`keep_recent_count` 0). Uploads are not durable, but pending-commit markers let a later start commit sessions from a dead run on POSIX.
 - Memories are written under `viking://user/<uid>/memories/`, or `viking://user/<uid>/peers/<peer>/memories/` when a peer is set.
-- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`; back up a YAML-linked file separately.
+- Linking an OpenViking `ovcli.conf` profile clears the five connection variables from the Hermes `.env`. `hermes backup` includes the default or environment-selected `ovcli.conf` under `$HOME`. Back up a YAML-linked file separately.
 
 <a id="_5-ov-cli-command-reference"></a><a id="_5-1-command-tree"></a><a id="_5-2-global-options-and-unique-mechanisms"></a><a id="_5-3-capabilities-only-the-cli-has"></a>
 
@@ -787,7 +804,9 @@ The comparisons above were checked against these locations. They help when you n
 - Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
-- Hermes: the bundled provider at the pinned Hermes commit linked in [Hermes](#hermes), and the external plugin's [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
+- Hermes: the bundled provider from earlier releases at the pinned commit linked
+  in [Hermes](#hermes), and the catalog plugin's
+  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
 
 ## See also
 

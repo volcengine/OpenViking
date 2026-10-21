@@ -1,3 +1,4 @@
+import { formatDateTime } from '#/i18n/format'
 import {
   Dialog,
   DialogContent,
@@ -246,9 +247,9 @@ export function Channels({
                           {t('lastReceived')}
                         </dt>
                         <dd>
-                          {new Date(
-                            connection.status.last_received,
-                          ).toLocaleString()}
+                          {formatDateTime(
+                            new Date(connection.status.last_received),
+                          )}
                         </dd>
                       </div>
                     )}
@@ -258,9 +259,9 @@ export function Channels({
                           {t('lastSent')}
                         </dt>
                         <dd>
-                          {new Date(
-                            connection.status.last_sent,
-                          ).toLocaleString()}
+                          {formatDateTime(
+                            new Date(connection.status.last_sent),
+                          )}
                         </dd>
                       </div>
                     )}

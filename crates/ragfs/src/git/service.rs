@@ -21,7 +21,7 @@ use tracing::warn;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::types::FileInfo;
-use crate::core::{FsContextInner, FS_CTX};
+use crate::core::{FsContextInner, FsContextView, PathLockContext, FS_CTX};
 use crate::git::{
     error::{GitError, ObjectStoreError, RefStoreError},
     ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_PATH},
@@ -984,7 +984,17 @@ impl GitService {
             validate_project_dir(project_dir)?;
         }
 
-        let ctx = Arc::new(FsContextInner::new(req.account.clone()));
+        // Encrypted writeback must reuse the caller's tree lock rather than
+        // acquire a conflicting lock. The request remains the tenant authority.
+        let ctx = Arc::new(FsContextInner::with_pathlock(
+            req.account.clone(),
+            PathLockContext {
+                lease_ref: FsContextView::current()
+                    .pathlock_lease_ref()
+                    .map(str::to_owned),
+                ..Default::default()
+            },
+        ));
         FS_CTX.scope(ctx, self.restore_impl(req)).await
     }
 
@@ -6635,7 +6645,9 @@ mod fast_path1_tests {
         )
         .unwrap();
 
-        let stack = build_default_stack(RagfsConfig::default()).await.unwrap();
+        let mut ragfs_config = RagfsConfig::default();
+        ragfs_config.pathlock.provider = "memory".to_string();
+        let stack = build_default_stack(ragfs_config).await.unwrap();
         let mut params = HashMap::new();
         params.insert(
             "local_dir".to_string(),
@@ -6648,25 +6660,17 @@ mod fast_path1_tests {
                 mount_path: "/local".to_string(),
                 params,
                 backups: Some(BackendsConfig {
-                    sync_type: "async".to_string(),
-                    write_ack_count: None,
-                    write_ack_timeout_ms: None,
-                    write_concurrency: None,
-                    retry_interval_ms: None,
-                    retry_backoff_base_ms: None,
-                    retry_max_retries_per_round: None,
-                    retry_quarantine_after_failures: None,
-                    read_probe_cache_ttl_ms: None,
+                    service_name: "mw-test".to_string(),
+                    initial_partitions: 16,
+                    checkpoint_interval_secs: 86_400,
+                    provider: "filesystem".to_string(),
                     items: vec![BackendItemConfig {
                         name: "backup1".to_string(),
                         backend: "localfs".to_string(),
                         params: serde_json::json!({
                             "local_dir": backup_dir.path().to_str().unwrap(),
                         }),
-                        timeout: None,
                         encryption: None,
-                        operations: None,
-                        excludes: None,
                     }],
                 }),
                 ..PluginConfig::default()

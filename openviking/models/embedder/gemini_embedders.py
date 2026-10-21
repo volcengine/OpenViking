@@ -20,6 +20,7 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.models.model_error import model_error_boundary
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -52,7 +53,7 @@ _ERROR_HINTS: Dict[int, str] = {
     401: "Invalid API key. Verify your GOOGLE_API_KEY or api_key in config.",
     403: "Permission denied. API key may lack access to this model.",
     404: "Model not found: '{model}'. Check spelling (e.g. 'gemini-embedding-2-preview').",
-    429: "Quota exceeded. Wait and retry, or increase your Google API quota.",
+    429: "Resource exhausted. Wait and retry.",
     500: "Gemini service error (Google-side). Retry after a delay.",
     503: "Gemini service unavailable. Retry after a delay.",
 }
@@ -139,12 +140,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self._client_kwargs: Dict[str, Any] = {"api_key": api_key}
         if _HTTP_RETRY_AVAILABLE:
             self._client_kwargs["http_options"] = HttpOptions(
-                retry_options=HttpRetryOptions(
-                    attempts=max(self.max_retries + 1, 1),
-                    initial_delay=0.5,
-                    max_delay=8.0,
-                    exp_base=2.0,
-                )
+                retry_options=HttpRetryOptions(attempts=1)
             )
         self.client = genai.Client(**self._client_kwargs)
         self.task_type = task_type
@@ -189,6 +185,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             f"task_type={self.task_type!r})"
         )
 
+    @model_error_boundary
     def embed(
         self,
         text: str,
@@ -213,14 +210,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            result = (
-                _call()
-                if _HTTP_RETRY_AVAILABLE
-                else self._run_with_retry(
-                    _call,
-                    logger=logger,
-                    operation_name="Gemini embedding",
-                )
+            result = self._run_once(
+                _call,
+                logger=logger,
+                operation_name="Gemini embedding",
             )
             # Estimate token usage
             estimated_tokens = self._estimate_tokens(text)
@@ -234,6 +227,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         except (APIError, ClientError) as e:
             _raise_api_error(e, self.model_name)
 
+    @model_error_boundary
     async def embed_async(
         self,
         text: str,
@@ -262,7 +256,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
 
         try:
-            result = await self._run_with_async_retry(
+            result = await self._run_once_async(
                 _call,
                 logger=logger,
                 operation_name="Gemini async embedding",

@@ -23,6 +23,7 @@ const activity = {
       shortcut: '⌘ N to create a new session',
     },
     chat: {
+      emptyReadDescription: 'This session has no messages yet.',
       historyLoadFailed: 'Could not load conversation history: {{error}}',
       sendFailed: 'Could not send message: {{error}}',
       copy: 'Copy',
@@ -30,6 +31,7 @@ const activity = {
       placeholder: 'Type a message...',
       emptyState: 'Select or create a session to start chatting.',
       thinking: 'Thinking...',
+      generating: 'Generating',
       reasoning: 'Reasoning',
       iteration: 'Round {{count}}',
       toolCall: 'Tool call',
@@ -138,11 +140,11 @@ const activity = {
         'Sign in to OpenViking Studio (Connection & Identity) or paste an API key below to verify.',
     },
   },
-  playground: {
+  filesystem: {
     copyUri: 'Copy current URI',
     copied: 'URI copied',
     copyFailed: 'Copy failed',
-    resizeContext: 'Resize context tree width',
+    resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
     tabs: {
@@ -156,11 +158,11 @@ const activity = {
     addResource: {
       title: 'Add resource',
       description:
-        'After it finishes, the context tree on the left refreshes and the Terminal on the right can locate the new resource.',
+        'After it finishes, the filesystem on the left refreshes and the Terminal on the right can locate the new resource.',
       submitted: 'Resource add task submitted',
     },
     explorer: {
-      title: 'Context tree',
+      title: 'Filesystem',
       addResource: 'Add resource',
       abstractLevel: 'L0',
       collapseDirectory: 'Collapse {{name}}',
@@ -179,7 +181,7 @@ const activity = {
     agent: {
       history: 'Session history',
       newSession: 'New session',
-      creating: 'Creating Playground session...',
+      creating: 'Creating Filesystem session...',
       detectingBot: 'Detecting bot mode...',
       createFailed: 'Failed to create session: {{error}}',
       retry: 'Retry',
@@ -190,8 +192,8 @@ const activity = {
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
-        'Creating the Playground session timed out. Check your connection settings and try again.',
-      newSessionTitle: 'New Playground session',
+        'Creating the Filesystem session timed out. Check your connection settings and try again.',
+      newSessionTitle: 'New Filesystem session',
       botPrompt: {
         title: 'Please enable bot mode',
         description:
@@ -216,7 +218,7 @@ const activity = {
       historyDescription: 'Review commands run in this browser.',
       clearHistory: 'Clear command history',
       noHistory: 'No command history',
-      welcomeTitle: 'Terminal connected to the context tree',
+      welcomeTitle: 'Terminal connected to the filesystem',
       welcomeBody:
         'Run /status, /ls, /search, /read, /add-resource. /search is global by default; add --scope . to use the current directory, or --scope viking://resources/... to limit it to a directory.',
       scopeLabel: 'cwd: {{uri}}',
@@ -241,7 +243,7 @@ const activity = {
         'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
       addResourceTitle: 'Add resource',
       sessionUsage:
-        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
+        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: 'Usage: /session delete <session_id>',
       sessionMissing:
         'No active session. Open the Agent panel to create one, or pass a session_id.',
@@ -297,7 +299,7 @@ const activity = {
         sessionAction: {
           name: 'subcommand',
           description:
-            'current, list, create, switch, get, context, messages, archive, commit, extract, message, tool-results, tool-result, tool-search, delete.',
+            'current, list, create, switch, get, context, messages, archive, commit, message, tool-results, tool-result, tool-search, delete.',
         },
         sessionId: {
           name: 'session_id',
@@ -452,10 +454,6 @@ const activity = {
           commit: {
             code: '/session commit [session_id] --keep-recent 10',
             description: 'Archive and trigger memory extraction',
-          },
-          extract: {
-            code: '/session extract [session_id]',
-            description: 'Extract memories from a session',
           },
           message: {
             code: '/session message [session_id] user hello',

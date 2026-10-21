@@ -410,9 +410,7 @@ async function main({ cfg, input, cwd }) {
     totalMessageCount = Number(meta?.total_message_count || 0);
     log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
     if (pendingTokens >= cfg.commitTokenThreshold) {
-      const commitRes = await commitSession(fetchJSON, ovSessionId, {
-        keep_recent_count: cfg.commitKeepRecentCount,
-      });
+      const commitRes = await commitSession(fetchJSON, ovSessionId, { keep_recent_count: 0 });
       committed = commitRes.ok;
       commitTraceId = commitRes.traceId || commitRes.result?.trace_id || "";
       if (committed) commitCount += 1;
@@ -421,7 +419,6 @@ async function main({ cfg, input, cwd }) {
         ok: commitRes.ok,
         trace_id: commitTraceId || undefined,
         pending: pendingTokens,
-        keepRecentCount: cfg.commitKeepRecentCount,
       });
     }
   }

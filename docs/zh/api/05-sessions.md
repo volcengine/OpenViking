@@ -43,20 +43,20 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
-| memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。包含 `experiences` 时会自动激活 `cases` 和 `trajectories`；不包含 `experiences` 时，显式传入的 `cases` 和 `trajectories` 会被忽略。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。`memory_types` 未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
+| memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；`working_memory.enabled` 默认 `false`，不生成归档摘要和 checkpoint 摘要，显式设为 `true` 才会生成；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。包含 `experiences` 时会自动激活 `cases` 和 `trajectories`；不包含 `experiences` 时，显式传入的 `cases` 和 `trajectories` 会被忽略。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。`memory_types` 未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
 | auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。省略时，新 Session 先继承 `server.user_config_defaults.auto_commit_policy`，再沿用现有 `memory.session_auto_commit.enabled` 行为。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
 
 `auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
-| 字段 | 类型 | 默认值 | 上限 | 说明 |
-|------|------|--------|------|------|
-| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
-| `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+| 字段 | 类型 | 默认值 | 最小值 | 上限 | 说明 |
+|------|------|--------|--------|------|------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 0 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 0（关闭）或 300 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 0 | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
-所有字段最小值为 `0`，会被 clamp 到 `[0, 上限]`。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
+新传入的 `idle_timeout_seconds` 必须为 `0`（关闭）或不小于 `300`，超过 `604800` 时会被 clamp 到该上限；为兼容存量数据，已经保存的小于 300 的正值仍按原值读取。其他字段最小值为 `0`，并会被 clamp 到各自范围。未知字段会以 `InvalidArgumentError` 拒绝。idle 超时还要求服务端开启 `memory.session_auto_commit.enabled`；仅设置 `idle_timeout_seconds` 不会启动扫描器。
 
 #### 3. 使用示例
 
@@ -803,6 +803,8 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 ### get_session_archive()
 
+正常完成的无 WM 归档仍返回 `messages` 原文，`abstract` 和 `overview` 为空字符串，读取时不会补生成摘要。pending、failed、不存在或损坏归档仍遵循原有错误契约。此接口主动展开单个归档，不改变 `/context` 的历史边界。
+
 #### 1. API 实现介绍
 
 获取某次已完成归档的完整内容。该接口通常配合 `get_session_context()` 使用，当需要查看更早的归档详情时调用。
@@ -1330,6 +1332,8 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 提交会话。归档消息（Phase 1）在响应返回前完成；有消息被归档时，摘要生成和记忆提取（Phase 2）在后台异步执行。产生归档的 commit 返回 `status: "accepted"` 和 `task_id`；没有可归档内容的 no-op commit 返回 `status: "skipped"` 和 `task_id: null`。
 
+原独立 session `extract` 接口已移除，记忆提取统一使用 `commit`。迁移后消息会按保留策略归档；请通过返回的 `task_id` 查询后台提取结果，不能将 `accepted` 当作提取完成。
+
 **两阶段提交流程**：
 - **Phase 1（同步）**: 按保留策略拆分消息，写入归档和恢复记录，入队 Phase 2，并将保留消息写回 live session
 - **Phase 2（异步）**: 生成摘要（L0/L1），提取长期记忆并更新关系
@@ -1355,6 +1359,7 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
 | keep_recent_count | int | 否 | 0 | 提交后保留为 live 状态的最近消息数 (保持 live, 不归档)。`0` (默认) 归档全部消息。 |
+| enable_working_memory | bool 或 null | 否 | null | 仅覆盖本次 commit 的 WM 生成开关；省略/null 沿用有效策略，true/false 不改变 self、peer、memory_types 或已保存策略。拒绝字符串和数字；响应的 `effective_enable_working_memory` 返回实际生效值。 |
 | reset_context | bool | 否 | false | HTTP API：归档全部 live messages 后追加只含 `.done`（带 `context_reset`）的边界 archive，目录内没有消息文件。保留 session ID 和原始历史，清空注入上下文，并阻止后续摘要继承 reset 前的 overview。要求 `keep_recent_count=0`，且不设置 `retention_mode`。 |
 
 `reset_context` 供 OpenClaw 插件 reset hook 和 `Session.commit_async()` 使用；没有 live messages 时也会创建边界；若最新 archive 已是 reset 边界则不重复创建。旧 archive 的记忆提取可以继续完成，长期记忆保留。SDK 和 CLI 没有专用的 `reset_context` 参数，需要时使用 HTTP API。
@@ -1467,43 +1472,6 @@ ov session commit a1b2c3d4
   }
 }
 ```
-
----
-
-### extract()
-
-#### 1. API 实现介绍
-
-对已有会话的当前 live 消息执行记忆提取，等待本次提取结果后返回。它不创建新的 commit 任务，也不替代归档；已归档历史不会作为本次 live 消息重复输入。
-
-**代码入口**：
-- `openviking/server/routers/sessions.py:extract_session()` - HTTP 路由
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| session_id | str | 是 | - | 要提取记忆的会话 ID |
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**响应示例**
-
-响应的 `result` 是本次提取产生的记忆写入结果列表。列表项的具体结构取决于该会话实际提取出了哪些记忆。
 
 <a id="get_task"></a><a id="list_tasks"></a>
 

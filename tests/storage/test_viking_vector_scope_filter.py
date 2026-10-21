@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclManager
+from openviking.storage.acl import AclAction, AclManager, acl_allows
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.viking_vector_index_backend import (
@@ -100,6 +100,107 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
     assert await backend.search_by_random(ctx=ctx) == []
     adapter.search_by_random.assert_awaited_once()
     assert adapter.search_by_random.await_args.kwargs["filter"] == _tenant_filter(ctx)
+
+
+@pytest.mark.asyncio
+async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, tmp_path):
+    ctx = _ctx()
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path / "debug_vectors"),
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": "alice-memory",
+                    "uri": "viking://user/alice/memories/own.md",
+                    "account_id": "acct",
+                    "context_type": "memory",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                },
+                {
+                    "id": "bob-memory",
+                    "uri": "viking://user/bob/memories/private.md",
+                    "account_id": "acct",
+                    "context_type": "memory",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                },
+            ],
+            ctx=RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN),
+        )
+
+        records, next_cursor = await backend.scroll(
+            filter=Eq("context_type", "memory"),
+            limit=10,
+            ctx=ctx,
+        )
+        count = await backend.count(filter=Eq("context_type", "memory"), ctx=ctx)
+
+        assert next_cursor is None
+        assert [record["id"] for record in records] == ["alice-memory"]
+        assert count == 1
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reader_grants", "allowed"), [([], False), (["1:user:reader"], True)])
+async def test_acl_resolution_sees_restricted_records_hidden_from_caller(
+    vector_backend_factory, tmp_path, reader_grants, allowed
+):
+    reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.USER)
+    backend = vector_backend_factory(
+        config=VectorDBBackendConfig(
+            backend="local",
+            name="context",
+            dimension=4,
+            path=str(tmp_path / "acl_vectors"),
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        backend.acl_manager = AclManager(backend, _AclConfigReader(True))
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": record_id,
+                    "uri": uri,
+                    "account_id": "acct",
+                    "context_type": "resource",
+                    "level": 2,
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "acl_mode": mode,
+                    "acl_direct_grants": direct,
+                    "acl_inherited_grants": inherited,
+                }
+                for record_id, uri, mode, direct, inherited in (
+                    ("dir", "viking://resources/private", "restricted", reader_grants, []),
+                    ("file", "viking://resources/private/rules.md", "inherit", [], reader_grants),
+                )
+            ],
+            ctx=RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN),
+        )
+
+        acl = await backend.acl_manager.resolve("viking://resources/private/rules.md", reader)
+
+        assert acl_allows(acl, reader, AclAction.READ) is allowed
+    finally:
+        await backend.close()
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():

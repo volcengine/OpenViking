@@ -76,7 +76,7 @@ export function joinUri(baseUri: string, child: string): string {
 /**
  * Matches `viking://` URIs inside arbitrary text. Stops at whitespace, quotes,
  * brackets and the punctuation that commonly trails a URI in prose. Shared so
- * the sessions view and the playground extract URIs identically.
+ * the sessions view and the filesystem extract URIs identically.
  */
 export const VIKING_URI_RE = /viking:\/\/[^\s,，。；;'"`<>()\]}\\]+/g
 

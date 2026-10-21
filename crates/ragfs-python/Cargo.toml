@@ -20,6 +20,7 @@ s3 = ["ragfs/s3"]
 [dependencies]
 ragfs = { path = "../ragfs", features = ["cache"] }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
+pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-appender = "0.2"

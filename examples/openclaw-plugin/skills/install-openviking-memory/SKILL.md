@@ -543,7 +543,6 @@ The agent-visible `add_resource` tool is disabled by default (`enableAddResource
 | `reason` | No | Reason or note for import. |
 | `instruction` | No | Processing instruction for semantic extraction. |
 | `wait` | No | Wait for processing completion. |
-| `timeout` | No | Timeout in seconds when `wait=true`. |
 
 ### `add_skill` — Import Agent Skill
 
@@ -552,7 +551,6 @@ The agent-visible `add_resource` tool is disabled by default (`enableAddResource
 | `source` | No | Local `SKILL.md` path or skill directory. Exactly one of `source` or `data` is required. |
 | `data` | No | Raw `SKILL.md` content or MCP tool dict. Exactly one of `source` or `data` is required. |
 | `wait` | No | Wait for processing completion. |
-| `timeout` | No | Timeout in seconds when `wait=true`. |
 
 Agent Skill best practice: verify frontmatter has a precise `name`, a trigger-oriented `description`, useful `tags`, explicit scope boundaries, and concrete execution steps. Do not include secrets in skill content.
 

@@ -1,6 +1,8 @@
+import asyncio
 import copy
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,6 +14,7 @@ from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config, SessionKey
+from vikingbot.hooks.builtins.openviking_hooks import OpenVikingCompactHook
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.session.manager import SessionManager
@@ -64,6 +67,19 @@ class _FakeOVClient:
     async def get_session_context(self, session_id, token_budget):
         self.context_calls.append((session_id, token_budget))
         return self.context_payload
+
+
+class _BlockingFirstProvider(_RecordingProvider):
+    def __init__(self):
+        super().__init__()
+        self.started = asyncio.Event()
+
+    async def chat(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        if len(self.calls) == 1:
+            self.started.set()
+            await asyncio.Future()
+        return LLMResponse(content="ok")
 
 
 @pytest.fixture
@@ -142,6 +158,80 @@ class _ImageRegistry:
         )
 
 
+class _SteerProvider(LLMProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    async def chat(self, messages, tools=None, **kwargs):
+        self.calls.append(copy.deepcopy(messages))
+        if len(self.calls) == 1:
+            return LLMResponse(
+                content="checking",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-1",
+                        name="wait_for_steer",
+                        arguments={},
+                        tokens=1,
+                    )
+                ],
+            )
+        return LLMResponse(content="steered final")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+class _BlockingSteerRegistry:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def get_definitions(self, **kwargs):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "wait_for_steer",
+                    "description": "Wait until the test releases the tool.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+    async def execute(self, tool_name, arguments, **kwargs):
+        self.started.set()
+        await self.release.wait()
+        return "tool result"
+
+
+async def _consume_outbound_event(
+    bus: MessageBus, event_type: OutboundEventType, timeout: float = 2
+) -> object:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out waiting for outbound event {event_type}")
+        outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=remaining)
+        if outbound.event_type == event_type:
+            return outbound
+
+
+async def _consume_outbound_until_response(bus: MessageBus, timeout: float = 2) -> list[object]:
+    events = []
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("Timed out waiting for response event")
+        outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=remaining)
+        events.append(outbound)
+        if outbound.event_type == OutboundEventType.RESPONSE:
+            return events
+
+
 def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
     context = ContextBuilder(workspace=temp_dir / "workspace")
     content = [
@@ -165,6 +255,26 @@ def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
             "name": "openviking_multi_read",
             "content": content,
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_context_build_messages_can_skip_system_prompt(temp_dir: Path):
+    context = ContextBuilder(workspace=temp_dir / "workspace", eval=True)
+
+    messages = await context.build_messages(
+        history=[],
+        current_message="steer with image",
+        media=[{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}],
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="steer-context"),
+        ov_tools_enable=False,
+        include_system=False,
+    )
+
+    assert [message["role"] for message in messages] == ["user", "user"]
+    assert messages[-1]["content"] == [
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+        {"type": "text", "text": "steer with image"},
     ]
 
 
@@ -297,6 +407,470 @@ async def test_agent_loop_passes_configured_temperature_to_provider(make_loop, t
     assert response.content == "ok"
     assert provider.calls[0][1]["temperature"] == 0.2
     assert loop.subagents.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_interrupt_does_not_cancel_final_session_save(
+    make_loop, temp_dir: Path, monkeypatch
+):
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = make_loop(bus=bus, config=config)
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="final-save")
+    msg = InboundMessage(session_key=session_key, sender_id="user-1", content="finish cleanly")
+    save_started = asyncio.Event()
+    release_save = asyncio.Event()
+    save_calls = 0
+    original_save = loop.sessions.save
+
+    async def fake_run_agent_loop(self, **kwargs):
+        return "final answer", None, [], {"prompt_tokens": 1, "completion_tokens": 1}, 1
+
+    async def blocking_save(session):
+        nonlocal save_calls
+        save_calls += 1
+        if len(session.messages) >= 2 and session.messages[-1].get("role") == "assistant":
+            save_started.set()
+            await release_save.wait()
+        await original_save(session)
+
+    fake_langfuse = _FakeLangfuseClient()
+    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
+    monkeypatch.setattr(loop.sessions, "save", blocking_save)
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.LangfuseClient.get_instance",
+        staticmethod(lambda: fake_langfuse),
+    )
+
+    task = asyncio.create_task(loop._process_message_as_active_turn(msg))
+    try:
+        await asyncio.wait_for(save_started.wait(), timeout=2)
+
+        assert await loop.interrupt(session_key) is False
+
+        release_save.set()
+        response = await asyncio.wait_for(task, timeout=2)
+
+        assert response is not None
+        assert response.content == "final answer"
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["role"] for message in session.messages] == ["user", "assistant"]
+        assert [message["content"] for message in session.messages] == [
+            "finish cleanly",
+            "final answer",
+        ]
+        assert save_calls == 1
+    finally:
+        release_save.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_interrupt_marks_active_and_current_queued_messages(make_loop):
+    bus = MessageBus()
+    provider = _BlockingFirstProvider()
+    loop = make_loop(bus=bus, provider=provider)
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="interrupt-count")
+
+    run_task = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="active")
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=2)
+        for content in ("first queued", "second queued"):
+            await bus.publish_inbound(
+                InboundMessage(session_key=session_key, sender_id="user-1", content=content)
+            )
+
+        assert await loop.interrupt(session_key) is True
+        await bus.publish_inbound(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="after interrupt")
+        )
+
+        for _ in range(3):
+            await _consume_outbound_event(bus, OutboundEventType.INTERRUPT)
+        response = await _consume_outbound_event(bus, OutboundEventType.RESPONSE)
+
+        session = loop.sessions.get_or_create(session_key)
+        assert response.content == "ok"
+        assert [message["content"] for message in session.messages] == [
+            "active",
+            "first queued",
+            "second queued",
+            "after interrupt",
+            "ok",
+        ]
+        assert len(provider.calls) == 2
+    finally:
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_steers_same_session_input_into_next_tool_turn(make_loop, temp_dir: Path):
+    bus = MessageBus()
+    provider = _SteerProvider()
+    tools = _BlockingSteerRegistry()
+    loop = make_loop(
+        bus=bus,
+        provider=provider,
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=3,
+    )
+    loop.tools = tools
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="steer-session")
+
+    run_task = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+        await asyncio.wait_for(tools.started.wait(), timeout=2)
+        assert (
+            loop.steer(
+                InboundMessage(session_key=session_key, sender_id="user-1", content="steer update")
+            )
+            is True
+        )
+
+        tools.release.set()
+
+        events = await _consume_outbound_until_response(bus)
+        assert [event.event_type for event in events[:4]] == [
+            OutboundEventType.ITERATION,
+            OutboundEventType.TOOL_CALL,
+            OutboundEventType.TOOL_RESULT,
+            OutboundEventType.ITERATION,
+        ]
+        response = events[-1]
+
+        assert response.content == "steered final"
+        assert len(provider.calls) == 2
+        second_call_user_text = "\n".join(
+            str(message.get("content"))
+            for message in provider.calls[1]
+            if message.get("role") == "user"
+        )
+        assert "first request" in second_call_user_text
+        assert "steer update" in second_call_user_text
+
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["role"] for message in session.messages] == [
+            "user",
+            "user",
+            "assistant",
+        ]
+        assert [message["content"] for message in session.messages] == [
+            "first request",
+            "steer update",
+            "steered final",
+        ]
+        assert bus.inbound_size == 0
+    finally:
+        tools.release.set()
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_steers_same_session_input_before_final_response(
+    make_loop, temp_dir: Path, monkeypatch
+):
+    bus = MessageBus()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="steer-final-boundary")
+    provider_calls = []
+
+    class _LateSteerProvider(_FakeProvider):
+        async def chat(self, messages, tools=None, **kwargs):
+            provider_calls.append(copy.deepcopy(messages))
+            if len(provider_calls) == 1:
+                assert (
+                    loop.steer(
+                        InboundMessage(
+                            session_key=session_key,
+                            sender_id="user-1",
+                            content="late steer",
+                        )
+                    )
+                    is True
+                )
+                return LLMResponse(content="first final")
+            assert (
+                loop.steer(
+                    InboundMessage(
+                        session_key=session_key,
+                        sender_id="user-1",
+                        content="too late",
+                    )
+                )
+                is False
+            )
+            return LLMResponse(content="steered final")
+
+    loop = make_loop(
+        bus=bus,
+        provider=_LateSteerProvider(),
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=2,
+    )
+
+    async def prepare_steer(steer_msg):
+        return loop_module._PreparedSteer(
+            msg=steer_msg,
+            prompt_messages=[{"role": "user", "content": steer_msg.content}],
+            newly_recalled_exp_uris=[],
+            newly_recalled_exp_content="",
+            auto_memory_tool={
+                "tool_name": "auto_memory_search",
+                "result": "recalled memory",
+            },
+        )
+
+    monkeypatch.setattr(loop, "_prepare_steer_message", prepare_steer)
+
+    run_task = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+
+        events = await _consume_outbound_until_response(bus)
+        assert [event.event_type for event in events[:4]] == [
+            OutboundEventType.ITERATION,
+            OutboundEventType.ITERATION,
+            OutboundEventType.TOOL_CALL,
+            OutboundEventType.TOOL_RESULT,
+        ]
+        response = events[-1]
+
+        assert response.content == "steered final"
+        assert len(provider_calls) == 2
+        final_call_user_text = "\n".join(
+            str(message.get("content"))
+            for message in provider_calls[1]
+            if message.get("role") == "user"
+        )
+        assert "first request" in final_call_user_text
+        assert "late steer" in final_call_user_text
+
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["content"] for message in session.messages] == [
+            "first request",
+            "first final",
+            "late steer",
+            "steered final",
+        ]
+        assert bus.inbound_size == 0
+    finally:
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_does_not_share_steers_with_concurrent_internal_loop(
+    make_loop,
+):
+    provider = _BlockingFirstProvider()
+    loop = make_loop(provider=provider, max_iterations=2)
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="concurrent-loop")
+    active_task = asyncio.create_task(
+        loop._process_message_as_active_turn(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+    )
+    try:
+        await asyncio.wait_for(provider.started.wait(), timeout=2)
+        assert loop.steer(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="steer update")
+        )
+
+        assert await loop.process_direct("internal task", session_key=session_key) == "ok"
+
+        active = loop._active_turn
+        assert active is not None
+        assert active.accepting_steer is True
+        assert [steer.msg.content for steer in active.accepted_steers] == ["steer update"]
+    finally:
+        active_task.cancel()
+        await asyncio.gather(active_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_interrupt_preserves_steers_during_batched_prepare(make_loop, monkeypatch):
+    loop = make_loop()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="steer-batch-interrupt")
+    first_started = asyncio.Event()
+    first_finished = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def prepare(steer_msg):
+        if steer_msg.content == "first steer":
+            first_started.set()
+            await release_first.wait()
+            first_finished.set()
+        else:
+            second_started.set()
+            await asyncio.Future()
+        return loop_module._PreparedSteer(
+            msg=steer_msg,
+            prompt_messages=[{"role": "user", "content": steer_msg.content}],
+            newly_recalled_exp_uris=[],
+            newly_recalled_exp_content="",
+        )
+
+    monkeypatch.setattr(loop, "_prepare_steer_message", prepare)
+
+    async def process(_msg, active_turn=None):
+        assert loop.steer(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first steer")
+        )
+
+        async def add_second_steer():
+            await first_started.wait()
+            assert loop.steer(
+                InboundMessage(session_key=session_key, sender_id="user-1", content="second steer")
+            )
+            release_first.set()
+
+        asyncio.create_task(add_second_steer())
+        await loop._take_accepted_steers(active_turn)
+
+    monkeypatch.setattr(loop, "_process_message", process)
+    task = asyncio.create_task(
+        loop._process_message_as_active_turn(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+    )
+    try:
+        await asyncio.wait_for(second_started.wait(), timeout=2)
+        await asyncio.wait_for(first_finished.wait(), timeout=2)
+        await asyncio.sleep(0)
+        assert await loop.interrupt(session_key)
+        response = await task
+        assert response is not None
+        assert response.event_type == OutboundEventType.INTERRUPT
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["content"] for message in session.messages] == [
+            "first request",
+            "first steer",
+            "second steer",
+        ]
+    finally:
+        release_first.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_interrupt_preserves_active_steer_input(
+    make_loop, temp_dir: Path, monkeypatch
+):
+    bus = MessageBus()
+    provider = _SteerProvider()
+    tools = _BlockingSteerRegistry()
+    loop = make_loop(
+        bus=bus,
+        provider=provider,
+        config=Config(storage_workspace=str(temp_dir)),
+        max_iterations=3,
+    )
+    loop.tools = tools
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="steer-interrupt-early")
+    original_build_messages = ContextBuilder.build_messages
+
+    async def recall_experience(self, *args, **kwargs):
+        messages = await original_build_messages(self, *args, **kwargs)
+        self.latest_recalled_exp_uris = ["viking://agent/experience/interrupted"]
+        self.latest_recalled_exp_content = "interrupted experience"
+        return messages
+
+    monkeypatch.setattr(ContextBuilder, "build_messages", recall_experience)
+
+    run_task = asyncio.create_task(loop.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+        await asyncio.wait_for(tools.started.wait(), timeout=2)
+        assert (
+            loop.steer(
+                InboundMessage(session_key=session_key, sender_id="user-1", content="steer update")
+            )
+            is True
+        )
+        active = loop._active_turn
+        assert active is not None
+        steer_task = active.accepted_steers[0].task
+
+        assert await loop.interrupt(session_key) is True
+
+        interrupted = await _consume_outbound_event(bus, OutboundEventType.INTERRUPT)
+
+        assert interrupted.content == ""
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["role"] for message in session.messages] == ["user", "user"]
+        assert [message["content"] for message in session.messages] == [
+            "first request",
+            "steer update",
+        ]
+        assert "recalled_exp_uris" not in session.metadata
+        assert bus.inbound_size == 0
+        assert active.accepted_steers == []
+        assert steer_task.done()
+    finally:
+        tools.release.set()
+        run_task.cancel()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_error_preserves_accepted_steer_input(make_loop, monkeypatch):
+    loop = make_loop()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="steer-error")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_message(_msg, active_turn=None):
+        started.set()
+        await release.wait()
+        raise RuntimeError("processing failed")
+
+    monkeypatch.setattr(loop, "_process_message", fail_message)
+    task = asyncio.create_task(
+        loop._process_message_as_active_turn(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="first request")
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert loop.steer(
+            InboundMessage(session_key=session_key, sender_id="user-1", content="steer update")
+        )
+        active = loop._active_turn
+        assert active is not None
+        steer_task = active.accepted_steers[0].task
+
+        release.set()
+        with pytest.raises(RuntimeError, match="processing failed"):
+            await task
+
+        session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+        assert [message["content"] for message in session.messages] == [
+            "first request",
+            "steer update",
+        ]
+        assert active.accepted_steers == []
+        assert steer_task.done()
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -906,3 +1480,58 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
     )
     assert persisted_session.metadata["openviking"]["last_synced_local_index"] == -1
     assert persisted_session.metadata["openviking"]["last_commit_local_index"] == -1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmation", [True, False, None])
+@pytest.mark.parametrize("manual", [True, False])
+async def test_wm_compaction_only_clears_history_after_confirmation(
+    make_loop, temp_dir, monkeypatch, confirmation, manual
+):
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://ov.local"},
+    )
+    loop = make_loop(config=config)
+    key = SessionKey(type="cli", channel_id="default", chat_id="wm-compaction")
+    session = loop.sessions.get_or_create(key, skip_heartbeat=True)
+    session.add_message("user", "Keep this constraint")
+    session.add_message("assistant", "Recorded")
+    await loop.sessions.save(session)
+    original = copy.deepcopy(session.messages)
+    commit_result = {"status": "accepted", "archived": True}
+    if confirmation is not None:
+        commit_result["effective_enable_working_memory"] = confirmation
+    client = SimpleNamespace(
+        session_owner_user_id=lambda: None,
+        append_messages=AsyncMock(return_value={"added": 2}),
+        get_session=AsyncMock(return_value={"pending_tokens": 0}),
+        commit_session=AsyncMock(return_value=commit_result),
+    )
+    hook = OpenVikingCompactHook()
+    monkeypatch.setattr(hook, "_get_client", AsyncMock(return_value=(client, False)))
+    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", hook.execute)
+    monkeypatch.setattr(loop, "_check_cmd_auth", lambda _: True)
+    loop._summarize_compact_chunk = AsyncMock(side_effect=AssertionError("WM handles compaction"))
+    if manual:
+        response = await loop._process_message(
+            InboundMessage(session_key=key, sender_id="user", content="/compact")
+        )
+        assert response is not None
+        if confirmation is not True:
+            assert "history was kept" in response.content
+    else:
+        success = await loop._submit_openviking_session_and_clear_if_committed(
+            session, force_commit=True
+        )
+        assert success is (confirmation is True)
+    assert client.commit_session.await_args.kwargs["enable_working_memory"] is True
+    loop._summarize_compact_chunk.assert_not_awaited()
+    persisted = loop.sessions._load(key)
+    if confirmation is True:
+        assert persisted.messages == []
+    else:
+        assert persisted.messages == original
+        loop._get_ov_client = AsyncMock(side_effect=AssertionError("Keep the full local history"))
+        history = await loop._build_prompt_history(session)
+        assert [m["content"] for m in history] == [m["content"] for m in original]

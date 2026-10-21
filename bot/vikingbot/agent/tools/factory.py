@@ -20,6 +20,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
+from vikingbot.config.schema import SandboxBackend
 
 if TYPE_CHECKING:
     from vikingbot.agent.subagent import SubagentManager
@@ -74,12 +75,13 @@ def register_default_tools(
     registry.register(EditFileTool())
     registry.register(ListDirTool())
 
-    # Shell tool
-    registry.register(
-        ExecTool(
-            timeout=exec_config.timeout,
+    # All agents share this registration, including Compile and subagents.
+    if config.sandbox.backend != SandboxBackend.DIRECT or config.sandbox.backends.direct.allow_exec:
+        registry.register(
+            ExecTool(
+                timeout=exec_config.timeout,
+            )
         )
-    )
 
     # Web tools
     registry.register(

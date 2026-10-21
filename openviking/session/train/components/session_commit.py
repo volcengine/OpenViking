@@ -84,8 +84,7 @@ class SessionCommitPolicyTrainer:
             label="train_start",
             enabled=self.show_progress,
             description=(
-                f"Processing {len(rollout_list)} rollouts, "
-                f"concurrency={self.commit_concurrency}"
+                f"Processing {len(rollout_list)} rollouts, concurrency={self.commit_concurrency}"
             ),
             concurrency=self.commit_concurrency,
         )
@@ -126,11 +125,7 @@ class SessionCommitPolicyTrainer:
         session_id = _session_id_for_rollout(rollout, run_id=self.run_id)
         stage = "prepare_messages"
         try:
-            messages = (
-                [_case_spec_message_to_request(rollout)]
-                + [_message_to_request(message) for message in rollout.messages]
-                + [_evaluation_message_to_request(rollout)]
-            )
+            messages = _build_commit_messages(rollout)
             stage = "create_session"
             await self.client.create_session(
                 session_id=session_id,
@@ -231,7 +226,6 @@ class SessionCommitPolicyTrainer:
                 "score": _rollout_score(rollout),
                 "error": str(exc),
             }
-
 
     async def _record_event(
         self,
@@ -370,6 +364,7 @@ def _rollout_score(rollout: Rollout) -> float:
         return 0.0
     return float(rollout.evaluation.score)
 
+
 def _task_error(task: dict[str, Any] | None) -> str | None:
     if task is None:
         return None
@@ -495,6 +490,68 @@ def _case_input_payload(case_input: dict[str, Any]) -> dict[str, Any]:
     return {key: case_input[key] for key in allowed_keys if key in case_input}
 
 
+def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
+    """Build the extraction input without changing the original rollout/evaluation."""
+    return (
+        [_case_spec_message_to_request(rollout)]
+        + [
+            _message_to_request(message)
+            for message in rollout.messages
+            if not _is_duplicate_tau2_reward_message(message, rollout.evaluation)
+        ]
+        + [_evaluation_message_to_request(rollout)]
+    )
+
+
+def _is_evaluation_report_copy(text: str, report: Any) -> bool:
+    """Match full JSON report copies, not additional feedback or partial evidence."""
+    if not isinstance(report, (dict, list)):
+        return False
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    # Ignore JSON whitespace/key order, but do not conflate booleans with numbers.
+    return json.dumps(parsed, sort_keys=True) == json.dumps(report, sort_keys=True)
+
+
+def _without_evaluation_report_copies(values: list[str], report: Any) -> list[str]:
+    return [value for value in values if not _is_evaluation_report_copy(value, report)]
+
+
+def _is_duplicate_tau2_reward_message(message: Any, evaluation: RubricEvaluation | None) -> bool:
+    """Drop only the known Tau2 wrapper when every fact is in OutcomeEvaluation."""
+    if (
+        evaluation is None
+        or getattr(message, "id", "") != "tau2-reward"
+        or message.role != "user"
+        or len(message.parts) != 1
+        or getattr(message.parts[0], "type", None) != "text"
+    ):
+        return False
+    lines = message.parts[0].text.split("\n", 2)
+    if (
+        len(lines) != 3
+        or lines[0] != f"task_success: {evaluation.passed}"
+        or not lines[1].startswith("task_reward: ")
+        or not lines[2].startswith("evaluation report: ")
+    ):
+        return False
+    try:
+        reward = json.loads(lines[1].removeprefix("task_reward: "))
+    except ValueError:
+        return False
+    return (
+        isinstance(reward, (int, float))
+        and not isinstance(reward, bool)
+        and reward == evaluation.score
+        and _is_evaluation_report_copy(
+            lines[2].removeprefix("evaluation report: "),
+            evaluation.metadata.get("evaluation_result"),
+        )
+    )
+
+
 def _evaluation_message_to_request(rollout: Rollout) -> dict[str, Any]:
     text = (
         "# OpenViking OutcomeEvaluation\n\n"
@@ -521,21 +578,27 @@ def _evaluation_payload_json(rollout: Rollout) -> str:
 def _evaluation_payload(evaluation: RubricEvaluation | None) -> dict[str, Any] | None:
     if evaluation is None:
         return None
-    return {
-        "passed": evaluation.passed,
-        "score": evaluation.score,
-        "feedback": evaluation.feedback,
-        "criterion_results": [
+    report = evaluation.metadata.get("evaluation_result")
+    criteria = []
+    for result in evaluation.criterion_results:
+        evidence = _without_evaluation_report_copies(result.evidence, report)
+        if len(evidence) < len(result.evidence):
+            evidence.append("See evaluation.metadata.evaluation_result.")
+        criteria.append(
             {
                 "criterion_name": result.criterion_name,
                 "passed": result.passed,
                 "score": result.score,
-                "feedback": result.feedback,
-                "evidence": result.evidence,
+                "feedback": _without_evaluation_report_copies(result.feedback, report),
+                "evidence": evidence,
                 "metadata": result.metadata,
             }
-            for result in evaluation.criterion_results
-        ],
+        )
+    return {
+        "passed": evaluation.passed,
+        "score": evaluation.score,
+        "feedback": _without_evaluation_report_copies(evaluation.feedback, report),
+        "criterion_results": criteria,
         "metadata": evaluation.metadata,
     }
 

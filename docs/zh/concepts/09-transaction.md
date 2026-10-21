@@ -272,12 +272,12 @@ value = owner_id:time_ns:lock_type
 HASH key 按路径 scope 隔离：
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-所有 key 都使用 `{namespace}` 作为 Redis Cluster hash tag。Exact 获取使用
+所有 key 都使用 `{service_name}` 作为 Redis Cluster hash tag。Exact 获取使用
 `HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
 `HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
 HASH。跨 scope batch 会被拒绝。
@@ -393,8 +393,8 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 路径锁默认启用，并使用 `filesystem` Provider。多进程通过 Redis 协调时，
 设置 `storage.agfs.pathlock.provider=cache`。Cache PathLock 要求配置顶层
-Redis Cache Provider 和非空 PathLock namespace。运行时等待超时固定为
-`0.0` 秒。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
+Redis Cache Provider，并使用顶层 `service_name` 作为 Redis namespace。
+运行时等待超时固定为 `0.0` 秒。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，
 `redo_recovery_enabled` 已废弃且会被忽略。
 
@@ -417,6 +417,7 @@ Redis 配置：
 
 ```json
 {
+  "service_name": "production",
   "cache": {
     "provider": "redis",
     "params": {
@@ -428,7 +429,6 @@ Redis 配置：
     "agfs": {
       "pathlock": {
         "provider": "cache",
-        "namespace": "production",
         "lock_expire_secs": 30.0
       }
     }
@@ -439,7 +439,6 @@ Redis 配置：
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `provider` | str | `filesystem`、`memory` 或 `cache` | `filesystem` |
-| `namespace` | str 或 null | `provider=cache` 时必填，用于标识一个 OpenViking 部署 | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
 
 兼容旧写法：

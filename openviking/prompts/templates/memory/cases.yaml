@@ -48,7 +48,7 @@ embedding_template: |-
 overview_template: |-
   # Cases Overview
   {% for item in items %}
-  - [{{ item.file_content.case_name }}](./{{ item.file_name }}) — {{ item.file_content.task_signature }}
+  - [{{ item.file_content.case_name|default(item.file_name, true) }}](./{{ item.file_name }}){% if item.file_content.task_signature %} — {{ item.file_content.task_signature }}{% endif %}
   {% endfor %}
 
 fields:

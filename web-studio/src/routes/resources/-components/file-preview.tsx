@@ -1,3 +1,5 @@
+import { formatDateTime } from '#/i18n/format'
+import i18n from '#/i18n/core'
 import {
   isValidElement,
   useEffect,
@@ -17,6 +19,7 @@ import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { X, Pencil, Save, XCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
@@ -41,12 +44,12 @@ import {
 } from '../-hooks/viking-fm'
 import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
-import type { CodeEditorHandle } from './code-editor'
+import type { CodeEditorHandle } from '#/components/code-editor'
 import { OkfMetadataPanel } from './okf-metadata-panel'
 import { YamlMetadata } from './yaml-metadata'
 
 const LazyCodeEditor = lazy(() =>
-  import('./code-editor').then((m) => ({ default: m.CodeEditor })),
+  import('#/components/code-editor').then((m) => ({ default: m.CodeEditor })),
 )
 const LazyMermaidDiagram = lazy(() =>
   import('./mermaid-diagram').then((m) => ({ default: m.MermaidDiagram })),
@@ -125,6 +128,8 @@ async function ensureLanguage(lang: string): Promise<void> {
 }
 
 interface FilePreviewProps {
+  readOnly?: boolean
+  defaultReadLimit?: number
   file: VikingFsEntry | null
   hideDirectoryHeader?: boolean
   onClose: () => void
@@ -478,7 +483,7 @@ function MarkdownImage({
         if (!alive) return
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
         created = URL.createObjectURL(blob)
         setObjectUrl(created)
@@ -1005,7 +1010,7 @@ function formatJsonlTime(value: string): string {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString([], {
+  return formatDateTime(date, {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
@@ -1348,6 +1353,8 @@ function JsonlPreview({ content }: { content: string }) {
 }
 
 export function FilePreview({
+  readOnly = false,
+  defaultReadLimit,
   file,
   hideDirectoryHeader = false,
   onClose,
@@ -1376,7 +1383,7 @@ export function FilePreview({
     resolvedFile,
     {
       maxAutoReadBytes: LARGE_FILE_PREVIEW_BYTES,
-      defaultReadLimit: -1,
+      defaultReadLimit: defaultReadLimit ?? (readOnly ? 10000 : -1),
       requireKnownSize: isJsonFile,
     },
     {
@@ -1392,7 +1399,10 @@ export function FilePreview({
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
   )
-  const frontmatter = useMemo(() => splitMarkdownFrontmatter(displayContent || ''), [displayContent])
+  const frontmatter = useMemo(
+    () => splitMarkdownFrontmatter(displayContent || ''),
+    [displayContent],
+  )
   const okfDocument = useMemo(
     () =>
       file && preview?.fileType === 'markdown'
@@ -1414,10 +1424,15 @@ export function FilePreview({
   >(new Set(['abstract', 'overview']))
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [loadingEditor, setLoadingEditor] = useState(false)
+  const [editorContent, setEditorContent] = useState('')
+  const fileUriRef = useRef(file?.uri)
+  fileUriRef.current = file?.uri
   const editorRef = useRef<CodeEditorHandle>(null)
   const { invalidatePreview } = useInvalidateVikingFs()
 
   const canEdit =
+    !readOnly &&
     !file?.isDir &&
     preview?.shouldAutoRead &&
     (preview.fileType === 'code' ||
@@ -1429,6 +1444,8 @@ export function FilePreview({
     setMarkdownMode('preview')
     setJsonMode('preview')
     setEditing(false)
+    setLoadingEditor(false)
+    setEditorContent('')
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
   }, [file?.uri])
 
@@ -1514,7 +1531,7 @@ export function FilePreview({
 
         const blob = response.data as Blob
         if (blob.size === 0) {
-          throw new Error('empty blob')
+          throw new Error(i18n.t('studio:errors.emptyBlob'))
         }
 
         const nextUrl = URL.createObjectURL(blob)
@@ -1543,6 +1560,38 @@ export function FilePreview({
     }
   }, [file, preview?.fileType])
 
+  const handleEdit = async () => {
+    if (!file || loadingEditor || !canEdit) return
+    const uri = file.uri
+    setLoadingEditor(true)
+    try {
+      // A limited preview must never become a replace write. Download the
+      // complete original content through the authenticated API first.
+      const response = preview.truncated
+        ? await getContentDownload({
+            query: { uri },
+            responseType: 'text',
+            throwOnError: true,
+          })
+        : null
+      if (fileUriRef.current !== uri) return
+      const content = response ? response.data : preview.content
+      if (
+        typeof content !== 'string' ||
+        new Blob([content]).size > LARGE_FILE_PREVIEW_BYTES
+      ) {
+        throw new Error(t('filePreview.largeFileSkipped'))
+      }
+      setEditorContent(content)
+      setEditing(true)
+    } catch (err) {
+      if (fileUriRef.current === uri)
+        toast.error(t('filePreview.editFailed'), { description: String(err) })
+    } finally {
+      if (fileUriRef.current === uri) setLoadingEditor(false)
+    }
+  }
+
   const handleSave = async () => {
     if (!file || !editorRef.current) return
     setSaving(true)
@@ -1551,7 +1600,7 @@ export function FilePreview({
       invalidatePreview(file.uri)
       setEditing(false)
     } catch (err) {
-      console.error('Save failed:', err)
+      toast.error(t('filePreview.saveFailed'), { description: String(err) })
     } finally {
       setSaving(false)
     }
@@ -1629,7 +1678,8 @@ export function FilePreview({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setEditing(true)}
+                  disabled={loadingEditor}
+                  onClick={() => void handleEdit()}
                 >
                   <Pencil className="mr-1 size-3.5" />
                   {t('filePreview.edit')}
@@ -1662,7 +1712,7 @@ export function FilePreview({
           >
             <LazyCodeEditor
               ref={editorRef}
-              initialContent={preview.content}
+              initialContent={editorContent}
               filename={file.name}
               isDark={isDark}
             />
@@ -1880,7 +1930,9 @@ export function FilePreview({
                     src={imageSrc}
                     alt={file.name}
                     className="max-h-[70vh] max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-                    onError={() => setImageError('direct img failed')}
+                    onError={() =>
+                      setImageError(t('studio:errors.imageLoadFailed'))
+                    }
                   />
                   {imageError ? (
                     <div className="text-xs text-muted-foreground">
@@ -1942,7 +1994,12 @@ export function FilePreview({
                     onNavigate={onNavigate}
                     rawFrontmatter={okfDocument.rawFrontmatter}
                   />
-                ) : frontmatter ? <YamlMetadata rawFrontmatter={frontmatter.rawFrontmatter} defaultOpen /> : null}
+                ) : frontmatter ? (
+                  <YamlMetadata
+                    rawFrontmatter={frontmatter.rawFrontmatter}
+                    defaultOpen
+                  />
+                ) : null}
                 <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}

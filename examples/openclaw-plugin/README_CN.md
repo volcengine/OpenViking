@@ -260,7 +260,7 @@ preflight 阶段的 `assemble()` 并不是简单地把旧聊天记录塞回来�
 
 - auto-capture 继续负责普通对话流，并通过批处理平衡成本和延迟
 - `memory_store` 面向明确的长期记忆意图，例如“记住我的主项目是 X”或“保存这个偏好”
-- 如果 `memory_store` 已提交但抽取出 0 条记忆，应检查 OpenViking 服务端抽取模型/配置；显式路径已经触发抽取，但 extractor 没有产出记忆
+- 如果 `memory_store` 已提交但抽取出 0 条记忆，工具会返回 `action: "failed"` 和 `error: "no_memories_extracted"`，Agent 会告诉用户没有新增记忆；可能是内容已经存过、抽取未开启，或需要检查 OpenViking 服务端抽取模型/配置
 
 ### `compact()` 负责什么
 

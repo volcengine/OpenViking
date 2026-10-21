@@ -10,7 +10,7 @@ class RetrievalConfig(BaseModel):
     recall_intent_timeout_s: float = Field(
         default=5.0,
         gt=0.0,
-        description="Timeout in seconds for optional context query expansion.",
+        description="Timeout in seconds for session intent analysis and context query expansion.",
     )
     recall_rewrite_timeout_s: float = Field(
         default=30.0,

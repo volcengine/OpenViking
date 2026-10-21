@@ -28,6 +28,8 @@ from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
 class _SemanticMixin:
@@ -201,7 +203,7 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
     ):
@@ -304,6 +306,7 @@ class _SemanticMixin:
             limit=limit,
             mode=RetrieverMode.QUICK,
             score_threshold=score_threshold,
+            has_explicit_target=bool(retrieval_targets.first_explicit_directory),
             scope_dsl=filter,
             level=level,
             events_time_decay_protection=events_time_decay_protection,
@@ -399,9 +402,10 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
     ):
         """Complex search with session context.
 
@@ -427,7 +431,6 @@ class _SemanticMixin:
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             QueryPlan,
             TypedQuery,
@@ -455,9 +458,17 @@ class _SemanticMixin:
             except Exception:
                 target_abstract = ""
 
-        intent_enabled = (
-            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
-        )
+        retrieval_config = self.retrieval_config or RetrievalConfig()
+        # The raw query remains usable if optional intent analysis times out or fails.
+        typed_queries = [
+            TypedQuery(
+                query=query,
+                context_type=None,
+                intent="",
+                priority=1,
+                target_directories=retrieval_targets.target_directories,
+            )
+        ]
 
         # With session context: optional intent analysis
         if image_url:
@@ -472,38 +483,45 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif intent_enabled and (session_summary or current_messages):
-            if self._vlm_resolver is None:
-                raise RuntimeError(
-                    "VikingFS requires a VLM resolver for account-owned intent analysis"
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
+            try:
+                if self._vlm_resolver is None:
+                    raise RuntimeError(
+                        "VikingFS requires a VLM resolver for account-owned intent analysis"
+                    )
+                analyzer = IntentAnalyzer(
+                    max_recent_messages=5,
+                    query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
                 )
-            analyzer = IntentAnalyzer(
-                max_recent_messages=5,
-                query_planner=await self._vlm_resolver.get_query_planner(
-                    real_ctx.account_id
-                ),
-            )
-            with telemetry.measure("search.intent_analysis"):
-                query_plan = await analyzer.analyze(
-                    compression_summary=session_summary or "",
-                    messages=current_messages or [],
-                    current_message=query,
-                    target_abstract=target_abstract,
+                with telemetry.measure("search.intent_analysis"):
+                    query_plan = await asyncio.wait_for(
+                        analyzer.analyze(
+                            compression_summary=session_summary or "",
+                            messages=current_messages or [],
+                            current_message=query,
+                            context_type=context_types[0]
+                            if context_types and len(context_types) == 1
+                            else None,
+                            target_abstract=target_abstract,
+                        ),
+                        timeout=retrieval_config.recall_intent_timeout_s,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Intent analysis failed (%s); using original query: %s",
+                    type(exc).__name__,
+                    exc,
                 )
-            typed_queries = query_plan.queries
-            for tq in typed_queries:
-                tq.target_directories = retrieval_targets.target_directories
-        else:
-            # No session context, or intent disabled: search with the raw query.
-            typed_queries = [
-                TypedQuery(
-                    query=query,
-                    context_type=None,
-                    intent="",
-                    priority=1,
-                    target_directories=retrieval_targets.target_directories,
-                )
-            ]
+            else:
+                typed_queries = query_plan.queries
+                for tq in typed_queries:
+                    tq.target_directories = retrieval_targets.target_directories
+                    # Caller scope is authoritative even when the planner ignores its prompt.
+                    if context_types and len(context_types) == 1:
+                        tq.context_type = context_types[0]
+                    elif context_types and tq.context_type not in context_types:
+                        # The existing scope filter searches only the caller's allowed types.
+                        tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
@@ -525,6 +543,7 @@ class _SemanticMixin:
                 ctx=real_ctx,
                 limit=limit,
                 score_threshold=score_threshold,
+                has_explicit_target=bool(retrieval_targets.first_explicit_directory),
                 scope_dsl=filter,
                 level=level,
                 events_time_decay_protection=events_time_decay_protection,

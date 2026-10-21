@@ -18,6 +18,7 @@ from openviking.service.task_tracker_concurrency import (
     OwnerLoopDispatcher,
     run_to_completion,
 )
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.logger import get_logger
@@ -231,14 +232,15 @@ class ExternalTaskService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
-            await get_queue_manager().enqueue(
-                QueueManager.EXTERNAL_TASK,
-                {
-                    "task_id": task.task_id,
-                    "account_id": ctx.account_id,
-                    "user_id": ctx.user.user_id,
-                },
-            )
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                await get_queue_manager().enqueue(
+                    QueueManager.EXTERNAL_TASK,
+                    {
+                        "task_id": task.task_id,
+                        "account_id": ctx.account_id,
+                        "user_id": ctx.user.user_id,
+                    },
+                )
             enqueued = True
             current = await tracker.get(
                 task.task_id,
@@ -290,14 +292,15 @@ class ExternalTaskService:
 
     async def _resume_submission(self, task: TaskRecord, ctx: RequestContext) -> None:
         if task.status == TaskStatus.PENDING:
-            await get_queue_manager().enqueue(
-                QueueManager.EXTERNAL_TASK,
-                {
-                    "task_id": task.task_id,
-                    "account_id": ctx.account_id,
-                    "user_id": ctx.user.user_id,
-                },
-            )
+            with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                await get_queue_manager().enqueue(
+                    QueueManager.EXTERNAL_TASK,
+                    {
+                        "task_id": task.task_id,
+                        "account_id": ctx.account_id,
+                        "user_id": ctx.user.user_id,
+                    },
+                )
 
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
         """Return False when this delivery must rotate behind other target work."""
@@ -340,7 +343,9 @@ class ExternalTaskService:
             await self._execute_task(task, provider, payload, account_id, user_id)
             return True
         except asyncio.CancelledError:
-            if not tracker.is_cancellation_requested(task_id):
+            if not await tracker.is_cancellation_requested(
+                task_id, account_id=account_id, user_id=user_id
+            ):
                 raise
             await run_to_completion(lambda: self.cancel_recovered(task_id, account_id, user_id))
             raise

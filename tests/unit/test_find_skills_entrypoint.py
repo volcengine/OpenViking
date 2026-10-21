@@ -78,8 +78,8 @@ async def test_find_skills_forwards_keywords_search_type(seen):
     assert seen["retrieve"]["search_type"] == "keywords"
 
 
-@pytest.mark.parametrize("query", ["", "  "])
-async def test_find_skills_needs_a_query_even_with_a_filter(seen, query):
+@pytest.mark.parametrize("query", ["", "  ", "broken\ud835"])
+async def test_find_skills_needs_a_valid_query_even_with_a_filter(seen, query):
     """It embeds the query, so a filter cannot stand in the way it can on find."""
     with pytest.raises(InvalidArgumentError):
         await _service(None).find_skills(

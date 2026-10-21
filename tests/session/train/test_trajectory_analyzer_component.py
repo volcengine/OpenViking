@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.utils import generate_uri
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -20,6 +23,7 @@ from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def _patch_runtime_defaults(monkeypatch):
@@ -57,6 +61,21 @@ class FakeExtractLoop:
         FakeExtractLoop.created.append(self)
 
     async def run(self):
+        provider = self.kwargs["context_provider"]
+        # Exercise context rebuilding before rendering filenames: provenance
+        # must survive message preparation as well as initial construction.
+        await provider.prepare_extraction_messages()
+        schema = next(
+            schema
+            for schema in provider.get_memory_schemas(self.kwargs["ctx"])
+            if schema.memory_type == "trajectories"
+        )
+        uri = generate_uri(
+            schema,
+            {"trajectory_name": "task"},
+            user_space="u",
+            extract_context=provider.get_extract_context(),
+        )
         return (
             ResolvedOperations(
                 upsert_operations=[
@@ -69,7 +88,7 @@ class FakeExtractLoop:
                             "content": "# task\nbody",
                         },
                         memory_type="trajectories",
-                        uris=["viking://user/u/memories/trajectories/task_20260607120000.md"],
+                        uris=[uri],
                         page_id=100,
                     )
                 ],
@@ -114,6 +133,8 @@ class FakeVikingFS:
         self.writes = []
 
     async def read_file(self, uri, ctx=None):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
         return self.files[uri]
 
     async def write_file(self, uri, content, ctx=None, lock_handle=None, lease_ref=None):
@@ -187,10 +208,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
 
     analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm_resolver=FakeResolver())
     context = TrajectoryAnalyzerContext(
-        request_context=SimpleNamespace(
-            user=SimpleNamespace(account_id="default", user_id="u"),
-            account_id="default",
-        ),
+        request_context=RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
         source_archive_uri="viking://user/u/sessions/s1/history/archive_001",
     )
 
@@ -203,7 +221,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
                 ToolPart(
                     tool_id="read-1",
                     tool_name="read",
-                    tool_input={"uri": "viking://user/u/memories/experiences/exchange.md"},
+                    tool_input={"uris": "viking://~/memories/experiences/exchange.md"},
                     tool_output="experience body",
                     tool_status="completed",
                 )
@@ -217,13 +235,16 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     created_loop = FakeExtractLoop.created[0]
     assert created_loop._transaction_handle is None
     provider = created_loop.kwargs["context_provider"]
+    assert provider.get_extract_context().source_archive_uri == context.source_archive_uri
     assert provider._transaction_handle is None
     assert provider._vlm_config is account_vlm
     assert [
         schema.memory_type for schema in provider.get_memory_schemas(context.request_context)
     ] == ["trajectories"]
     assert len(fs.writes) == 1
-    assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
+    archive_digest = hashlib.sha256(context.source_archive_uri.encode("utf-8")).hexdigest()[:16]
+    expected_uri = f"viking://user/u/memories/trajectories/task_20260607120000_{archive_digest}.md"
+    assert fs.writes[0][0] == expected_uri
     assert '"case_name": "case"' in fs.writes[0][1]
     assert (
         '"source_archive_uri": "viking://user/u/sessions/s1/history/archive_001"' in fs.writes[0][1]
@@ -236,11 +257,30 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert len(analysis.trajectories) == 1
     traj = analysis.trajectories[0]
     assert traj.name == "task"
+    assert traj.uri == expected_uri
     assert traj.outcome == "success"
     assert traj.retrieval_anchor == "Stage: final"
     assert traj.metadata["case_name"] == "case"
     assert analysis.evaluation.passed is True
     assert analysis.metadata["policy_snapshot_id"] == "snapshot"
+
+    # Replaying the same source keeps its filename; another session/archive
+    # must not collide even when the task name and business timestamp are equal.
+    repeated = await analyzer.analyze(rollout, context)
+    assert repeated.trajectories[0].uri == expected_uri
+    for source_archive_uri in (
+        "viking://user/u/sessions/s2/history/archive_001",
+        "viking://user/u/sessions/s1/history/archive_002",
+    ):
+        other = await analyzer.analyze(
+            rollout,
+            TrajectoryAnalyzerContext(
+                request_context=context.request_context,
+                source_archive_uri=source_archive_uri,
+            ),
+        )
+        assert other.trajectories[0].uri != expected_uri
+        assert other.trajectories[0].content == traj.content
 
 
 @pytest.mark.asyncio

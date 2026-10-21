@@ -306,6 +306,25 @@ class TestVolcengineKMSProviderMock:
         assert decrypted == plaintext_key
         volcengine_mock_provider.decrypt_file_key.assert_called_once_with(encrypted, iv, account_id)
 
+    @pytest.mark.asyncio
+    async def test_persist_failure_clears_cache_and_retries(
+        self, volcengine_mock_provider, tmp_path
+    ):
+        """A failed persist must not leave an unpersisted ephemeral key cached."""
+        volcengine_mock_provider.key_file = tmp_path / "root-key.enc"
+        volcengine_mock_provider._encrypt_with_kms = AsyncMock(side_effect=RuntimeError("KMS down"))
+
+        with pytest.raises(ConfigError, match="data loss risk"):
+            await volcengine_mock_provider.get_root_key()
+
+        # Cache must be cleared so a retry re-creates and re-persists the key
+        # instead of returning via the get_root_key fast path a key that was
+        # never written to disk.
+        assert volcengine_mock_provider._root_key is None
+        with pytest.raises(ConfigError, match="data loss risk"):
+            await volcengine_mock_provider.get_root_key()
+        assert volcengine_mock_provider._encrypt_with_kms.call_count == 2
+
 
 class TestCrossProviderEnvelope:
     """Tests for cross-provider envelope behavior."""

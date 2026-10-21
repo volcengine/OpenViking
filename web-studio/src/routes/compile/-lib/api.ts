@@ -1,3 +1,4 @@
+import i18n from '#/i18n/core'
 import { getOvResult, ovClient, OvClientError } from '#/lib/ov-client'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 
@@ -12,10 +13,25 @@ export type CompileTask = TaskRecord & {
   task_id: string
   meta?: { request?: CompileRequest }
 }
+type CompileTaskPayload = Omit<CompileTask, 'meta'> & {
+  meta?: {
+    request?: Omit<CompileRequest, 'from'> & { from?: string[] | null }
+  }
+}
 export type TaskPage = {
   items: CompileTask[]
   next_cursor: string | null
   has_more: boolean
+}
+type TaskPagePayload = Omit<TaskPage, 'items'> & { items: CompileTaskPayload[] }
+
+const normalizeCompileTask = (task: CompileTaskPayload): CompileTask => {
+  const request = task.meta?.request
+  if (!request) return task as CompileTask
+  return {
+    ...task,
+    meta: { ...task.meta, request: { ...request, from: request.from ?? [] } },
+  }
 }
 export const active = (status?: string) =>
   ['pending', 'running', 'cancelling'].includes(status ?? '')
@@ -33,7 +49,7 @@ export async function fetchCompileTasks(
   cursor?: string,
   signal?: AbortSignal,
 ) {
-  const page = await getOvResult<TaskPage>(
+  const page = await getOvResult<TaskPagePayload>(
     ovClient.client.get({
       url: '/api/v1/tasks',
       signal,
@@ -50,34 +66,39 @@ export async function fetchCompileTasks(
   if (!Array.isArray(page.items))
     throw new OvClientError({
       code: 'PAGINATION_UNSUPPORTED',
-      message:
-        'The server does not support paginated tasks. Update OpenViking and retry.',
+      message: i18n.t('compile:errors.upgrade'),
     })
-  return page
+  return { ...page, items: page.items.map(normalizeCompileTask) }
 }
-export function fetchCompileTask(id: string, signal?: AbortSignal) {
-  return getOvResult<CompileTask>(
-    ovClient.client.get({
-      url: `/api/v1/tasks/${encodeURIComponent(id)}`,
-      signal,
-      query: { include_events: true },
-    }),
+export async function fetchCompileTask(id: string, signal?: AbortSignal) {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.get({
+        url: `/api/v1/tasks/${encodeURIComponent(id)}`,
+        signal,
+        query: { include_events: true },
+      }),
+    ),
   )
 }
-export function createCompile(body: CompileRequest, key: string) {
-  return getOvResult<CompileTask>(
-    ovClient.client.post({
-      url: '/api/v1/compile',
-      body,
-      headers: { 'Idempotency-Key': key },
-    }),
+export async function createCompile(body: CompileRequest, key: string) {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.post({
+        url: '/api/v1/compile',
+        body,
+        headers: { 'Idempotency-Key': key },
+      }),
+    ),
   )
 }
-export function cancelCompile(id: string) {
-  return getOvResult<CompileTask>(
-    ovClient.client.post({
-      url: `/api/v1/tasks/${encodeURIComponent(id)}/cancel`,
-    }),
+export async function cancelCompile(id: string) {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.post({
+        url: `/api/v1/tasks/${encodeURIComponent(id)}/cancel`,
+      }),
+    ),
   )
 }
 export function fetchCapabilities() {
@@ -87,11 +108,13 @@ export function fetchCapabilities() {
     reason_code?: string
   }>(ovClient.client.get({ url: '/api/v1/compile/capabilities' }))
 }
-export function lookupSubmission(key: string) {
-  return getOvResult<CompileTask>(
-    ovClient.client.get({
-      url: `/api/v1/compile/submissions/${encodeURIComponent(key)}`,
-    }),
+export async function lookupSubmission(key: string) {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.get({
+        url: `/api/v1/compile/submissions/${encodeURIComponent(key)}`,
+      }),
+    ),
   )
 }
 export type CompileSkill = { name: string; uri: string; description: string }

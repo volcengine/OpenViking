@@ -72,7 +72,7 @@ export function ContextLink({
   }
   return (
     <Link
-      to="/playground"
+      to="/filesystem"
       search={
         entry && !entry.isDir ? { uri: parentUri(uri), file: uri } : { uri }
       }

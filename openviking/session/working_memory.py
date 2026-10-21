@@ -978,8 +978,8 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     - ``Open Issues`` UPDATE that silently drops old items restores them
       with an explicit marker.
 
-    Missing sections or unknown ops default to ``KEEP`` (the schema
-    should prevent this, but we stay defensive so a buggy LLM or
+    Missing sections, unknown ops, or non-string UPDATE content default to ``KEEP``.
+    The schema should prevent this, but we stay defensive so a buggy LLM or
     schema-loose backend cannot wipe out the prior WM).
     """
     wm_debug(
@@ -993,6 +993,17 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
         full_header = f"## {header}"
         op = (ops or {}).get(header)
         old_content = old_sections.get(full_header, "").rstrip()
+
+        if (
+            isinstance(op, dict)
+            and (op.get("op") or "").upper() == "UPDATE"
+            and not isinstance(op.get("content"), str)
+        ):
+            logger.warning(
+                "WM update: non-string UPDATE content for section %r; keeping old content",
+                header,
+            )
+            op = None
 
         # ---------- per-section guards ----------
         if old_content:

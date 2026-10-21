@@ -5,7 +5,7 @@
 import asyncio
 import sys
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
@@ -15,6 +15,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_work_index import detach_task_context
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _prepare_snapshot_diff,
@@ -120,30 +121,6 @@ class _SnapshotMixin:
     @staticmethod
     def _restore_reindex_context(ctx: RequestContext) -> RequestContext:
         return replace(ctx, bypass_acl=True)
-
-    async def system_sync_status(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Dict[str, Any]:
-        """Return multi-write sync status for one Viking URI subtree."""
-        await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._async_agfs.system_sync_status(
-            path,
-            fs_ctx={"account_id": real_ctx.account_id},
-        )
-
-    async def system_sync_retry(
-        self, uri: str, ctx: Optional[RequestContext] = None
-    ) -> Dict[str, Any]:
-        """Retry multi-write sync for one Viking URI subtree."""
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
-        real_ctx = self._ctx_or_default(ctx)
-        path = self._uri_to_path(uri, ctx=ctx)
-        return await self._async_agfs.system_sync_retry(
-            path,
-            fs_ctx={"account_id": real_ctx.account_id},
-        )
 
     async def get_gitignore(self, ctx: Optional[RequestContext] = None) -> str:
         """Return the account-level .ovgitignore content, or an empty string if absent.
@@ -460,7 +437,9 @@ class _SnapshotMixin:
                     ctx=real_ctx,
                 )
             try:
-                result = await self._async_agfs.run("git_restore", **kwargs)
+                result = await self._async_agfs.run(
+                    "git_restore", **kwargs, ctx=self._pathlock_fs_ctx(real_ctx, lease)
+                )
             except GitRestoreWritebackPartialError as exc:
                 # The ref already advanced — capture the exception and
                 # finish the lock scope cleanly. Reindex scheduling and
@@ -849,11 +828,19 @@ class _SnapshotMixin:
             vlm_resolver=self._vlm_resolver,
             vector_config_resolver=self._vector_config_resolver,
         )
-        for op, uri, level in tasks:
-            loop.create_task(
-                self._run_vector_rebuild(executor, op, uri, level, ctx),
-                name=f"vikingfs-git-{op}:{uri}:{int(level)}",
-            )
+        with detach_task_context():
+            for op, uri, level in tasks:
+                loop.create_task(
+                    self._run_vector_rebuild(
+                        executor,
+                        op,
+                        uri,
+                        level,
+                        ctx,
+                        file_task_owner="standalone",
+                    ),
+                    name=f"vikingfs-git-{op}:{uri}:{int(level)}",
+                )
 
     async def _run_restore_rebuild_tracked(
         self,
@@ -873,7 +860,11 @@ class _SnapshotMixin:
         from openviking.service.task_work_index import bind_task_context
 
         tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
+        running_work_id = await tracker.register_running_task(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
         try:
             await tracker.start(
                 task_id,
@@ -886,10 +877,22 @@ class _SnapshotMixin:
                 vector_config_resolver=self._vector_config_resolver,
             )
             reindex_ctx = self._restore_reindex_context(ctx)
-            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
+            with bind_task_context(
+                task_id,
+                ctx.account_id,
+                ctx.user.user_id,
+                work_id=running_work_id,
+            ):
                 await asyncio.gather(
                     *[
-                        self._run_vector_rebuild(executor, op, uri, level, reindex_ctx)
+                        self._run_vector_rebuild(
+                            executor,
+                            op,
+                            uri,
+                            level,
+                            reindex_ctx,
+                            file_task_owner="current",
+                        )
                         for (op, uri, level) in tasks
                     ]
                 )
@@ -919,13 +922,27 @@ class _SnapshotMixin:
         uri: str,
         level: Any,
         ctx: RequestContext,
+        *,
+        file_task_owner: Literal["current", "standalone"],
     ) -> None:
         """Wrapper coroutine: dispatch one vector task and swallow errors."""
         try:
             if op == "reindex_marker":
                 await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
             elif op == "reindex_file":
-                await executor.execute(uri=uri, mode="vectors_only", wait=True, ctx=ctx)
+                if file_task_owner == "current":
+                    await executor.execute_in_current_task(
+                        uri=uri,
+                        mode="vectors_only",
+                        ctx=ctx,
+                    )
+                else:
+                    await executor.execute(
+                        uri=uri,
+                        mode="vectors_only",
+                        wait=True,
+                        ctx=ctx,
+                    )
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive

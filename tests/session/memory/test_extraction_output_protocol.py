@@ -182,6 +182,11 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
     assert '"preferences": []' in protocol.render_final_instruction(context)
     assert '"delete_ids": []' in protocol.render_final_instruction(context)
 
+    assert protocol.parse('{"memory_operations": [{"type": "edit"}]}', context) == (
+        None,
+        "No expected fields found; got fields: memory_operations",
+    )
+
 
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():
     uri = "viking://user/alice/memories/preferences/editor.md"
@@ -234,6 +239,8 @@ def test_python_contract_includes_link_rules_when_enabled():
 
     assert "## Link Rules" in contract
     assert "obj.link(target" in contract
+    assert "weight=0.5" in contract
+    assert "description=''" in contract
     assert "match_text" in contract
     assert "obj_a.link(" in contract
     assert "assign the create/set call to a variable first" in contract
@@ -275,12 +282,64 @@ def test_python_field_description_keeps_dsl_patch_instructions():
     schema.fields[1].description = "Write content in {{ language.upper() }}."
     context = _context([schema], template_context={"language": "en"})
 
-    contract = create_extraction_output_protocol("python").render_contract(context)
+    protocol = create_extraction_output_protocol("python")
+    contract = protocol.render_contract(context)
 
     assert "content [editable string: obj.field.edit/drop/update]: Write content in EN." in contract
     assert "obj.content.edit(search=..., replace=...)" in contract
     assert "PATCH operation for" not in contract
     assert "Use a DELETE block" not in contract
+    assert "copied verbatim" in contract
+    assert "occur exactly once" in contract
+    assert "## Patch Context Rules" in protocol.render_context_rules(context)
+
+
+@pytest.mark.parametrize("output_format", ["python", "json"])
+def test_output_contract_preserves_core_add_only_and_upsert_capabilities(output_format):
+    context = _context([_preference_schema(operation_mode="add_only")], available_tools=())
+    protocol = create_extraction_output_protocol(output_format)
+    contract = protocol.render_contract(context)
+    rules = protocol.render_reference_rules(context)
+    assert "Create new memories only, with complete field values" in contract + rules
+    assert protocol.render_context_rules(context) == ""
+    for unsupported in (
+        "obj.update",
+        "obj.content.edit",
+        "obj.content.drop",
+        "replacement=",
+    ):
+        assert unsupported not in contract + rules + protocol.render_final_instruction(context)
+    assert "delete_ids" not in rules + protocol.render_final_instruction(context)
+
+    program = (
+        'sdk.create_preferences(topic="editor", content="""Use Vim""", score=1)\nsdk.commit()'
+        if output_format == "python"
+        else '{"preferences": [{"page_id": 100, "topic": "editor", "content": "Use Vim", "score": 1}]}'
+    )
+    operations, error = protocol.parse(program, context)
+    assert error is None
+    assert operations.preferences[0].content == "Use Vim"
+
+    # A mixed batch must retain upsert/delete support, without teaching patches
+    # from an add-only schema or exposing inspection tools it does not have.
+    mixed = _context(
+        [_preference_schema(operation_mode="add_only"), _project_schema()], available_tools=()
+    )
+    rules = protocol.render_reference_rules(mixed)
+    contract = protocol.render_contract(mixed)
+    assert "replacement" in rules
+    assert "preserving every unaffected fact" in rules
+    assert protocol.render_context_rules(mixed) == ""
+    if output_format == "python":
+        assert "obj.content.update(" in contract
+        assert "obj.delete(replacement=None)" in contract
+        assert "obj.content.edit" not in contract
+        assert "obj.content.drop" not in contract
+        assert "call the available native" not in contract.lower()
+        assert "never drop a unique fact" in rules
+    else:
+        assert "When editing an existing item" in rules
+        assert "DELETE blocks" not in rules
 
 
 @pytest.mark.asyncio
@@ -318,6 +377,8 @@ async def test_default_python_extract_loop_passes_language_to_field_descriptions
     assert f"Preferences in {language}." in prompt
     assert f"Write content in {language}." in prompt
     assert "{{ language }}" not in prompt
+    assert "## Read Format Rules" not in prompt
+    assert "## Patch Context Rules" in prompt
 
 
 def test_python_contract_omits_link_rules_when_disabled():
@@ -777,6 +838,24 @@ def test_python_syntax_error_includes_offending_source_line():
     assert "^" in error
 
 
+@pytest.mark.parametrize("ending", ["sdk.commit(", "sdk.commit())"])
+@pytest.mark.parametrize(
+    "wrapper", ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."]
+)
+def test_python_rejects_invalid_program_containing_fenced_example(ending, wrapper):
+    context = _context([_profile_schema()])
+    protocol = create_extraction_output_protocol("python")
+    program = (
+        'sdk.set_profile(content="""Example:\n```python\nsdk.commit()\n```\n'
+        f'Keep this example.""")\n{ending}'
+    )
+
+    operations, error = protocol.parse(wrapper.format(program), context)
+
+    assert operations is None
+    assert error is not None
+
+
 def test_memory_schema_identity_fields_follow_scope_and_uri_template():
     entities = MemoryTypeSchema(
         memory_type="entities",
@@ -824,17 +903,31 @@ def test_memory_schema_identity_fields_ignore_jinja_token_collisions():
     assert events.identity_fields() == ("peer_id", "event_name", "ranges")
 
 
-def test_python_set_single_file_memory_compiles_to_same_operations_as_json():
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Engineer",
+        'Config:\n```nginx\nadd_header Cache-Control "no-cache";\n```\nDone.',
+        "Example:\n```python\nsdk.commit()\n```\nKeep this example.",
+        "Use the literal ``` marker.",
+        "```text\nfirst\n```\n```python\nsdk.commit()\n```",
+    ],
+)
+@pytest.mark.parametrize(
+    "wrapper",
+    ["{}", "```python\n{}\n```", "Explanation\n```python\n{}\n```\nDone."],
+)
+def test_python_set_single_file_memory_compiles_to_same_operations_as_json(content, wrapper):
     context = _context([_profile_schema()])
     python_protocol = create_extraction_output_protocol("python")
     json_protocol = create_extraction_output_protocol("json")
 
     python_operations, python_error = python_protocol.parse(
-        "sdk.set_profile(content='Engineer')\nsdk.commit()",
+        wrapper.format(f'sdk.set_profile(content="""{content}""")\nsdk.commit()'),
         context,
     )
     json_operations, json_error = json_protocol.parse(
-        '{"profile":[{"page_id":100,"content":"Engineer"}],"delete_ids":[]}',
+        json.dumps({"profile": [{"page_id": 100, "content": content}], "delete_ids": []}),
         context,
     )
 
@@ -1152,6 +1245,13 @@ def test_python_builtin_content_edit_respects_merge_op_and_offers_valid_repair(m
         assert operations is not None
         assert operations.model_dump()[memory_type][0]["content"]["blocks"]
     else:
+        contract = protocol.render_contract(context)
+        rules = protocol.render_reference_rules(context)
+        assert "obj.content.update(" in contract
+        assert "obj.content.edit(" not in contract
+        assert "obj.content.drop(" not in contract
+        assert "delete(replacement=canonical)" in rules
+        assert "never drop a unique fact" in rules
         assert operations is None
         assert error is not None
         assert "merge_op=replace" in error
@@ -1562,7 +1662,7 @@ def test_python_read_search_errors_keep_native_tools_available_for_retry(
     assert error_fragment in error
     assert protocol.keep_tools_enabled_after_parse_error(error)
     retry = protocol.render_format_retry(error)
-    assert "native search/read tool" in retry
+    assert "native read tool" in retry
     assert "Do not emit sdk.search(), sdk.read()" in retry
 
 

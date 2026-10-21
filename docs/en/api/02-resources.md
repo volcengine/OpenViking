@@ -1,6 +1,6 @@
 # Resource Management
 
-Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. For package export and import, see [OVPack](14-ovpack.md).
+Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. See the [data organization guide](../guides/23-data-organize.md) for directory conventions and [OVPack](14-ovpack.md) for package export and import.
 
 ## Core Concepts
 
@@ -83,7 +83,7 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 
 OpenViking first checks whether the source and request parameters qualify for Connector ingestion. Connector runs ingestion outside the standard pipeline. Otherwise, formats selected by [`parser_api`](../guides/01-configuration.md#parser-api) use the external Understanding parser; remaining formats use built-in parsers. External parsing replaces only the Parse stage and returns to TreeBuilder and the standard storage/semantic pipeline. Feishu documents already normalized to Markdown by an accessor bypass external parsing.
 
-Connector requires an exact `to` target and does not support `wait=true`. A `tos://` source cannot fall back to a built-in accessor. Git may fall back when Connector does not apply, except when Connector-only credentials were supplied. For supported standard-pipeline requests, `wait=true` waits for work belonging to this import, not unrelated work in the global queues; a timeout does not imply that the import was cancelled.
+Connector requires an exact `to` target and does not support `wait=true`. A `tos://` source cannot fall back to a built-in accessor. Git may fall back when Connector does not apply, except when Connector-only credentials were supplied. For supported standard-pipeline requests, `wait=true` waits for work belonging to this import, not unrelated work in the global queues; an HTTP request timeout does not imply that the import was cancelled. There is no per-import `timeout` parameter; configure HTTP timeouts on the client.
 
 #### Stage 1: Parse
 - Uses `UnifiedResourceProcessor` to parse content based on resource type
@@ -187,7 +187,6 @@ This endpoint is the core entry point for resource management. It supports vario
 | reason | string | No | "" | Reason for adding the resource. When non-empty, OpenViking runs it through the normal session memory extraction pipeline with the resource URI and records resource references in the resulting memory |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
-| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
 | strict | bool | No | False | Whether to use strict mode |
 | ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
 | include | string | No | None | File patterns to include (glob) |
@@ -623,7 +622,7 @@ task_id      uuid-xxx
 | `errors` | array | List of errors encountered during processing |
 | `warnings` | array | Optional warnings, including partial processing or memory-linking failures |
 | `queue_status` | object | Queue summary when waiting synchronously or reading a completed task result; grouped by queue with `processed`, `requeue_count`, `error_count`, and `errors` |
-| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason` |
+| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason`. `status="accepted"` means the memory commit is queued, not finished: poll `commit_task_id` via `/api/v1/tasks/{task_id}` for its result |
 
 **Completed add-resource task result**
 

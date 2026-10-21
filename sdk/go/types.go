@@ -33,7 +33,6 @@ type AddResourceOptions struct {
 	Reason              string
 	Instruction         string
 	Wait                bool
-	Timeout             *float64
 	Strict              bool
 	IgnoreDirs          string
 	Include             string
@@ -52,7 +51,6 @@ type AddResourceOptions struct {
 // AddSkillOptions controls AddSkill.
 type AddSkillOptions struct {
 	Wait      bool
-	Timeout   *float64
 	Telemetry any
 	Extra     map[string]any
 	// TargetURI scopes the operation to a skills root such as
@@ -141,7 +139,6 @@ type GetSkillOptions struct {
 // UpdateSkillOptions controls UpdateSkill.
 type UpdateSkillOptions struct {
 	Wait           bool
-	Timeout        *float64
 	SourceMetadata map[string]any
 	Telemetry      any
 	TargetURI      any
@@ -151,11 +148,6 @@ type UpdateSkillOptions struct {
 // DeleteSkillOptions controls DeleteSkill.
 type DeleteSkillOptions struct {
 	TargetURI any
-}
-
-// WaitProcessedOptions controls WaitProcessed.
-type WaitProcessedOptions struct {
-	Timeout *float64 `json:"timeout,omitempty"`
 }
 
 // ObserverStatusOptions controls observer status formatting.
@@ -239,7 +231,6 @@ type TreePage struct {
 type RemoveOptions struct {
 	Recursive bool
 	Wait      bool
-	Timeout   *float64
 }
 
 // WriteOptions controls Write.
@@ -247,7 +238,6 @@ type WriteOptions struct {
 	ACL            *ACLSpec
 	Mode           string
 	Wait           bool
-	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
 	Tags           []string
@@ -257,18 +247,21 @@ type WriteOptions struct {
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string  `json:"uri"`
-	Content       *string `json:"content,omitempty"`
-	ContentBase64 *string `json:"content_base64,omitempty"`
-	Mode          string  `json:"mode,omitempty"`
+	URI           string   `json:"uri"`
+	Content       *string  `json:"content,omitempty"`
+	ContentBase64 *string  `json:"content_base64,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	TagMode       string   `json:"tag_mode,omitempty"`
+	ACL           *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
 type BatchWriteOptions struct {
-	Wait      *bool
-	Timeout   *float64
-	Telemetry any
-	Extra     map[string]any
+	Wait           *bool
+	Telemetry      any
+	ProcessingMode string
+	Extra          map[string]any
 }
 
 // SetTagsOptions controls SetTags.

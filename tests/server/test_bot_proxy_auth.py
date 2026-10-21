@@ -104,6 +104,117 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_interrupt_proxy_forwards_session_interrupt(monkeypatch):
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"interrupted": true}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"interrupted": True}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, timeout):
+            forwarded["url"] = url
+            forwarded["headers"] = headers
+            forwarded["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/bot/v1/sessions/session%201/interrupt")
+
+    assert response.status_code == 200
+    assert response.json() == {"interrupted": True}
+    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/sessions/session%201/interrupt"
+    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+    assert forwarded["timeout"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_steer_proxy_forwards_message_body(monkeypatch):
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"accepted": true}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"accepted": True}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers, timeout):
+            forwarded["url"] = url
+            forwarded["json"] = json
+            forwarded["headers"] = headers
+            forwarded["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(
+        auth_mode="trusted",
+        host="127.0.0.1",
+        port=1944,
+        root_api_key="active-user-key",
+    )
+    app.state.auth_plugin = TrustedAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/bot/v1/sessions/session%201/steer",
+            headers={
+                "X-API-Key": "active-user-key",
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+            },
+            json={"message": "follow up", "user_id": "ignored"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True}
+    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/sessions/session%201/steer"
+    assert forwarded["json"]["message"] == "follow up"
+    assert forwarded["json"]["openviking_connection"]["api_key"] == "active-user-key"
+    assert forwarded["json"]["openviking_connection"]["user_id"] == "alice"
+    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+    assert forwarded["timeout"] == 30.0
+
+
+@pytest.mark.asyncio
 async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypatch):
     forwarded = {}
 
@@ -136,7 +247,9 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
+    app.state.config = ServerConfig(
+        auth_mode="trusted", root_api_key="active-root-key", host="127.0.0.1", port=1944
+    )
     app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
@@ -145,7 +258,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         response = await client.post(
             "/bot/v1/chat",
             headers={
-                "X-API-Key": "active-user-key",
+                "X-API-Key": "active-root-key",
                 "X-OpenViking-Account": "acct",
                 "X-OpenViking-User": "alice",
             },
@@ -155,7 +268,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     assert response.status_code == 200
     assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
     assert forwarded["json"]["openviking_connection"] == {
-        "api_key": "active-user-key",
+        "api_key": "active-root-key",
         "account_id": "acct",
         "user_id": "alice",
         "agent_id": "web-playground",
@@ -164,69 +277,6 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "server_url": "http://127.0.0.1:1944",
     }
     assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
-    assert forwarded["timeout"] == 300.0
-
-
-@pytest.mark.asyncio
-async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypatch):
-    forwarded = {}
-
-    class FakeResponse:
-        status_code = 200
-        text = '{"session_id": "session-1", "message": "ok"}'
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"session_id": "session-1", "message": "ok"}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def post(self, url, json, headers, timeout):
-            forwarded["url"] = url
-            forwarded["json"] = json
-            forwarded["headers"] = headers
-            forwarded["timeout"] = timeout
-            return FakeResponse()
-
-    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
-    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "")
-    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
-
-    app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1955)
-    app.state.auth_plugin = TrustedAuthPlugin()
-    app.include_router(bot_router_module.router, prefix="/bot/v1")
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/bot/v1/chat",
-            headers={
-                "X-OpenViking-Account": "acct",
-                "X-OpenViking-User": "alice",
-            },
-            json={"message": "hello"},
-        )
-
-    assert response.status_code == 200
-    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
-    assert "api_key" not in forwarded["json"]["openviking_connection"]
-    assert forwarded["json"]["openviking_connection"] == {
-        "account_id": "acct",
-        "user_id": "alice",
-        "agent_id": "web-playground",
-        "role": "user",
-        "api_key_type": "root",
-        "server_url": "http://127.0.0.1:1955",
-    }
-    assert "X-Gateway-Token" not in forwarded["headers"]
     assert forwarded["timeout"] == 300.0
 
 
@@ -255,13 +305,15 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     monkeypatch.setattr(compile_router_module, "get_service", lambda: service)
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
+    app.state.config = ServerConfig(
+        auth_mode="trusted", root_api_key="active-root-key", host="127.0.0.1", port=1944
+    )
     app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(compile_router_module.router)
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
     headers = {
-        "X-API-Key": "active-user-key",
+        "X-API-Key": "active-root-key",
         "X-OpenViking-Account": "acct",
         "X-OpenViking-User": "alice",
     }
@@ -294,7 +346,9 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert legacy_cancel.status_code == 400
     assert "POST /api/v1/tasks/{task_id}/cancel" in legacy_cancel.json()["detail"]
     assert calls["connection"] == {
-        "api_key": "active-user-key",
+        "api_key": "active-root-key",
+        "account_id": "acct",
+        "user_id": "alice",
         **({"request_id": request_id} if request_id else {}),
     }
     assert calls["owner"] == ("acct", "alice")
@@ -320,10 +374,11 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     ],
     ids=["no-args", "empty-args", "empty-key", "private-only", "full-args"],
 )
+@pytest.mark.parametrize("identity", [{}, {"account_id": "acct", "user_id": "alice"}])
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
-    monkeypatch, tmp_path, caplog, finish, args
+    monkeypatch, tmp_path, caplog, finish, args, identity
 ):
-    """Runtime calls retain saved args and request ID through polling, cancellation, and recovery."""
+    """Runtime calls retain args, identity, and request ID through polling, cancellation, and recovery."""
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -411,7 +466,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         "get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
-    connection = {"api_key": "active-user-key", "request_id": "compile-request-123"}
+    connection = {"api_key": "active-user-key", "request_id": "compile-request-123", **identity}
     owner = {"account_id": "acct", "user_id": "alice"}
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
     task = await service.create(
@@ -427,9 +482,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     }
     private_payload = {"args": private_args} if private_args else {}
     assert task.to_dict()["meta"]["request"].get("args", {}) == public_args
-    stored = await store.get(task.task_id, **owner)
+    stored = await store.get_task(task.task_id, **owner)
     assert stored is not None
-    assert stored["meta"]["request"].get("args", {}) == public_args
+    assert stored.meta["request"].get("args", {}) == public_args
 
     tracker = TaskTracker(store)
     restored = await tracker.get(task.task_id, **owner)
@@ -471,6 +526,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
     assert forwarded[0]["headers"]["Idempotency-Key"] == task.task_id
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
+    for request in forwarded:
+        assert request["headers"].get("X-OpenViking-Account") == identity.get("account_id")
+        assert request["headers"].get("X-OpenViking-User") == identity.get("user_id")
     assert forwarded[0]["body"] == {
         "task_type": "compile",
         "payload": {
@@ -536,6 +594,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     queue._async_agfs = backend
     store = PersistentTaskStore(MockLocalAGFS(root_path=tmp_path))
     tracker = TaskTracker(store)
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(external_task_service_module, "get_queue_manager", lambda: manager)
     monkeypatch.setattr(
@@ -612,13 +671,21 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         include_events=False,
         _ctx=ctx,
     )
-    assert queried.result == (await state(first)).to_dict()
+    queried_task = dict(queried.result)
+    current_task = (await state(first)).to_dict()
+    assert queried_task.pop("processing_seconds") >= 0
+    assert current_task.pop("processing_seconds") >= 0
+    assert queried_task == current_task
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
     await queue.dequeue()  # Same target rotates, including across users.
     assert (await state(waiting)).status == TaskStatus.PENDING
     assert waiting.task_id not in submitted
-    assert tracker.has_work(waiting.task_id)  # Requeue survives ACK of the old delivery.
+    assert await tracker.has_work(
+        waiting.task_id,
+        account_id=waiting.account_id,
+        user_id=waiting.user_id,
+    )  # Requeue survives ACK of the old delivery.
     await queue.dequeue()
     assert (await state(independent)).status == TaskStatus.COMPLETED
     await tracker.cancel(cancelled.task_id, account_id="acct", user_id="alice")
@@ -637,6 +704,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         with pytest.raises(asyncio.CancelledError):
             await worker
         tracker = TaskTracker(store)
+        monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
         tasks = ExternalTaskService()
         tasks.register(CompileService(service._config, tasks, SimpleNamespace()))
         queue.set_dequeue_handler(ExternalTaskProcessor(tasks))

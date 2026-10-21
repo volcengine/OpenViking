@@ -33,6 +33,9 @@ class ResourceIngestionCollector(EventMetricCollector):
     """
 
     DOMAIN: ClassVar[str] = "resource"
+    # rule: <METRICS_NAMESPACE>_<DOMAIN>_imports_total
+    # e.g.: openviking_resource_imports_total
+    IMPORTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "imports", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_stage_total
     # e.g.: openviking_resource_stage_total
     STAGE_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "stage", unit="total")
@@ -47,7 +50,9 @@ class ResourceIngestionCollector(EventMetricCollector):
         DOMAIN, "wait_duration", unit="seconds"
     )
 
-    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"resource.stage", "resource.wait"})
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
+        {"resource.import", "resource.stage", "resource.wait"}
+    )
     STAGES: ClassVar[tuple[str, ...]] = ("parse", "finalize", "persist", "summarize")
     STAGE_STATUSES: ClassVar[tuple[str, ...]] = ("ok", "error")
 
@@ -71,6 +76,14 @@ class ResourceIngestionCollector(EventMetricCollector):
         `resource.stage` emits both a counter increment and duration sample, while `resource.wait`
         emits only a wait-duration histogram observation.
         """
+        if event_name == "resource.import":
+            self.record_import(
+                registry,
+                pipeline=str(payload["pipeline"]),
+                source_type=str(payload["source_type"]),
+                account_id=payload.get("account_id"),
+            )
+            return
         if event_name == "resource.stage":
             self.record_stage(
                 registry,
@@ -87,6 +100,22 @@ class ResourceIngestionCollector(EventMetricCollector):
                 duration_seconds=float(payload["duration_seconds"]),
                 account_id=payload.get("account_id"),
             )
+
+    def record_import(
+        self,
+        registry,
+        *,
+        pipeline: str,
+        source_type: str,
+        account_id: str | None = None,
+    ) -> None:
+        """Record one accepted resource-import task."""
+        registry.inc_counter(
+            self.IMPORTS_TOTAL,
+            labels={"pipeline": str(pipeline), "source_type": str(source_type)},
+            label_names=("pipeline", "source_type"),
+            account_id=None if account_id is None else str(account_id),
+        )
 
     def record_stage(
         self,

@@ -28,6 +28,11 @@ services:
     volumes:
       - ~/.openviking:/app/.openviking
     environment:
+      # Set OPENVIKING_GATEWAY_ENABLED=true in .env to run the gateway on this port.
+      OPENVIKING_GATEWAY_ENABLED: ${OPENVIKING_GATEWAY_ENABLED:-}
+      OPENVIKING_GATEWAY_MANAGEMENT_KEY: ${OPENVIKING_GATEWAY_MANAGEMENT_KEY:-}
+      # Only read once, to migrate data stored by the v0.5.0 gateway.
+      OPENVIKING_GATEWAY_ENCRYPTION_KEY: ${OPENVIKING_GATEWAY_ENCRYPTION_KEY:-}
       OPENVIKING_PUBLIC_BASE_URL: ${OPENVIKING_PUBLIC_BASE_URL:-}
       OPENVIKING_SERVER_PORT: ${OPENVIKING_SERVER_PORT:-1933}
     healthcheck:

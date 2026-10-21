@@ -28,7 +28,7 @@ describe('VikingBot web session ownership', () => {
   })
 })
 
-it('includes only explicitly registered legacy playground sessions', () => {
+it('includes only explicitly registered legacy Filesystem sessions', () => {
   const legacy = 'f5216b16-cd10-4e9a-b542-a29576f2260c'
   expect(isVikingBotWebSession({ session_id: legacy }, [legacy])).toBe(true)
   expect(isVikingBotWebSession({ session_id: legacy }, [])).toBe(false)

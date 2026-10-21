@@ -8,7 +8,12 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), save: vi.fn() }))
 vi.mock('./api', () => ({ fetchSessionFirstTitle: mocks.fetch }))
 vi.mock('./use-session-titles', () => ({
   useSessionTitles: () => ({
-    getTitle: (id: string) => (id === 'custom' ? 'My title' : id),
+    getTitle: (id: string) =>
+      id === 'custom'
+        ? 'My title'
+        : id === 'filesystem-draft'
+          ? '新建文件系统会话'
+          : id,
     setTitle: mocks.save,
   }),
 }))
@@ -20,7 +25,12 @@ it('backfills the first user text without fetching or replacing a custom title',
   mocks.fetch.mockResolvedValue('First question')
   const client = new QueryClient()
   renderHook(
-    () => useDefaultConversationTitles('account', ['missing', 'custom']),
+    () =>
+      useDefaultConversationTitles('account', [
+        'missing',
+        'filesystem-draft',
+        'custom',
+      ]),
     {
       wrapper: ({ children }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -30,5 +40,13 @@ it('backfills the first user text without fetching or replacing a custom title',
   await waitFor(() =>
     expect(mocks.save).toHaveBeenCalledWith('missing', 'First question'),
   )
-  expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith('missing')
+  await waitFor(() =>
+    expect(mocks.save).toHaveBeenCalledWith(
+      'filesystem-draft',
+      'First question',
+    ),
+  )
+  expect(mocks.fetch).toHaveBeenCalledWith('missing')
+  expect(mocks.fetch).toHaveBeenCalledWith('filesystem-draft')
+  expect(mocks.fetch).toHaveBeenCalledTimes(2)
 })

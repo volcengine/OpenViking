@@ -4,6 +4,7 @@
 Tests for MemoryUpdater.
 """
 
+import errno
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,7 @@ import pytest
 from openviking.message import Message
 from openviking.message.part import TextPart, ToolPart
 from openviking.prompts.manager import PromptManager
+from openviking.pyagfs.exceptions import AGFSIoError
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
@@ -27,6 +29,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
     ExtractContext,
+    MemoryReadError,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -445,11 +448,15 @@ class TestMemoryUpdater:
         assert "deleted_event.md" not in document.body
 
     @pytest.mark.asyncio
-    async def test_generate_overview_template_fallbacks_for_preferences_and_entities(self):
+    async def test_generate_overview_template_fallbacks_for_builtin_memories(self):
         registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml("openviking/prompts/templates/memory/cases.yaml")
         registry.load_from_yaml("openviking/prompts/templates/memory/entities.yaml")
         registry.load_from_yaml("openviking/prompts/templates/memory/preferences.yaml")
 
+        case_dir = "viking://user/alice/memories/cases"
+        case_uri = f"{case_dir}/merged_case.md"
+        case_overview_uri = f"{case_dir}/.overview.md"
         entity_dir = "viking://user/alice/memories/entities/动漫角色"
         entity_uri = f"{entity_dir}/越前龙马.md"
         entity_overview_uri = f"{entity_dir}/.overview.md"
@@ -460,11 +467,14 @@ class TestMemoryUpdater:
         class FakeVikingFS:
             def __init__(self):
                 self.store = {
+                    case_uri: "Merged into another case.",
                     entity_uri: "A tennis character.",
                     preference_uri: "Prefers concise updates.",
                 }
 
             async def ls(self, uri, show_all_hidden=False, ctx=None):
+                if uri == case_dir:
+                    return [{"name": "merged_case.md", "isDir": False}]
                 if uri == entity_dir:
                     return [{"name": "越前龙马.md", "isDir": False}]
                 if uri == preference_dir:
@@ -486,13 +496,16 @@ class TestMemoryUpdater:
             "openviking.utils.embedding_utils.vectorize_directory_meta",
             new_callable=AsyncMock,
         ) as vectorize_directory_meta:
+            await updater.generate_overview("cases", case_dir, ctx, extract_context=None)
             await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
             await updater.generate_overview(
                 "preferences", preference_dir, ctx, extract_context=None
             )
 
-        assert vectorize_directory_meta.await_count == 2
+        assert vectorize_directory_meta.await_count == 3
 
+        assert "- [merged_case.md](./merged_case.md)" in viking_fs.store[case_overview_uri]
+        assert "no such element" not in viking_fs.store[case_overview_uri]
         assert "**Category:** 动漫角色" in viking_fs.store[entity_overview_uri]
         assert "- [越前龙马.md](./越前龙马.md)" in viking_fs.store[entity_overview_uri]
         assert "**User:** alice" in viking_fs.store[preference_overview_uri]
@@ -1306,15 +1319,32 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_apply_operations_keeps_source_when_locked_target_read_fails(self):
+    @pytest.mark.parametrize(
+        ("read_error", "retryable", "write_first"),
+        [
+            (OSError(errno.EIO, "transient read failure"), True, False),
+            (TimeoutError("read timeout"), True, False),
+            (AGFSIoError("storage I/O failure"), True, False),
+            (PermissionError("read denied"), False, False),
+            (OSError("unclassified read failure"), False, False),
+            (TimeoutError("read after earlier write"), False, True),
+        ],
+    )
+    async def test_apply_operations_preserves_memories_when_fresh_reads_fail(
+        self, read_error, retryable, write_first
+    ):
         source_uri = "viking://user/u/memories/entities/person/阿珍.md"
         target_uri = "viking://user/u/memories/entities/person/陈静娴.md"
+        update_uri = "viking://user/u/memories/entities/person/小王.md"
         old_file = MemoryFile(uri=source_uri, memory_type="entities", content="source")
         mock_viking_fs = MagicMock()
-        mock_viking_fs.read_file = AsyncMock(
-            side_effect=[NotFoundError(target_uri, "file"), OSError("read failed")]
-        )
-        updater = MemoryUpdater(registry=MagicMock())
+        reads = [NotFoundError(target_uri, "file"), read_error]
+        reads.extend([FileNotFoundError(), read_error] if write_first else [read_error])
+        mock_viking_fs.read_file = AsyncMock(side_effect=reads)
+        mock_viking_fs.write_file = AsyncMock()
+        registry = MagicMock()
+        registry.get.return_value = MemoryTypeSchema(memory_type="entities")
+        updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
         updater._apply_delete = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
@@ -1327,7 +1357,17 @@ class TestMemoryUpdater:
                     memory_fields={"name": "陈静娴"},
                     memory_type="entities",
                     uris=[target_uri],
-                )
+                ),
+                ResolvedOperation(
+                    old_memory_file_content=None
+                    if write_first
+                    else MemoryFile(
+                        uri=update_uri, memory_type="entities", content="stale snapshot"
+                    ),
+                    memory_fields={"content": "updated"},
+                    memory_type="entities",
+                    uris=[update_uri, update_uri + ".second"] if write_first else [update_uri],
+                ),
             ],
             delete_file_contents=[],
             errors=[],
@@ -1335,7 +1375,18 @@ class TestMemoryUpdater:
 
         result = await updater.apply_operations(operations, MagicMock())
 
-        assert any(uri == target_uri for uri, _error in result.errors)
+        read_errors = {
+            uri: error for uri, error in result.errors if isinstance(error, MemoryReadError)
+        }
+        assert set(read_errors) == {
+            target_uri,
+            *operations.upsert_operations[1].uris,
+        }
+        assert all(error.__cause__ is read_error for error in read_errors.values())
+        assert read_errors[update_uri].retryable is retryable
+        assert result.written_uris == []
+        assert result.edited_uris == []
+        assert mock_viking_fs.write_file.await_count == int(write_first)
         assert result.deleted_uris == []
         updater._apply_delete.assert_not_awaited()
 

@@ -8,11 +8,10 @@ All queues are managed through NamedQueue.
 import asyncio
 import atexit
 import threading
-import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
-from openviking.service.task_work_index import TaskWorkIndex
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -136,13 +135,12 @@ class QueueManager:
         self._queue_stop_events: Dict[str, threading.Event] = {}
         self._embedding_worker_stopped = threading.Event()
         self._poll_interval = 0.2
-        self._task_work_index = TaskWorkIndex()
         self._vlm_resolver: Optional["VLMResolver"] = None
         # Import at composition time to avoid a service <-> queue package cycle.
         from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 
         self._middlewares: tuple[QueueMiddleware, ...] = (
-            TaskWorkQueueMiddleware(self._task_work_index),
+            TaskWorkQueueMiddleware(),
             *middlewares,
         )
 
@@ -167,11 +165,55 @@ class QueueManager:
         logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
 
     async def prepare_task_tracking(self, tracker: Any) -> list[Any]:
-        """Rebuild task work from QueueFS before any consumer starts."""
+        """Bootstrap Work only for stores that reconstruct it from QueueFS."""
+        from openviking.service.task_domain import WorkRecoveryMode
+        from openviking.service.task_work_index import extract_task_metadata
+
+        if tracker.work_recovery_mode is WorkRecoveryMode.DURABLE_STORE:
+            return []
+
         snapshots = {name: await queue.snapshot() for name, queue in self._queues.items()}
-        owners = self._task_work_index.rebuild(snapshots)
-        tracker.attach_work_index(self._task_work_index)
+        owners: Dict[str, tuple[str, str]] = {}
+        for queue_name, messages in snapshots.items():
+            for message in messages:
+                metadata = extract_task_metadata(message)
+                if metadata is None or not metadata.account_id or not metadata.user_id:
+                    continue
+                owners[metadata.task_id] = (metadata.account_id, metadata.user_id)
+                await tracker.reconcile_delivery(
+                    metadata.task_id,
+                    metadata.work_id,
+                    queue_name,
+                    account_id=metadata.account_id,
+                    user_id=metadata.user_id,
+                )
         return await tracker.restore_work_tasks(owners)
+
+    async def get_queued_tasks(self, tracker: Any, queue_name: str) -> list[Any]:
+        """Read Tasks referenced by a queue's unacknowledged deliveries."""
+        from openviking.service.task_work_index import extract_task_metadata
+
+        queue = self._queues.get(queue_name)
+        if queue is None:
+            return []
+        tasks = []
+        seen: set[tuple[str, str, str]] = set()
+        for message in await queue.snapshot():
+            metadata = extract_task_metadata(message)
+            if metadata is None or not metadata.account_id or not metadata.user_id:
+                continue
+            key = (metadata.task_id, metadata.account_id, metadata.user_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            task = await tracker.get(
+                metadata.task_id,
+                account_id=metadata.account_id,
+                user_id=metadata.user_id,
+            )
+            if task is not None:
+                tasks.append(task)
+        return tasks
 
     def setup_standard_queues(
         self,
@@ -324,6 +366,14 @@ class QueueManager:
                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.run_until_complete(loop.shutdown_default_executor())
+            try:
+                loop.run_until_complete(LoopScopedAsyncClientCache.close_current_loop_clients())
+            except Exception:
+                logger.warning(
+                    "[QueueManager] Failed to close async clients for %s",
+                    queue.name,
+                    exc_info=True,
+                )
             loop.close()
             if queue.name == self.EMBEDDING:
                 # No more deliveries can start and active handlers have exited,
@@ -403,10 +453,16 @@ class QueueManager:
             stop_event.set()
         if self.EMBEDDING not in self._queue_threads:
             self._embedding_worker_stopped.set()
+        alive_workers = []
         for name, thread in self._queue_threads.items():
             thread.join(timeout=10.0)
             if thread.is_alive():
                 logger.warning(f"[QueueManager] Worker thread {name} did not exit in time")
+                alive_workers.append(name)
+        if alive_workers:
+            # Keep queues and dependencies available for pending finalizers and
+            # let the caller retry shutdown once the workers have terminated.
+            raise RuntimeError(f"Queue workers did not stop: {', '.join(alive_workers)}")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
 
@@ -512,17 +568,8 @@ class QueueManager:
         statuses = await self.check_status(queue_name)
         return all(s.is_complete for s in statuses.values())
 
-    async def wait_complete(
-        self,
-        queue_name: Optional[str] = None,
-        timeout: Optional[float] = None,
-        poll_interval: float = 0.5,
-    ) -> Dict[str, QueueStatus]:
-        """Wait for completion and return final status."""
-        start = time.time()
-        while True:
-            if await self.is_all_complete(queue_name):
-                return await self.check_status(queue_name)
-            if timeout and (time.time() - start) > timeout:
-                raise TimeoutError(f"Queue processing not complete after {timeout}s")
-            await asyncio.sleep(poll_interval)
+    async def wait_complete(self) -> Dict[str, QueueStatus]:
+        """Wait for all queues to complete and return their final status."""
+        while not await self.is_all_complete():
+            await asyncio.sleep(0.5)
+        return await self.check_status()

@@ -142,12 +142,22 @@ class OpenVikingCompactHook(Hook):
             admin_commit_result = await client.commit_session(
                 session_id=session_id,
                 keep_recent_count=0,
+                # VikingBot uses OV history even when the server defaults WM off.
+                enable_working_memory=True,
                 retention_mode="turn_budget",
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,
                 min_raw_tail_steps=min_raw_tail_steps,
                 user_id=session_user_id,
             )
+            confirmed = admin_commit_result.get("effective_enable_working_memory") is True
+            state["working_memory_confirmed"] = confirmed
+            if not confirmed:
+                # The caller only clears local messages after a successful sync.
+                raise RuntimeError(
+                    "OpenViking did not confirm Working Memory generation; "
+                    "session history was kept. Upgrade the server and retry."
+                )
             logger.info(
                 f"[HOOK] Committed session {session_id} for user {session_user_id or 'current'}"
             )

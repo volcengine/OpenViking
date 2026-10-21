@@ -11,8 +11,10 @@ pip install langchain-openviking                 # LangChain 适配器
 pip install "langchain-openviking[langgraph]"    # LangGraph middleware
 ```
 
-该集成独立于 OpenViking server 发布。为兼容现有应用，完整包仍会把旧的
-`openviking.integrations.langchain` 导入路径转发到 `langchain-openviking`。
+该集成独立于 OpenViking server 发布。从 v0.5.0 之后的下一个服务端版本开始，
+旧的 `openviking.integrations.langchain` 命名空间将移除，不提供兼容转发模块；
+v0.5.0 仍保留该路径。请安装独立包，并改用 `langchain_openviking` 导入，
+详见[未发布版本的迁移说明](../about/02-changelog.md#未发布)。
 
 ## 连接
 
@@ -242,7 +244,14 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
 ```
+
+按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
+删除不存在的键不会产生任何影响。
+
+`put()` 会在修改记录前校验命名空间。其他删除错误会向调用方抛出。
+记录和搜索索引文件分别删除；如果只完成其中一步，请解决报告的错误后重试，以完成清理。
 
 ### LangGraph middleware
 
@@ -295,17 +304,17 @@ commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPar
 仓库内提供了可直接运行的最小示例，使用内存测试客户端，无需模型凭证：
 
 ```bash
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/rag/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/context-backend/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langchain/message-history/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/agent/quick_app.py
+uv run --project integrations/frameworks/langchain --extra langgraph python integrations/frameworks/langchain/examples/langgraph/middleware/quick_app.py
 ```
 
-连接真实 OpenViking 服务和 OpenAI 兼容模型的示例见 [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py)。
+连接真实 OpenViking 服务和 OpenAI 兼容模型的示例见 [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/integrations/frameworks/langchain/examples/langgraph/agent/live_app.py)。
 
 ## 参见
 
 - [集成能力参考](./16-capability-reference.md)
-- [examples/langchain-langgraph/](https://github.com/volcengine/OpenViking/tree/main/examples/langchain-langgraph) — 上面所有示例的完整源码
+- [integrations/frameworks/langchain/examples/](https://github.com/volcengine/OpenViking/tree/main/integrations/frameworks/langchain/examples) — 上面所有示例的完整源码
 - [MCP 客户端](./06-mcp-clients.md) — 非 SDK 方式的 MCP 集成

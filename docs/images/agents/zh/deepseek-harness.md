@@ -25,7 +25,8 @@ curl -fsSL https://openviking.ai/install | bash
 |---|---|
 | 没有上下文注入，也没有 OpenViking 工具 | 执行 `dsh --profile web --dump-config`，确认输出中包含 `openviking-memory`；若缺失，重新运行安装器或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` |
 | 插件安装到了错误的 profile | 安装器默认使用 `web`；把命令末尾的 `bash` 换成 `bash -s -- --dsh-profile <name>` 重新运行 |
-| 安装时报 `ERESOLVE @deepseek-ai/dsh-*` | 各包预发布 tag 可能不同步，请精确安装 `@deepseek-ai/dsh@0.1.0-rc.6` |
+| DSH 提示插件与当前 dsh 版本不兼容 | 插件接受 `0.1.0-rc.6` 起的所有 DSH 0.x 版本；DSH 已是 1.0 或更高时，升级插件或运行 `dsh plugin allow-version` |
+| 升级 DSH 后插件启动失败 | 更新的 0.x 版本不经预先验证就会被接受；请把 DSH 固定到已验证的版本（如 `0.2.0-rc.2`），并提 issue |
 | 安装时提示包不在 npm registry 中 | pnpm 默认拒绝发布不满 24 小时的版本；可稍后重试，或把精确版本加入 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` |
 | 无法召回历史记忆 | 先执行 `curl http://localhost:1933/health` 确认服务端正常；再检查端点配置，并确认 prompt 不少于 3 个字符 |
 | OpenViking 返回 401 / 403 | 检查 API Key；可信模式部署还需检查 `OPENVIKING_ACCOUNT` 与 `OPENVIKING_USER` |

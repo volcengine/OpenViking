@@ -43,20 +43,20 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, `working_memory.enabled` defaults to `false` (no archive/checkpoint summaries); explicitly set it to `true` to generate summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 | auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If omitted, the new Session inherits `server.user_config_defaults.auto_commit_policy`, then the existing `memory.session_auto_commit.enabled` behavior. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
-| Field | Type | Default | Max | Description |
-|-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
-| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
-| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+| Field | Type | Default | Min | Max | Description |
+|-------|------|---------|-----|-----|-------------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 0 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 0 (off) or 300 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
+| `keep_recent_count` | int | 0 | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
-All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
+New `idle_timeout_seconds` inputs must be `0` (off) or at least `300`; values above `604800` are clamped to that maximum. For stored-data compatibility, existing positive values below 300 continue to be read unchanged. Other fields have a minimum of `0` and are clamped to their ranges. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
 
 #### 3. Usage Examples
 
@@ -807,7 +807,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 #### 1. API Implementation Introduction
 
-Get the full contents of one completed archive for a session. This endpoint is typically used with `get_session_context()` when you need to view older archive details.
+Get the full contents of one completed archive for a session. A normal WM-disabled archive returns its raw `messages` with empty `abstract` and `overview`; no summary is generated on read. Pending, failed, missing, or corrupt archives retain their existing error behavior. This explicit history read is independent of the bounded `get_session_context()` prompt view.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
@@ -1333,9 +1333,11 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 Commit a session. Message archiving (Phase 1) completes before the response returns. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
+The former standalone session `extract` endpoint has been removed. Use `commit` for memory extraction. This archives messages according to the retention policy; use the returned `task_id` to check the background extraction result. An `accepted` response does not mean extraction is complete.
+
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1) and extract long-term memories
+- **Phase 2 (Asynchronous)**: Extract long-term memories; generate WM/checkpoint summaries only when the effective WM policy is enabled (default: disabled)
 
 **Notes:**
 - Consecutive commits are accepted; only requests that produce an archive return a separate `task_id`. No-op commits do not create tasks.
@@ -1358,6 +1360,7 @@ Commit a session. Message archiving (Phase 1) completes before the response retu
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
+| enable_working_memory | bool or null | No | null | Override only WM generation for this commit. Omitted/null inherits the resolved policy; true/false leaves self/peer/memory_types and saved policies unchanged. Strings/numbers are rejected. The response includes `effective_enable_working_memory`. |
 | reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
 
 `reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. The SDK and CLI do not expose a dedicated `reset_context` option; use the HTTP API when needed.
@@ -1471,43 +1474,6 @@ ov session commit a1b2c3d4
   }
 }
 ```
-
----
-
-### extract()
-
-#### 1. API Implementation Introduction
-
-Extract memories from the existing session’s current live messages and wait for the extraction result. This does not create a commit task or replace archiving; previously archived history is not included again as live input.
-
-**Code Entries:**
-- `openviking/server/routers/sessions.py:extract_session()` - HTTP route
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID to extract memories from |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**Response Example**
-
-The response’s `result` field contains the list of extracted memory writes. The exact item shape depends on which memories were produced for that session.
 
 <a id="get_task"></a><a id="list_tasks"></a>
 

@@ -12,6 +12,7 @@ const detailKeys = {
   rootAvailable: 'health.detail.rootAvailable',
   tenantDataAvailable: 'health.detail.tenantDataAvailable',
   trustedIdentityRequired: 'health.detail.trustedIdentityRequired',
+  trustedKeyRequired: 'health.detail.trustedKeyRequired',
 } as const satisfies Record<CapabilityDetailCode, string>
 
 export function localizeCapabilityDetail(

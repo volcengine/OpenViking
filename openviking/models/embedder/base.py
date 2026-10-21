@@ -12,18 +12,14 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
+from openviking.models.model_error import model_error_kind
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
     resolve_embedding_max_input_tokens,
     truncate_embedding_input,
 )
 from openviking.utils.exceptions import AllCredentialsFailedError
-from openviking.utils.model_retry import (
-    OrderedCredentialSwitcher,
-    classify_api_error,
-    retry_async,
-    retry_sync,
-)
+from openviking.utils.model_retry import OrderedCredentialSwitcher
 from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
@@ -200,6 +196,19 @@ async def embed_compat(
         return await embedder.embed_async(embedding_input, is_query=is_query)
 
 
+async def embedder_supports_multimodal(embedder: Any) -> bool:
+    """Whether ``embedder`` accepts image inputs.
+
+    Account-bound embedders resolve the account's current resource, so the
+    capability must be read asynchronously instead of from an attribute.
+    """
+    from openviking.config.embedding import AccountBoundEmbedder
+
+    if isinstance(embedder, AccountBoundEmbedder):
+        return await embedder.supports_multimodal_async()
+    return bool(getattr(embedder, "supports_multimodal", False))
+
+
 async def _embed_from_request_cache(
     key: Any, factory: Callable[[], Awaitable["EmbedResult"]]
 ) -> "EmbedResult":
@@ -364,66 +373,58 @@ class EmbedderBase(ABC):
         """Release resources, subclasses can override as needed"""
         pass
 
-    def _run_with_retry(self, func: Callable[[], T], *, logger=None, operation_name: str) -> T:
-        def _wrapped() -> T:
-            previous_started_at = self._active_call_started_at
-            self._active_call_started_at = time.monotonic()
-            try:
-                return func()
-            finally:
-                self._active_call_started_at = previous_started_at
+    def _run_once(
+        self,
+        func: Callable[[], T],
+        *,
+        logger=None,
+        operation_name: str = "embedding",
+    ) -> T:
+        """Run one provider request with per-attempt timing state."""
+        previous_started_at = self._active_call_started_at
+        self._active_call_started_at = time.monotonic()
+        try:
+            return func()
+        finally:
+            self._active_call_started_at = previous_started_at
 
-        return retry_sync(
-            _wrapped,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name=operation_name,
-        )
-
-    async def _run_with_async_retry(
+    async def _run_once_async(
         self,
         func: Callable[[], Awaitable[T]],
         *,
         logger=None,
         operation_name: str,
     ) -> T:
-        async def _wrapped() -> T:
-            semaphore = getattr(self, "_account_semaphore", None)
-            if semaphore is None:
-                semaphore = _get_async_embed_semaphore(self.max_concurrent)
-            wait_started = time.monotonic()
-            await semaphore.acquire()
-            wait_elapsed = time.monotonic() - wait_started
-            telemetry = get_current_telemetry()
-            telemetry.set("embedding.async.max_concurrent", self.max_concurrent)
-            telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
+        """Run one async provider request with concurrency and telemetry guards."""
+        semaphore = getattr(self, "_account_semaphore", None)
+        if semaphore is None:
+            semaphore = _get_async_embed_semaphore(self.max_concurrent)
+        wait_started = time.monotonic()
+        await semaphore.acquire()
+        wait_elapsed = time.monotonic() - wait_started
+        telemetry = get_current_telemetry()
+        telemetry.set("embedding.async.max_concurrent", self.max_concurrent)
+        telemetry.set("embedding.async.wait_ms", round(wait_elapsed * 1000, 3))
 
-            started = time.monotonic()
-            previous_started_at = self._active_call_started_at
-            self._active_call_started_at = started
-            try:
-                return await func()
-            finally:
-                elapsed = time.monotonic() - started
-                telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
-                if logger and elapsed >= 3.0:
-                    logger.warning(
-                        "%s slow call provider=%s model=%s wait_ms=%.2f duration_ms=%.2f",
-                        operation_name,
-                        self.provider,
-                        self.model_name,
-                        wait_elapsed * 1000,
-                        elapsed * 1000,
-                    )
-                self._active_call_started_at = previous_started_at
-                semaphore.release()
-
-        return await retry_async(
-            _wrapped,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name=operation_name,
-        )
+        started = time.monotonic()
+        previous_started_at = self._active_call_started_at
+        self._active_call_started_at = started
+        try:
+            return await func()
+        finally:
+            elapsed = time.monotonic() - started
+            telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
+            if logger and elapsed >= 3.0:
+                logger.warning(
+                    "%s slow call provider=%s model=%s wait_ms=%.2f duration_ms=%.2f",
+                    operation_name,
+                    self.provider,
+                    self.model_name,
+                    wait_elapsed * 1000,
+                    elapsed * 1000,
+                )
+            self._active_call_started_at = previous_started_at
+            semaphore.release()
 
     @property
     def is_dense(self) -> bool:
@@ -478,6 +479,7 @@ class EmbedderBase(ABC):
         try:
             from openviking.metrics.datasources import EmbeddingEventDataSource
             from openviking.observability.context import get_root_observability_context
+            from openviking.telemetry import get_ingestion_source_type
 
             root_context = get_root_observability_context()
 
@@ -489,6 +491,7 @@ class EmbedderBase(ABC):
                 completion_tokens=int(completion_tokens),
                 account_id=getattr(self, "_account_id", None)
                 or (root_context.account_id if root_context is not None else None),
+                source_type=get_ingestion_source_type(),
             )
         except Exception as e:
             # Metrics must never break embedding execution.
@@ -655,28 +658,38 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
     @property
     def supports_multimodal(self) -> bool:
-        """Supports multimodal input only if both sub-embedders do."""
-        return self.dense_embedder.supports_multimodal and self.sparse_embedder.supports_multimodal
+        """Images are handled by the dense channel; sparse consumes only text."""
+        return self.dense_embedder.supports_multimodal
+
+    def _sparse_input(self, content: "EmbeddingInput") -> Optional[str]:
+        text = extract_text_from_content(content)
+        if isinstance(content, list) and not text.strip():
+            return None
+        return self.sparse_embedder.prepare_embedding_input(text)
 
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
         dense_input = self.dense_embedder.prepare_embedding_input(content)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
+        sparse_input = self._sparse_input(content)
         dense_res = self.dense_embedder.embed(dense_input, is_query=is_query)
-        sparse_res = self.sparse_embedder.embed(sparse_input, is_query=is_query)
+        sparse_res = (
+            self.sparse_embedder.embed(sparse_input, is_query=is_query)
+            if sparse_input is not None
+            else None
+        )
 
         return EmbedResult(
-            dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
+            dense_vector=dense_res.dense_vector,
+            sparse_vector=sparse_res.sparse_vector if sparse_res is not None else None,
         )
 
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         dense_input = self.dense_embedder.prepare_embedding_input(content)
-        sparse_input = self.sparse_embedder.prepare_embedding_input(content)
-        calls = asyncio.gather(
-            self.dense_embedder.embed_async(dense_input, is_query=is_query),
-            self.sparse_embedder.embed_async(sparse_input, is_query=is_query),
-            return_exceptions=True,
-        )
+        sparse_input = self._sparse_input(content)
+        providers = [self.dense_embedder.embed_async(dense_input, is_query=is_query)]
+        if sparse_input is not None:
+            providers.append(self.sparse_embedder.embed_async(sparse_input, is_query=is_query))
+        calls = asyncio.gather(*providers, return_exceptions=True)
         # Keep the parent borrow alive until every child has stopped. Shielding
         # also lets cancellation wait for providers with asynchronous cleanup.
         from openviking.service.task_tracker_concurrency import run_to_completion
@@ -685,9 +698,11 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         for result in results:
             if isinstance(result, BaseException):
                 raise result
-        dense_res, sparse_res = results
+        dense_res = results[0]
+        sparse_res = results[1] if sparse_input is not None else None
         return EmbedResult(
-            dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
+            dense_vector=dense_res.dense_vector,
+            sparse_vector=sparse_res.sparse_vector if sparse_res is not None else None,
         )
 
     def get_dimension(self) -> int:
@@ -853,16 +868,18 @@ class FailoverEmbedder(EmbedderBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)
@@ -898,16 +915,18 @@ class FailoverEmbedder(EmbedderBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
+                kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(error_class):
+                if self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
+                aggregated_errors.append((credential_id, kind, exc, idx))
 
                 logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
+                    "Credential %s failed with %s, trying next credential",
+                    credential_id,
+                    kind.value,
                 )
 
         raise AllCredentialsFailedError(aggregated_errors)

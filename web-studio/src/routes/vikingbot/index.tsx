@@ -1,6 +1,6 @@
 import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { ConversationRow } from './-components/conversation-row'
-import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
+import { readFilesystemAgentSessionIds } from '#/routes/filesystem/-lib/utils'
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQueries, useQuery } from '@tanstack/react-query'
@@ -77,7 +77,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
     scope,
     sessions.data
       .filter((session) =>
-        isVikingBotWebSession(session, readPlaygroundAgentSessionIds(scope)),
+        isVikingBotWebSession(session, readFilesystemAgentSessionIds(scope)),
       )
       .map((session) => session.session_id),
   )
@@ -92,7 +92,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const rows = [
     ...sessions.data
       .filter((session) =>
-        isVikingBotWebSession(session, readPlaygroundAgentSessionIds(scope)),
+        isVikingBotWebSession(session, readFilesystemAgentSessionIds(scope)),
       )
       .map((session) => ({
         id: session.session_id,

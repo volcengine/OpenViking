@@ -54,7 +54,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、关
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | query | str | 否 | "" | 查询文本；图片查询或仅按过滤条件查询时可省略 |
-| image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
+| image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
@@ -180,6 +180,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 ```
 
 Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` 会要求全部命中；上面的例子只返回显式检索标签同时包含 `env=prod` 和 `team=search` 的上下文。
+
+完整索引记录写回或显式标签字段更新时，会丢弃存储中的遗留非法标签。读取只过滤非法标签，不修改存储。如需修复已知受影响的文件或目录，同时保留合法标签且不重新生成向量，可调用 `POST /api/v1/content/set_tags`，请求体为 `{"uri": "<affected-uri>", "tags": [], "mode": "append"}`。仅在需要同时修复目录后代时添加 `"recursive": true`。`default` 等裸值会被移除，不会通过猜测键名进行转换。
 
 **Python SDK**
 
@@ -392,8 +394,9 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | query | str | 否 | "" | 搜索查询字符串；未提供 `image_url` 时必填 |
-| image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
+| image_url | str 或 list[str] | 否 | None | 单个图片 URI 或有序图片 URI 数组，每项支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | search_type | `"semantic"` \| `"keywords"` | 否 | `"semantic"` | 检索类型。`semantic` 使用 Embedding 和向量召回；`keywords` 使用 BM25 关键词召回 |
+| mode | `"list"` \| `"context"` | 否 | `"list"` | 返回排序命中列表或组装好的上下文。CLI `--mode` 会映射到这个字段；context 专用参数见下文 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
@@ -568,6 +571,12 @@ fmt.Println(result.Total)
 # 带会话 ID 的搜索
 ov search "best practices" --session-id abc123
 
+# 按服务端默认配置组装上下文，并启用事件时间衰减
+ov search "recent decisions" --mode context --events-time-decay-protection 7d
+
+# 以 JSON 返回完整的 context 结果
+ov -o json search "best practices" --mode context
+
 # 限定上下文类型
 ov search "best practices" --context-type skill
 
@@ -593,6 +602,8 @@ ov search "how to implement OAuth" -L 1,2
 # 图片查询同样使用 --image；会直接检索并跳过 session planning
 ov search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
+
+`ov search --mode list` 为默认行为，返回常规命中列表。使用 `--mode context` 时，默认终端输出展示组装后的 `rendered` 文本（返回非空 `digest` 时优先展示摘要）；`-o json` 保留完整结果，包括 `entries`、`rendered`、`digest` 和 `stats`。CLI 暂未提供 `max_tokens`、`detail`、`rewrite` 等 context 专用选项，使用服务端默认值。context 模式拒绝 `--uri` 和 `--read-content`；服务端会忽略 `--level`，由组装流程选择内容档位。
 
 **响应示例**
 
@@ -660,7 +671,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 #### 2. 接口和参数说明
 
-**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额就是唯一候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
+**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额之和就是候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
 
 **L1 查询理解**
 
@@ -675,11 +686,11 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 |------|------|--------|------|
 | `limit` | int | 10 | 仅作为 quota-free 检索的候选条目上限；`purpose` 或 `quotas` 启用分桶后被忽略 |
 | `max_tokens` | int | 1600 | 唯一的预算参数，采用感知 CJK 的启发式估算（codepoint ≥ 0x3000 记 1.5 token/字，其余按 chars/4） |
-| `quotas` | object | None | 各桶绝对条数上限；键取 `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`。显式传入后忽略 `limit` |
-| `purpose` | `chat` \| `coding` | None | 按下表的绝对分类配额启用六域分桶采样；仅在未显式传 `quotas` 时生效 |
+| `quotas` | object | None | 各桶首轮条数上限，总和即候选上限；某个桶用不满的名额会让给其他桶剩余的最佳命中，`0` 表示关闭该桶。键取 `events`/`entities`/`preferences`/`experiences`/`resources`/`skills`。显式传入后忽略 `limit` |
+| `purpose` | `chat` \| `coding` | None | 按下表的分类配额启用六域分桶采样；仅在未显式传 `quotas` 时生效 |
 | `detail` | `abstract` \| `overview` \| `full` \| object | None | 为每条结果请求同一个起始档和最高档；请求档不可用或装不进预算时仍逐档退档而不截断。省略时按类别取默认档（见下）。也可传按类别的对象，如 `{"events":"overview","preferences":"abstract"}`，未列出的类别仍取默认档。`"auto"` 是已废弃的写法，等价于省略 |
 | `dedup_turns` | int | 0 | 跨轮冷却轮数，需要 `session_id`；账本存在 `{session_uri}/.recall_log.json` |
-| `exclude_uris` | string[] | [] | 无状态去重兜底，最多 200 条，与 `dedup_turns` 取并集 |
+| `exclude_uris` | string[] | [] | 无状态去重兜底，最多 200 条，与 `dedup_turns` 取并集。目录 URI 会排除整棵子树；只想排除已返回的目录节点本身时，回传它的 `.abstract.md` 和 `.overview.md` URI；`dedup_turns` 只冷却原样返回过的 URI |
 | `peer_scope` | `actor` \| `all` | `all` | `actor` 排除其他 peer，但仍保留全局、User 自有和当前 Actor Peer 内容 |
 | `other_peer_penalty` | number \| object | 按类型默认值 | 对其他 peer 结果施加的分数折损 |
 
@@ -692,8 +703,8 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 **档位规则**
 
-- **Purpose 预设**：`chat` 使用 `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`；`coding` 使用 `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`。这些值是每个分类的绝对上限，不是权重。各桶结果汇总后仍会去重并全局排序，但不会再被第二个全局 `limit` 截断
-- **按类别的默认档**：省略 `detail` 时，各类别落在下表的档位；文件条目中只有 `events` 的默认档需要回读正文；目录命中会读取 `.overview.md`
+- **Purpose 预设**：`chat` 使用 `events:3, entities:3, preferences:1, experiences:1, resources:1, skills:1`；`coding` 使用 `events:1, entities:2, preferences:1, experiences:1, resources:3, skills:2`。每个桶先按自己的配额取条目；某个桶命中不足时，空出的名额让给其他桶剩余的最佳命中，总数（两个预设都是 10）不会超出。各桶结果汇总后仍会去重并全局排序，但不会再被第二个全局 `limit` 截断
+- **按类别的默认档**：省略 `detail` 时，各类别落在下表的档位；文件条目中只有 `events` 的默认档需要回读正文；目录命中会读取 `.overview.md`。预置的作用域目录（`viking://resources`、`viking://agent` 及其预置子目录、用户根目录及其一级目录）只用于导航，不会作为条目返回，即使它们的 `.overview.md` 已按内容重新生成也一样
 
   | 类别 | 默认档 | 剩余预算可加深到 | 原因 |
   |------|--------|------------------|------|
@@ -844,7 +855,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
+| level_limit | int | 否 | 10 | 最大目录遍历深度。HTTP SDK 未指定时使用服务端默认值。 |
 | tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
 | before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |

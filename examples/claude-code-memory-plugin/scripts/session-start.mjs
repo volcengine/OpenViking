@@ -14,8 +14,8 @@
  *   2. Archive injection (resume/compact only): OV's persistent session's
  *      latest_archive_overview, fetched at OPENVIKING_RESUME_CONTEXT_BUDGET
  *      tokens. For "compact" this is OV's canonical long-term record alongside
- *      CC's own compact summary; for "resume" it re-hydrates context lost when
- *      CC restarted.
+ *      CC's own compact summary; for "resume" it supplements the history restored by CC.
+ *      This optional injection is disabled by default.
  *
  * The composed payload is mirrored to ~/.openviking/last_inject.md for audit.
  */
@@ -87,7 +87,7 @@ function formatArchiveSection(sessionCtx, ovSessionId, maxBytes = 0) {
 
 function writeLastInject(content) {
   try {
-    const path = join(homedir(), ".openviking", "last_inject.md");
+    const path = join(process.env.OPENVIKING_HOME || join(homedir(), ".openviking"), "last_inject.md");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content, "utf-8");
   } catch {
@@ -106,7 +106,7 @@ runHookStage({
   log("start", { source, sessionId, peerSource: effectivePeer.source });
 
   const willInjectProfile = !cfg.noAutoInject;
-  const willInjectArchive = (source === "resume" || source === "compact") && !!sessionId;
+  const willInjectArchive = cfg.resumeArchiveInject && (source === "resume" || source === "compact") && !!sessionId;
 
   const health = await fetchJSON("/health");
   if (!health.ok) {
@@ -136,7 +136,7 @@ runHookStage({
   const maxBytes = cfg.sessionStartMaxBytes || 0;
   let archiveSection = null;
   let ovSessionId = null;
-  if ((source === "resume" || source === "compact") && sessionId) {
+  if (willInjectArchive) {
     ovSessionId = deriveOvSessionId(sessionId);
     const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
     archiveSection = formatArchiveSection(sessionCtx, ovSessionId, Math.floor(maxBytes / 2));

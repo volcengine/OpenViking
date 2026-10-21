@@ -1188,6 +1188,12 @@ async def test_add_resource_routes_git_repo_to_connector(
         submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
     )
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    record_import = Mock()
+    monkeypatch.setattr(
+        connector_delegate_module.ResourceIngestionEventDataSource,
+        "record_import",
+        record_import,
+    )
 
     await service.add_resource(
         path="https://git.example/org/repo.git",
@@ -1208,6 +1214,11 @@ async def test_add_resource_routes_git_repo_to_connector(
         },
         auth_config=None,
         extra_params=None,
+    )
+    record_import.assert_called_once_with(
+        pipeline="connector",
+        source_type="repository",
+        account_id="acct",
     )
 
 
@@ -1410,6 +1421,12 @@ async def test_connector_import_persists_task_before_remote_submission(
 
     connector_client = SimpleNamespace(submit_doc_add=AsyncMock(side_effect=fail_submission))
     _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    record_import = Mock()
+    monkeypatch.setattr(
+        connector_delegate_module.ResourceIngestionEventDataSource,
+        "record_import",
+        record_import,
+    )
 
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError, match="submission failed"):
@@ -1425,6 +1442,7 @@ async def test_connector_import_persists_task_before_remote_submission(
         account_id="acct",
         user_id="alice",
     )
+    record_import.assert_not_called()
     assert "secret-value" not in caplog.text
 
 

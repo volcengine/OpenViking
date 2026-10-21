@@ -45,6 +45,8 @@ from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.registry import tool_error
 from utils import atomic_json_write, env_var_enabled
 
+from . import quick_local
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows
@@ -67,6 +69,51 @@ _OVCLI_SAVED_PREFIX = "ovcli.conf."
 _CONNECTION_KEYS = ("endpoint", "api_key", "account", "user", "agent")
 _IDENTITY_UNSET = object()
 _OPENVIKING_ENV_KEYS = tuple(f"OPENVIKING_{key.upper()}" for key in _CONNECTION_KEYS)
+_EXTRA_HEADERS_ENV = "OPENVIKING_EXTRA_HEADERS"
+_RESERVED_HEADER_PREFIX = "x-openviking-"
+
+
+def _parse_extra_headers(raw) -> dict:
+    """Extra HTTP headers to send on every OpenViking request.
+
+    Mirrors the JS layer (memory-plugin-shared/lib/mcp-proxy-config.mjs): a JSON
+    object whose values are scalars. Reserved X-OpenViking-* names are dropped so a
+    caller-supplied map can never assert tenant identity (trusted mode reads those
+    as identity, so allowing them would be an impersonation vector).
+    """
+    data = raw
+    if isinstance(data, str):
+        text = data.strip()
+        if not text:
+            return {}
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            logger.warning("%s is not valid JSON; ignoring", _EXTRA_HEADERS_ENV)
+            return {}
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("extra headers must be a JSON object of string values; ignoring")
+        return {}
+    parsed = {}
+    for name, value in data.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip()
+        if key.lower().startswith(_RESERVED_HEADER_PREFIX):
+            logger.warning("extra headers: ignoring reserved header %r", key)
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            logger.warning("extra headers: header %r must be a scalar; ignoring", key)
+            continue
+        parsed[key] = str(value)
+    return parsed
+
+
+def _extra_headers_key(headers) -> str:
+    """Stable fingerprint so a changed map refreshes the cached client."""
+    return json.dumps(headers or {}, sort_keys=True, separators=(",", ":"))
 _TIMEOUT = 30.0
 _SESSION_DRAIN_TIMEOUT = 10.0
 _DEFERRED_COMMIT_TIMEOUT = (_TIMEOUT * 2) + 5.0
@@ -220,6 +267,10 @@ def _status_code_from_error(error: Exception) -> Optional[int]:
     return getattr(getattr(error, "response", None), "status_code", None)
 
 
+def _is_redirect(status: Optional[int]) -> bool:
+    return isinstance(status, int) and 300 <= status < 400
+
+
 def _format_openviking_exception(error: Exception) -> str:
     return _sanitize_openviking_error_message(str(error), _status_code_from_error(error))
 
@@ -285,7 +336,8 @@ class _VikingClient:
     def __init__(self, endpoint: str, api_key: str = "",
                  account: Optional[str] | object = _IDENTITY_UNSET,
                  user: Optional[str] | object = _IDENTITY_UNSET,
-                 agent: Optional[str] | object = _IDENTITY_UNSET):
+                 agent: Optional[str] | object = _IDENTITY_UNSET,
+                 extra_headers: Optional[dict] | object = _IDENTITY_UNSET):
         self._endpoint = endpoint.rstrip("/")
         self._api_key = api_key
         # Account/user are local/trusted-mode tenant identity. API-key requests
@@ -295,7 +347,17 @@ class _VikingClient:
         self._account = (get_secret("OPENVIKING_ACCOUNT", "") if account is _IDENTITY_UNSET or account is None else account) or "default"
         self._user = (get_secret("OPENVIKING_USER", "") if user is _IDENTITY_UNSET or user is None else user) or "default"
         self._agent = (get_secret("OPENVIKING_AGENT", "") or _DEFAULT_AGENT) if agent is _IDENTITY_UNSET or agent is None else agent
+        # Extra HTTP headers (e.g. Cloudflare Access service tokens) — same resolution
+        # shape as the identity fields above: an explicit value wins, otherwise the
+        # profile's OPENVIKING_EXTRA_HEADERS.
+        self._extra_headers = (
+            _parse_extra_headers(get_secret(_EXTRA_HEADERS_ENV))
+            if extra_headers is _IDENTITY_UNSET or extra_headers is None
+            else _parse_extra_headers(extra_headers)
+        )
         # Every client owns its resolved identity, including clients retained across reloads.
+        # The snapshot stays a 5-tuple on purpose: it is unpacked positionally in several
+        # places, so extra headers ride beside it (self._extra_headers) instead.
         self._conn_snapshot = (self._endpoint, self._api_key, self._account, self._user, self._agent)
         self._httpx = _get_httpx()
         if self._httpx is None:
@@ -311,6 +373,10 @@ class _VikingClient:
             h.update({k: v for k, v in (("X-OpenViking-Account", self._account), ("X-OpenViking-User", self._user)) if v})
         if self._api_key:
             h.update({"X-API-Key": self._api_key, "Authorization": "Bearer " + self._api_key})
+        if self._extra_headers:
+            # Operator-supplied headers fill gaps; ours win, so a stray entry can never
+            # override authentication or tenant identity.
+            return {**self._extra_headers, **h}
         return h
 
     @staticmethod
@@ -390,12 +456,103 @@ class _VikingClient:
 
     def _anonymous_json(self, path: str) -> dict:
         """Probe server identity without disclosing credentials or tenant IDs."""
-        return self._parse_response(self._httpx.get(f"{self._endpoint}{path}", headers={"Accept": "application/json"}, timeout=3.0))
+        resp = self._httpx.get(
+            f"{self._endpoint}{path}",
+            headers={"Accept": "application/json"},
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int) and 300 <= status < 400:
+            # An authenticating gateway answered the anonymous probe with a redirect to
+            # its own login page. Surface the status instead of parsing the HTML body
+            # into an empty dict, so callers can retry with credentials.
+            raise _OpenVikingHTTPError(f"HTTP {status}", status)
+        return self._parse_response(resp)
+
+    def _probe_retry_headers(self, *, gateway_only: bool) -> dict:
+        """Headers a retry may carry, limited to what that response authorizes.
+
+        ``gateway_only`` is the operator's ``extra_headers`` and nothing else: a gateway
+        never asks for the OpenViking key, so a redirect retry must not carry it. The other
+        set is the one every other request uses (the key, tenant-free).
+        """
+        if gateway_only:
+            return dict(self._extra_headers)
+        return self._headers(include_tenant=False)
+
+    def _probe_retry_json(self, *, gateway_only: bool) -> dict:
+        """One probe retry with either the gateway headers or the key."""
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=gateway_only),
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        return self._probe_json(resp, gateway_only=gateway_only)
+
+    def _probe_json(self, resp, *, gateway_only: bool) -> dict:
+        """Parse a probe response, never reading a 3xx as if it were a payload.
+
+        ``_parse_response`` only raises at ``>= 400``, so a retry that lands on a redirect
+        would otherwise come back as an empty dict (an HTML login page) or — when the
+        redirect body happens to be JSON — as a healthy payload. Either way the probe would
+        accept an answer nobody gave: the endpoint is still gating the request.
+        """
+        status = getattr(resp, "status_code", None)
+        if _is_redirect(status):
+            if gateway_only:
+                sent = "extra_headers"
+                detail = ("the gateway is still redirecting, so check that the configured "
+                          "gateway credentials are valid")
+            else:
+                sent = "the API key"
+                detail = ("the endpoint is still redirecting, so check the API key and any "
+                          "gateway credentials")
+            raise _OpenVikingHTTPError(f"HTTP {status} after retrying with {sent}: {detail}", status)
+        return self._parse_response(resp)
+
+    def _probe_gateway_retry(self) -> dict:
+        """Retry the probe with the operator's gateway headers only.
+
+        Bounded to one extra request, and the redirect destination is never followed. If the
+        gateway lets the probe through and the server behind it then asks for credentials
+        (401/403), that explicit challenge is answered by the ordinary key retry, so the key
+        still stays out of the redirect attempt itself.
+        """
+        resp = self._httpx.get(
+            f"{self._endpoint}/health",
+            headers=self._probe_retry_headers(gateway_only=True),
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        if getattr(resp, "status_code", None) in (401, 403) and self._api_key:
+            return self._probe_retry_json(gateway_only=False)
+        return self._probe_json(resp, gateway_only=True)
 
     def health_payload(self) -> dict:
         """``GET /health``, anonymous first so credentials never reach an unknown host.
-        Hosted OpenViking requires auth on /health: when an API key is configured and the
-        anonymous call gets 401/403, retry once with the key (no tenant headers).
+        Hosted OpenViking requires auth on /health: an explicit 401/403 challenge is retried
+        once with the key (no tenant headers), exactly as it always was.
+
+        A 3xx is a gateway answering. It is retried only when this connection carries gateway
+        headers — the operator's declaration that an authenticating gateway (Cloudflare
+        Access, oauth2-proxy, ...) fronts the endpoint — and that retry carries nothing but
+        those headers: no key, no peer identity, and no API key is required for it, because
+        none is sent. If the gateway then lets us through to a server that asks for
+        credentials itself, that 401/403 is handled by the ordinary key retry. An ordinary
+        redirect from an endpoint that has not been shown to be OpenViking is not
+        authorization to resend secrets, so it stays a failure, and the login URL is never
+        followed.
+
+        A ``401``/``403`` is the endpoint asking for credentials, and which credential it
+        wants is not knowable from the status alone: an OpenViking server wants the key, a
+        gateway (oauth2-proxy, many WAFs) wants its own headers and answers 401/403 rather
+        than redirecting. So the key is tried when one is configured, and the gateway headers
+        are tried when they are — a gateway-only deployment has no key to try, and gating the
+        gateway retry on a key it never sends is what kept such a deployment from starting at
+        all. When both are configured the key is tried first, which is the pre-existing
+        behaviour, and the gateway headers are not retried a second time.
 
         Prefer an anonymous probe so credentials are never sent to an unknown host during identity checks.
         See #78410.
@@ -403,9 +560,18 @@ class _VikingClient:
         try:
             return self._anonymous_json("/health")
         except _OpenVikingHTTPError as exc:
-            if not self._api_key or _status_code_from_error(exc) not in {401, 403}:
+            status = _status_code_from_error(exc)
+            if _is_redirect(status):
+                if not self._extra_headers:
+                    raise
+                return self._probe_gateway_retry()
+            if status not in (401, 403):
                 raise
-            return self._parse_response(self._httpx.get(f"{self._endpoint}/health", headers=self._headers(include_tenant=False), timeout=3.0))
+            if self._api_key:
+                return self._probe_retry_json(gateway_only=False)
+            if self._extra_headers:
+                return self._probe_gateway_retry()
+            raise
 
     def openapi_payload(self) -> dict:
         return self._anonymous_json("/openapi.json")
@@ -495,7 +661,6 @@ ADD_RESOURCE_SCHEMA = _tool_schema(
         "parent": _str("Optional parent viking:// URI. Cannot be used with to."),
         "instruction": _str("Optional processing instruction for semantic extraction."),
         "wait": {"type": "boolean", "description": "Whether to wait for processing to complete."},
-        "timeout": {"type": "number", "description": "Timeout in seconds when wait is true."},
     },
     ["url"],
 )
@@ -648,6 +813,7 @@ def _connection_values_from_ovcli(data: dict) -> dict:
         "account": _clean_config_value(data.get("account") or data.get("account_id")) if send_identity else "",
         "user": _clean_config_value(data.get("user") or data.get("user_id")) if send_identity else "",
         "agent": _clean_config_value(data.get("actor_peer_id") or data.get("agent_id")),
+        "extra_headers": _parse_extra_headers(data.get("extra_headers")),
     }
 
 
@@ -870,21 +1036,38 @@ def _profile_openviking_env(hermes_home: Optional[str]) -> Optional[dict]:
         return {}  # A failed profile read must not borrow another profile's credentials.
 
 
+def _provider_ovcli_config_path(provider_config: dict, *, env: Optional[dict] = None, hermes_home=None) -> Path:
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        return quick_local.managed_paths(Path(hermes_home or get_hermes_home())).ovcli_config
+    return _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""), env=env)
+
+
 def _ovcli_values_for(provider_config: dict, *, env: Optional[dict] = None) -> dict:
     """Connection values from the linked ovcli profile, or {} when none is linked."""
     if not provider_config.get("use_ovcli_config"):
         return {}
-    ovcli_path = _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""), env=env)
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        return _connection_values_from_ovcli(quick_local.connection_config(provider_config, get_hermes_home()))
+    ovcli_path = _provider_ovcli_config_path(provider_config, env=env)
     return _connection_values_from_ovcli(_load_ovcli_config(ovcli_path))
 
 
-def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env: Optional[dict] = None) -> dict:
+def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env: Optional[dict] = None, hermes_home=None) -> dict:
     """Layering: env -> linked ovcli profile -> config.yaml -> built-in default.
     An env account/user (even empty) is authoritative; the secret api_key never
     comes from config.yaml. Every env read goes through the profile secret scope:
     under multiplexing ``os.environ`` is the DEFAULT profile's .env, and a raw read
     would spend its key and tenant on behalf of a secondary profile."""
     provider_config = dict(provider_config or {})
+    if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+        try:
+            profile = quick_local.connection_config(provider_config, Path(hermes_home or get_hermes_home()))
+        except quick_local.QuickLocalSetupError as exc:
+            raise _OpenVikingEndpointError(str(exc)) from exc
+        values = _connection_values_from_ovcli(profile)
+        resolved = {key: values[key] or ("default" if key in ("account", "user") else _DEFAULT_AGENT if key == "agent" else "") for key in _CONNECTION_KEYS}
+        resolved["extra_headers"] = values.get("extra_headers") or {}
+        return resolved
     ovcli_values = _ovcli_values_for(provider_config, env=env)
 
     def layered(key: str, default: str = "", *, env_authoritative: bool = False) -> str:
@@ -900,12 +1083,14 @@ def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env:
     account = layered("account", env_authoritative=True)
     user = layered("user", env_authoritative=True)
     account, user = account or "default", user or "default"
+    extra_headers_raw = get_secret(_EXTRA_HEADERS_ENV) if env is None else env.get(_EXTRA_HEADERS_ENV)
     return {
         "endpoint": _normalize_openviking_url(layered("endpoint", _DEFAULT_ENDPOINT)),
         "api_key": api_key,
         "account": account,
         "user": user,
         "agent": layered("agent", _DEFAULT_AGENT),
+        "extra_headers": _parse_extra_headers(extra_headers_raw) or ovcli_values.get("extra_headers") or {},
     }
 
 
@@ -1093,7 +1278,7 @@ def _local_listener_suffix(endpoint: str) -> str:
     return f" The listener on {host}:{port} is {_describe_local_port_listener(host, port)}."
 
 
-def _start_local_openviking_server(endpoint: str) -> tuple[str, str]:
+def _start_local_openviking_server(endpoint: str, *, hermes_home=None) -> tuple[str, str]:
     try:
         host, port = _local_openviking_bind(endpoint)
     except ValueError as e:
@@ -1109,7 +1294,7 @@ def _start_local_openviking_server(endpoint: str) -> tuple[str, str]:
     server_cmd = shutil.which("openviking-server")
     if not server_cmd:
         return _LOCAL_SERVER_FAILED, "openviking-server was not found on PATH. Start it manually, then retry."
-    log_path = get_hermes_home() / _OPENVIKING_SERVER_LOG_RELATIVE_PATH
+    log_path = Path(hermes_home or get_hermes_home()) / _OPENVIKING_SERVER_LOG_RELATIVE_PATH
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         # Strip PYTHONPATH: the Desktop backend puts the Hermes venv on it, which
@@ -1119,7 +1304,33 @@ def _start_local_openviking_server(endpoint: str) -> tuple[str, str]:
         # would import aiohttp and friends from the Hermes venv instead of its own (its venv's site-packages
         # are shadowed because PYTHONPATH precedes them) — and on Windows the loaded DLLs then lock the
         # Hermes venv, aborting `hermes update` with access-denied on .pyd files. (#78153)
-        child_env = os.environ.copy()
+        # The server's embedding/VLM models may read provider keys, so the bound profile's pass;
+        # bot, gateway and GitHub tokens never do. HOME stays the user's: ov.conf defaults to
+        # ~/.openviking. Missing helpers fail startup rather than expose secrets.
+        from hermes_cli.config import OPTIONAL_ENV_VARS
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        from tools.environments.local import _finalize_child_env, _scrub_credentials, served_profile_child_env
+
+        home_token = set_hermes_home_override(hermes_home) if hermes_home else None
+        try:
+            # Profile hydration can re-add bot tokens. Reuse Hermes's credential
+            # policy after the overlay; these helpers predate the base_env API.
+            child_env = _scrub_credentials(
+                served_profile_child_env(target_home=hermes_home, inherit_credentials=True), inherit_credentials=True)
+            # Older hosts put gateway secrets in optional-credential metadata.
+            # Preserve model variables, including providers Hermes does not list.
+            for key in list(child_env):
+                metadata = OPTIONAL_ENV_VARS.get(key.upper(), {})
+                if (metadata.get("category") == "messaging"
+                        or (metadata.get("category") == "setting" and metadata.get("password"))
+                        or key.upper() in {"VERCEL_TOKEN", "VERCEL_OIDC_TOKEN"}):
+                    child_env.pop(key)
+            child_env = _finalize_child_env(child_env)
+        finally:
+            if home_token is not None:
+                reset_hermes_home_override(home_token)
+        if real_home := child_env.get("HERMES_REAL_HOME"):
+            child_env["HOME"] = real_home
         child_env.pop("PYTHONPATH", None)
         with log_path.open("ab") as log_file:
             subprocess.Popen([server_cmd, "--host", host, "--port", str(port)], stdout=log_file, stderr=log_file,
@@ -1152,10 +1363,10 @@ def _emit_runtime(message: str, callback=None, *, kind: str = "warning") -> None
             logger.debug("OpenViking runtime %s callback failed", kind, exc_info=True)
 
 
-def _runtime_openviking_timeout_message(endpoint: str) -> str:
+def _runtime_openviking_timeout_message(endpoint: str, timeout_seconds: float = _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT) -> str:
     return (
         f"Local OpenViking server at {endpoint} is not reachable. Tried to start openviking-server, but it did not "
-        f"become reachable within {_LOCAL_OPENVIKING_AUTOSTART_TIMEOUT:.0f} seconds. {_RETRY_LATER}"
+        f"become reachable within {timeout_seconds:.0f} seconds. {_RETRY_LATER}"
     )
 
 
@@ -1360,7 +1571,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
         """The resolved ovcli config (default ~/.openviking/ovcli.conf) so endpoint/api-key
         survive backup/import. The backup walk itself drops paths outside $HOME."""
         try:
-            return [str(_resolve_ovcli_config_path())]
+            config, env = self._profile_config_and_env()
+            if not config.get("use_ovcli_config"):
+                return []
+            home = Path(self._hermes_home or get_hermes_home()).resolve()
+            path = _provider_ovcli_config_path(config, env=env, hermes_home=home)
+            return [] if path.resolve().is_relative_to(home) else [str(path)]
         except Exception:
             return []
 
@@ -1404,13 +1620,17 @@ class OpenVikingMemoryProvider(MemoryProvider):
         # snapshot+reset of the turn counter and the session-id rotation must be atomic against a concurrent
         # increment. See hermes-agent#28296 review.
         self._inflight_writers: Dict[str, Set[threading.Thread]] = {}
+        self._upload_tails: Dict[str, threading.Event] = {}  # guarded by _inflight_lock
         self._deferred_commit_threads: Set[threading.Thread] = set()
         self._commit_scope: Optional[_CommitScope] = None
         self._profile_prefetched_sessions: Set[str] = set()
         self._conn_snapshot: Optional[tuple] = None
+        self._extra_headers: dict = {}
         self._failed_refresh: Optional[tuple] = None
         self._runtime_start_thread: Optional[threading.Thread] = None
         self._runtime_start_pending = False
+        self._runtime_status_callback = None
+        self._runtime_warning_callback = None
         self._shutting_down = False  # finalizers stop issuing network writes
         # Non-primary contexts (cron/subagent/flush) skip OpenViking writes; resolved in
         # initialize() from the host's agent_context.
@@ -1465,7 +1685,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not provider_config.get("use_ovcli_config"):
             return {key: "(set)" if key in ("api_key", "root_api_key") else value for key, value in provider_config.items()}
 
-        ovcli_path = _resolve_ovcli_config_path(str(provider_config.get("ovcli_config_path") or ""))
+        ovcli_path = _provider_ovcli_config_path(provider_config)
         display = {"use_ovcli_config": True, "ovcli_config_path": str(ovcli_path)}
         try:
             settings = _resolve_connection_settings(provider_config)
@@ -1474,7 +1694,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
             return display
         display["endpoint"] = settings.get("endpoint") or _DEFAULT_ENDPOINT
         display.update({key: settings[key] for key in ("agent", "account", "user") if settings.get(key)})
-        if env_overrides := [key for key in _OPENVIKING_ENV_KEYS if key in os.environ]:
+        if provider_config.get("deployment") == quick_local.DEPLOYMENT:
+            display["deployment"] = quick_local.DEPLOYMENT
+            display["server_config_path"] = str(quick_local.managed_paths(get_hermes_home()).server_config)
+        elif env_overrides := [key for key in _OPENVIKING_ENV_KEYS if key in os.environ]:
             display["env_overrides"] = ", ".join(env_overrides)
         return display
 
@@ -1490,12 +1713,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     # -- connection lifecycle ------------------------------------------------
 
-    def _start_runtime_openviking_waiter(self, *, endpoint: str, status_callback=None, warning_callback=None) -> None:
+    def _start_runtime_openviking_waiter(self, *, endpoint: str, managed_start=None, status_callback=None, warning_callback=None) -> None:
         # Caller holds _runtime_start_lock and reserved ownership via _runtime_start_pending.
         if self._runtime_start_thread and self._runtime_start_thread.is_alive():
             return
         self._runtime_start_thread = spawn_context_thread(
-            lambda: self._finish_runtime_openviking_start(endpoint=endpoint, status_callback=status_callback, warning_callback=warning_callback),
+            lambda: self._finish_runtime_openviking_start(endpoint=endpoint, managed_start=managed_start, status_callback=status_callback, warning_callback=warning_callback),
             name="openviking-runtime-start")
         self._runtime_start_thread.start()
 
@@ -1504,7 +1727,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _build_client(self, endpoint: Optional[str] = None) -> _VikingClient:
         endpoint, api_key, account, user, agent = self._settings_tuple(endpoint)
-        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent,
+                             extra_headers=self._extra_headers)
 
     def _publish_client(self, client: _VikingClient, endpoint: str) -> None:
         with self._session_state_lock:
@@ -1520,21 +1744,52 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     snapshot = self._conn_snapshot or self._settings_tuple()
                 # Recovery may use only the matching endpoint and identity. Do
                 # not persist credentials, or use the same marker after A -> B -> A.
-                key = hashlib.sha256(json.dumps(snapshot).encode()).hexdigest()
+                recovery_snapshot = snapshot
+                config, _env = self._profile_config_and_env()
+                if config.get("deployment") == quick_local.DEPLOYMENT:
+                    # The managed workspace remains the same when a foreign
+                    # listener forces a port change. Keep recovery tied to that
+                    # workspace and tenant, while marker_id still separates
+                    # concurrent connection generations.
+                    paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+                    recovery_snapshot = (quick_local.DEPLOYMENT, str(paths.workspace), *snapshot[2:])
+                key = hashlib.sha256(json.dumps(recovery_snapshot).encode()).hexdigest()
                 if self._commit_scope is not None:
                     self._turn_count = 0
                 self._commit_scope = _CommitScope(self._client, key)
             return self._commit_scope
 
-    def _finish_runtime_openviking_start(self, *, endpoint: Optional[str] = None, status_callback=None, warning_callback=None) -> None:
+    def _finish_runtime_openviking_start(self, *, endpoint: Optional[str] = None, managed_start=None, status_callback=None, warning_callback=None) -> None:
         endpoint = endpoint or self._endpoint
 
         def stale() -> bool:
             return self._shutting_down or self._endpoint != endpoint
 
-        if not _wait_for_openviking_health(endpoint, timeout_seconds=_LOCAL_OPENVIKING_AUTOSTART_TIMEOUT, should_stop=stale):
+        config, _env = self._profile_config_and_env()
+        managed = config.get("deployment") == quick_local.DEPLOYMENT
+        timeout = quick_local._HEALTH_TIMEOUT_SECONDS if managed else _LOCAL_OPENVIKING_AUTOSTART_TIMEOUT
+        if managed_start is not None:
+            from .local_server import LocalServer
+            server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+            try:
+                ready = server.wait_ready(managed_start,
+                                          _validate_openviking_reachability,
+                                          should_stop=stale, timeout=timeout)
+            except Exception as exc:
+                if not stale():
+                    _emit_runtime(f"Quick Local startup failed ({type(exc).__name__}). Review the server log; Hermes will retry on a later turn.", warning_callback)
+                return
+            if ready is None or stale():
+                return
+            if ready.endpoint != endpoint:
+                with self._client_refresh_lock:
+                    if stale():
+                        return
+                    self._endpoint = ready.endpoint
+                    endpoint = ready.endpoint
+        elif not _wait_for_openviking_health(endpoint, timeout_seconds=timeout, should_stop=stale):
             if not stale():
-                _emit_runtime(_runtime_openviking_timeout_message(endpoint), warning_callback)
+                _emit_runtime(_runtime_openviking_timeout_message(endpoint, timeout), warning_callback)
             return
 
         with self._client_refresh_lock:
@@ -1543,6 +1798,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
             try:
                 client = self._build_client(endpoint)
                 healthy = client.health()
+                if healthy and managed:
+                    paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+                    healthy = quick_local.server_belongs_to_profile(paths, endpoint)
+                    if healthy:
+                        healthy = not paths.restart_required_marker.is_file()
                 if stale():
                     return
                 warning_message = "" if healthy else f"OpenViking server at {endpoint} is still not reachable after auto-start. {_RETRY_LATER}"
@@ -1573,8 +1833,23 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if self._shutting_down or self._runtime_start_pending or (self._runtime_start_thread and self._runtime_start_thread.is_alive()):
                 return
             self._runtime_start_pending = True
-            start_state, start_message = _start_local_openviking_server(endpoint)
-            if start_state != _LOCAL_SERVER_STARTED:
+            managed_start = None
+            try:
+                config, _env = self._profile_config_and_env()
+                if config.get("deployment") == quick_local.DEPLOYMENT:
+                    from .local_server import LocalServer
+                    server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+                    managed_start = server.start()
+                    settings = self._resolve_bound_connection_settings(config, _env)
+                    self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
+                    endpoint = self._endpoint
+                    start_state, start_message = _LOCAL_SERVER_STARTED, f"Starting Quick Local at {endpoint}. Logs: {server.paths.root.parent / _OPENVIKING_SERVER_LOG_RELATIVE_PATH}"
+                else:
+                    start_state, start_message = _start_local_openviking_server(endpoint, hermes_home=self._hermes_home)
+            except Exception as exc:
+                logger.debug("OpenViking startup failed", exc_info=True)
+                start_state, start_message = _LOCAL_SERVER_FAILED, f"Startup failed ({type(exc).__name__}). Review the server log."
+            finally:
                 self._runtime_start_pending = False
 
         if start_state != _LOCAL_SERVER_STARTED:
@@ -1584,22 +1859,31 @@ class OpenVikingMemoryProvider(MemoryProvider):
         with self._runtime_start_lock:
             self._runtime_start_pending = False
             if not self._shutting_down:
-                self._start_runtime_openviking_waiter(endpoint=endpoint, status_callback=status_callback, warning_callback=warning_callback)
+                self._start_runtime_openviking_waiter(endpoint=endpoint, managed_start=managed_start, status_callback=status_callback, warning_callback=warning_callback)
 
     def initialize(self, session_id: str, **kwargs) -> None:
         is_cli = kwargs.get("platform") == "cli"
         warning_callback = kwargs.get("warning_callback") if is_cli else None
         status_callback = kwargs.get("status_callback") if is_cli else None
+        self._runtime_status_callback = status_callback
+        self._runtime_warning_callback = warning_callback
         requested_home = str(kwargs.get("hermes_home") or "").strip()
         self._hermes_home = requested_home or str(get_hermes_home())
         self._hermes_home_bound = bool(requested_home)
         connection_error = ""
+        config, env = self._profile_config_and_env()
         try:
-            settings = self._resolve_bound_connection_settings()
+            settings = self._resolve_bound_connection_settings(config, env)
         except _OpenVikingEndpointError as exc:
             connection_error = str(exc)
-            settings = dict.fromkeys(_CONNECTION_KEYS, "")
+            settings: dict = dict.fromkeys(_CONNECTION_KEYS, "")
         self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
+        # Resolve extra headers BEFORE any client is built. _VikingClient snapshots them at
+        # construction, and the startup /health probe goes through that client: a gateway that
+        # protects every route (Cloudflare Access, oauth2-proxy) rejects a header-less probe,
+        # which would drop the client and leave the provider unusable until a config change
+        # forced a rebuild. See tests/test_extra_headers.py::test_startup_health_probe_carries_extra_headers.
+        self._extra_headers = _parse_extra_headers(settings.get("extra_headers"))
         # Baseline established — set here, not at the end, so an exception in the
         # connection attempt (swallowed by MemoryManager) can't leave the provider
         # stuck in never-refresh mode.
@@ -1627,6 +1911,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if connection_error:
             self._failed_refresh = (("invalid-endpoint", connection_error), time.monotonic())
             _emit_runtime(f"{connection_error} {_FIX_ENDPOINT}", warning_callback)
+        elif config.get("deployment") == quick_local.DEPLOYMENT:
+            self._client = self._ensure_client_locked(status_callback=status_callback, warning_callback=warning_callback)
         else:
             try:
                 self._client = self._build_client()
@@ -1660,28 +1946,33 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not self._env_refresh_enabled:
             return self._client  # no baseline yet: keep whatever the caller wired up
         with self._client_refresh_lock:
-            return self._ensure_client_locked()
+            return self._ensure_client_locked(
+                status_callback=self._runtime_status_callback,
+                warning_callback=self._runtime_warning_callback,
+            )
 
     def _profile_config_and_env(self) -> tuple[dict, Optional[dict]]:
         home = self._hermes_home if self._hermes_home_bound else None
         env = _profile_openviking_env(home)
         return _load_hermes_openviking_config(home, env=env), env
 
-    def _resolve_bound_connection_settings(self) -> dict:
-        config, env = self._profile_config_and_env()
-        return _resolve_connection_settings(config, env=env)
+    def _resolve_bound_connection_settings(self, config=None, env=None) -> dict:
+        if config is None:
+            config, env = self._profile_config_and_env()
+        return _resolve_connection_settings(config, env=env, hermes_home=self._hermes_home or get_hermes_home())
 
     def _in_cooldown(self, failed_key) -> bool:
         failed = self._failed_refresh
         return failed is not None and failed[0] == failed_key and time.monotonic() - failed[1] < _FAILED_CONFIG_RETRY_COOLDOWN_SECONDS
 
-    def _ensure_client_locked(self) -> Optional["_VikingClient"]:
+    def _ensure_client_locked(self, *, status_callback=None, warning_callback=None) -> Optional["_VikingClient"]:
         """Resolve and publish one client/config state under the refresh lock."""
         if self._shutting_down:
             self._client = None
             return None
+        config, env = self._profile_config_and_env()
         try:
-            settings = self._resolve_bound_connection_settings()
+            settings = self._resolve_bound_connection_settings(config, env)
         except _OpenVikingEndpointError as exc:
             failed_key = ("invalid-endpoint", str(exc))
             if not self._in_cooldown(failed_key):
@@ -1689,9 +1980,28 @@ class OpenVikingMemoryProvider(MemoryProvider):
             self._failed_refresh = (failed_key, time.monotonic())
             self._client = None
             return None
+        managed = config.get("deployment") == quick_local.DEPLOYMENT
+        if managed:
+            paths = quick_local.managed_paths(Path(self._hermes_home or get_hermes_home()))
+            if paths.restart_required_marker.is_file():
+                self._endpoint, self._api_key, self._account, self._user, self._agent = (settings[k] for k in _CONNECTION_KEYS)
+                if not self._in_cooldown(("quick-local-restart",)):
+                    self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+                    self._failed_refresh = (("quick-local-restart",), time.monotonic())
+                return None
         settings_key = tuple(settings[k] for k in _CONNECTION_KEYS)
-        if settings_key == self._settings_tuple():
+        extra_key = _extra_headers_key(settings.get("extra_headers"))
+        if settings_key == self._settings_tuple() and extra_key == _extra_headers_key(self._extra_headers):
             if self._client is not None:
+                if managed:
+                    from .local_server import LocalServer
+
+                    server = LocalServer(Path(self._hermes_home or get_hermes_home()))
+                    if not server.is_running(settings_key[0]):
+                        self._handle_runtime_openviking_unreachable(
+                            status_callback=status_callback, warning_callback=warning_callback
+                        )
+                        return None
                 return self._client
             with self._runtime_start_lock:
                 if self._runtime_start_pending or (self._runtime_start_thread and self._runtime_start_thread.is_alive()):
@@ -1702,6 +2012,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 return None
 
         self._endpoint, self._api_key, self._account, self._user, self._agent = settings_key
+        # Same ordering rule as initialize(): the client snapshots extra headers at build time,
+        # so refresh them before rebuilding + probing.
+        self._extra_headers = _parse_extra_headers(settings.get("extra_headers"))
         try:
             client = self._build_client()
         except ImportError:
@@ -1711,16 +2024,24 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         health_state, health_message = _classify_runtime_openviking_health(client, settings_key[0])
         if health_state == "healthy":
+            if managed and not quick_local.server_belongs_to_profile(paths, settings_key[0]):
+                self._failed_refresh = (settings_key, time.monotonic())
+                self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+                return None
+            if managed:
+                quick_local.clear_server_restart_required(paths.server_config)
             self._publish_client(client, settings_key[0])
             return self._client
         self._failed_refresh = (settings_key, time.monotonic())
-        if health_state == "responded":
+        if managed:
+            self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
+        elif health_state == "responded":
             logger.warning(
                 "%s OpenViking memory is temporarily unavailable; Hermes will retry on a later access (after cooldown) or when the config changes.",
                 health_message,
             )
         else:
-            self._handle_runtime_openviking_unreachable()
+            self._handle_runtime_openviking_unreachable(status_callback=status_callback, warning_callback=warning_callback)
         self._client = None
         return None
 
@@ -1734,7 +2055,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not isinstance(snapshot, tuple):
             snapshot = self._conn_snapshot or self._settings_tuple()
         endpoint, api_key, account, user, agent = snapshot
-        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
+        return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent,
+                             extra_headers=self._extra_headers)
 
     # -- prompt / prefetch ---------------------------------------------------
 
@@ -1848,7 +2170,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if scope in ("shared", "peer"):
                 endpoint, api_key, account, user, _agent = client._conn_snapshot
                 client = _VikingClient(endpoint, api_key, account=account, user=user,
-                                       agent=sender_peer if scope == "peer" else "")
+                                       agent=sender_peer if scope == "peer" else "",
+                                       extra_headers=self._extra_headers)
             if scope == "peer":
                 # Explicit roots also constrain fallback searches when there is
                 # no sender. An actor-less user-root search includes all peers.
@@ -2234,14 +2557,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
     @classmethod
     def _select_recall_candidates(cls, items: List[Dict[str, Any]], query: str, *, limit: int, score_threshold: float) -> List[Dict[str, Any]]:
         """Threshold + dedupe (uri, then abstract+category — events/cases stay URI-distinct),
-        ranked by score + L2 leaf boost + query-token overlap."""
-        tokens = ["".join(ch for ch in raw if ch.isalnum()) for raw in query.lower().replace("_", " ").split()]
-        tokens = [token for token in tokens if len(token) >= 2][:8]
+        ranked by score + L2 leaf boost. No query-token overlap boost: server scores sit in a
+        band of about +/-0.01, so a literal-overlap bonus decided the order and buried
+        cross-language hits (queries and memories in different languages share no tokens)."""
 
         def rank(item: Dict[str, Any]) -> float:
-            text = f"{item.get('uri', '')} {cls._recall_abstract(item)}".lower()
-            overlap_boost = min(0.2, sum(1 for token in tokens if token in text) * 0.05)
-            return cls._clamp_score(item.get("score")) + (0.12 if item.get("level") == 2 else 0.0) + overlap_boost
+            return cls._clamp_score(item.get("score")) + (0.12 if item.get("level") == 2 else 0.0)
 
         seen_uri, seen_key = set(), set()
         filtered: List[Dict[str, Any]] = []
@@ -2407,26 +2728,26 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 _preview(user_content), _preview(assistant_content),
             )
 
-        def drop_empty() -> None:
-            if not self._inflight_writers.get(sid):
-                self._inflight_writers.pop(sid, None)
-
         cfg, env = self._profile_config_and_env()
         threshold = self._setting("commit_token_threshold", cfg, env=env)
 
-        def upload_and_check() -> None:
+        def upload_and_check(upload_finished: threading.Event) -> None:
             # Serialize writes with commits on the workers, so a slow commit never
             # blocks sync_turn. A write after a commit re-arms its recovery marker.
-            with self._writer_commit_lock:
-                with self._session_state_lock:
-                    if self._session_id == sid and self._commit_scope is scope and self._client is scope.client:
-                        self._turn_count += 1
-                        turn_count = self._turn_count
-                    else:
-                        turn_count = 1
-                self._mark_session_committed(sid, committed=False, scope=scope)
-                self._mark_session_pending(sid, scope=scope)
-                client = upload.run()
+            try:
+                with self._writer_commit_lock:
+                    with self._session_state_lock:
+                        if self._session_id == sid and self._commit_scope is scope and self._client is scope.client:
+                            self._turn_count += 1
+                            turn_count = self._turn_count
+                        else:
+                            turn_count = 1
+                    self._mark_session_committed(sid, committed=False, scope=scope)
+                    self._mark_session_pending(sid, scope=scope)
+                    client = upload.run()
+            finally:
+                # The next turn need not wait for this turn's metadata request.
+                upload_finished.set()
             if client is not None:
                 self._maybe_commit_live_session(sid, turn_count, threshold, client, scope)
 
@@ -2435,10 +2756,47 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not sid:
             return
         upload = _TurnUpload(client, sid, batch_messages, user_content, assistant_content, assistant_peer_id, user_peer_id)
-        self._spawn_tracked("openviking-sync", upload_and_check, self._inflight_lock, lambda: self._inflight_writers.setdefault(sid, set()),
-                            after_discard=drop_empty)
+        self._spawn_upload(sid, upload_and_check)
 
     # -- tracked worker threads ---------------------------------------------
+
+    def _spawn_upload(self, sid: str, body: Callable[[threading.Event], None]) -> None:
+        """Order each session's uploads before taking the shared write/commit lock.
+
+        Keep metadata checks concurrent and retain every worker for commit drains.
+        Publish a successor only after its thread starts, so a failed start cannot
+        strand later turns or let them bypass an earlier upload.
+        """
+        finished = threading.Event()
+
+        def _run() -> None:
+            try:
+                if previous is not None:
+                    previous.wait()
+                body(finished)
+            finally:
+                finished.set()
+                with self._inflight_lock:
+                    writers.discard(thread)
+                    if not writers:
+                        self._inflight_writers.pop(sid, None)
+                    if self._upload_tails.get(sid) is finished:
+                        self._upload_tails.pop(sid, None)
+
+        thread = spawn_context_thread(_run, name="openviking-sync")
+        with self._inflight_lock:
+            previous = self._upload_tails.get(sid)
+            writers = self._inflight_writers.setdefault(sid, set())
+            writers.add(thread)
+            try:
+                thread.start()
+            except Exception as exc:
+                writers.discard(thread)
+                if not writers:
+                    self._inflight_writers.pop(sid, None)
+                logger.warning("OpenViking upload worker failed to start: %s", exc)
+            else:
+                self._upload_tails[sid] = finished
 
     def _spawn_tracked(self, name: str, body: Callable[[], None], lock: threading.Lock, workers: Callable[[], Set[threading.Thread]],
                        *, after_discard: Callable[[], None] = None, skip_if: Callable[[], bool] = None) -> None:
@@ -2655,6 +3013,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _recover_pending_sessions(self) -> None:
         """Commit sessions left pending by dead runs, one thread per former owner."""
+        if not self._writes_enabled:
+            return
         scope = self._capture_commit_scope()
         if not scope.client:
             return
@@ -3105,7 +3465,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if args.get("to") and args.get("parent"):
             return tool_error("Cannot specify both 'to' and 'parent'")
         payload: Dict[str, Any] = {
-            key: args[key] for key in ("reason", "to", "parent", "instruction", "wait", "timeout") if key in args and args[key] not in {None, ""}
+            key: args[key] for key in ("reason", "to", "parent", "instruction", "wait") if key in args and args[key] not in {None, ""}
         }
 
         parsed_url = urlparse(url)

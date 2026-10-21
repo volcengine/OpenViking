@@ -7,6 +7,9 @@ from typing import Any
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
 
+# Task-relative storage for complete tool results; these files are not deliverables.
+TOOL_RESULT_DIRECTORY = ".tool-results"
+
 
 @dataclass(frozen=True)
 class MultimodalToolResult:

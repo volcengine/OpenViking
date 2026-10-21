@@ -94,7 +94,8 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
       continue;
     }
     if (row.type === "context.append_message" && row.message?.role === "user") {
-      pendingUser = textFromContent(row.message.content) || pendingUser;
+      const kind = row.message.origin?.kind;
+      if (!kind || kind === "user") pendingUser = textFromContent(row.message.content) || pendingUser;
       continue;
     }
     if (row.type === "turn.prompt") {
@@ -113,7 +114,8 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
     }
     if (event.type === "content.part" && event.part?.type === "text") {
       const turnId = attachPending(event.turnId);
-      assistants.set(turnId, `${assistants.get(turnId) || ""}${event.part.text || ""}`);
+      const prev = assistants.get(turnId);
+      assistants.set(turnId, prev ? `${prev}\n${event.part.text || ""}` : event.part.text || "");
     }
   }
 

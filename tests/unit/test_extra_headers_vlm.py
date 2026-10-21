@@ -14,6 +14,7 @@ from openai import AsyncOpenAI, OpenAI
 from volcenginesdkarkruntime import Ark, AsyncArk
 from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
     detect_provider_by_model,
@@ -349,17 +350,21 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["max_retries"] == 0
 
     @pytest.mark.parametrize(
-        ("status_code", "message", "expected_attempts"),
+        ("status_code", "message", "expected_kind"),
         [
-            (400, "Total tokens of multi-modal content and text exceed max message tokens.", 1),
-            (400, "The parameter model is invalid.", 1),
-            (401, "Unauthorized", 1),
-            (503, "Service Unavailable", 6),
+            (
+                400,
+                "Total tokens of multi-modal content and text exceed max message tokens.",
+                ModelErrorKind.INVALID_REQUEST,
+            ),
+            (400, "The parameter model is invalid.", ModelErrorKind.INVALID_REQUEST),
+            (401, "Unauthorized", ModelErrorKind.AUTHENTICATION_ERROR),
+            (503, "Service Unavailable", ModelErrorKind.TRANSIENT_SERVICE_ERROR),
         ],
     )
     @patch("volcenginesdkarkruntime.AsyncArk")
-    def test_volcengine_async_client_uses_shared_retry_policy(
-        self, mock_async_ark_class, status_code, message, expected_attempts
+    def test_volcengine_async_client_performs_single_request(
+        self, mock_async_ark_class, status_code, message, expected_kind
     ):
         error = ArkAPIStatusError(
             f"Error code: {status_code} - {message}",
@@ -382,12 +387,12 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        with patch("openviking.utils.model_retry.asyncio.sleep", new=AsyncMock()):
-            with pytest.raises(ArkAPIStatusError) as raised:
-                asyncio.run(vlm.get_completion_async("hello"))
+        with pytest.raises(ModelError) as raised:
+            asyncio.run(vlm.get_completion_async("hello"))
 
-        assert raised.value is error
-        assert mock_client.chat.completions.create.await_count == expected_attempts
+        assert raised.value.kind == expected_kind
+        assert raised.value.__cause__ is error
+        assert mock_client.chat.completions.create.await_count == 1
         call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0
@@ -531,7 +536,7 @@ class TestVLMExtraRequestBody:
             api_key="sk-test",
             http_client=httpx.Client(transport=httpx.MockTransport(send)),
         ) as client:
-            monkeypatch.setattr(vlm, "get_client", lambda: client)
+            monkeypatch.setattr(vlm.inner, "get_client", lambda: client)
             assert vlm.get_completion("hello") == "ok"
             assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
 
@@ -539,7 +544,7 @@ class TestVLMExtraRequestBody:
             api_key="sk-test",
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
         ) as async_client:
-            monkeypatch.setattr(vlm, "get_async_client", lambda: async_client)
+            monkeypatch.setattr(vlm.inner, "get_async_client", lambda: async_client)
             assert await vlm.get_completion_async("hello") == "ok"
             assert (
                 await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])

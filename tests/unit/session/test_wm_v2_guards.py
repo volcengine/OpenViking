@@ -287,6 +287,28 @@ class TestEnforceOpenIssuesResolved:
 # =======================================================================
 
 
+@pytest.mark.parametrize("section", WM_SEVEN_SECTIONS)
+@pytest.mark.parametrize("content", [None, [], ["new item"], {"text": "new item"}, 42])
+def test_merge_keeps_section_with_non_string_update(section, content):
+    old = _make_wm(
+        **{
+            name.lower().replace(" ", "_").replace("&", "and"): "- Existing context"
+            for name in WM_SEVEN_SECTIONS
+        }
+    )
+    other = "Current State" if section != "Current State" else "Task & Goals"
+    merged = wm.merge_wm_sections(
+        old,
+        {
+            section: {"op": "UPDATE", "content": content},
+            other: {"op": "UPDATE", "content": "Valid replacement"},
+        },
+    )
+    sections = wm.parse_wm_sections(merged)
+    assert sections[f"## {section}"] == "- Existing context"
+    assert sections[f"## {other}"] == "Valid replacement"
+
+
 class TestMergeWmSections:
     def test_all_keep(self):
         old = _make_wm(session_title="Title", current_state="Working")

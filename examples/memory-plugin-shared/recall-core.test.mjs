@@ -87,6 +87,9 @@ test("buildRecallBlock injects context assembled by the server", async () => {
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /viking:\/\/user\/default\/memories\/a\.md/);
   assert.match(block, /<\/openviking-context>$/);
+  // Recalled history is labelled as internal context, not external evidence.
+  assert.match(block, /this user's own saved history/);
+  assert.match(block, /not an external source or established fact/);
 });
 
 test("a server-side digest outlasts the ordinary request timeout", async () => {

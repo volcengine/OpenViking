@@ -128,15 +128,33 @@ fs.read(uri)
 - 内容面：通过 `read` 自动恢复占位符
 - 两者解耦：内容文件负责占位符，隐私服务负责敏感值与版本
 
-常用命令：
+PrivacySanitizer 不根据字段名猜测敏感性。当前 active Privacy 中长度不少于 6 个 Unicode 字符的字符串值会参与正文自动扫描与引用替换；更短的值仍可保存、引用和显式读取，但不会参与全文替换，以降低普通正文误命中。Python 负责目录、引用和缓存策略，匹配器构建、最长匹配与正文重写由 `ragfs` 的 Rust Aho-Corasick 实现完成，并通过 PyO3 复用不可变 matcher、扫描时释放 GIL。匹配目录按用户和本进程 revision 缓存，本进程修改会立即失效，另外设有 3600 秒缓存 TTL 以覆盖多 worker/多节点修改。
+
+以保存 GitHub Personal Access Token（PAT）为例：
 
 ```bash
-ov privacy categories
-ov privacy list skill
-ov privacy skill search-web
-ov privacy upsert skill search-web --values-json '{"api_key":"..."}'
-ov privacy activate skill search-web 1
-ov read viking://~/skills/search-web/SKILL.md
+# 首次写入或轮换 GitHub PAT；credential/github 是 target，pat 是 field
+ov privacy upsert credential github --field-pat 'github_pat_...'
+
+# 盘点当前目标和字段，不暴露值
+ov privacy tree --category credential --references
+
+# target 只有 pat 一个字段时可以省略 field
+ov privacy reference credential github
+ov privacy resolve credential github
+
+# 显式指定 field 的等价形式
+ov privacy reference credential github pat
+ov privacy resolve credential github pat
+ov privacy resolve '{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}'
+
+# 查看/切换历史版本，或删除 pat 字段（最后一个字段删除后 target 也会删除）
+ov privacy versions credential github
+ov privacy activate credential github 1
+ov privacy delete credential github pat --yes
+
+# 扫描一个明确的 URI；默认仅报告，--fix 才会替换明文 PAT
+ov privacy scan --uri viking://~/resources/project-a
 ```
 
 ---

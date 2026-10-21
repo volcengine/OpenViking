@@ -6,15 +6,19 @@ import shutil
 import sys
 import time
 import unittest
+import weakref
 from contextlib import ExitStack
+from pathlib import Path
 from unittest.mock import patch
 
 from openviking.storage.vectordb import engine
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
+from openviking.storage.vectordb.store.store_manager import StoreManager
 
 DB_PATH_CRASH = "./test_data/test_db_crash_recovery"
 DB_PATH_ROBUST = "./test_data/test_db_robust_crash"
+DB_PATH_TORN = "./test_data/test_db_torn_snapshot"
 LARGE_TEXT = "旧数据升级后的长文本" * 4000
 
 
@@ -90,9 +94,16 @@ def worker_write_and_crash(path, start_id, count, event_ready):
         col.upsert_data(data[2:])
         col.update_data([{"id": start_id, "data": LARGE_TEXT}])
         col.update_data([{"id": start_id, "data": LARGE_TEXT + " updated"}])
-        # Leave a large deletion in the log too, without changing the final count.
-        col.upsert_data([{"id": start_id + count, "vector": [0.1] * 4, "data": LARGE_TEXT}])
-        col.delete_data([start_id + count])
+        # Replay long PUT and DEL runs, including a large deletion, without
+        # changing the final count.
+        transient_ids = list(range(start_id + count, start_id + 2 * count))
+        col.upsert_data(
+            [
+                {"id": uid, "vector": [0.1] * 4, "data": LARGE_TEXT if i == 0 else "temporary"}
+                for i, uid in enumerate(transient_ids)
+            ]
+        )
+        col.delete_data(transient_ids)
         print("[Subprocess] Upsert done. Not closing.")
 
         # Notify main process that write is done
@@ -125,6 +136,40 @@ def setup_robust_collection(path):
             {"IndexName": "idx_main", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
         )
     return col
+
+
+def setup_torn_snapshot_collection(path):
+    """Helper to setup collection config for torn-snapshot tests"""
+    meta_data = {
+        "CollectionName": "torn_snapshot_col",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            {"FieldName": "data", "FieldType": "string"},
+        ],
+    }
+    col = get_or_create_local_collection(meta_data=meta_data, path=path)
+    if not col.has_index("idx_torn"):
+        col.create_index(
+            "idx_torn",
+            {"IndexName": "idx_torn", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
+        )
+    return col
+
+
+def list_version_numbers(version_dir):
+    """Return the snapshot version numbers currently on disk, sorted."""
+    return sorted(
+        int(name)
+        for name in os.listdir(version_dir)
+        if name.isdigit() and (Path(version_dir) / name).is_dir()
+    )
+
+
+def make_torn_version(version_dir, version):
+    """Create a marker-complete but payload-less (torn) snapshot version."""
+    os.makedirs(str(Path(version_dir, str(version))))
+    Path(version_dir, f"{version}.write_done").touch()
 
 
 def worker_cycle_1_write(path, event_ready):
@@ -195,6 +240,7 @@ class TestCrashRecovery(unittest.TestCase):
             shutil.rmtree(DB_PATH_ROBUST)
 
     def tearDown(self):
+        self.doCleanups()
         if os.path.exists(DB_PATH_CRASH):
             shutil.rmtree(DB_PATH_CRASH)
         if os.path.exists(DB_PATH_ROBUST):
@@ -211,7 +257,7 @@ class TestCrashRecovery(unittest.TestCase):
         ctx = multiprocessing.get_context("spawn")
         event = ctx.Event()
 
-        data_count = 100
+        data_count = 2050
         p = ctx.Process(target=worker_write_and_crash, args=(DB_PATH_CRASH, 0, data_count, event))
         p.start()
 
@@ -234,10 +280,27 @@ class TestCrashRecovery(unittest.TestCase):
         # Recover
         print("[Main] Recovering collection in main process...")
         # Re-opening the collection should trigger recovery logic (PersistentIndex should rebuild/catchup from Store)
-        col = get_or_create_local_collection(path=DB_PATH_CRASH)
+        live_deltas: weakref.WeakValueDictionary[int, DeltaRecord] = weakref.WeakValueDictionary()
+        peak_live_deltas = 0
+        read_deltas = StoreManager.get_delta_data_after_ts
+
+        def tracked_deltas(manager, version):
+            nonlocal peak_live_deltas
+            for number, record in enumerate(read_deltas(manager, version)):
+                live_deltas[number] = record
+                peak_live_deltas = max(peak_live_deltas, len(live_deltas))
+                yield record
+
+        with patch.object(StoreManager, "get_delta_data_after_ts", tracked_deltas):
+            col = get_or_create_local_collection(path=DB_PATH_CRASH)
+        self.addCleanup(col.close)
+        self.assertGreater(peak_live_deltas, 0, "Recovery must exercise the persisted delta log")
+        self.assertLessEqual(
+            peak_live_deltas, 1025, "Recovery must release replayed deltas during long PUT/DEL runs"
+        )
 
         # 1. Verify Data Persistence (Store)
-        print("[Main] Verifying data fetch (All 100 items)...")
+        print(f"[Main] Verifying data fetch (All {data_count} items)...")
         # Check all IDs
         all_ids = list(range(data_count))
         res = col.fetch_data(all_ids)
@@ -271,7 +334,6 @@ class TestCrashRecovery(unittest.TestCase):
         )
         self.assertEqual(set(found_ids), set(all_ids))
 
-        col.close()
         print("[Main] Simple recovery test passed.")
 
     def run_process_and_crash(self, target_func):
@@ -359,6 +421,86 @@ class TestCrashRecovery(unittest.TestCase):
 
         col.close()
         print("\n[Main] Robust recovery test passed.")
+
+
+class TestTornSnapshotSelection(unittest.TestCase):
+    """A snapshot marked .write_done but missing its payload must never be selected.
+
+    A crash between the native dump and the payload blocks reaching disk can
+    leave behind a version directory that carries a .write_done marker but no
+    loadable payload. Selecting it as the newest version makes the next open
+    hard-fail on the native loader before any recovery path runs, even though
+    the previous complete snapshot is still on disk and loadable.
+    """
+
+    def setUp(self):
+        if os.path.exists(DB_PATH_TORN):
+            shutil.rmtree(DB_PATH_TORN)
+
+    def tearDown(self):
+        if os.path.exists(DB_PATH_TORN):
+            shutil.rmtree(DB_PATH_TORN)
+
+    def test_torn_newest_snapshot_is_skipped_on_reopen(self):
+        print("\n=== Test Torn Newest Snapshot Is Skipped On Reopen ===")
+
+        col = setup_torn_snapshot_collection(DB_PATH_TORN)
+        data = [{"id": i, "vector": [0.1] * 4, "data": f"torn_{i}"} for i in range(10)]
+        col.upsert_data(data)
+        version_dir = col.get_index("idx_torn").version_dir
+        col.close()
+
+        # After close() only the newest complete version remains on disk.
+        valid_versions = list_version_numbers(version_dir)
+        self.assertEqual(len(valid_versions), 1)
+        valid_version = valid_versions[0]
+        self.assertTrue(Path(version_dir, str(valid_version), "manager_meta.json").is_file())
+
+        # Crash artifact: a newer, marker-complete but payload-less version.
+        torn_version = valid_version + 1
+        make_torn_version(version_dir, torn_version)
+
+        # Reopening must succeed and fall back to the previous complete
+        # snapshot instead of hard-failing on the empty newest one.
+        reopened = setup_torn_snapshot_collection(DB_PATH_TORN)
+        reopened_index = reopened.get_index("idx_torn")
+        self.assertEqual(int(reopened_index.now_version), valid_version)
+        self.assertEqual(int(reopened_index.get_newest_version()), valid_version)
+
+        res = reopened.fetch_data(list(range(10)))
+        self.assertEqual(len(res.items), 10)
+        self.assertEqual(
+            {item.id for item in res.items}, set(range(10)), "All ids should be recovered"
+        )
+        search_res = reopened.search_by_vector("idx_torn", dense_vector=[0.1] * 4, limit=10)
+        self.assertEqual({item.id for item in search_res.data}, set(range(10)))
+
+        reopened.close()
+        print("[Main] Torn snapshot skipped, previous complete snapshot reloaded.")
+
+    def test_get_newest_version_ignores_missing_or_empty_meta(self):
+        print("\n=== Test get_newest_version Ignores Torn Snapshots ===")
+
+        col = setup_torn_snapshot_collection(DB_PATH_TORN)
+        try:
+            col.upsert_data([{"id": 1, "vector": [0.1] * 4, "data": "torn_1"}])
+            index = col.get_index("idx_torn")
+            version_dir = index.version_dir
+            index.persist()
+            valid_version = index.get_newest_version()
+            self.assertGreater(valid_version, 0)
+
+            # Torn variants: marker present, payload missing or 0 bytes.
+            make_torn_version(version_dir, valid_version + 1)
+            empty_meta_version = valid_version + 2
+            os.makedirs(str(Path(version_dir, str(empty_meta_version))))
+            Path(version_dir, str(empty_meta_version), "manager_meta.json").touch()
+            Path(version_dir, f"{empty_meta_version}.write_done").touch()
+
+            self.assertEqual(index.get_newest_version(), valid_version)
+        finally:
+            col.close()
+        print("[Main] get_newest_version rejected torn snapshots.")
 
 
 if __name__ == "__main__":

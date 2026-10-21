@@ -54,6 +54,7 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+_RECOVERY_BATCH_SIZE = 1024
 
 
 class _MutationMarker:
@@ -1385,33 +1386,33 @@ class PersistCollection(LocalCollection):
                 "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
             )
-            upsert_list: List[DeltaRecord] = []
-            delete_list: List[DeltaRecord] = []
+            records: List[DeltaRecord] = []
+            batch_operation = "upsert"
             _processed = 0
             _seen = 0
             _last_log = 0.0
             for data in delta_records:
                 _seen += 1
                 if data.type == OpType.PUT.value:
-                    if delete_list:
-                        _processed += self._replay_recovery_records(
-                            index_name=index_name,
-                            index=index,
-                            records=delete_list,
-                            operation="delete",
-                        )
-                        delete_list = []
-                    upsert_list.append(data)
+                    operation = "upsert"
                 elif data.type == OpType.DEL.value:
-                    if upsert_list:
+                    operation = "delete"
+                else:
+                    operation = None
+                if operation is not None:
+                    # Preserve log order without retaining an entire run of PUTs or DELs.
+                    if records and (
+                        operation != batch_operation or len(records) >= _RECOVERY_BATCH_SIZE
+                    ):
                         _processed += self._replay_recovery_records(
                             index_name=index_name,
                             index=index,
-                            records=upsert_list,
-                            operation="upsert",
+                            records=records,
+                            operation=batch_operation,
                         )
-                        upsert_list = []
-                    delete_list.append(data)
+                        records = []
+                    batch_operation = operation
+                    records.append(data)
                 now = time.time()
                 if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
@@ -1421,19 +1422,12 @@ class PersistCollection(LocalCollection):
                         index_name,
                     )
                     _last_log = now
-            if upsert_list:
+            if records:
                 _processed += self._replay_recovery_records(
                     index_name=index_name,
                     index=index,
-                    records=upsert_list,
-                    operation="upsert",
-                )
-            if delete_list:
-                _processed += self._replay_recovery_records(
-                    index_name=index_name,
-                    index=index,
-                    records=delete_list,
-                    operation="delete",
+                    records=records,
+                    operation=batch_operation,
                 )
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             index._start_dense_rebuild_worker()
@@ -1514,6 +1508,13 @@ class PersistCollection(LocalCollection):
                     logger.error(f"Failed to flush index {index_name}: {e}")
 
         self.indexes.iterate(persist_index)
+        if persisted_count > 0:
+            # Recovery only replays deltas newer than each index's snapshot, so
+            # anything older than the oldest snapshot is dead weight.
+            try:
+                self._delete_expire_delta_record()
+            except Exception as e:
+                logger.error(f"Failed to prune delta records: {e}")
         return persisted_count
 
     def _new_index(

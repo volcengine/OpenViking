@@ -1,3 +1,4 @@
+import { formatDateTime } from '#/i18n/format'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -68,7 +69,7 @@ export function PlatformHistory({
           >
             <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
               <span>{message.sender || t('unknownSender')}</span>
-              <time>{new Date(message.time).toLocaleString()}</time>
+              <time>{formatDateTime(new Date(message.time))}</time>
             </div>
             <p className="whitespace-pre-wrap break-words text-sm leading-7">
               {message.content}

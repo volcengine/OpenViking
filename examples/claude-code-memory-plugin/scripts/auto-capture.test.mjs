@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { extractCaptureTurns } from "./cc-transcript.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -121,6 +122,54 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
       await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("threshold commit archives every captured message", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-commit-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const commits = [];
+
+  try {
+    await writeTranscript(transcriptPath);
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        writeJson(res, { status: "ok", result: { added: body.messages.length } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cc-capture-commit") {
+        writeJson(res, {
+          status: "ok",
+          result: { message_count: 2, pending_tokens: 5000, commit_count: 0 },
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/sessions/cc-capture-commit/commit") {
+        commits.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { status: "accepted" } });
+        return;
+      }
+      writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "capture-commit", transcript_path: transcriptPath, cwd: root },
+        {
+          ...hookEnv(root, baseUrl),
+          OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
+          OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "10",
+        },
+      );
+    });
+
+    assert.deepEqual(commits, [{ keep_recent_count: 0 }]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -444,4 +493,22 @@ test("subagent capture sanitizes injected text before filtering and sending", as
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("api-request-blob lines are not captured as conversation turns", () => {
+  const question = { role: "user", content: [{ type: "text", text: "what does the cursor track?" }] };
+  const answer = { role: "assistant", content: [{ type: "text", text: "the number of captured turns" }] };
+  const blob = (message) => ({ type: "api-request-blob", sessionId: "s1", hash: "h", message });
+  const turns = extractCaptureTurns([
+    { type: "user", sessionId: "s1", message: question },
+    blob({ role: "system", content: "You are Claude Code." }),
+    blob(question),
+    { type: "assistant", sessionId: "s1", message: answer },
+    blob(answer),
+  ]);
+
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.text]), [
+    ["user", "what does the cursor track?"],
+    ["assistant", "the number of captured turns"],
+  ]);
 });

@@ -11,7 +11,6 @@ from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 from openviking.service.task_work_index import (
-    TaskWorkIndex,
     TaskWorkRejected,
     bind_task_context,
     get_task_context,
@@ -468,20 +467,11 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
-    work_index = TaskWorkIndex()
-
-    async def finalize_before_ack(_metadata):
-        return None
-
-    work_index.set_callbacks(
-        finalize_before_ack=finalize_before_ack,
-        is_cancellation_requested=lambda _task_id: True,
-    )
     embedding_queue = NamedQueue(
         None,
         "/queue",
         "Embedding",
-        middlewares=[TaskWorkQueueMiddleware(work_index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     embedding_queue._initialized = True
     unrelated_ran = asyncio.Event()

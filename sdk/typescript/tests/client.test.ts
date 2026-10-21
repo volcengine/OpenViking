@@ -149,6 +149,7 @@ describe("OpenVikingClient", () => {
       sourceMessageIds: ["user-1"],
     });
     await client.commitSession("session-1", {
+      enableWorkingMemory: true,
       retentionMode: "turn_budget",
       keepRecentTurnCount: 3,
       retainedMessageTokenBudget: 12_000,
@@ -163,6 +164,7 @@ describe("OpenVikingClient", () => {
       source_message_ids: ["user-1"],
     });
     expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toEqual({
+      enable_working_memory: true,
       retention_mode: "turn_budget",
       keep_recent_turn_count: 3,
       retained_message_token_budget: 12_000,
@@ -551,9 +553,15 @@ describe("OpenVikingClient", () => {
           uri: "resources/project/a.txt",
           content: "hello",
           mode: "upsert",
+          tags: ["team=search"],
+          tagMode: "append",
+          acl: {
+            acl_mode: "restricted",
+            entries: [{ principal: "group:engineering", level: "write" }],
+          },
         },
       ],
-      { extra: { future_flag: 0 } },
+      { processingMode: "vectors_only", extra: { future_flag: 0 } },
     );
     await expect(
       client.downloadBytes("resources/project/a.txt"),
@@ -573,8 +581,15 @@ describe("OpenVikingClient", () => {
         uri: "viking://resources/project/a.txt",
         content: "hello",
         mode: "upsert",
+        tags: ["team=search"],
+        tag_mode: "append",
+        acl: {
+          acl_mode: "restricted",
+          entries: [{ principal: "group:engineering", level: "write" }],
+        },
       },
     ]);
+    expect(batchWriteBody.processing_mode).toBe("vectors_only");
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");
@@ -1461,5 +1476,50 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[6]![1]?.body))).toEqual({
       content: "*.log\n",
     });
+  });
+
+  it("fetches one account by exact path without leaking credentials", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      ok({
+        account_id: "team-a",
+        created_at: "2026-10-20T03:00:00Z",
+        user_count: 2,
+        status: "active",
+      }),
+    );
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      apiKey: "root-key",
+      fetch: fetcher,
+    });
+
+    const account = await client.adminGetAccount("team-a");
+    expect(account).toMatchObject({ account_id: "team-a", status: "active" });
+    expect(account).not.toHaveProperty("api_key");
+
+    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(url.pathname).toBe("/api/v1/admin/accounts/team-a");
+    expect(
+      new Headers(fetcher.mock.calls[0]![1]?.headers).get("X-API-Key"),
+    ).toBe("root-key");
+  });
+
+  it("reads one user's membership by exact path without leaking credentials", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ user_id: "alice", role: "admin" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      apiKey: "root-key",
+      fetch: fetcher,
+    });
+
+    const user = await client.adminGetUser("team-a", "alice");
+    expect(user).toEqual({ user_id: "alice", role: "admin" });
+    expect(user).not.toHaveProperty("api_key");
+    expect(user).not.toHaveProperty("key_prefix");
+
+    const url = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(url.pathname).toBe("/api/v1/admin/accounts/team-a/users/alice");
   });
 });

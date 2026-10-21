@@ -30,7 +30,7 @@ Choose the registered names that match the current runtime:
 | Runtime | Search | Read |
 | --- | --- | --- |
 | OpenViking MCP, Codex, Claude Code | `find` or `search` | `read` |
-| OpenCode | `openviking_find` or `openviking_search` | `openviking_read` |
+| OpenCode, pi | `openviking_find` or `openviking_search` | `openviking_read` |
 | OpenClaw | `ov_search` | `ov_read` or `ov_multi_read` |
 
 The host may display MCP names with a namespace such as

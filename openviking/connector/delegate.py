@@ -39,6 +39,7 @@ from openviking.connector.routing import (
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
+from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.observability.http_error_context import (
     sanitize_public_error_details,
     sanitize_public_http_error,
@@ -683,6 +684,11 @@ class ConnectorDelegate:
                 raise InternalError(
                     f"Connector accepted the import but returned no task key: {result}"
                 )
+            ResourceIngestionEventDataSource.record_import(
+                pipeline="connector",
+                source_type="repository" if add_type == "git" else "document",
+                account_id=ctx.account_id,
+            )
             # Never log api_key / auth_config / param_config values here.
             logger.info(
                 "[ConnectorDelegate] Connector import accepted: add_type=%s to=%s "
@@ -884,7 +890,6 @@ class ConnectorDelegate:
                                 ctx=ctx,
                                 reason=reason,
                                 source_name=None,
-                                timeout=None,
                             )
                             for key in ("memory_linking", "warnings"):
                                 if key in link_result:

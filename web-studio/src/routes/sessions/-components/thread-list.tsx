@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { Button } from '#/components/ui/button'
+import { useStudioService } from '#/hooks/use-studio-service'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   useCreateSession,
@@ -35,6 +36,7 @@ interface ThreadListProps {
 
 export function ThreadList({ activeSessionId }: ThreadListProps) {
   const { i18n, t } = useTranslation('sessions')
+  const { provider } = useStudioService()
   const { identityScopeKey } = useAppConnection()
   const navigate = useNavigate()
   const { data: sessions, isLoading } = useSessionListByRecency()
@@ -92,7 +94,9 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
       <div className="flex h-16 shrink-0 items-center justify-between border-b border-border/70 px-4">
         <div className="min-w-0">
           <h1 className="text-sm font-semibold text-foreground">
-            {t('threadList.title')}
+            {provider === 'volcengine'
+              ? t('studio:sessionRecords')
+              : t('threadList.title')}
           </h1>
           {!isLoading ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
@@ -100,21 +104,23 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
             </p>
           ) : null}
         </div>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          disabled={createSession.isPending}
-          onClick={handleNewSession}
-          aria-label={t('threadList.newSession')}
-          title={t('threadList.newSession')}
-        >
-          {createSession.isPending ? (
-            <LoaderCircleIcon className="animate-spin" />
-          ) : (
-            <PlusIcon />
-          )}
-        </Button>
+        {provider === 'opensource' ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            disabled={createSession.isPending}
+            onClick={handleNewSession}
+            aria-label={t('threadList.newSession')}
+            title={t('threadList.newSession')}
+          >
+            {createSession.isPending ? (
+              <LoaderCircleIcon className="animate-spin" />
+            ) : (
+              <PlusIcon />
+            )}
+          </Button>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -132,7 +138,9 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
               {t('threadList.emptyTitle')}
             </p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {t('threadList.emptyDescription')}
+              {provider === 'opensource'
+                ? t('threadList.emptyDescription')
+                : t('studio:noSessionRecords')}
             </p>
           </div>
         ) : (
@@ -235,9 +243,11 @@ export function ThreadList({ activeSessionId }: ThreadListProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <div className="shrink-0 border-t border-border/70 px-4 py-3 text-[11px] text-muted-foreground">
-        {t('threadList.shortcut')}
-      </div>
+      {provider === 'opensource' ? (
+        <div className="shrink-0 border-t border-border/70 px-4 py-3 text-[11px] text-muted-foreground">
+          {t('threadList.shortcut')}
+        </div>
+      ) : null}
     </aside>
   )
 }

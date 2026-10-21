@@ -17,6 +17,12 @@ openviking-server --config /path/to/ov.conf
 
 服务端启动时读取配置。修改模型、检索、存储或 `server` 配置后，需要重启服务；重启后建议运行 `openviking-server doctor`。
 
+通过单 worker 的 `openviking-server` 启动时，Studio 的「服务端配置」页面提供「保存并重启」。重启能力和实例标识复用现有 ROOT 配置读取接口（`GET /api/v1/admin/configuration?source=file`）返回；只有 ROOT 可以请求重启（`POST /api/v1/admin/restart`，请求体为 `{"revision":"<已保存文件的版本>"}`）。服务校验当前文件和版本后返回 HTTP 202，等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和工作目录替换当前进程。页面确认新的服务实例恢复后才显示成功。单独点击「保存配置」仍只保存文件。
+
+多 worker 或嵌入式 ASGI 启动不支持页面重启，需要通过部署平台重启。配置通过校验后，外部依赖仍可能导致启动失败。如果修改了地址、端口或 ROOT 凭证，请更新 Studio 连接设置。账号和集群覆盖配置仍优先于文件默认配置。
+
+配置含环境变量引用时，Studio 表单只读，请使用文件模式编辑原文。带引号或未带引号的引用、转义和格式按提交内容保存。Windows `%VAR%` 引用和美元/百分号字面值（包括 `\u0024`、`\u0025`）也使用文件模式，避免表单序列化引入新的引用。
+
 ## 配置结构
 
 下面只展示常用顶层分组，不是可直接运行的完整配置。首次启动可从本页的[最小示例](#最小示例)开始，填写实际模型与凭据；后续示例中的片段应合并到同一个 `ov.conf`。
@@ -38,7 +44,7 @@ openviking-server --config /path/to/ov.conf
 }
 ```
 
-未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段，兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略，但服务端会输出 WARNING，逐项列出未被采用的字段。
+未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段（`gateway` 部分除外），兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略，但服务端会输出 WARNING，逐项列出未被采用的字段。
 
 ## 顶层配置
 
@@ -67,6 +73,7 @@ openviking-server --config /path/to/ov.conf
 | `log` | object | 控制台日志 | 日志级别、格式和文件输出 |
 | `telemetry` | object | disabled | OpenTelemetry trace 上报 |
 | `oauth` | object | disabled | MCP OAuth 2.1 配置 |
+| `gateway` | object | disabled | OpenViking 网关配置，网关为使用 API Key 的模型客户端补充 OpenViking 记忆。这一部分的未知字段会直接报错，见[配置参考](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | 内置模板 | 自定义 Prompt 模板目录 |
 | `ingest` | object | 内置默认值 | 会话日志导入配置 |
 | `output_language_override` | string | `""` | 强制摘要和记忆输出语言；空值表示自动识别 |
@@ -189,6 +196,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     "parse_output": {
       "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -210,6 +220,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 `parse_output.mode=local` 可避免把 parser 中间产物写入共享 AGFS。当前 worker
 必须在下游任务入队前把所需字节提交到正式资源树。产物会在内容提交后清理；
 请为 `local_root` 预留足够空间以容纳并发导入。
+
+### `parsers`
+
+| 字段 | 类型 / 常用值 | 默认值 | 作用 |
+|---|---|---|---|
+| `download_temp_dir` | 路径或 `null` | 系统临时目录 | 内置 parser 下载文件、Git checkout 和压缩包解压使用的临时目录 |
+
+配置后，parser 会在该目录下创建带有 `ov_git_`、`ov_zip_` 等前缀的临时目录；未配置时继续使用系统临时目录。
 
 ## 队列 Worker 配置
 
@@ -305,7 +323,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `with_bot` | boolean | `false` | 是否启用 VikingBot API 代理 |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI 地址 |
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
-| `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
+| `upload_signed_ttl_seconds` | integer | `600` | 签名上传、下载 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
 
 ### 文件加密与 API Key 哈希

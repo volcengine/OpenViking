@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -20,10 +21,36 @@ import {
   readyCheckState,
   scanDebugLog,
   unknownOvcliKeys,
+  whichCommand,
   WORKSPACE_PEER_HINT,
 } from "./lib/doctor-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
+
+test("whichCommand returns the first executable path without a line terminator", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-doctor-path-"));
+  const originalPath = process.env.PATH;
+  const command = `ov-doctor-probe-${process.pid}`;
+  const filename = process.platform === "win32" ? `${command}.exe` : command;
+  const bins = [join(dir, "first bin"), join(dir, "second bin")];
+  try {
+    for (const bin of bins) {
+      mkdirSync(bin);
+      writeFileSync(join(bin, filename), "", { mode: 0o755 });
+    }
+    for (const paths of [bins, bins.slice(0, 1)]) {
+      process.env.PATH = [...paths, originalPath].filter(Boolean).join(delimiter);
+      const resolved = whichCommand(command);
+      assert.equal(resolved, join(bins[0], filename));
+      assert.ok(existsSync(resolved));
+    }
+    assert.equal(whichCommand(`${command}-missing`), "");
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("describeApiKey decodes identity segments and masks the secret", () => {
   const key = `${b64("acme")}.${b64("alice")}.${b64("0123456789abcdef0123456789abcdef")}`;
@@ -210,7 +237,7 @@ test("lintServerConf covers every harness, not just the two with a legacy ov.con
 });
 
 test("assessReady interprets the readiness checks", () => {
-  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok", multiwrite_sync: "not_supported" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
+  const ok = { ok: true, status: 200, json: { status: "ready", checks: { agfs: { status: "ok", checks: { filesystem: "ok" } }, vectordb: "ok", api_key_manager: "not_configured", embedding: "ok", ollama: "not_configured" } } };
   let report = createReport();
   assert.equal(assessReady(report, ok).ready, true);
   assert.equal(report.exitCode(), 0);
@@ -307,6 +334,35 @@ test("no doctor wrapper redefines a name doctor-core already exports", () => {
     const declared = [...read(rel).matchAll(/^(?:export )?(?:async function|function|const) (\w+)\s*[(=]/gm)].map((m) => m[1]);
     const clashes = declared.filter((name) => exported.has(name));
     assert.deepEqual(clashes, [], `${rel} redeclares doctor-core exports: ${clashes.join(", ")}`);
+  }
+});
+
+// The hooks bound their own requests (agent-hook-plugin/tests/request-budget),
+// so no timeout setting is a hook overrun the doctor should report.
+test("the hook hosts' doctor reports no hook-budget overrun at any request timeout", () => {
+  const home = mkdtempSync(join(tmpdir(), "ov-doctor-hosts-"));
+  const doctor = fileURLToPath(new URL("../agent-hook-plugin/scripts/ov-memory-doctor.mjs", import.meta.url));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENVIKING_")));
+  const budgetWarnings = (client, extra = {}) => {
+    const run = spawnSync(process.execPath, [doctor, client, "--offline", "--json"], {
+      cwd: home,
+      // Only node on PATH, so the doctor's `<client> --version` probe never
+      // starts a host editor installed on the machine running the suite.
+      env: { ...env, ...extra, HOME: home, PATH: dirname(process.execPath) },
+      encoding: "utf8",
+    });
+    const config = JSON.parse(run.stdout).sections.find((section) => section.title === "Configuration");
+    return config.findings
+      .filter((finding) => finding.level === "warn" && finding.title.includes("hook budget"))
+      .map((finding) => `${finding.title} → ${finding.fix}`);
+  };
+  try {
+    for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
+      assert.deepEqual(budgetWarnings(client), [], client);
+      assert.deepEqual(budgetWarnings(client, { OPENVIKING_TIMEOUT_MS: "35000" }), [], client);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

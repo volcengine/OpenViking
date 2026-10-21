@@ -97,6 +97,7 @@ export function formatTaskProcessingDuration(
     : formatDurationString(Math.floor(seconds))
 }
 
+/** Task wall time not covered by a locally observed worker-owned interval. */
 export function formatTaskWaitingDuration(
   task: TaskTimestamp,
 ): string | undefined {

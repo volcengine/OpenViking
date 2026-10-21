@@ -11,6 +11,9 @@ import {
 import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { getContentDownload } from '#/lib/ov-client'
+import { saveFileContent } from '../-lib/api'
+import { toast } from 'sonner'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import {
   FilePreview,
@@ -20,7 +23,11 @@ import {
 } from './file-preview'
 
 const previewState = vi.hoisted(() => ({
-  override: null as { content: string; fileType: string } | null,
+  override: null as {
+    content: string
+    fileType: string
+    truncated?: boolean
+  } | null,
 }))
 
 const previewMocks = vi.hoisted(() => ({
@@ -28,6 +35,25 @@ const previewMocks = vi.hoisted(() => ({
     svg: '<svg viewBox="0 0 120 40"><text>Client to server</text></svg>',
   })),
 }))
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('../-lib/api', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  saveFileContent: vi.fn(),
+}))
+vi.mock('#/components/code-editor', async () => {
+  const React = await import('react')
+  return {
+    CodeEditor: React.forwardRef(
+      ({ initialContent }: { initialContent: string }, ref) => {
+        React.useImperativeHandle(ref, () => ({
+          getContent: () => initialContent,
+        }))
+        return <div data-testid="editor-content">{initialContent}</div>
+      },
+    ),
+  }
+})
 
 vi.mock('@streamdown/mermaid', () => ({
   mermaid: {
@@ -978,5 +1004,65 @@ describe('FilePreview JSONL rendering', () => {
     // Raw mode: line 1 still listed, the tool-only line 2 is gone.
     expect(screen.getByText('1')).toBeTruthy()
     expect(screen.queryByText('2')).toBeNull()
+  })
+})
+
+describe('FilePreview complete-content editing', () => {
+  beforeEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+  afterEach(() => {
+    cleanup()
+    previewState.override = null
+  })
+  it('loads the complete original before editing a limited hosted preview', async () => {
+    previewState.override = {
+      content: 'limited preview',
+      fileType: 'text',
+      truncated: true,
+    }
+    vi.mocked(getContentDownload).mockResolvedValue({
+      data: 'complete original\nlast line',
+    } as never)
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    expect((await screen.findByTestId('editor-content')).textContent).toBe(
+      'complete original\nlast line',
+    )
+    expect(getContentDownload).toHaveBeenCalledWith({
+      query: { uri: file.uri },
+      responseType: 'text',
+      throwOnError: true,
+    })
+    vi.mocked(saveFileContent).mockRejectedValue(new Error('Forbidden'))
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByTestId('editor-content').textContent).toBe(
+      'complete original\nlast line',
+    )
+  })
+
+  it('does not open an editor when the complete original cannot be read', async () => {
+    previewState.override = {
+      content: 'limited preview',
+      fileType: 'text',
+      truncated: true,
+    }
+    vi.mocked(getContentDownload).mockRejectedValue(new Error('Forbidden'))
+    const client = new QueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <FilePreview file={file} defaultReadLimit={10000} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'filePreview.edit' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.queryByTestId('editor-content')).toBeNull()
   })
 })

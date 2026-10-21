@@ -17,7 +17,6 @@ func (c *Client) AddSkill(ctx context.Context, data any, opts *AddSkillOptions) 
 	payload := map[string]any{
 		"wait": opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
@@ -120,7 +119,6 @@ func (c *Client) UpdateSkill(ctx context.Context, skillName string, data any, op
 	payload := map[string]any{
 		"wait": opts.Wait,
 	}
-	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "source_metadata", opts.SourceMetadata)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setAny(payload, "target_uri", opts.TargetURI)

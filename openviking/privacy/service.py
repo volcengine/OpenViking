@@ -16,7 +16,17 @@ from openviking.privacy.helpers import (
     parse_version_filename,
     version_uri,
 )
-from openviking.privacy.models import UserPrivacyConfigMeta, UserPrivacyConfigVersion
+from openviking.privacy.models import (
+    UserPrivacyConfigMeta,
+    UserPrivacyConfigVersion,
+    UserPrivacyFieldDeleteResult,
+)
+from openviking.privacy.validation import (
+    validate_privacy_field_name,
+    validate_privacy_identifier,
+    validate_privacy_metadata,
+    validate_privacy_values,
+)
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.time_utils import get_current_timestamp
@@ -28,6 +38,15 @@ class UserPrivacyConfigService:
 
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
+        self._catalog_revisions: dict[tuple[str, str], int] = {}
+
+    def catalog_revision(self, ctx: RequestContext) -> int:
+        """Return the process-local revision of the caller's active value catalog."""
+        return self._catalog_revisions.get((ctx.account_id, ctx.user.user_id), 0)
+
+    def _bump_catalog_revision(self, ctx: RequestContext) -> None:
+        key = (ctx.account_id, ctx.user.user_id)
+        self._catalog_revisions[key] = self._catalog_revisions.get(key, 0) + 1
 
     def _user_root(self, ctx: RequestContext) -> str:
         return canonical_user_root(ctx)
@@ -63,7 +82,11 @@ class UserPrivacyConfigService:
         async with self._config_lock(
             ctx, category, target_key, owner_lease_ref=owner_lease_ref
         ) as lease:
-            if not await self._viking_fs.exists(root_uri, ctx=ctx):
+            # Acquiring a path lock may materialize the target directory. Treat
+            # only a persisted current snapshot as an existing privacy target,
+            # so repeated deletion is idempotent and an empty lock root is not
+            # reported as deleted configuration.
+            if not await self.exists(ctx, category, target_key):
                 return False
             if owner_lease_ref is not None:
                 # An enclosing Skill update still needs this root's lock for
@@ -71,6 +94,7 @@ class UserPrivacyConfigService:
                 await self._clear_contents(ctx, category, target_key, lease)
             else:
                 await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx, lease_ref=lease)
+            self._bump_catalog_revision(ctx)
             return True
 
     async def _clear_contents(
@@ -189,6 +213,7 @@ class UserPrivacyConfigService:
         return sorted(entry["name"] for entry in entries if entry.get("name"))
 
     async def list_targets(self, ctx: RequestContext, category: str) -> list[str]:
+        validate_privacy_identifier(category, "category")
         uri = f"{self._user_root(ctx)}/privacy/{category}"
         try:
             entries = await self._viking_fs.ls(uri, ctx=ctx)
@@ -221,69 +246,133 @@ class UserPrivacyConfigService:
         labels: Optional[dict[str, Any]] = None,
         *,
         owner_lease_ref: Optional[dict[str, Any]] = None,
+        preserve_fields: Optional[set[str]] = None,
     ) -> UserPrivacyConfigVersion:
         async with self._config_lock(
             ctx, category, target_key, owner_lease_ref=owner_lease_ref
         ) as lease:
-            await self._ensure_root(ctx, category, target_key, lease)
-            now = get_current_timestamp()
-            meta = await self.get_meta(ctx, category, target_key)
-            current = await self.get_current(ctx, category, target_key)
-
-            if current and canonicalize_values(current.values) == canonicalize_values(values):
-                if meta is None:
-                    meta = UserPrivacyConfigMeta(
-                        category=category,
-                        target_key=target_key,
-                        active_version=current.version,
-                        latest_version=current.version,
-                        created_at=now,
-                    )
-                meta.updated_by = updated_by
-                meta.last_accessed_at = now
-                if labels is not None:
-                    meta.labels = dict(labels)
-                await self._save_meta(ctx, category, target_key, meta, lease)
-                return current
-
-            version_number = 1 if meta is None else meta.latest_version + 1
-            version = UserPrivacyConfigVersion(
-                version=version_number,
+            if preserve_fields:
+                # Resolve retained references under the write lock so a Skill
+                # prepared before a credential rotation keeps the latest value.
+                current = await self.get_current(ctx, category, target_key)
+                retained = (
+                    {key: value for key, value in current.values.items() if key in preserve_fields}
+                    if current is not None
+                    else {}
+                )
+                values = {**retained, **values}
+            return await self._upsert_locked(
+                ctx=ctx,
                 category=category,
                 target_key=target_key,
-                values=dict(values),
-                created_at=now,
-                created_by=updated_by,
+                values=values,
+                updated_by=updated_by,
                 change_reason=change_reason,
-            )
-
-            await self._viking_fs.write_file(
-                version_uri(self._user_space(ctx), category, target_key, version_number),
-                json.dumps(version.to_dict(), ensure_ascii=False),
-                ctx=ctx,
-                lease_ref=lease,
-            )
-            await self._viking_fs.write_file(
-                current_uri(self._user_space(ctx), category, target_key),
-                json.dumps(version.to_dict(), ensure_ascii=False),
-                ctx=ctx,
+                labels=labels,
                 lease_ref=lease,
             )
 
+    async def patch_values(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        updates: dict[str, Any],
+        updated_by: str = "",
+        change_reason: str = "",
+        labels: Optional[dict[str, Any]] = None,
+    ) -> UserPrivacyConfigVersion:
+        """Atomically merge fields into current values, creating the target if absent."""
+        async with self._config_lock(ctx, category, target_key) as lease:
+            current = await self.get_current(ctx, category, target_key)
+            values = dict(current.values) if current is not None else {}
+            values.update(updates)
+            return await self._upsert_locked(
+                ctx=ctx,
+                category=category,
+                target_key=target_key,
+                values=values,
+                updated_by=updated_by,
+                change_reason=change_reason,
+                labels=labels,
+                lease_ref=lease,
+            )
+
+    async def _upsert_locked(
+        self,
+        *,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        values: dict[str, Any],
+        updated_by: str,
+        change_reason: str,
+        labels: Optional[dict[str, Any]],
+        lease_ref: Optional[dict[str, Any]],
+    ) -> UserPrivacyConfigVersion:
+        """Persist a complete snapshot while the caller holds the target lock."""
+        validate_privacy_values(values)
+        validate_privacy_metadata(change_reason=change_reason, labels=labels)
+        await self._ensure_root(ctx, category, target_key, lease_ref)
+        now = get_current_timestamp()
+        meta = await self.get_meta(ctx, category, target_key)
+        current = await self.get_current(ctx, category, target_key)
+
+        if current and canonicalize_values(current.values) == canonicalize_values(values):
             if meta is None:
                 meta = UserPrivacyConfigMeta(
                     category=category,
                     target_key=target_key,
+                    active_version=current.version,
+                    latest_version=current.version,
                     created_at=now,
                 )
-            meta.active_version = version_number
-            meta.latest_version = version_number
             meta.updated_by = updated_by
             meta.last_accessed_at = now
             if labels is not None:
                 meta.labels = dict(labels)
-            await self._save_meta(ctx, category, target_key, meta, lease)
-            return version
+            await self._save_meta(ctx, category, target_key, meta, lease_ref)
+            return current
+
+        version_number = 1 if meta is None else meta.latest_version + 1
+        version = UserPrivacyConfigVersion(
+            version=version_number,
+            category=category,
+            target_key=target_key,
+            values=dict(values),
+            created_at=now,
+            created_by=updated_by,
+            change_reason=change_reason,
+        )
+
+        await self._viking_fs.write_file(
+            version_uri(self._user_space(ctx), category, target_key, version_number),
+            json.dumps(version.to_dict(), ensure_ascii=False),
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
+        await self._viking_fs.write_file(
+            current_uri(self._user_space(ctx), category, target_key),
+            json.dumps(version.to_dict(), ensure_ascii=False),
+            ctx=ctx,
+            lease_ref=lease_ref,
+        )
+
+        if meta is None:
+            meta = UserPrivacyConfigMeta(
+                category=category,
+                target_key=target_key,
+                created_at=now,
+            )
+        meta.active_version = version_number
+        meta.latest_version = version_number
+        meta.updated_by = updated_by
+        meta.last_accessed_at = now
+        if labels is not None:
+            meta.labels = dict(labels)
+        await self._save_meta(ctx, category, target_key, meta, lease_ref)
+        self._bump_catalog_revision(ctx)
+        return version
 
     async def activate_version(
         self,
@@ -313,4 +402,80 @@ class UserPrivacyConfigService:
             meta.updated_by = updated_by
             meta.last_accessed_at = get_current_timestamp()
             await self._save_meta(ctx, category, target_key, meta, lease)
+            self._bump_catalog_revision(ctx)
             return snapshot
+
+    async def delete_field(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        field: str,
+        updated_by: str = "",
+    ) -> Optional[UserPrivacyFieldDeleteResult]:
+        """Remove one field from the active values by publishing a new snapshot.
+
+        Historical snapshots remain intact while the target still has fields.
+        Deleting the final field removes the complete target and its history.
+        """
+        validate_privacy_field_name(field, location="field")
+        async with self._config_lock(ctx, category, target_key) as lease:
+            meta = await self.get_meta(ctx, category, target_key)
+            current = await self.get_current(ctx, category, target_key)
+            if meta is None or current is None or field not in current.values:
+                return None
+
+            values = dict(current.values)
+            values.pop(field)
+            if not values:
+                await self._viking_fs.rm(
+                    self.get_config_root(ctx, category, target_key),
+                    recursive=True,
+                    ctx=ctx,
+                    lease_ref=lease,
+                )
+                self._bump_catalog_revision(ctx)
+                return UserPrivacyFieldDeleteResult(
+                    category=category,
+                    target_key=target_key,
+                    field=field,
+                    target_deleted=True,
+                )
+
+            now = get_current_timestamp()
+            version_number = meta.latest_version + 1
+            snapshot = UserPrivacyConfigVersion(
+                version=version_number,
+                category=category,
+                target_key=target_key,
+                values=values,
+                created_at=now,
+                created_by=updated_by,
+                change_reason=f"delete field: {field}",
+            )
+            serialized = json.dumps(snapshot.to_dict(), ensure_ascii=False)
+            await self._viking_fs.write_file(
+                version_uri(self._user_space(ctx), category, target_key, version_number),
+                serialized,
+                ctx=ctx,
+                lease_ref=lease,
+            )
+            await self._viking_fs.write_file(
+                current_uri(self._user_space(ctx), category, target_key),
+                serialized,
+                ctx=ctx,
+                lease_ref=lease,
+            )
+            meta.active_version = version_number
+            meta.latest_version = version_number
+            meta.updated_by = updated_by
+            meta.last_accessed_at = now
+            await self._save_meta(ctx, category, target_key, meta, lease)
+            self._bump_catalog_revision(ctx)
+            return UserPrivacyFieldDeleteResult(
+                category=category,
+                target_key=target_key,
+                field=field,
+                target_deleted=False,
+                active_version=snapshot.version,
+            )

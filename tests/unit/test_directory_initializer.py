@@ -132,3 +132,25 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     }
     assert count == len(expected_uris)
     assert set(viking_fs.contexts) == expected_uris
+
+
+def test_preset_directory_uris_cover_seeded_directories_only():
+    from openviking.core.directories import preset_directory_uris
+
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    user_root = canonical_user_root(ctx)
+
+    uris = preset_directory_uris(ctx)
+
+    assert {
+        "viking://resources",
+        "viking://agent",
+        "viking://agent/skills",
+        user_root,
+        f"{user_root}/memories",
+        f"{user_root}/resources",
+        f"{user_root}/privacy",
+        f"{user_root}/peers",
+    } <= uris
+    assert f"{user_root}/memories/preferences" not in uris
+    assert "viking://resources/proj" not in uris

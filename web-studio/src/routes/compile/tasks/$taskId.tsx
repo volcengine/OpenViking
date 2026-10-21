@@ -256,7 +256,7 @@ function CompileDetail() {
               <div className="space-y-5">
                 {request && (
                   <Link
-                    to="/playground"
+                    to="/filesystem"
                     search={{ uri: request.to }}
                     className="inline-flex rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
                   >

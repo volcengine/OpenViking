@@ -211,6 +211,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
 | `capture.enabled` | boolean | Whether the session is captured |
 | `capture.commit_token_threshold` | integer, `1000`–`1000000` | Tokens accumulated before a capture commits |
 | `bypass.session_patterns` | list of globs | A session whose id or working directory matches skips recall and capture |
+| `usage.view` / `usage.output` | string | Codex OV-Usage footer: `summary` / `expanded` / `off`, and `auto` / `terminal` / `desktop` |
 | `labels` | object | Free-form metadata for humans; not read by the plugins |
 
 An out-of-range number is clamped to the nearest bound and reported; an unrecognized enum value is ignored. The table lists common fields; `config-schema.mjs` defines the full shared schema. Unrecognized keys do not take effect.

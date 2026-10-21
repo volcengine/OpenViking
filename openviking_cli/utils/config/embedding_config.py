@@ -744,6 +744,7 @@ class EmbeddingConfig(BaseModel):
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
+            RetryEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
@@ -1021,7 +1022,12 @@ class EmbeddingConfig(BaseModel):
                 "google-genai is not installed. Install it with: pip install openviking[gemini]"
             )
         params = param_builder(config)
-        return embedder_class(**params)
+        embedder = embedder_class(**params)
+        if provider == "local":
+            return embedder
+        if isinstance(embedder, RetryEmbedder):
+            return embedder
+        return RetryEmbedder(embedder)
 
     def get_embedder(self):
         """Get embedder instance based on configuration.

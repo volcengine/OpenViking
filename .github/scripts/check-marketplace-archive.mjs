@@ -29,7 +29,12 @@ const PACKAGE_MANIFESTS = ["plugin.json"];
 // Directories a host loads whole; what is inside them is named nowhere.
 const CONTENT_DIRS = ["skills", "rules", "commands"];
 
-const SCRIPT_RE = /[^\s"'`]+\.(?:mjs|cjs|js)\b/g;
+// Command hooks name .mjs/.cjs/.js scripts; a Claude Code hooks module (`modules`
+// in hooks.json) names a .ts/.tsx file.
+const SCRIPT_RE = /[^\s"'`]+\.(?:mjs|cjs|js|tsx?)\b/g;
+
+// TypeScript imports leave the extension off: "./sources" is sources.ts.
+const TS_EXTENSIONS = ["", ".ts", ".tsx", ".d.ts"];
 
 async function isFile(path) {
   return stat(path)
@@ -92,8 +97,15 @@ async function importClosure(entries) {
   const reached = new Set();
   const pending = [...entries];
   while (pending.length) {
-    const file = pending.pop();
-    if (reached.has(file) || !(await isFile(file))) continue;
+    const spec = pending.pop();
+    let file = null;
+    for (const ext of TS_EXTENSIONS) {
+      if (await isFile(spec + ext)) {
+        file = spec + ext;
+        break;
+      }
+    }
+    if (!file || reached.has(file)) continue;
     reached.add(file);
     const source = await readFile(file, "utf-8");
     for (const spec of importSpecifiers(source)) {

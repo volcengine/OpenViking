@@ -1,4 +1,8 @@
 {{- $config := deepCopy .Values.config }}
+{{- if .Values.gateway.enabled }}
+{{- $gateway := dict "enabled" true "storage_path" (printf "%s/gateway" .Values.persistence.mountPath) }}
+{{- $_ := set $config "gateway" (mergeOverwrite $gateway ($config.gateway | default dict)) }}
+{{- end }}
 {{- if empty $config.storage.workspace }}
 {{- $_ := set $config.storage "workspace" (printf "%s/openviking_workspace" (trimSuffix "/" .Values.persistence.mountPath)) }}
 {{- end }}

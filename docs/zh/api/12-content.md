@@ -216,18 +216,18 @@ ov read viking://resources/docs/api.md
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
-| mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 仅创建缺失文件，目标已存在时返回 `409 Conflict` |
+| mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
-| timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
 
 **说明**
 
-- `replace` 和 `append` 在目标文件缺失时都会创建文件；其中 `append` 会以传入内容作为新文件的初始内容。`create` 仅用于创建缺失文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
-- 显式 `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
+- `replace`、`append` 和作为兼容别名的 `create` 都会在目标缺失时创建文件；`append` 会以传入内容作为新文件的初始内容，其他情况下 `create` 与 `replace` 完全相同。目录始终会被拒绝。
+- 使用任意模式创建缺失文件时，都只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
+- 正文提交后，如果后续语义/向量任务入队失败，不会回滚已写正文；接口会返回错误，调用方应重试同一次 write 以重新派发派生维护。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
 - 提供非空 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags`，或显式传 `tags: []` 配合 `tag_mode: "replace"`，都不会修改已有标签。使用 `tag_mode: "clear"` 可清空全部已有标签，且 `clear` 会忽略同时传入的标签值。
@@ -345,8 +345,8 @@ ov write viking://resources/docs/api.md \
 | `root_uri` | string | 是 | - | 包含所有写入目标的已存在 Resource 或 Memory 目录 |
 | `operations` | array | 是 | - | 要校验并执行的文件写入 |
 | `wait` | boolean | 否 | `true` | 是否等待语义/向量刷新 |
-| `timeout` | number | 否 | `null` | `wait=true` 时的刷新超时时间（秒） |
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
+| `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
 
 每个 operation 包含：
 
@@ -356,18 +356,24 @@ ov write viking://resources/docs/api.md \
 | `content` | string | 条件必填 | UTF-8 文本；与 `content_base64` 必须且只能提供一个 |
 | `content_base64` | string | 条件必填 | Base64 编码的字节；Memory 目标不支持 |
 | `mode` | string | 否 | `replace`（默认）、`append`、`create` 或 `upsert` |
+| `tags` | string[] | 否 | - | 该文件的显式检索标签 |
+| `tag_mode` | string | 否 | `replace` | 该文件标签写入方式：`replace`、`append` 或 `clear` |
+| `acl` | object | 否 | - | 该文件的直接 ACL；需要该文件的 manage 权限 |
 
 **说明**
 
-- 单次请求最多包含 256 个 operation，单文件不超过 8 MiB，总内容不超过 16 MiB。
+- 不设置 operation 数量、单文件大小或总内容大小的应用层上限。
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
-- `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
+- `create`、`replace`、`upsert` 是“写成请求最终正文”的兼容写法：文件存在时覆盖，缺失时创建。`append` 在文件存在时追加，文件缺失时以请求正文创建文件。
+- `processing_mode` 对整个 batch 生效，不能在不同 operation 中混用语义模式；`vectors_only` 不刷新父目录语义，只维护变化文件的向量。
+- `tags`、`tag_mode` 与 `acl` 按 operation 生效；tags 会随该文件首次向量 upsert 写入，`clear` 不要求传 `tags` 并会忽略同时传入的标签值。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。所有文件写完并释放锁后才启动语义处理，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
-- 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达目录聚合状态；提交任务前任一目录因锁冲突跳过时为 `skipped`，通过 `vector_status` 表达变化文件的向量维护状态。
+- 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达按直接父目录聚合的状态；只有所有父目录都未入队时才为 `skipped`，某一个目录因锁冲突跳过不会掩盖其他目录已入队的工作。`vector_status` 表达变化文件的向量维护状态。
+- 若正文已提交但异步刷新入队失败，正文不会回滚。可使用相同最终正文通过 `replace`、`create` 或 `upsert` 重写；不要直接重放已经成功过的 `append`，否则会重复追加。
 
 **Python SDK**
 

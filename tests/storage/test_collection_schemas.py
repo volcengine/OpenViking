@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.server.identity import RequestContext, Role, UserIdentifier
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import (
@@ -818,7 +819,7 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
             self.enqueued = []
 
         async def enqueue_embedding_msg(self, msg):
-            self.enqueued.append(msg.id)
+            self.enqueued.append(msg)
             return None
 
     embedder = _DummyEmbedder()
@@ -827,7 +828,8 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
         lambda: _DummyConfig(embedder),
     )
 
-    handler = TextEmbeddingHandler(_QueueingVikingDB())
+    vikingdb = _QueueingVikingDB()
+    handler = TextEmbeddingHandler(vikingdb)
     monkeypatch.setattr(
         await handler.breaker(),
         "check",
@@ -855,6 +857,38 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
         assert result.outcome is ProcessOutcome.REQUEUED
         assert result.value is None
         assert result.error is None
+    assert all(msg.failure_requeue_count == 0 for msg in vikingdb.enqueued)
+
+
+@pytest.mark.asyncio
+async def test_embedding_model_error_fails_without_reenqueue(monkeypatch):
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg)
+
+    class _ModelErrorEmbedder(_DummyEmbedder):
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise ModelError(ModelErrorKind.TRANSIENT_SERVICE_ERROR, "model request failed")
+
+    vikingdb = _QueueingVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_ModelErrorEmbedder()),
+    )
+    handler = TextEmbeddingHandler(vikingdb)
+
+    result = await handler.on_dequeue(_build_queue_payload())
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error is not None
+    assert "model request failed" in result.error
+    assert vikingdb.enqueued == []
 
 
 @pytest.mark.asyncio
@@ -876,7 +910,11 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
 
     class _AuthErrorEmbedder(_DummyEmbedder):
         async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
-            raise RuntimeError("Error code: 401 - {'code': 'AuthenticationError'} Unauthorized")
+            raise ModelError(
+                ModelErrorKind.AUTHENTICATION_ERROR,
+                "Error code: 401 - {'code': 'AuthenticationError'} Unauthorized",
+                status_code=401,
+            )
 
     vikingdb = _QueueingVikingDB()
     monkeypatch.setattr(
@@ -896,6 +934,41 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
     )
     assert vikingdb.enqueued == []  # terminal: not re-enqueued
     (await handler.breaker()).check()  # breaker not tripped (would raise if open)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_query", [True, False])
+async def test_request_level_400_does_not_trip_account_breaker(monkeypatch, is_query):
+    """One rejected input (e.g. an invalid image URL) must not open the
+    account-wide breaker and block the next, valid embedding call."""
+
+    class _RejectFirstEmbedder(_DummyEmbedder):
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            if self.calls == 0:
+                self.calls += 1
+                raise ModelError(
+                    ModelErrorKind.INVALID_REQUEST,
+                    "Error code: 400 - {'error': {'code': 'InvalidParameter', "
+                    "'message': 'Invalid base64 image url'}}",
+                    status_code=400,
+                )
+            return self.embed(text, is_query=is_query)
+
+    embedder = _RejectFirstEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+    handler = TextEmbeddingHandler(SimpleNamespace(is_closing=False, has_queue_manager=True))
+    provider = handler._embedding_provider
+
+    with pytest.raises(ModelError, match="400"):
+        await provider.embed("default", "bad input", is_query=is_query)
+
+    (await handler.breaker()).check()  # would raise CircuitBreakerOpen if tripped
+    result = await provider.embed("default", "good input", is_query=is_query)
+    assert result.dense_vector == [0.1, 0.2]
+    assert embedder.calls == 2
 
 
 @pytest.mark.asyncio
@@ -1064,10 +1137,6 @@ async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
         "openviking.metrics.datasources.EmbeddingEventDataSource.record_error",
         staticmethod(lambda **kwargs: captured.update(kwargs)),
     )
-    monkeypatch.setattr(
-        "openviking.storage.collection_schemas.classify_api_error",
-        lambda _err: "unknown",
-    )
 
     handler = TextEmbeddingHandler(_DummyVikingDB())
     await handler.on_dequeue(_build_queue_payload_for_account("acct-embed-error"))
@@ -1190,11 +1259,7 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
 
     assert result.outcome is ProcessOutcome.SUCCESS
     assert result.error is None
-    assert result.value == {
-        **queue_data["payload"]["context_data"],
-        "id": vector_record_id("default", "viking://resources/sample", 2),
-        "vector": [0.1, 0.2],
-    }
+    assert result.value == {"vector_written": True}
     assert "data" in captured
     assert captured["data"]["parent_uri"] == "viking://resources"
 
@@ -1255,9 +1320,7 @@ async def test_embedding_handler_honors_existing_record_id_override(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_generates_id_when_no_existing_override(monkeypatch):
-    from openviking.storage.vector_ids import vector_record_id
-
+async def test_embedding_handler_generates_id_and_reports_written_context(monkeypatch):
     captured = {}
 
     class _CapturingVikingDB:
@@ -1274,48 +1337,15 @@ async def test_embedding_handler_generates_id_when_no_existing_override(monkeypa
         lambda: _DummyConfig(embedder),
     )
     payload = _build_queue_payload_for_account("acct-new-id")
-
-    await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
-
-    assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
-
-
-@pytest.mark.asyncio
-async def test_embedding_handler_settles_request_wait_by_message_id(monkeypatch):
-    class _CapturingVikingDB:
-        is_closing = False
-        mode = "local"
-        uses_content_field = False
-
-        async def upsert(self, _data, *, ctx, options=UpsertOptions()):
-            assert options.partial_update is False
-            return "rec-1"
-
-    embedder = _DummyEmbedder()
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(embedder),
-    )
-
-    completed = []
-    monkeypatch.setattr(
-        "openviking.storage.collection_schemas.get_request_wait_tracker",
-        lambda: SimpleNamespace(
-            mark_embedding_done=lambda telemetry_id, root_id, **kwargs: completed.append(
-                (telemetry_id, root_id, kwargs)
-            )
-        ),
-    )
-
-    handler = TextEmbeddingHandler(_CapturingVikingDB())
-    payload = _build_queue_payload()
     queue_data = json.loads(payload["data"])
-    queue_data["telemetry_id"] = "request-1"
+    queue_data["task_id"] = "task-1"
+    queue_data["_task_work_id"] = "work-1"
     payload["data"] = json.dumps(queue_data)
 
-    await handler.on_dequeue(payload)
+    result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
 
-    assert completed == [("request-1", queue_data["id"], {"vector_written": True})]
+    assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
+    assert result.value == {"vector_written": True}
 
 
 def test_context_collection_uses_acl_mode_and_excludes_parent_uri():

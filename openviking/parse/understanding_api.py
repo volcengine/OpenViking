@@ -39,6 +39,7 @@ from openviking.parse.parsers.media.constants import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
@@ -775,7 +776,11 @@ class UnderstandingAPI(BaseParser):
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             rsp = await client.get(zip_url)
         rsp.raise_for_status()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as f:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".zip",
+            dir=get_parser_download_temp_dir(),
+        ) as f:
             f.write(rsp.content)
             return Path(f.name)
 
@@ -794,7 +799,7 @@ class UnderstandingAPI(BaseParser):
         try:
             await writer.mkdir(resource_rel)
 
-            with tempfile.TemporaryDirectory() as extract_dir:
+            with tempfile.TemporaryDirectory(dir=get_parser_download_temp_dir()) as extract_dir:
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     safe_extract_zip(zf, extract_dir)
                 extract_path = Path(extract_dir)

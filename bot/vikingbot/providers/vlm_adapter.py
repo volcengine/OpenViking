@@ -5,19 +5,21 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
-import asyncio
 import json
 import re
 import time
 import traceback
 from collections.abc import AsyncIterator, Mapping
+from contextlib import aclosing
 from typing import Any
 
 from loguru import logger
 
+from openviking.models.model_error import model_error_kind
 from openviking.models.vlm.backends.volcengine_vlm import build_volcengine_request_headers
-from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
+from openviking.utils.model_retry import effective_max_retries, retry_async
 from openviking.utils.multimodal import redact_image_data_urls
+from openviking_cli.utils import get_logger
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -257,6 +259,8 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResponse:
         effective_model = model or self._default_model
 
@@ -283,31 +287,23 @@ class VLMProviderAdapter(LLMProvider):
                         )
 
             # --- Call VLM backend ---
-            attempt = 1
             # An explicit empty list asks VLM backends for a structured response
             # without exposing tools, so per-response usage is preserved.
             response_tools = tools if tools is not None else []
-            while True:
-                try:
-                    result = await self._vlm.get_completion_async(
-                        messages=messages,
-                        thinking=getattr(self._vlm, "thinking", None),
-                        tools=response_tools,
-                        tool_choice="auto" if response_tools else None,
-                    )
-                    break
-                except Exception as e:
-                    if not is_retryable_rate_limit_error(e):
-                        raise
-                    delay = rate_limit_retry_delay(attempt)
-                    logger.warning(
-                        "VLM adapter chat rate limited; retrying attempt={} delay={:.1f}s error={}",
-                        attempt,
-                        delay,
-                        e,
-                    )
-                    await asyncio.sleep(delay)
-                    attempt += 1
+            # Effort overrides are scoped to the native Ark backend, not compatible APIs.
+            completion_overrides = (
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None and self._vlm.provider == "volcengine"
+                else {}
+            )
+            result = await self._vlm.get_completion_async(
+                messages=messages,
+                thinking=thinking if thinking is not None else getattr(self._vlm, "thinking", None),
+                tools=response_tools,
+                tool_choice="auto" if response_tools else None,
+                max_tokens=max_tokens,
+                **completion_overrides,
+            )
 
             llm_response = self._convert_response(result)
 
@@ -324,6 +320,7 @@ class VLMProviderAdapter(LLMProvider):
             return LLMResponse(
                 content=f"Error calling LLM in VLM Adapter: {str(e)}",
                 finish_reason="error",
+                error_kind=model_error_kind(e),
             )
 
     async def chat_stream(
@@ -350,13 +347,15 @@ class VLMProviderAdapter(LLMProvider):
         try:
             stream_with_failover = getattr(self._vlm, "stream_with_failover", None)
             if callable(stream_with_failover):
-                async for event in self._chat_stream_failover_with_retry(
-                    stream_with_failover,
-                    messages=messages,
-                    tools=tools,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
+                async for event in stream_with_failover(
+                    lambda vlm: self._chat_stream_with_retry(
+                        vlm,
+                        messages=messages,
+                        tools=tools,
+                        model=model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
                 ):
                     yield event
                 return
@@ -377,6 +376,7 @@ class VLMProviderAdapter(LLMProvider):
                 response=LLMResponse(
                     content=f"Error calling LLM in VLM Adapter stream: {str(exc)}",
                     finish_reason="error",
+                    error_kind=model_error_kind(exc),
                 ),
             )
 
@@ -425,47 +425,6 @@ class VLMProviderAdapter(LLMProvider):
             getattr(vlm, "get_async_client", None)
         )
 
-    async def _chat_stream_failover_with_retry(
-        self,
-        stream_with_failover: Any,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-        model: str | None,
-        max_tokens: int | None,
-        temperature: float,
-    ) -> AsyncIterator[LLMStreamEvent]:
-        attempt = 1
-        while True:
-            emitted = False
-            try:
-                async for event in stream_with_failover(
-                    lambda vlm: self._chat_stream_backend(
-                        vlm,
-                        messages=messages,
-                        tools=tools,
-                        model=model,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                    )
-                ):
-                    emitted = True
-                    yield event
-                return
-            except Exception as exc:
-                if emitted or not is_retryable_rate_limit_error(exc):
-                    raise
-                delay = rate_limit_retry_delay(attempt)
-                logger.warning(
-                    "VLM credential stream rate limited; retrying attempt={} "
-                    "delay={:.1f}s error={}",
-                    attempt,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-                attempt += 1
-
     async def _chat_stream_with_retry(
         self,
         vlm: Any,
@@ -475,33 +434,35 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None,
         temperature: float,
     ) -> AsyncIterator[LLMStreamEvent]:
-        attempt = 1
-        while True:
-            emitted = False
+        """Retry before the first event; never replay emitted output."""
+
+        async def start_stream():
+            """Return the stream and first event; close failed attempts."""
+            stream = self._chat_stream_backend(
+                vlm,
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
             try:
-                async for event in self._chat_stream_backend(
-                    vlm,
-                    messages=messages,
-                    tools=tools,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                ):
-                    emitted = True
-                    yield event
-                return
-            except Exception as exc:
-                if emitted or not is_retryable_rate_limit_error(exc):
-                    raise
-                delay = rate_limit_retry_delay(attempt)
-                logger.warning(
-                    "VLM adapter stream rate limited; retrying attempt={} delay={:.1f}s error={}",
-                    attempt,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-                attempt += 1
+                return stream, await anext(stream)
+            except BaseException:
+                await stream.aclose()
+                raise
+
+        stream, first = await retry_async(
+            start_stream,
+            max_retries=effective_max_retries(getattr(vlm, "max_retries", 0)),
+            logger=get_logger(__name__),
+            operation_name=f"{vlm.provider} VLM stream",
+            model_errors_only=True,
+        )
+        async with aclosing(stream):
+            yield first
+            async for event in stream:
+                yield event
 
     async def _chat_stream_backend(
         self,
@@ -513,6 +474,7 @@ class VLMProviderAdapter(LLMProvider):
         max_tokens: int | None,
         temperature: float,
     ) -> AsyncIterator[LLMStreamEvent]:
+        """Release the HTTP response after normal or failed SDK iteration."""
         kwargs = self._build_stream_kwargs(
             vlm,
             messages=messages,
@@ -530,39 +492,40 @@ class VLMProviderAdapter(LLMProvider):
 
         client = vlm.get_async_client()
         response = await client.chat.completions.create(**kwargs)
-        async for chunk in response:
-            chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
-            if chunk_usage:
-                usage = chunk_usage
+        async with response as stream:
+            async for chunk in stream:
+                chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
+                if chunk_usage:
+                    usage = chunk_usage
 
-            choices = getattr(chunk, "choices", None) or []
-            if not choices:
-                continue
-            choice = choices[0]
-            if getattr(choice, "finish_reason", None):
-                finish_reason = choice.finish_reason or finish_reason
-            delta = getattr(choice, "delta", None)
-            if delta is None:
-                continue
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason or finish_reason
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
 
-            reasoning_delta = stream_delta_value(delta, "reasoning_content")
-            if reasoning_delta:
-                reasoning_parts.append(reasoning_delta)
-                yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+                reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
+                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
 
-            content_delta = stream_delta_value(delta, "content")
-            if content_delta:
-                content_parts.append(content_delta)
-                yield LLMStreamEvent(type="content_delta", content=content_delta)
+                content_delta = stream_delta_value(delta, "content")
+                if content_delta:
+                    content_parts.append(content_delta)
+                    yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-            for fallback_index, delta_tool_call in enumerate(
-                getattr(delta, "tool_calls", None) or []
-            ):
-                merge_stream_tool_call_delta(
-                    tool_calls,
-                    delta_tool_call,
-                    fallback_index=fallback_index,
-                )
+                for fallback_index, delta_tool_call in enumerate(
+                    getattr(delta, "tool_calls", None) or []
+                ):
+                    merge_stream_tool_call_delta(
+                        tool_calls,
+                        delta_tool_call,
+                        fallback_index=fallback_index,
+                    )
 
         if usage:
             self._record_vlm_usage(vlm, usage, time.perf_counter() - start_time)
@@ -590,9 +553,7 @@ class VLMProviderAdapter(LLMProvider):
     ) -> dict[str, Any]:
         provider = getattr(vlm, "provider", None)
         configured_max_tokens = getattr(vlm, "max_tokens", None)
-        effective_max_tokens = (
-            configured_max_tokens if configured_max_tokens is not None else max_tokens
-        )
+        effective_max_tokens = max_tokens if max_tokens is not None else configured_max_tokens
         # A wrapped credential owns its model.  The model passed by AgentLoop is
         # the outer/default model and must not overwrite a backup credential.
         effective_model = (
@@ -612,6 +573,9 @@ class VLMProviderAdapter(LLMProvider):
             }
             if effective_max_tokens is not None:
                 kwargs["max_tokens"] = effective_max_tokens
+            reasoning_effort = getattr(vlm, "reasoning_effort", None)
+            if getattr(vlm, "thinking", False) and reasoning_effort is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
             kwargs["extra_headers"] = build_volcengine_request_headers(
                 getattr(vlm, "extra_headers", None)
             )
@@ -629,10 +593,13 @@ class VLMProviderAdapter(LLMProvider):
         kwargs["model"] = effective_model
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
-        if effective_max_tokens is not None and not (
-            "max_tokens" in kwargs or "max_completion_tokens" in kwargs
-        ):
-            token_key = "max_completion_tokens" if "reasoning_effort" in kwargs else "max_tokens"
+        if effective_max_tokens is not None:
+            token_key = (
+                "max_completion_tokens"
+                if "max_completion_tokens" in kwargs
+                or ("max_tokens" not in kwargs and "reasoning_effort" in kwargs)
+                else "max_tokens"
+            )
             kwargs[token_key] = effective_max_tokens
         return kwargs
 
@@ -714,7 +681,12 @@ class VLMProviderAdapter(LLMProvider):
             content=result.content,
             tool_calls=tool_calls,
             finish_reason=result.finish_reason,
-            usage=result.usage,
+            usage={
+                k: v
+                for k, v in (result.usage if isinstance(result.usage, dict) else {}).items()
+                if isinstance(v, int)
+            }
+            | self._parse_usage(result.usage),
             reasoning_content=result.reasoning_content,
         )
 
