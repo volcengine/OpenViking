@@ -247,8 +247,9 @@ test("hits that all fall under the score threshold are recorded as filtered_out"
 });
 
 test("the client-ranked fallback degrades past the budget to URI hints", async () => {
-  const first = "x".repeat(500);
-  const second = "y".repeat(500);
+  // Leave room for the recall wrapper and both citations within the 200-token cap.
+  const first = "x".repeat(300);
+  const second = "y".repeat(300);
   const { stdout, state } = await recallTurn({
     env: { OPENVIKING_RECALL_TOKEN_BUDGET: "200" },
     routes: {

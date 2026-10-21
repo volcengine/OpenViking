@@ -775,6 +775,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Manage privacy targets, field references, values, versions, and cleanup.",
         examples: &[
             HelpItem {
+                label: "ov privacy tree [--category <category>] [--references]",
+                description: "List current targets and fields without revealing values.",
+            },
+            HelpItem {
                 label: "ov privacy categories",
                 description: "List privacy categories.",
             },

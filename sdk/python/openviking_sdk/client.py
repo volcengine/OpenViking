@@ -1947,6 +1947,14 @@ class AsyncHTTPClient:
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
+    async def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        """Return one account's credential-free metadata.
+
+        Raises NotFoundError when the account does not exist.
+        """
+        response = await self._request("GET", f"/api/v1/admin/accounts/{account_id}")
+        return self._handle_response(response)
+
     async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         response = await self._request("DELETE", f"/api/v1/admin/accounts/{account_id}")
         return self._handle_response(response)
@@ -1992,6 +2000,18 @@ class AsyncHTTPClient:
             params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
+        )
+        return self._handle_response(response)
+
+    async def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Return one user's credential-free membership info (user_id, role).
+
+        Raises NotFoundError when the user does not exist. Never returns
+        api_key or key_prefix.
+        """
+        response = await self._request(
+            "GET",
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
         )
         return self._handle_response(response)
 
@@ -3057,6 +3077,9 @@ class SyncHTTPClient:
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
 
+    def admin_get_account(self, account_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_account(account_id))
+
     def admin_register_user(
         self,
         account_id: str,
@@ -3092,6 +3115,9 @@ class SyncHTTPClient:
 
     def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_remove_user(account_id, user_id))
+
+    def admin_get_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_get_user(account_id, user_id))
 
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))

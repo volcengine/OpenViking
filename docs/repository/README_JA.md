@@ -400,6 +400,7 @@ ov chat   # 別のターミナルで実行
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
 - [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
+- [NVIDIA cuVS](https://github.com/NVIDIA/cuvs) - GPU アクセラレーションによるベクトル検索・クラスタリングライブラリ
 
 提携の提案は [issue](https://github.com/volcengine/OpenViking/issues) で受け付けています。
 

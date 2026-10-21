@@ -1726,6 +1726,13 @@ impl HttpClient {
         self.get("/api/v1/privacy-configs", &[]).await
     }
 
+    pub async fn privacy_tree(&self, category: Option<&str>) -> Result<serde_json::Value> {
+        let params = category
+            .map(|value| vec![("category".to_string(), value.to_string())])
+            .unwrap_or_default();
+        self.get("/api/v1/privacy-configs/tree", &params).await
+    }
+
     pub async fn privacy_list_targets(&self, category: &str) -> Result<serde_json::Value> {
         let path = format!("/api/v1/privacy-configs/{}", category);
         self.get(&path, &[]).await

@@ -18,6 +18,7 @@ from langchain_openviking.client import (
     OptionalDependencyError,
     call_openviking,
     ensure_client,
+    is_not_found_error,
     item_value,
     iter_result_items,
     missing_dependency,
@@ -60,6 +61,7 @@ class OpenVikingStore(BaseStore):
     Values are stored as JSON records under ``<root_uri>/data``. A separate
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
+    Removal ignores missing targets and propagates other backend errors.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -159,17 +161,23 @@ class OpenVikingStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: Mapping[str, Any],
+        value: Mapping[str, Any] | None,
         index: bool | list[str] | None = None,
         *,
         ttl: Any = None,
     ) -> None:
+        from langgraph.store.base import _validate_namespace
+
         if ttl is not None:
             raise NotImplementedError(
                 "TTL is not supported by OpenVikingStore. "
                 "OpenViking stores LangGraph values as durable content records."
             )
         namespace = tuple(namespace)
+        _validate_namespace(namespace)
+        if value is None:
+            self.delete(namespace, key)
+            return
         now = datetime.now(timezone.utc)
         data_uri = self._data_uri(namespace, key)
         record = self._write_record(data_uri, namespace, key, dict(value), now)
@@ -353,9 +361,10 @@ class OpenVikingStore(BaseStore):
     def _remove(self, uri: str) -> None:
         try:
             call_openviking(self._client(), "rm", uri=uri, recursive=False)
-        except Exception:
-            logger.debug("OpenVikingStore remove ignored missing/unavailable URI", exc_info=True)
-            pass
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
+            logger.debug("OpenVikingStore remove ignored missing URI", exc_info=True)
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
         return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"

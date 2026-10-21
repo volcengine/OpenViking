@@ -30,6 +30,11 @@ from openviking.core.namespace import is_content_root_uri
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    overlay_parser_subprocess_env,
+)
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
 from openviking.resource.feishu_watch_auth import (
     FEISHU_ACCESS_TOKEN_ARG,
@@ -1488,6 +1493,10 @@ class ResourceService:
         proc = None
         try:
             env = build_git_http_auth_env(auth_config, source) if auth_config is not None else None
+            env = overlay_parser_subprocess_env(
+                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, source),
+                env,
+            )
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "ls-remote",

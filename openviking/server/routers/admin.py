@@ -521,6 +521,20 @@ async def list_accounts(
     return Response(status="ok", result=accounts)
 
 
+@router.get("/accounts/{account_id}")
+@require_auth_root
+async def get_account(
+    request: Request,
+    account_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return credential-free metadata for one account, or 404 if absent."""
+    account = await _get_api_key_manager(request).get_account(account_id)
+    if account is None:
+        raise NotFoundError(account_id, "account")
+    return Response(status="ok", result=account)
+
+
 @router.post("/migrate")
 @require_auth_root
 async def migrate_legacy_data(
@@ -1034,6 +1048,26 @@ async def list_users(
             for user in users["users"]
         ]
     return Response(status="ok", result=users if include_summary else users["users"])
+
+
+@router.get("/accounts/{account_id}/users/{user_id}")
+@require_auth_root_or_admin
+async def get_user(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return one user's credential-free membership info, or 404 if absent.
+
+    Deliberately returns only ``user_id`` and ``role``; it never exposes
+    ``api_key`` or ``key_prefix``.
+    """
+    _check_account_access(ctx, account_id)
+    user = await _get_api_key_manager(request).get_user_membership(account_id, user_id)
+    if user is None:
+        raise NotFoundError(user_id, "user")
+    return Response(status="ok", result={"user_id": user_id, "role": user["role"]})
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")

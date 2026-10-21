@@ -92,7 +92,7 @@ const studio = {
       'Enter a valid HTTP or HTTPS service address without embedded credentials.',
     deleteConfirm: 'Delete “{{name}}”? Its saved credentials will be removed.',
     fields: {
-      baseUrl: 'Service address',
+      baseUrl: 'Service Address',
       apiKey: 'User API Key',
       adminApiKey: 'Management API Key (optional)',
       accountId: 'Account ID',
@@ -132,12 +132,12 @@ const studio = {
     management: 'Management',
   },
   providers: {
-    opensource: 'Open source',
-    volcengine: 'Volcengine hosted',
+    opensource: 'Open Source',
+    volcengine: 'VolcEngine Hosted',
     unknown: 'Service type unconfirmed',
     checking: 'Checking connection…',
   },
-  serviceType: 'Service type',
+  serviceType: 'Service Type',
   auto: 'Detect automatically',
   serviceHint:
     'Automatic detection uses Volcengine for official endpoints and open source for other addresses. For a hosted proxy, select Volcengine hosted. Features appear after connection verification.',

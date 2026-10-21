@@ -506,9 +506,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
 | POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
+| GET | `/api/v1/admin/accounts/{account_id}` | Get credential-free metadata for one account |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Get one user's credential-free membership info (user_id, role) |
 | GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
 | PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
@@ -521,6 +523,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a group member |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in content |
 | GET | `/api/v1/privacy-configs/{category}` | List category targets |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get the active configuration |

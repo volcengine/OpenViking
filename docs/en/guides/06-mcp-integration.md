@@ -143,6 +143,9 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
+| `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
+| `privacy_resolve` | Turn a complete `{{ov_privacy:...}}` placeholder into one current field's actual value for immediate use | `reference` |
+| `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
 | `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
@@ -165,6 +168,44 @@ user spaces, not a shortcut to yours. See
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. One-time user-token imports pass only `args.feishu_access_token`; user-token watches must also pass `args.feishu_refresh_token`. They may pass `args.feishu_app_id` and `args.feishu_app_secret` together for that watch, or fall back to the server app credentials. The app must match the issuer of the user token.
 
 > `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
+
+### Using saved credentials from a skill
+
+If a SKILL.md, document or tool result contains an authentication placeholder such as:
+
+```text
+Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
+```
+
+and the current task needs the credential, call `privacy_resolve` with the entire
+placeholder unchanged, excluding the surrounding `Authorization: Bearer` text:
+
+```json
+{
+  "name": "privacy_resolve",
+  "arguments": {
+    "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  }
+}
+```
+
+These are the parameters for an MCP `tools/call` request. Use the returned `value`
+in the API's authentication field; the placeholder itself is not a working key.
+Resolution uses the current active version and rejects another owner's reference,
+even for administrators. Field-level Privacy URIs are also accepted. If you do not
+know the reference, call `privacy_tree`, optionally filtering by `category`.
+
+To save a PAT supplied by the user, call `privacy_upsert` with
+`category="credential"`, `target_key="github"` and `values={"pat":"<user-provided-token>"}`.
+It creates the target or merges the supplied fields, preserving other fields such
+as `username`. Changed values create and activate a version; this does not rotate
+credentials at the external provider. Its response describes only the updated
+fields, without echoing their values.
+
+Tree and resolve are marked read-only; upsert is marked as a potentially destructive
+write. Read-only does not mean non-sensitive: resolve returns plaintext to the MCP
+client and Agent context. Keep references in saved documents and memory, and do
+not echo resolved secrets in chat. Tree and upsert return no stored values.
 
 ### Resource permissions and sharing
 

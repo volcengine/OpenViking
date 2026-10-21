@@ -139,6 +139,9 @@ claude mcp add --transport http openviking \
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`（可选） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
+| `privacy_tree` | 盘点已保存的凭据；返回当前字段元数据及引用，不含值 | `category`（可选） |
+| `privacy_resolve` | 将完整的 `{{ov_privacy:...}}` 占位符解析为一个当前字段的实际值，供立即使用 | `reference` |
+| `privacy_upsert` | 原子合并用户提供的凭据字段；返回元数据和引用，不回显值 | `category`, `target_key`, `values` |
 | `list_users` | 查询当前 account 的用户 ID；默认不返回凭证，管理员也一样 | `query`(可选，ID 子串), `limit`(默认 100), `page`(默认 1), `include_credentials`(默认 false，仅 ADMIN/ROOT 可设为 true) |
 | `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
 | `get_acl` | 查看共享资源的直接、继承和有效 ACL；要求该节点的 manage 或账号 ADMIN | `uri` |
@@ -159,6 +162,38 @@ claude mcp add --transport http openviking \
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。一次性用户 token 导入只传 `args.feishu_access_token`；用户 token watch 还必须传 `args.feishu_refresh_token`。可为该 watch 同时传入 `args.feishu_app_id` 和 `args.feishu_app_secret`，也可回退使用服务端应用凭证；实际使用的应用必须与用户 token 的签发应用一致。
 
 > `processing_mode=vectors_only` 会跳过 VLM 语义理解阶段，不生成或刷新 `.abstract.md` / `.overview.md`；它只向量化当前非隐藏资源文件，并保留已存在的旧语义产物。
+
+### 使用 skill 中引用的凭据
+
+当 SKILL.md、文档或工具结果中出现以下认证占位符，且当前任务需要这个凭据时：
+
+```text
+Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
+```
+
+调用 `privacy_resolve`，原样传入完整占位符，不要带上外部的 `Authorization: Bearer`：
+
+```json
+{
+  "name": "privacy_resolve",
+  "arguments": {
+    "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  }
+}
+```
+
+以上是 MCP `tools/call` 请求的参数。将返回的 `value` 填入 API 的认证字段；占位符本身不是
+可以直接使用的密钥。解析始终读取当前生效版本，并拒绝其他 owner 的引用，管理员也不例外。
+也支持字段级 Privacy URI。不知道引用时，先调用 `privacy_tree`，可用 `category` 缩小范围。
+
+用户提供 PAT 并要求保存时，调用 `privacy_upsert`，传入 `category="credential"`、
+`target_key="github"` 和 `values={"pat":"<user-provided-token>"}`。目标不存在时创建，存在时
+合并指定字段，保留 `username` 等其他字段。值变化后创建并激活版本，但不会到外部服务轮换凭据。
+成功响应只描述本次更新的字段，不回显它们的值。
+
+tree 和 resolve 标记为只读，upsert 标记为可能覆盖数据的写入。只读不等于不敏感：resolve
+会将明文返回给 MCP 客户端和 Agent 上下文。保存文档和记忆时保留引用，不在聊天中复述解析后的
+密钥。tree 和 upsert 的响应不返回保存的值。
 
 ### 资源权限与授权对象
 

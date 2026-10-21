@@ -1943,6 +1943,15 @@ enum WatchCommands {
 enum PrivacyCommands {
     /// List privacy config categories
     Categories,
+    /// List all privacy targets and fields as a tree (current version, no values)
+    Tree {
+        /// Limit the tree to one category
+        #[arg(long, value_name = "category")]
+        category: Option<String>,
+        /// Append the owner-bound reference for each field
+        #[arg(long)]
+        references: bool,
+    },
     /// List targets by category
     List {
         /// Privacy config category
@@ -2860,6 +2869,7 @@ fn is_privacy_subcommand(token: &str) -> bool {
     matches!(
         token,
         "categories"
+            | "tree"
             | "list"
             | "get"
             | "reference"
@@ -4718,6 +4728,7 @@ mod tests {
             &["ov", "session", "add-messages"],
             &["ov", "session", "commit"],
             &["ov", "privacy", "categories"],
+            &["ov", "privacy", "tree"],
             &["ov", "privacy", "list"],
             &["ov", "privacy", "get"],
             &["ov", "privacy", "reference"],
@@ -6052,6 +6063,38 @@ mod tests {
             .expect("spawn CLI parser test")
             .join()
             .expect("CLI parser test thread");
+    }
+
+    #[test]
+    fn cli_parses_privacy_tree_options_without_rewriting_to_get() {
+        on_cli_parser_stack(|| {
+            let args = [
+                "ov",
+                "privacy",
+                "tree",
+                "--category",
+                "credential",
+                "--references",
+                "--output",
+                "json",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+            let cli = Cli::parse_from(preprocess_privacy_args(args));
+            let Commands::Privacy { action } = cli.command else {
+                panic!("expected privacy command")
+            };
+            let PrivacyCommands::Tree {
+                category,
+                references,
+            } = *action
+            else {
+                panic!("expected tree command")
+            };
+            assert_eq!(category.as_deref(), Some("credential"));
+            assert!(references);
+        });
     }
 
     #[test]

@@ -1,7 +1,9 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDownIcon } from 'lucide-react'
-import { Button } from '#/components/ui/button'
+import { Button, buttonVariants } from '#/components/ui/button'
+import { Link } from '@tanstack/react-router'
+import { SetupIdentityDirectory } from '#/components/setup-identity-directory'
 import { Badge } from '#/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '#/components/ui/card'
 import {
@@ -21,7 +23,11 @@ import {
 } from '#/components/ui/select'
 import { Field, FieldLabel } from '#/components/ui/field'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { createRandomUuid } from '#/lib/browser-crypto'
+import {
+  CLOUD_SETUP_URL,
+  StudioSetupRequestError,
+  verifyStudioSetup,
+} from '#/lib/connection/onboarding'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import type { ConnectionProfile } from '#/lib/connection/profiles'
 import { formatHostedIdentity } from '#/lib/connection/identity-label'
@@ -69,19 +75,78 @@ export function ConnectionProfilesList() {
   } = useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionProfile | null>(null)
   const [error, setError] = React.useState('')
+  const [directoryIdentitySelected, setDirectoryIdentitySelected] =
+    React.useState(false)
+  const [saving, setSaving] = React.useState(false)
+  const saveController = React.useRef<AbortController | null>(null)
+  const currentDraft = React.useRef(draft)
+  currentDraft.current = draft
+  React.useEffect(() => {
+    saveController.current?.abort()
+    setSaving(false)
+    return () => saveController.current?.abort()
+  }, [draft])
+  const [directoryScope, setDirectoryScope] = React.useState<string | null>(
+    null,
+  )
+  const currentDirectoryScope = draft
+    ? JSON.stringify([
+        draft.id,
+        draft.connection.serviceSelection,
+        draft.connection.baseUrl,
+        draft.connection.adminApiKey,
+      ])
+    : null
+  const hasControlKey =
+    draft?.connection.serviceSelection === 'opensource' &&
+    Boolean(draft.connection.adminApiKey.trim())
   const [deleting, setDeleting] = React.useState<ConnectionProfile | null>(null)
+  const openSourceUrlRef = React.useRef('')
   const openEditor = (profile: ConnectionProfile) => {
     setError('')
+    setDirectoryScope(null)
+    setDirectoryIdentitySelected(false)
+    const hosted = profile.connection.serviceSelection === 'volcengine'
+    openSourceUrlRef.current = hosted ? '' : profile.connection.baseUrl
     setDraft(profile)
   }
-  function save(event: React.FormEvent) {
+  async function save(event: React.FormEvent) {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || saving) return
     if (!isValidConnectionUrl(draft.connection.baseUrl)) {
       setError(t('profiles.invalidUrl'))
       return
     }
     const connection = normalizeProfileConnection(draft.connection)
+    if (directoryIdentitySelected && connection.apiKey.trim()) {
+      const controller = new AbortController()
+      saveController.current = controller
+      setSaving(true)
+      setError('')
+      try {
+        const verified = await verifyStudioSetup(connection, controller.signal)
+        if (controller.signal.aborted || currentDraft.current !== draft) return
+        if (
+          verified.accountId !== connection.accountId ||
+          verified.userId !== connection.userId
+        ) {
+          setError(t('onboarding:directoryIdentityMismatch'))
+          return
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted && currentDraft.current === draft) {
+          setError(
+            new StudioSetupRequestError('data', cause, connection).message,
+          )
+        }
+        return
+      } finally {
+        if (saveController.current === controller) {
+          saveController.current = null
+          setSaving(false)
+        }
+      }
+    }
     saveProfile({
       ...draft,
       connection: {
@@ -159,24 +224,9 @@ export function ConnectionProfilesList() {
       <Card>
         <CardHeader className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle>{t('profiles.title')}</CardTitle>
-          <Button
-            onClick={() =>
-              openEditor({
-                id: createRandomUuid(),
-                name: '',
-                connection: {
-                  serviceSelection: 'opensource',
-                  baseUrl: '',
-                  apiKey: '',
-                  adminApiKey: '',
-                  accountId: 'default',
-                  userId: 'default',
-                },
-              })
-            }
-          >
+          <Link to="/config" className={buttonVariants()}>
             {t('profiles.add')}
-          </Button>
+          </Link>
         </CardHeader>
         <CardContent className="grid gap-3">
           <p className="text-sm text-muted-foreground">{t('profiles.hint')}</p>
@@ -231,7 +281,7 @@ export function ConnectionProfilesList() {
           if (!open) setDraft(null)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
           <DialogHeader className="pr-8">
             <DialogTitle>
               {t(
@@ -271,11 +321,20 @@ export function ConnectionProfilesList() {
                   ]}
                   onValueChange={(value) => {
                     if (value !== 'opensource' && value !== 'volcengine') return
+                    setDirectoryIdentitySelected(false)
+                    if (draft.connection.serviceSelection !== 'volcengine') {
+                      openSourceUrlRef.current = draft.connection.baseUrl
+                    }
                     setDraft({
                       ...draft,
                       connection: {
                         ...draft.connection,
+                        baseUrl:
+                          value === 'volcengine'
+                            ? CLOUD_SETUP_URL
+                            : openSourceUrlRef.current,
                         serviceSelection: value,
+                        apiKey: '',
                       },
                     })
                   }}
@@ -298,9 +357,13 @@ export function ConnectionProfilesList() {
               </Field>
               {PROFILE_FIELDS.filter(
                 (field) =>
-                  draft.connection.serviceSelection === 'opensource' ||
-                  field === 'baseUrl' ||
-                  field === 'apiKey',
+                  (draft.connection.serviceSelection === 'opensource' ||
+                    field === 'baseUrl' ||
+                    field === 'apiKey') &&
+                  !(
+                    hasControlKey &&
+                    (field === 'accountId' || field === 'userId')
+                  ),
               ).map((key) => {
                 return (
                   <Field key={key} className="gap-2">
@@ -311,6 +374,10 @@ export function ConnectionProfilesList() {
                       id={`profile-${key}`}
                       className="h-10"
                       required={key === 'baseUrl'}
+                      readOnly={
+                        key === 'baseUrl' &&
+                        draft.connection.serviceSelection === 'volcengine'
+                      }
                       type={
                         key === 'apiKey' || key === 'adminApiKey'
                           ? 'password'
@@ -331,6 +398,45 @@ export function ConnectionProfilesList() {
                   </Field>
                 )
               })}
+              {hasControlKey && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setDirectoryScope(currentDirectoryScope)}
+                  >
+                    {t('onboarding:verify')}
+                  </Button>
+                  {directoryScope === currentDirectoryScope && (
+                    <SetupIdentityDirectory
+                      key={currentDirectoryScope}
+                      connection={draft.connection}
+                      disabled={false}
+                      onSelect={({ accountId, userId }) => {
+                        setDirectoryIdentitySelected(true)
+                        setDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                connection: {
+                                  ...current.connection,
+                                  accountId,
+                                  userId,
+                                  apiKey:
+                                    current.connection.accountId ===
+                                      accountId &&
+                                    current.connection.userId === userId
+                                      ? current.connection.apiKey
+                                      : '',
+                                },
+                              }
+                            : current,
+                        )
+                      }}
+                    />
+                  )}
+                </>
+              )}
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
@@ -344,8 +450,8 @@ export function ConnectionProfilesList() {
                 >
                   {t('profiles.cancel')}
                 </Button>
-                <Button type="submit" disabled={!draft.name.trim()}>
-                  {t('profiles.save')}
+                <Button type="submit" disabled={saving || !draft.name.trim()}>
+                  {t(saving ? 'onboarding:verifying' : 'profiles.save')}
                 </Button>
               </div>
             </form>

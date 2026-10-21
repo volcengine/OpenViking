@@ -1627,7 +1627,6 @@ async def test_session_state_lock_serializes_root_meta_without_blocking_archive_
 
     phase2 = client(session_id=initial.session_id)
     appending = client(session_id=initial.session_id)
-    await phase2.load()
     await appending.load()
 
     phase2_inside_save = asyncio.Event()
@@ -1875,6 +1874,14 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
 ):
     session = client(session_id="phase1_reconcile_durable_root_test")
     await session.ensure_exists()
+    session.meta.memory_policy = {"memory_types": ["profile"]}
+    legacy_meta = session.meta.to_dict()
+    legacy_meta.update(
+        pending_tokens="123", keep_recent_count="1", memories_extracted={"total": "4"}
+    )
+    await session._viking_fs.write_file(
+        f"{session.uri}/.meta.json", json.dumps(legacy_meta), ctx=session.ctx
+    )
     original = [
         _text_message("u1", "user", "archive me"),
         _text_message("a1", "assistant", "retain me"),
@@ -1884,7 +1891,7 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
     archive_uri = await _write_archive(session, 1, [original[0]])
     await session._write_phase1_marker(
         archive_uri,
-        queue_message={"task_id": "synthetic"},
+        queue_message={"task_id": "synthetic", "record_auto_commit_success": True},
         original_messages=original,
         archived_messages=[original[0]],
         retained_messages=[original[1]],
@@ -1901,9 +1908,28 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
         AsyncMock(side_effect=lambda task_id: task_id == "synthetic"),
     )
 
-    assert await session._ensure_phase1_ready(archive_uri)
-    assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
-    assert session.meta.message_count == 1
+    recovering = client(session_id=session.session_id)
+    original_read = recovering._viking_fs.read_file
+    failed_once = False
+
+    async def transient_meta_read(uri, *args, **kwargs):
+        nonlocal failed_once
+        if uri == f"{session.uri}/.meta.json" and not failed_once:
+            failed_once = True
+            raise AGFSIoError("temporary metadata read failure")
+        return await original_read(uri, *args, **kwargs)
+
+    monkeypatch.setattr(recovering._viking_fs, "read_file", transient_meta_read)
+    assert await recovering._ensure_phase1_ready(archive_uri)
+    assert (await recovering._read_phase1_meta(archive_uri))["status"] == "ready"
+    assert recovering.meta.message_count == 1
+    assert recovering.meta.memory_policy == {"memory_types": ["profile"]}
+    assert recovering.meta.memories_extracted == {"total": 4}
+    assert recovering.meta.last_auto_commit_at
+    persisted = json.loads(
+        await recovering._viking_fs.read_file(f"{session.uri}/.meta.json", ctx=recovering.ctx)
+    )
+    assert persisted["last_auto_commit_at"] == recovering.meta.last_auto_commit_at
 
 
 async def test_interrupted_phase1_before_root_rewrite_becomes_failed(

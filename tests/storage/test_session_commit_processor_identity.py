@@ -31,9 +31,6 @@ class _FakeSession:
     async def exists(self) -> bool:
         return True
 
-    async def load(self) -> None:
-        return None
-
     async def resume_queued_commit(self, msg) -> bool:
         root = get_root_observability_context()
         self._captured["account_id"] = root.account_id if root else None
@@ -74,11 +71,12 @@ async def test_process_binds_committing_identity_to_root_context(monkeypatch):
     with pytest.raises(OSError, match="store unavailable"):
         await processor.on_dequeue(message)
     tracker.create.side_effect = None
-    session.load = AsyncMock(side_effect=ValueError("invalid session message"))
+    original_resume = session.resume_queued_commit
+    session.resume_queued_commit = AsyncMock(side_effect=ValueError("invalid archive message"))
     result = await processor.on_dequeue(message)
     assert result.outcome is ProcessOutcome.FAILED
-    assert result.error == "invalid session message"
-    session.load.side_effect = None
+    assert result.error == "invalid archive message"
+    session.resume_queued_commit = original_resume
     assert (await processor.on_dequeue(message)).outcome is ProcessOutcome.SUCCESS
     assert captured == {"account_id": "acme", "user_id": "alice"}
     assert get_root_observability_context() is None

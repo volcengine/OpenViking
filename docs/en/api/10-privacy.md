@@ -4,7 +4,7 @@ Privacy configs manage sensitive values by `category + target_key` (for example,
 
 Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
-These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Reads and CLI output contain the stored values; `***` below is an example placeholder, not automatic redaction.
+These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
 
@@ -13,6 +13,7 @@ Activating a version changes only the values stored in OpenViking. It does not r
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/privacy-configs` | List privacy config categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in stored content |
 | GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
@@ -140,6 +141,57 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
   "result": ["skill"]
 }
 ```
+
+---
+
+### list_privacy_tree()
+
+List the current user's categories, targets, active version numbers and field metadata
+in one request. Historical versions and stored values are never returned. Targets
+without a current snapshot are skipped.
+
+**HTTP API**
+
+```text
+GET /api/v1/privacy-configs/tree
+```
+
+The optional `category` query parameter limits the tree to one category. An invalid
+identifier returns `INVALID_ARGUMENT`. An empty store returns `categories: []`;
+a missing filtered category returns that category with `targets: []`.
+
+```bash
+curl "http://localhost:1933/api/v1/privacy-configs/tree?category=credential" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "owner_user_id": "alice",
+    "categories": [{
+      "category": "credential",
+      "targets": [{
+        "target_key": "github",
+        "version": 3,
+        "fields": [{
+          "field": "pat",
+          "configured": true,
+          "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+        }]
+      }]
+    }]
+  }
+}
+```
+
+`configured` is false for `null` or an empty string; other values, including `false`
+and `0`, are configured. References are bound to the current owner and always
+included in the API response. The CLI shows them in table output only when
+`--references` is set; JSON output preserves all metadata.
 
 ---
 
@@ -519,6 +571,11 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 # Categories and targets
 ov privacy categories
 ov privacy list skill
+
+# Tree of current targets and fields, without values
+ov privacy tree
+ov privacy tree --category credential --references
+ov privacy tree --output json
 
 # Active config (shortcut supported)
 ov privacy get skill byted-viking-search-knowledgebase

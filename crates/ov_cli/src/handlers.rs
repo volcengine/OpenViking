@@ -803,6 +803,19 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
         PrivacyCommands::Categories => {
             commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
         }
+        PrivacyCommands::Tree {
+            category,
+            references,
+        } => {
+            commands::privacy::tree(
+                &client,
+                category.as_deref(),
+                references,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::List { category } => {
             commands::privacy::list_targets(&client, &category, ctx.output_format, ctx.compact)
                 .await

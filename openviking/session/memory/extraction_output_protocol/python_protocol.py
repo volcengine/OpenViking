@@ -1576,6 +1576,7 @@ def _field_type_name(field_type: FieldType) -> str:
         FieldType.INT64: "int",
         FieldType.FLOAT32: "float",
         FieldType.BOOL: "bool",
+        FieldType.STRING_LIST: "list[str]",
     }.get(field_type, "object")
 
 

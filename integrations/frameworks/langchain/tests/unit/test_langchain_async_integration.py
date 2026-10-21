@@ -6,6 +6,7 @@ import sys
 import threading
 from typing import Any
 
+import httpx
 import pytest
 
 pytest.importorskip("langchain_core")
@@ -968,6 +969,61 @@ async def test_async_retriever_uses_native_client_for_search_and_read():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("search_mode", ["find", "search"])
+@pytest.mark.parametrize("session_id", [None, "review-session"])
+async def test_retriever_passes_session_only_to_search(
+    monkeypatch, asynchronous, search_mode, session_id
+):
+    from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
+
+    requests = []
+
+    async def request(self, method, path, **kwargs):
+        requests.append((method, path, kwargs["json"]))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "result": {
+                    "resources": [
+                        {"uri": "viking://resources/release.md", "abstract": "Release checklist"}
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(AsyncHTTPClient, "_request", request)
+    client_type = AsyncHTTPClient if asynchronous else SyncHTTPClient
+    client = client_type(url="http://openviking.test", api_key="test")
+    retriever = OpenVikingRetriever(
+        **({"async_client": client} if asynchronous else {"client": client}),
+        search_mode=search_mode,
+        session_id=session_id,
+        content_mode="abstract",
+        score_threshold=0.5,
+        tags=["env=test"],
+    )
+    try:
+        documents = (
+            await retriever.ainvoke("release") if asynchronous else retriever.invoke("release")
+        )
+    finally:
+        await retriever.aclose()
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+    assert [document.page_content for document in documents] == ["Release checklist"]
+    expected = {"query": "release", "target_uri": "", "limit": 10, "score_threshold": 0.5}
+    expected["tags"] = ["env=test"]
+    if search_mode == "search" and session_id is not None:
+        expected["session_id"] = session_id
+    assert requests == [("POST", f"/api/v1/search/{search_mode}", expected)]
+
+
+@pytest.mark.asyncio
 async def test_async_recorder_preserves_batch_and_commit_semantics():
     class BatchTrackingClient(InMemoryOpenVikingClient):
         def __init__(self):
@@ -1318,16 +1374,31 @@ async def test_async_chat_history_reads_writes_and_clears_natively():
 
 
 @pytest.mark.asyncio
-async def test_async_context_assembler_combines_session_and_recall():
-    backing = InMemoryOpenVikingClient(
-        {"viking://resources/runbooks/async.md": "Async context is azure."}
-    )
+@pytest.mark.parametrize("metadata_prefix", ["openviking", "recall", "", "my_recall"])
+@pytest.mark.parametrize(
+    "uri,context_type",
+    [
+        ("viking://resources/runbooks/async.md", "resource"),
+        ("viking://user/default/memories/preferences/async.md", "memory"),
+        ("viking://skills/async.md", "skill"),
+    ],
+)
+async def test_async_context_assembler_combines_session_and_recall(
+    metadata_prefix, uri, context_type
+):
+    content = "Async context is azure. " * 30
+    backing = InMemoryOpenVikingClient({uri: content})
     backing.add_message("async-assembler", "user", content="Active async turn.")
     client = AsyncInMemoryOpenVikingClient(backing)
     assembler = OpenVikingSessionContextAssembler(
         include_session_context=True,
         async_client=client,
-        target_uri="viking://resources",
+        retriever=OpenVikingRetriever(
+            async_client=client,
+            target_uri=uri,
+            metadata_prefix=metadata_prefix,
+            search_mode="search",
+        ),
     )
 
     assembled = await assembler.aassemble(
@@ -1337,7 +1408,23 @@ async def test_async_context_assembler_combines_session_and_recall():
 
     assert "Active async turn." in assembled.block
     assert "Async context is azure." in assembled.block
-    assert assembled.context_parts[0]["uri"] == "viking://resources/runbooks/async.md"
+    assert assembled.context_parts == [
+        {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
+    ]
+    recorder = OpenVikingSessionRecorder(async_client=client)
+    await recorder.arecord(
+        "async-assembler",
+        [HumanMessage(content="Deployment question"), AIMessage(content="Deployment answer")],
+        context_parts=assembled.context_parts,
+    )
+    assert [
+        part
+        for message in backing.sessions["async-assembler"][-2:]
+        for part in message["parts"]
+        if part["type"] == "context"
+    ] == assembled.context_parts
+    await recorder.aclose()
+    await assembler.aclose()
 
 
 @pytest.mark.asyncio

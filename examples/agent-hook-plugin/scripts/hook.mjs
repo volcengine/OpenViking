@@ -125,8 +125,9 @@ async function promptSubmit(ctx) {
 
 async function capture(ctx) {
   if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
-  await withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
+  await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
     const state = await readHookState(clientId, ctx.nativeSessionId);
+    ctx.stateFile = stateFile;
     const next = await host.capture(ctx, state, event);
     if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
   });

@@ -441,3 +441,19 @@ describe('connection credential planes', () => {
     })
   })
 })
+
+it('does not synchronize a control-key placeholder into the selected data user', () => {
+  expect(
+    synchronizeResolvedDataIdentity(
+      {
+        serviceSelection: 'opensource',
+        baseUrl: 'https://service.test',
+        apiKey: '',
+        adminApiKey: 'admin-key',
+        accountId: 'tenant',
+        userId: 'alice',
+      },
+      { role: 'admin', accountId: 'tenant', userId: 'default' },
+    ),
+  ).toBeNull()
+})

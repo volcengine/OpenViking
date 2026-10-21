@@ -35,6 +35,16 @@ fields:
       Use exactly one of: success, failure, partial, unfinished, unknown.
     merge_op: immutable
 
+  - name: related_case_ids
+    type: string_list
+    description: |
+      When Candidate Cases are provided, return the IDs of the cases supported by this trajectory in the same extraction response.
+      Use only IDs from Candidate Cases; multiple IDs are allowed. Return [] when none match.
+      Use the candidate task descriptions only for association. Derive the trajectory from the archived conversation, never invent actions to match a case.
+      Do not link every case merely because they share an archive.
+      When Candidate Cases are absent, return [] without choosing cases; the system handles single-case association.
+    merge_op: immutable
+
   - name: task_query
     type: string
     description: |

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -9,7 +9,11 @@ import {
   shouldShowGatewayNavigation,
 } from './app-shell'
 
-const bootstrap = vi.hoisted(() => ({ health: vi.fn(), pathname: '/' }))
+const bootstrap = vi.hoisted(() => ({
+  health: vi.fn(),
+  pathname: '/',
+  navigate: vi.fn(),
+}))
 vi.mock('#/lib/connection/health', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   fetchServerHealth: bootstrap.health,
@@ -22,7 +26,7 @@ vi.mock('#/hooks/use-app-connection', async (original) => ({
 vi.mock('@tanstack/react-router', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   Navigate: ({ to }: { to: string }) => <output>{to}</output>,
-  useNavigate: () => vi.fn(),
+  useNavigate: () => bootstrap.navigate,
   useRouterState: ({
     select,
   }: {
@@ -132,4 +136,15 @@ it('opens a fresh standalone Gateway Studio without the data-connection wizard',
   } finally {
     window.history.replaceState(null, '', '/')
   }
+})
+
+it('cancels setup back to the existing workspace without changing its marker', () => {
+  localStorage.clear()
+  localStorage.setItem('ov_studio_setup', 'complete')
+  sessionStorage.setItem('ov_studio_workspace_selected', 'selected')
+  bootstrap.pathname = '/config'
+  render(<AppShell>{null}</AppShell>)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(bootstrap.navigate).toHaveBeenCalledWith({ to: '/', replace: true })
+  expect(localStorage.getItem('ov_studio_setup')).toBe('complete')
 })

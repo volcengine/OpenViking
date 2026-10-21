@@ -3,6 +3,9 @@ import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Building2Icon,
+  ArrowLeftIcon,
+  CloudIcon,
+  ServerIcon,
   CheckIcon,
   ChevronDownIcon,
   LoaderCircleIcon,
@@ -42,9 +45,11 @@ import type {
 import { DEFAULT_USER_ID } from '#/lib/admin-options'
 import { formatHostedIdentity } from '#/lib/connection/identity-label'
 import { connectionProfileFingerprint } from '#/lib/connection/profiles'
+import type { ConnectionProfile } from '#/lib/connection/profiles'
 import { PLAIN_INPUT_PROPS } from '#/lib/form-input'
 import { ovClient } from '#/lib/ov-client'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
+import { resolveConfiguredServiceProvider } from '#/lib/studio-service'
 import { cn } from '#/lib/utils'
 
 export function selectAccountUser(
@@ -72,54 +77,35 @@ function currentRuntimeIdentity(): string {
   ])
 }
 
-function HostedServiceIcon() {
-  const { t } = useTranslation('accountSwitcher')
-  const label = t('provider.hosted')
+function OpenVikingMark() {
   return (
-    <span
-      title={label}
-      role="img"
-      aria-label={label}
-      className="inline-flex size-4 shrink-0 items-center justify-center text-sidebar-foreground/70"
+    <svg
+      viewBox="0 0 100 100"
+      className="size-7"
+      fill="currentColor"
+      aria-hidden="true"
     >
-      <svg
-        viewBox="0 0 24 24"
-        className="size-3.5 opacity-60"
-        aria-hidden="true"
-      >
-        <g transform="translate(0.349 12.857)">
-          <path
-            d="M0 9.1584H6.34404L3.4718 0.221463C3.41951 0.0533704 3.23825 -0.0376799 3.07094 0.0148491C2.97333 0.0463665 2.89665 0.123409 2.86528 0.221463L0 9.1584Z"
-            fill="#00DCFF"
-          />
-        </g>
-        <g transform="translate(15.771 11.277)">
-          <path
-            d="M0 10.7483H7.36188L3.9842 0.221463C3.93191 0.0533704 3.75065 -0.03768 3.58334 0.0148491C3.48574 0.0463665 3.40905 0.123409 3.37768 0.221463L0 10.7483Z"
-            fill="#00DCFF"
-          />
-        </g>
-        <g transform="translate(7.012 1.716)">
-          <path
-            d="M0 20.3102H13.5804L7.09348 0.219641C7.03771 0.0515485 6.85993 -0.0395018 6.69262 0.0165291C6.59502 0.0480465 6.51833 0.125089 6.48696 0.219641L0 20.3102Z"
-            fill="#006AFF"
-          />
-        </g>
-        <g transform="translate(2.882 6.815)">
-          <path
-            d="M0.00348549 15.2114H10.2829L5.44472 0.219641C5.38895 0.0515482 5.21118 -0.0395018 5.04386 0.0165292C4.94626 0.0480466 4.86958 0.125089 4.83821 0.219641L0 15.2114H0.00348549Z"
-            fill="#006AFF"
-          />
-        </g>
-        <g transform="translate(5.736 9.355)">
-          <path
-            d="M0 12.6725H8.69343L4.64998 0.219641C4.5942 0.0515485 4.41643 -0.0395018 4.24912 0.0165291C4.15152 0.0480465 4.07832 0.125089 4.04694 0.219641L0.00348582 12.6725H0Z"
-            fill="#00DCFF"
-          />
-        </g>
-      </svg>
-    </span>
+      <path d="M20.5 84H31L70 16.45H67ZM37 84 76 16.45V84Z" />
+    </svg>
   )
+}
+
+function serviceKey(connection: ConnectionProfile['connection']): string {
+  return JSON.stringify([
+    resolveConfiguredServiceProvider(
+      connection.baseUrl,
+      connection.serviceSelection,
+    ),
+    connection.baseUrl.trim().replace(/\/+$/, ''),
+  ])
+}
+
+function serviceHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return baseUrl
+  }
 }
 
 export function AccountSwitcher() {
@@ -142,6 +128,16 @@ export function AccountSwitcher() {
   const [open, setOpen] = React.useState(false)
   const [createOpen, setCreateOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
+  const [serviceSearch, setServiceSearch] = React.useState('')
+  const [identitySearch, setIdentitySearch] = React.useState('')
+  const [selectedService, setSelectedService] = React.useState<string | null>(
+    null,
+  )
+  const [view, setView] = React.useState<'identities' | 'accounts'>('accounts')
+  const [mobileDetails, setMobileDetails] = React.useState(false)
+  const currentService = serviceKey(connection)
+  const selectedIsActive =
+    !selectedService || selectedService === currentService
   const [switchingAccountId, setSwitchingAccountId] = React.useState('')
   const [manualSwitch, setManualSwitch] = React.useState<{
     accountId: string
@@ -195,7 +191,8 @@ export function AccountSwitcher() {
   )
 
   const accountsQuery = useQuery({
-    enabled: canManageAccounts && open,
+    enabled:
+      canManageAccounts && open && selectedIsActive && view === 'accounts',
     queryFn: () => fetchAdminAccounts(adminConnection),
     queryKey: [
       'account-switcher',
@@ -348,7 +345,6 @@ export function AccountSwitcher() {
     },
   })
 
-  const accountLabel = connection.accountId || t('unset')
   const seenProfiles = new Set<string>()
   const savedProfiles = [...profiles]
     .sort((a, b) =>
@@ -360,143 +356,81 @@ export function AccountSwitcher() {
       seenProfiles.add(key)
       return true
     })
-  const identityFor = (profile: (typeof savedProfiles)[number]) =>
-    profile.connection.serviceSelection === 'volcengine'
-      ? formatHostedIdentity(
-          profile.connection.accountId,
-          profile.connection.userId,
-        )
-      : `${profile.connection.accountId}/${profile.connection.userId}`
-  const summaryFor = (profile: (typeof savedProfiles)[number]) =>
-    JSON.stringify([
-      profile.name,
-      profile.connection.serviceSelection,
-      identityFor(profile),
-      profile.connection.baseUrl.trim().replace(/\/+$/, ''),
-    ])
-  const summaryCounts = new Map<string, number>()
+  const groups = new Map<
+    string,
+    {
+      connection: ConnectionProfile['connection']
+      profiles: ConnectionProfile[]
+    }
+  >()
+  groups.set(currentService, { connection, profiles: [] })
   for (const profile of savedProfiles) {
-    const summary = summaryFor(profile)
-    summaryCounts.set(summary, (summaryCounts.get(summary) ?? 0) + 1)
+    const key = serviceKey(profile.connection)
+    if (!groups.has(key))
+      groups.set(key, { connection: profile.connection, profiles: [] })
+    groups.get(key)!.profiles.push(profile)
   }
-  const savedConnectionsMenu = (
-    <>
-      <div className="max-h-60 space-y-0.5 overflow-y-auto p-1.5">
-        {savedProfiles.map((profile) => {
-          const active = profile.id === activeProfileId
-          const identity = identityFor(profile)
-          const showProfileId =
-            (summaryCounts.get(summaryFor(profile)) ?? 0) > 1
-          return (
-            <button
-              key={profile.id}
-              type="button"
-              aria-current={active ? 'true' : undefined}
-              onClick={() => {
-                setOpen(false)
-                activateProfile(profile.id)
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                active && 'bg-accent/70',
-              )}
-            >
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-xs font-semibold">
-                {profile.name.charAt(0).toUpperCase()}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex min-w-0 items-center gap-1">
-                  <span className="min-w-0 truncate text-sm font-medium">
-                    {profile.name}
-                  </span>
-                  {profile.connection.serviceSelection === 'volcengine' ? (
-                    <HostedServiceIcon />
-                  ) : null}
-                  {showProfileId ? (
-                    <span
-                      className="shrink-0 font-mono text-[10px] text-muted-foreground"
-                      title={profile.id}
-                    >
-                      #{profile.id.slice(0, 8)}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  className="block truncate text-xs text-muted-foreground"
-                  title={`${identity ? `[${identity}] · ` : ''}${profile.connection.baseUrl}`}
-                >
-                  {identity ? `[${identity}] · ` : null}
-                  {profile.connection.baseUrl}
-                </span>
-              </span>
-              {active ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-            </button>
-          )
-        })}
-      </div>
-      <p className="border-t px-2.5 py-2 text-xs text-muted-foreground">
-        {t('connections.savedOnly')}
-      </p>
-      <Link
-        to="/config"
-        onClick={() => setOpen(false)}
-        className="flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <PlusIcon className="size-4" />
-        {t('connections.add')}
-      </Link>
-    </>
+  const selectedKey =
+    selectedService && groups.has(selectedService)
+      ? selectedService
+      : currentService
+  const selected = groups.get(selectedKey)!
+  const titleFor = (c: ConnectionProfile['connection']) =>
+    c.serviceSelection === 'volcengine'
+      ? t('provider.hosted')
+      : serviceHost(c.baseUrl)
+  const identityFor = (c: ConnectionProfile['connection']) =>
+    c.serviceSelection === 'volcengine'
+      ? formatHostedIdentity(c.accountId, c.userId) || t('unset')
+      : `${c.accountId}/${c.userId}`
+  const visibleGroups = [...groups].filter(([, group]) =>
+    `${titleFor(group.connection)} ${group.connection.baseUrl}`
+      .toLowerCase()
+      .includes(serviceSearch.trim().toLowerCase()),
   )
-
-  if (provider === 'volcengine' || !canManageAccounts) {
-    return (
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          aria-label={t('connections.switch')}
-          className="flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-1 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center"
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/50">
-            <Building2Icon className="size-4" />
-          </span>
-          <span className="flex min-w-0 flex-1 items-center gap-1 group-data-[collapsible=icon]:hidden">
-            <span className="min-w-0 truncate text-sm font-semibold">
-              {(provider === 'volcengine' &&
-                formatHostedIdentity(
-                  connection.accountId,
-                  connection.userId,
-                )) ||
-                connection.accountId ||
-                t('hosted.currentWorkspace')}
-            </span>
-            {provider === 'volcengine' ? <HostedServiceIcon /> : null}
-          </span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          className="w-80 gap-0 p-1.5"
-        >
-          {savedConnectionsMenu}
-        </PopoverContent>
-      </Popover>
-    )
+  const visibleProfiles = selected.profiles.filter((profile) =>
+    `${identityFor(profile.connection)} ${profile.name}`
+      .toLowerCase()
+      .includes(identitySearch.trim().toLowerCase()),
+  )
+  const showAccountsTab =
+    resolveConfiguredServiceProvider(
+      selected.connection.baseUrl,
+      selected.connection.serviceSelection,
+    ) === 'opensource'
+  const accountsVisible = showAccountsTab && view === 'accounts'
+  const accountAccessReady = canManageAccounts && selectedKey === currentService
+  function changeOpen(next: boolean) {
+    setOpen(next)
+    if (next) {
+      setSelectedService(currentService)
+      setServiceSearch('')
+      setIdentitySearch('')
+      setSearch('')
+      setMobileDetails(false)
+      setView('identities')
+    }
   }
 
   return (
     <>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={changeOpen}>
         <PopoverTrigger
           aria-label={t('connections.switch')}
-          className="flex h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          className="flex min-h-12 w-full min-w-0 items-center gap-2 rounded-lg px-1 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-sidebar-accent/50">
-            <Building2Icon className="size-4" />
+          <span className="flex size-8 shrink-0 items-center justify-center text-sidebar-foreground">
+            <OpenVikingMark />
           </span>
-          <span className="flex min-w-0 flex-1 items-center gap-1 group-data-[collapsible=icon]:hidden">
-            <span className="min-w-0 truncate text-sm font-semibold">
-              {accountLabel}
+          <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+            <span
+              className="block truncate text-sm font-semibold"
+              title={connection.baseUrl}
+            >
+              {titleFor(connection)}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">
+              [{identityFor(connection)}]
             </span>
           </span>
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
@@ -505,102 +439,334 @@ export function AccountSwitcher() {
           side="bottom"
           align="start"
           sideOffset={6}
-          className="max-h-[min(80vh,44rem)] w-80 gap-0 overflow-y-auto p-0"
+          className="w-[min(40rem,calc(100vw-2rem))] gap-0 overflow-hidden p-0"
         >
-          <p className="px-4 pt-3 text-xs font-medium text-muted-foreground">
-            {t('connections.title')}
-          </p>
-          {savedConnectionsMenu}
-          <p className="border-t px-4 pt-3 text-xs font-medium text-muted-foreground">
-            {t('serverAccountsTitle')}
-          </p>
-          <div className="border-b p-2">
-            <div className="relative">
-              <SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t('searchPlaceholder')}
-                className="h-8 pl-8 text-sm"
-              />
+          <div className="grid min-h-80 sm:grid-cols-[12rem_minmax(0,1fr)]">
+            <div
+              className={cn(
+                'flex min-w-0 flex-col sm:border-r',
+                mobileDetails && 'hidden sm:flex',
+              )}
+            >
+              <div className="p-3">
+                <Input
+                  value={serviceSearch}
+                  onChange={(event) => setServiceSearch(event.target.value)}
+                  aria-label={t('servicesSearch')}
+                  placeholder={t('servicesSearch')}
+                  className="h-9"
+                />
+              </div>
+              <div className="max-h-72 flex-1 overflow-y-auto px-1.5 pb-2">
+                {visibleGroups.map(([key, group]) => {
+                  const Icon =
+                    group.connection.serviceSelection === 'volcengine'
+                      ? CloudIcon
+                      : ServerIcon
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={key === selectedKey}
+                      title={group.connection.baseUrl}
+                      onClick={() => {
+                        setSelectedService(key)
+                        setView('identities')
+                        setIdentitySearch('')
+                        setMobileDetails(true)
+                      }}
+                      className={cn(
+                        'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        key === selectedKey && 'bg-accent',
+                      )}
+                    >
+                      <Icon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 truncate font-medium">
+                        {titleFor(group.connection)}
+                      </span>
+                    </button>
+                  )
+                })}
+                {visibleGroups.length === 0 && (
+                  <p className="px-3 py-5 text-xs text-muted-foreground">
+                    {t('noConnections')}
+                  </p>
+                )}
+              </div>
+              <Link
+                to="/config"
+                onClick={() => setOpen(false)}
+                className="mt-auto flex h-11 shrink-0 items-center gap-2 border-t px-3 text-xs hover:bg-accent"
+              >
+                <PlusIcon className="size-3.5" />
+                {t('connections.add')}
+              </Link>
             </div>
-          </div>
-          <div className="max-h-60 overflow-y-auto p-1.5">
-            {accountsQuery.isLoading ? (
-              <div className="flex items-center justify-center gap-2 px-2.5 py-6 text-sm text-muted-foreground">
-                <LoaderCircleIcon className="size-3.5 animate-spin" />
-                {t('loading')}
+            <div
+              className={cn(
+                'flex min-w-0 flex-col',
+                !mobileDetails && 'hidden sm:flex',
+              )}
+            >
+              <div className="flex min-h-14 items-center gap-2 px-4 py-3">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 sm:hidden"
+                  aria-label={t('backToServices')}
+                  onClick={() => setMobileDetails(false)}
+                >
+                  <ArrowLeftIcon className="size-4" />
+                </Button>
+                <span
+                  className="min-w-0 truncate text-sm font-semibold"
+                  title={selected.connection.baseUrl}
+                >
+                  {titleFor(selected.connection)}
+                </span>
+                {selectedKey === currentService && (
+                  <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                    {t('connected')}
+                  </span>
+                )}
               </div>
-            ) : accountsQuery.isError ? (
-              <div className="grid gap-1 px-2.5 py-5 text-center">
-                <p className="text-sm font-medium text-destructive">
-                  {t('errors.loadAccounts')}
-                </p>
-                <p className="line-clamp-2 text-xs text-muted-foreground">
-                  {accountsQuery.error instanceof Error
-                    ? accountsQuery.error.message
-                    : String(accountsQuery.error)}
-                </p>
-              </div>
-            ) : filteredAccounts.length === 0 ? (
-              <p className="px-2.5 py-6 text-center text-sm text-muted-foreground">
-                {t('empty')}
-              </p>
-            ) : (
-              filteredAccounts.map((account) => {
-                const active = account.accountId === connection.accountId
-                const switching = switchingAccountId === account.accountId
-                return (
+              <div className="flex gap-4 border-b px-4">
+                <button
+                  type="button"
+                  aria-pressed={!accountsVisible}
+                  onClick={() => setView('identities')}
+                  className={cn(
+                    'min-h-9 border-b-2 text-xs',
+                    !accountsVisible
+                      ? 'border-foreground font-medium'
+                      : 'border-transparent text-muted-foreground',
+                  )}
+                >
+                  {t('identities')}
+                </button>
+                {showAccountsTab && (
                   <button
-                    key={account.accountId}
                     type="button"
-                    disabled={Boolean(switchingAccountId)}
-                    onClick={() => void selectAccount(account.accountId)}
+                    aria-pressed={accountsVisible}
+                    onClick={() => setView('accounts')}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent disabled:cursor-wait disabled:opacity-60',
-                      active && 'bg-accent/70',
+                      'min-h-9 border-b-2 text-xs',
+                      accountsVisible
+                        ? 'border-foreground font-medium'
+                        : 'border-transparent text-muted-foreground',
                     )}
                   >
-                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">
-                      <Building2Icon className="size-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex min-w-0 items-center gap-1">
-                        <span className="min-w-0 truncate text-sm font-medium">
-                          {account.accountId}
-                        </span>
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {t('memberCount', { count: account.userCount })}
-                      </span>
-                    </span>
-                    {switching ? (
-                      <LoaderCircleIcon className="size-3.5 animate-spin" />
-                    ) : active ? (
-                      <CheckIcon className="size-3.5 text-primary" />
-                    ) : null}
+                    {t('serverAccountsTitle')}
                   </button>
-                )
-              })
-            )}
-          </div>
-          {!isGatewayHost && (
-            <div className="border-t p-1.5">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start px-2.5"
-                onClick={() => {
-                  setOpen(false)
-                  setCreateOpen(true)
-                }}
+                )}
+              </div>
+              <div className="min-h-0 flex-1">
+                {accountsVisible && !accountAccessReady ? (
+                  <div className="space-y-3 p-4 text-xs text-muted-foreground">
+                    <p>
+                      {t(
+                        selectedKey !== currentService
+                          ? 'accountsConnectFirst'
+                          : isConnectionRoleLoading
+                            ? 'accountsChecking'
+                            : 'accountsRootRequired',
+                      )}
+                    </p>
+                    {selectedKey === currentService &&
+                      !isConnectionRoleLoading && (
+                        <Link
+                          to="/settings"
+                          onClick={() => setOpen(false)}
+                          className="text-foreground underline underline-offset-4"
+                        >
+                          {t('manageConnections')}
+                        </Link>
+                      )}
+                  </div>
+                ) : accountsVisible ? (
+                  <>
+                    <div className="flex items-center gap-2 p-3">
+                      <div className="relative min-w-0 flex-1">
+                        <SearchIcon className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={search}
+                          onChange={(event) => setSearch(event.target.value)}
+                          aria-label={t('searchPlaceholder')}
+                          placeholder={t('searchPlaceholder')}
+                          className="h-9 pl-8 text-xs"
+                        />
+                      </div>
+                      {!isGatewayHost && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-9 shrink-0 text-xs"
+                          onClick={() => {
+                            setOpen(false)
+                            setCreateOpen(true)
+                          }}
+                        >
+                          <PlusIcon className="size-3.5" />
+                          {t('create')}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="max-h-60 overflow-y-auto p-1.5">
+                      {accountsQuery.isLoading ? (
+                        <div className="flex items-center justify-center gap-2 px-2.5 py-6 text-sm text-muted-foreground">
+                          <LoaderCircleIcon className="size-3.5 animate-spin" />
+                          {t('loading')}
+                        </div>
+                      ) : accountsQuery.isError ? (
+                        <div className="grid gap-1 px-2.5 py-5 text-center">
+                          <p className="text-sm font-medium text-destructive">
+                            {t('errors.loadAccounts')}
+                          </p>
+                          <p className="line-clamp-2 text-xs text-muted-foreground">
+                            {accountsQuery.error instanceof Error
+                              ? accountsQuery.error.message
+                              : String(accountsQuery.error)}
+                          </p>
+                        </div>
+                      ) : filteredAccounts.length === 0 ? (
+                        <p className="px-2.5 py-6 text-center text-sm text-muted-foreground">
+                          {t('empty')}
+                        </p>
+                      ) : (
+                        filteredAccounts.map((account) => {
+                          const active =
+                            account.accountId === connection.accountId
+                          const switching =
+                            switchingAccountId === account.accountId
+                          return (
+                            <button
+                              key={account.accountId}
+                              type="button"
+                              disabled={Boolean(switchingAccountId)}
+                              onClick={() =>
+                                void selectAccount(account.accountId)
+                              }
+                              className={cn(
+                                'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent disabled:cursor-wait disabled:opacity-60',
+                                active && 'bg-accent/70',
+                              )}
+                            >
+                              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">
+                                <Building2Icon className="size-3.5" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex min-w-0 items-center gap-1">
+                                  <span className="min-w-0 truncate text-sm font-medium">
+                                    {account.accountId}
+                                  </span>
+                                </span>
+                                <span className="block text-xs text-muted-foreground">
+                                  {t('memberCount', {
+                                    count: account.userCount,
+                                  })}
+                                </span>
+                              </span>
+                              {switching ? (
+                                <LoaderCircleIcon className="size-3.5 animate-spin" />
+                              ) : active ? (
+                                <CheckIcon className="size-3.5 text-primary" />
+                              ) : null}
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-3">
+                      <Input
+                        value={identitySearch}
+                        onChange={(event) =>
+                          setIdentitySearch(event.target.value)
+                        }
+                        aria-label={t('identitiesSearch')}
+                        placeholder={t('identitiesSearch')}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="max-h-60 space-y-1 overflow-y-auto px-2 pb-2">
+                      {visibleProfiles.map((profile) => {
+                        const identity = identityFor(profile.connection)
+                        const duplicateIdentity =
+                          selected.profiles.filter(
+                            (candidate) =>
+                              identityFor(candidate.connection) === identity,
+                          ).length > 1
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            aria-current={
+                              profile.id === activeProfileId
+                                ? 'true'
+                                : undefined
+                            }
+                            title={profile.name}
+                            onClick={() => {
+                              setOpen(false)
+                              activateProfile(profile.id)
+                            }}
+                            className={cn(
+                              'flex min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                              profile.id === activeProfileId && 'bg-accent',
+                            )}
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">
+                                {profile.name}
+                              </span>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                [{identity}]
+                              </span>
+                            </span>
+                            {duplicateIdentity && (
+                              <span
+                                className="shrink-0 font-mono text-[10px] text-muted-foreground"
+                                title={profile.id}
+                              >
+                                #{profile.id.slice(0, 8)}
+                              </span>
+                            )}
+                            {profile.id === activeProfileId && (
+                              <CheckIcon className="size-3.5 shrink-0" />
+                            )}
+                          </button>
+                        )
+                      })}
+                      {visibleProfiles.length === 0 && (
+                        <p className="px-3 py-5 text-xs text-muted-foreground">
+                          {t('noIdentities')}
+                        </p>
+                      )}
+                    </div>
+                    <p className="px-4 pb-3 text-[11px] text-muted-foreground">
+                      {t('connections.savedOnly')}
+                    </p>
+                  </>
+                )}
+              </div>
+              <Link
+                to={
+                  accountsVisible && accountAccessReady ? '/users' : '/settings'
+                }
+                onClick={() => setOpen(false)}
+                className="mt-auto flex h-11 shrink-0 items-center border-t px-4 text-xs hover:bg-accent"
               >
-                <PlusIcon />
-                {t('create')}
-              </Button>
+                {t(
+                  accountsVisible && accountAccessReady
+                    ? 'accountSettings'
+                    : 'manageConnections',
+                )}
+              </Link>
             </div>
-          )}
+          </div>
         </PopoverContent>
       </Popover>
 

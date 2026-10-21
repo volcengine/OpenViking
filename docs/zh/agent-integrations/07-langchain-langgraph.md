@@ -244,7 +244,14 @@ from langchain_openviking import OpenVikingStore
 store = OpenVikingStore(url="http://localhost:1933", api_key="...")
 store.put(("users", "ada"), "preferences", {"color": "azure"})
 items = store.search(("users",), query="azure", limit=3)
+store.put(("users", "ada"), "preferences", None)  # 值为 None 表示删除该条目
 ```
+
+按 LangGraph `BaseStore` 约定，传入 `None` 作为值表示删除该条目，等价于 `delete()`。
+删除不存在的键不会产生任何影响。
+
+`put()` 会在修改记录前校验命名空间。其他删除错误会向调用方抛出。
+记录和搜索索引文件分别删除；如果只完成其中一步，请解决报告的错误后重试，以完成清理。
 
 ### LangGraph middleware
 

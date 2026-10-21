@@ -1,9 +1,90 @@
 use crate::client::HttpClient;
 use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
+use crate::theme;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
+
+const TREE_INDENT: &str = "  ";
+
+fn render_privacy_tree(result: &Value, references: bool) -> String {
+    let Some(categories) = result
+        .get("categories")
+        .and_then(Value::as_array)
+        .filter(|categories| !categories.is_empty())
+    else {
+        return theme::muted("(empty)").to_string();
+    };
+    let mut lines = vec![theme::heading("viking://~/privacy").to_string()];
+    for category in categories {
+        lines.push(format!(
+            "{TREE_INDENT}{}",
+            theme::heading(category["category"].as_str().unwrap_or_default())
+        ));
+        for target in category
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            lines.push(format!(
+                "{}{}  {}",
+                TREE_INDENT.repeat(2),
+                theme::sky_value(target["target_key"].as_str().unwrap_or_default()),
+                theme::muted(format!("(v{})", target["version"]))
+            ));
+            for field in target
+                .get("fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let status = if field["configured"].as_bool().unwrap_or(false) {
+                    theme::success("configured")
+                } else {
+                    theme::warning("unconfigured")
+                };
+                lines.push(format!(
+                    "{}{}  {}",
+                    TREE_INDENT.repeat(3),
+                    theme::sky_value(field["field"].as_str().unwrap_or_default()),
+                    status
+                ));
+                if references && let Some(reference) = field["reference"].as_str() {
+                    lines.push(format!(
+                        "{}{}",
+                        TREE_INDENT.repeat(4),
+                        theme::muted(reference)
+                    ));
+                }
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+pub async fn tree(
+    client: &HttpClient,
+    category: Option<&str>,
+    references: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.privacy_tree(category).await?;
+    if output_format == OutputFormat::Json {
+        output_success(&result, OutputFormat::Json, compact);
+    } else {
+        println!(
+            "{}",
+            crate::output::append_profile_to_rendered(
+                render_privacy_tree(&result, references),
+                &result
+            )
+        );
+    }
+    Ok(())
+}
 
 fn parse_field_pairs(pairs: &[String]) -> Result<HashMap<String, String>> {
     let mut parsed: HashMap<String, String> = HashMap::new();
@@ -551,6 +632,68 @@ pub async fn upsert(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn privacy_tree_result() -> Value {
+        json!({"owner_user_id": "alice", "categories": [{
+            "category": "credential", "targets": [{
+                "target_key": "github", "version": 3, "fields": [
+                    {"field": "pat", "configured": true,
+                     "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"},
+                    {"field": "region", "configured": false,
+                     "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/region}}"}
+                ]
+            }]
+        }]})
+    }
+
+    #[test]
+    fn privacy_tree_renders_empty() {
+        for references in [false, true] {
+            let rendered = render_privacy_tree(&json!({"categories": []}), references);
+            assert!(rendered.contains("(empty)"));
+            assert!(!rendered.contains("ov_privacy"));
+        }
+    }
+
+    #[test]
+    fn privacy_tree_without_references_shows_hierarchy_and_status() {
+        let rendered = render_privacy_tree(&privacy_tree_result(), false);
+        let lines: Vec<_> = rendered.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].contains("viking://~/privacy"));
+        assert!(lines[1].starts_with("  ") && lines[1].contains("credential"));
+        assert!(
+            lines[2].starts_with("    ")
+                && lines[2].contains("github")
+                && lines[2].contains("(v3)")
+        );
+        assert!(
+            lines[3].starts_with("      ")
+                && lines[3].contains("pat")
+                && lines[3].contains("configured")
+        );
+        assert!(!lines[3].contains("unconfigured"));
+        assert!(
+            lines[4].starts_with("      ")
+                && lines[4].contains("region")
+                && lines[4].contains("unconfigured")
+        );
+        assert!(!rendered.contains("ov_privacy:"));
+    }
+
+    #[test]
+    fn privacy_tree_references_are_indented_under_each_field() {
+        let result = privacy_tree_result();
+        let rendered = render_privacy_tree(&result, true);
+        let lines: Vec<_> = rendered.lines().collect();
+        assert_eq!(lines.len(), 7);
+        for (index, field) in [(4, 0), (6, 1)] {
+            let reference = result["categories"][0]["targets"][0]["fields"][field]["reference"]
+                .as_str()
+                .unwrap();
+            assert!(lines[index].starts_with("        ") && lines[index].contains(reference));
+        }
+    }
 
     #[test]
     fn inferred_field_requires_an_unambiguous_target() {

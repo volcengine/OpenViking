@@ -473,17 +473,22 @@ function looksLikeUnknownField(res) {
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
 }
 
+// Recalled text is the user's own history. Without a provenance boundary a model
+// may cite an internal decision as external evidence or industry practice.
+export const RECALL_CONTEXT_TEMPLATE = [
+  "<openviking-context>",
+  "Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact. Use the search/read MCP tools to expand URIs.",
+  "{context}",
+  "</openviking-context>",
+].join("\n");
+
 function wrapContext(body) {
   // Retrieved text cannot introduce a second capture delimiter inside ours.
   const text = String(body)
     .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
     .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
-  return [
-    "<openviking-context>",
-    "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
-    text,
-    "</openviking-context>",
-  ].join("\n");
+  // Use a replacer so recalled dollar sequences stay literal.
+  return RECALL_CONTEXT_TEMPLATE.replace("{context}", () => text);
 }
 
 /**

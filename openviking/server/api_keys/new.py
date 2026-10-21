@@ -218,6 +218,9 @@ class APIKeyManager:
     async def get_user(self, account_id, user_id):
         return await self._store.get_user(account_id, user_id)
 
+    async def get_user_membership(self, account_id, user_id):
+        return await self._store.get_user_membership(account_id, user_id)
+
     @deprecated(
         "get_user_for_management is a FileStore compatibility path and will be removed.",
         category=None,

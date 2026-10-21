@@ -654,6 +654,8 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_task",
         "list_tasks",
         "admin_list_accounts",
+        "admin_get_account",
+        "admin_get_user",
     ]:
         assert method_name in explicit_methods, method_name
 
@@ -1188,6 +1190,37 @@ async def test_admin_seed_payloads_are_sent():
         "seed": "alice-seed",
     }
     assert fake_http.post.await_args_list[2].kwargs["json"] == {"seed": "new-seed"}
+
+
+@pytest.mark.asyncio
+async def test_admin_get_account_uses_exact_path_and_returns_metadata():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {
+        "account_id": "acct",
+        "status": "active",
+        "user_count": 2,
+    }
+
+    result = await client.admin_get_account("acct")
+
+    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct")
+    assert result["user_count"] == 2
+    assert "api_key" not in result
+
+
+@pytest.mark.asyncio
+async def test_admin_get_user_reads_membership_from_point_read_path():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"user_id": "alice", "role": "admin"}
+
+    result = await client.admin_get_user("acct", "alice")
+    client._request.assert_awaited_once_with(
+        "GET", "/api/v1/admin/accounts/acct/users/alice"
+    )
+    assert result == {"user_id": "alice", "role": "admin"}
+    assert "api_key" not in result and "key_prefix" not in result
 
 
 @pytest.mark.asyncio

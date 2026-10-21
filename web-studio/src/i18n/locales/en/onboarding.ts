@@ -1,4 +1,24 @@
 export default {
+  verifyDirectoryHint:
+    'Optional. After Verify Connection, choose an Account and User with this Root or Admin key. A User API Key is still needed for data access.',
+  loadDirectory: 'Load Accounts & Users',
+  directoryHint: 'Use a Root or Admin API Key to browse identities.',
+  directoryControlRequired:
+    'Enter a valid Root or Admin API Key to load accounts and users.',
+  directoryLoadFailed:
+    'Could not load identities. Check the management key and service address, then retry.',
+  directoryAccount: 'Select Account',
+  directoryUser: 'Select User',
+  directoryAdminHint:
+    'An Admin key can select users only in its own account. Enter that user’s API Key to access data.',
+  directoryKeyHint:
+    'Selecting an identity does not grant data access. Enter its User API Key, or leave it empty to manage accounts only.',
+  directoryIdentityMismatch:
+    'This User API Key belongs to a different account or user. Enter the key for the selected identity.',
+
+  openSourceConnection: 'OpenSource',
+  cancel: 'Cancel',
+  exit: 'Exit Studio',
   connectionTitle: 'Connect your workspace.',
   preferencesHint: 'Choose your language and appearance.',
   connectionHint: 'Connect and verify an OpenViking service.',
@@ -19,7 +39,7 @@ export default {
   savedConnectionUnavailable:
     'This saved connection is unavailable. Choose another one or enter a new API Key.',
   newAddressHint: 'Enter a valid HTTP or HTTPS address to continue.',
-  hostedEndpoint: 'Service address',
+  hostedEndpoint: 'Service Address',
   preferences: 'Preferences',
   connection: 'Connect a service',
   welcome: 'Welcome to\nOpenViking Studio',

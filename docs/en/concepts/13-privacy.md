@@ -136,6 +136,9 @@ Using a GitHub Personal Access Token (PAT) as an example:
 # Create or rotate the PAT; credential/github is the target and pat is the field
 ov privacy upsert credential github --field-pat 'github_pat_...'
 
+# Inspect current targets and fields without exposing values
+ov privacy tree --category credential --references
+
 # Omit the field when pat is the target's only field
 ov privacy reference credential github
 ov privacy resolve credential github

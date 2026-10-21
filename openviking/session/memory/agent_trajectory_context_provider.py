@@ -9,6 +9,7 @@ co-extract reusable executable skills in the same ReAct pass.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
@@ -49,11 +50,13 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         *args,
         include_trajectories: bool = True,
         include_session_skills: bool = False,
+        case_candidates: list[dict[str, Any]] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._include_trajectories = include_trajectories
         self._include_session_skills = include_session_skills
+        self.case_candidates = list(case_candidates or [])
         self._skill_provider = SessionSkillContextProvider(*args, **kwargs)
         self._sync_skill_provider_state()
 
@@ -103,9 +106,22 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
             if not isinstance(self.messages, list):
                 logger.warning(f"Expected List[Message], got {type(self.messages)}")
                 return []
-            return [self._build_conversation_message()]
-        self._sync_skill_provider_state()
-        return await self._skill_provider.prefetch()
+            messages = [self._build_conversation_message()]
+        else:
+            self._sync_skill_provider_state()
+            messages = await self._skill_provider.prefetch()
+        if len(self.case_candidates) > 1:
+            candidates = [
+                {key: case[key] for key in ("id", "name", "task_signature", "input")}
+                for case in self.case_candidates
+            ]
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "## Candidate Cases\n" + json.dumps(candidates, ensure_ascii=False),
+                }
+            )
+        return messages
 
     async def execute_tool(self, tool_call) -> Any:
         if not self._include_session_skills:

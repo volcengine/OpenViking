@@ -94,7 +94,8 @@ it('root selects an account through the read-only list without requesting user c
       <AccountSwitcher />
     </QueryClientProvider>,
   )
-  fireEvent.click(screen.getByText('default'))
+  fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  fireEvent.click(screen.getByRole('button', { name: 'serverAccountsTitle' }))
   await waitFor(() => expect(screen.getByText('team')).toBeTruthy())
   expect(screen.queryByText('create')).toBeNull()
   expect(fetchAccounts).toHaveBeenCalledWith(
@@ -153,17 +154,29 @@ it('keeps saved connections and server account switching available to a gateway 
 
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
   expect(
-    screen.getByRole('button', { name: /Open-source default/ }),
-  ).toBeTruthy()
-  const hosted = screen.getByRole('button', { name: /Hosted space/ })
+    screen
+      .getByRole('button', { name: 'serverAccountsTitle' })
+      .getAttribute('aria-pressed'),
+  ).toBe('false')
   expect(
-    hosted.querySelector('[role="img"][aria-label="provider.hosted"]'),
-  ).toBeTruthy()
-  fireEvent.click(hosted)
+    screen
+      .getByRole('button', { name: 'identities' })
+      .getAttribute('aria-pressed'),
+  ).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'identities' }))
+  expect(screen.getByTitle('Open-source default')).toBeTruthy()
+  const hostedService = screen.getByRole('button', { name: 'provider.hosted' })
+  fireEvent.click(hostedService)
+  expect(activateProfile).not.toHaveBeenCalled()
+  expect(
+    screen.queryByRole('button', { name: 'serverAccountsTitle' }),
+  ).toBeNull()
+  fireEvent.click(screen.getByTitle('Hosted space'))
   expect(activateProfile).toHaveBeenCalledWith('hosted')
   expect(switchAccount).not.toHaveBeenCalled()
 
   fireEvent.click(screen.getByRole('button', { name: 'connections.switch' }))
+  fireEvent.click(screen.getByRole('button', { name: 'serverAccountsTitle' }))
   await waitFor(() => expect(screen.getByText('team')).toBeTruthy())
   fireEvent.click(screen.getByText('team'))
   await waitFor(() => expect(switchAccount).toHaveBeenCalledWith('team'))

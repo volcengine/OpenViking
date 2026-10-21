@@ -221,6 +221,7 @@ class ExtractContext:
         *,
         split_long_text_messages: bool = True,
         source_archive_uri: str = "",
+        extraction_scope: str = "",
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -232,6 +233,7 @@ class ExtractContext:
             self.chunk_meta = chunk_meta
         self.page_id_map = PageIdMap()
         self.source_archive_uri = (source_archive_uri or "").rstrip("/")
+        self.extraction_scope = extraction_scope
 
     @classmethod
     def _build_extraction_messages(
@@ -411,15 +413,18 @@ class ExtractContext:
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
     def get_source_archive_suffix(self) -> str:
-        """Namespace filenames by their full source archive without exposing its path.
+        """Namespace filenames by archive and optional extraction input scope.
 
-        Keep legacy naming for callers outside session commits that have no archive.
-        The suffix is stable across retries, not a new random record identifier.
+        Preserve the existing suffix when no scope is supplied. Different scopes
+        can hold distinct analyses of the same archive, while retries stay stable.
         """
-        if not self.source_archive_uri:
+        if not self.source_archive_uri and not self.extraction_scope:
             return ""
-        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8")).hexdigest()[:16]
-        return f"_{digest}"
+        digest = hashlib.sha256(self.source_archive_uri.encode("utf-8"))
+        if self.extraction_scope:
+            digest.update(b"\0")
+            digest.update(self.extraction_scope.encode("utf-8"))
+        return f"_{digest.hexdigest()[:16]}"
 
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2

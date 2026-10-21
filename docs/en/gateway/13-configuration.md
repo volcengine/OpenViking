@@ -40,6 +40,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `max_body_bytes` | Both | `33554432` (32 MiB) | 1,024 or more | Size limit for requests and uploads, in bytes |
 | `upstream_timeout_seconds` | Both | `600` | More than 0 | Timeout for provider requests |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
+| `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |
 
 ## Environment variables {#environment-variables}
 
@@ -54,6 +55,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 - Values that start with `tcp://` or `udp://` are ignored, so the variables Kubernetes sets for a Service named `openviking-gateway` (such as `OPENVIKING_GATEWAY_PORT=tcp://…`) do not override the file.
 - A value in the file can also be a `"$VAR"` reference, resolved from the environment.
 - The `encryption` block can only be set in the file.
+- `client_rules` takes the whole section as JSON: `OPENVIKING_GATEWAY_CLIENT_RULES='{"auxiliary_patterns":{"add":["You are the Acme title writer"]}}'`.
 - Containers usually need no file: set the fields they need as variables.
 
 ## Validation {#validation}
@@ -63,8 +65,41 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `openviking_url` and `public_url` | HTTP(S), with no credentials, query or fragment |
 | Upstream `base_url` | Its own rules; see [Endpoint](07-upstreams.md#endpoint) |
 | `management_key` | At least 32 characters once `$VAR` references are resolved; an unresolved `$VAR` fails |
+| `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
 | Removed fields | Ignored, with a startup warning: `encryption_key_env`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+
+## Client rules {#client-rules}
+
+The gateway tells [housekeeping requests](10-overview-and-requests.md#request-types) and the messages clients insert on the user's behalf apart from real user messages by fixed text, listed in the packaged [`client-rules.json`](https://github.com/volcengine/OpenViking/blob/main/openviking_gateway/client-rules.json). When a client's title or summary requests show up as **New message** in the request log, or a real message is treated as housekeeping, add or remove entries in `client_rules`:
+
+```json
+{
+  "gateway": {
+    "enabled": true,
+    "client_rules": {
+      "auxiliary_patterns": {
+        "add": ["You are the Acme title writer"],
+        "remove": ["Create a short.{0,40}title"]
+      },
+      "noise_tags": { "add": ["acme-context"] }
+    }
+  }
+}
+```
+
+In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrapper.
+
+| List | Entries | What a match does |
+| --- | --- | --- |
+| `auxiliary_patterns` | Regular expressions, ignoring case | Each is matched separately against the Messages `system` field, the Responses `instructions` and the latest user message. A match makes the request **Housekeeping**. System and developer messages inside Chat Completions `messages` or Responses `input` are not checked, so for those clients match text in the user message. |
+| `noise_patterns` | Regular expressions, case-sensitive | Ignored when the gateway reads the conversation: left out of request classification, the memory search and saved messages and tool results, but still sent to the model unchanged. A user message left empty is not a new user message, so the request continues the turn. |
+| `noise_tags` | Tag names | `<tag …>…</tag>` blocks, in any letter case, handled the same way as `noise_patterns`. |
+| `plugin_tags` | Tag names | `<tag` in the system prompt or a client message marks an OpenViking memory plugin in the client. For the rest of that conversation the gateway only forwards requests: no memory, no OpenViking tools, nothing saved (see [When both are in use](../guides/15-gateway.md#when-both-are-in-use)). Add only a tag the plugin itself writes. |
+
+- **`add` appends to the packaged list and `remove` takes entries out of it.** Write a removal exactly as it appears in `client-rules.json`. A removal that matches nothing, for example after an upgrade changed the entry, is ignored with a startup warning. The packaged list cannot be replaced as a whole, so entries added in later releases keep working.
+- **Match text only the client writes.** Use a full sentence from the client's own prompt rather than a short phrase. A user message that matches makes its whole turn housekeeping, so none of it is searched for or saved; a pattern that also matches the main conversation's system prompt does this to every request. Anchor a noise pattern to the whole message (`"\\A…\\Z"` in JSON) so it never cuts text out of a real message.
+- **Changes take effect at startup.** Restart the server or the standalone gateway after editing.
 
 ## Context profile settings {#context-profile-settings}
 

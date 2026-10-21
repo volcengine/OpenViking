@@ -1249,6 +1249,10 @@ export class OpenVikingClient {
       `/api/v1/admin/accounts/${pathPart(accountId)}`,
     );
   }
+  /** Return credential-free metadata for one account; rejects with NOT_FOUND if absent. */
+  adminGetAccount(accountId: string): Promise<JsonObject> {
+    return this.request("GET", `/api/v1/admin/accounts/${pathPart(accountId)}`);
+  }
   /** Register a user in an account. */
   adminRegisterUser(
     accountId: string,
@@ -1296,6 +1300,13 @@ export class OpenVikingClient {
   adminRemoveUser(accountId: string, userId: string): Promise<JsonObject> {
     return this.request(
       "DELETE",
+      `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}`,
+    );
+  }
+  /** One user's credential-free membership info (user_id, role); rejects NOT_FOUND if absent. Never returns api_key/key_prefix. */
+  adminGetUser(accountId: string, userId: string): Promise<JsonObject> {
+    return this.request(
+      "GET",
       `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}`,
     );
   }

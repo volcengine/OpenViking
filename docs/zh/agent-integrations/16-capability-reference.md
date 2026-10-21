@@ -360,7 +360,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 写入失败时 |
 |---|---|
-| Claude Code、Cursor、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条，每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
+| Claude Code、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条，每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
+| Cursor | 新捕获不入离线队列。文本 transcript 与本地工具记录保留未上报内容，服务端确认后才推进进度；同一会话后续采集重试。消息未传完整时不提交。`SessionStart` 仍重放旧队列中的写入 |
 | Codex、TraeCode CLI 2.0 | 新捕获的内容不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分。`SessionStart` 仍会重放已排队的条目 |
 | OpenClaw | 没有队列，失败的轮次不会重发 |
 | Hermes（内置） | 上传在进程内线程中运行，不从磁盘重放。`$HERMES_HOME/openviking/pending_sessions/` 下的待提交标记让之后的启动能提交已退出进程留下的会话（仅 POSIX） |
@@ -579,10 +580,10 @@ Claude Code、Codex、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安�
 
 ### Cursor
 
-[Cursor](./12-cursor.md)。hook 与 MCP 配置，包含 6 个 hook（`sessionStart`、`beforeSubmitPrompt`、`beforeReadFile`、`stop`、`preCompact`、`sessionEnd`）、一条常驻 rule 和 3 个 skill。
+[Cursor](./12-cursor.md)。hook 与 MCP 配置，包含 7 个 hook（`sessionStart`、`beforeSubmitPrompt`、`beforeReadFile`、`afterMCPExecution`、`stop`、`preCompact`、`sessionEnd`）、一条常驻 rule 和 3 个 skill。
 
 - URI guard 只在 `beforeReadFile` 运行，不受插件开关影响。shell 命令不检查，升级会移除旧版本注册的 `beforeShellExecution` 条目。
-- 只捕获文本，所以 `ov-experience-memory` 能检索和应用 Experience，但无法把读取关联回所用的 Experience。
+- `afterMCPExecution` 保留 OpenViking 工具完成记录，Stop 与对话一起上报。成功读取的 Experience 可关联到同次提交生成的轨迹；失败、未完成调用和自动注入不计为成功读取。
 - `sessionEnd` 只在关闭窗口时触发，此时 Cursor 已停止执行 hook 命令，因此实际不会提交。
 - 服务端不可达时，每轮都要等满 15 秒召回超时。
 

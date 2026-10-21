@@ -3717,3 +3717,172 @@ async def test_private_model_probe_passes_draft_without_saving(
     assert response.json()["result"] == {"ok": True, "ms": 12}
     assert "draft-secret" not in response.text
     probe.assert_awaited_once_with("vlm", body["config"], body["fallback"], True, "dense")
+
+
+# ---- Exact account/user existence probes ----
+
+
+async def test_get_account_returns_credential_free_metadata_or_404(
+    lightweight_admin_client,
+):
+    account_id = _uid()
+    missing = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}", headers=root_headers()
+    )
+    assert missing.status_code == 404
+
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+
+    response = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}", headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result == {
+        "account_id": account_id,
+        "created_at": result["created_at"],
+        "user_count": 1,
+        "status": "active",
+    }
+    # Existence metadata must never carry credentials.
+    body = response.text
+    for secret_field in ("api_key", "user_key", "key_prefix", "seed"):
+        assert secret_field not in body
+
+
+async def test_get_account_is_root_only(template_account, lightweight_admin_client):
+    account_id, admin_headers = template_account
+    response = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}", headers=admin_headers
+    )
+    assert response.status_code == 403
+
+
+async def test_user_point_read_returns_role_without_credentials(
+    lightweight_admin_client,
+):
+    account_id = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+
+    registered = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account_id}/users",
+        json={"user_id": "bob"},
+        headers=admin_headers,
+    )
+    assert registered.status_code == 200
+
+    for user_id, role in (("alice", "admin"), ("bob", "user")):
+        response = await lightweight_admin_client.get(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["result"] == {"user_id": user_id, "role": role}
+        # The point read is defined as a credential-free membership probe; weld
+        # that contract shut so no credential field can ever leak through it.
+        for secret_field in ("api_key", "user_key", "key_prefix", "seed"):
+            assert secret_field not in response.text
+
+    unknown_user = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}/users/ghost",
+        headers=root_headers(),
+    )
+    assert unknown_user.status_code == 404
+    assert unknown_user.json()["error"]["message"] == "User not found: ghost"
+
+    # An unknown account bubbles up the account-level 404 from the refresh,
+    # matching list_users rather than masquerading as a missing user.
+    unknown_account_id = _uid()
+    unknown_account = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{unknown_account_id}/users/alice",
+        headers=root_headers(),
+    )
+    assert unknown_account.status_code == 404
+    assert (
+        unknown_account.json()["error"]["message"]
+        == f"Account not found: {unknown_account_id}"
+    )
+
+
+async def test_user_point_read_admin_scoped_to_own_account(lightweight_admin_client):
+    account_id = _uid()
+    other = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    own = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}/users/alice",
+        headers=admin_headers,
+    )
+    assert own.status_code == 200
+    assert own.json()["result"] == {"user_id": "alice", "role": "admin"}
+
+    denied = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{other}/users/alice",
+        headers=admin_headers,
+    )
+    assert denied.status_code == 403
+
+
+async def test_user_point_read_sees_peer_process_writes_without_a_list(
+    admin_client: httpx.AsyncClient,
+    admin_app: FastAPI,
+    admin_service: OpenVikingService,
+):
+    """Point read must not depend on a preceding list to refresh the registry.
+
+    With the account-store watcher off (the default), a user created or re-roled
+    by a peer process landed in the shared store but not in this instance's
+    memory. The membership probe refreshes on demand, so it must not return a
+    stale 404 or a stale role.
+    """
+    writer = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=admin_service.viking_fs,
+    )
+    await writer.load()
+    try:
+        acct = _uid()
+        await writer.create_account(acct, "alice")
+        await writer.register_user(acct, "bob", role="user")
+
+        # The serving instance never listed this account, so bob is only in the
+        # peer's store. The probe must still resolve him.
+        created = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users/bob",
+            headers=root_headers(),
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["result"] == {"user_id": "bob", "role": "user"}
+
+        # A peer-side role change must be reflected too, not served from stale
+        # memory.
+        await writer.set_role(acct, "bob", "admin")
+        rerole = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users/bob",
+            headers=root_headers(),
+        )
+        assert rerole.status_code == 200, rerole.text
+        assert rerole.json()["result"] == {"user_id": "bob", "role": "admin"}
+    finally:
+        await writer.close()
