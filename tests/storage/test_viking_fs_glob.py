@@ -454,10 +454,11 @@ async def test_glob_remote_entry_mode_fills_missing_stat_fields(monkeypatch, fs)
 
 
 @pytest.mark.asyncio
-async def test_glob_remote_filters_hidden_files_but_keeps_hidden_dir_children(monkeypatch, fs):
+async def test_glob_remote_filters_metadata_files_but_keeps_user_dotfiles(monkeypatch, fs):
     vector_store = _RemoteGlobVectorStore(
         [
             {"uri": "viking://resources/.hidden.md", "level": 2, "name": ".hidden.md"},
+            {"uri": "viking://resources/docs/.overview.md", "level": 2, "name": ".overview.md"},
             {
                 "uri": "viking://resources/.hidden_dir/nested.md",
                 "level": 2,
@@ -472,8 +473,11 @@ async def test_glob_remote_filters_hidden_files_but_keeps_hidden_dir_children(mo
     result = await fs.glob("**/*.md", uri="viking://resources", node_limit=10, ctx=_default_ctx())
 
     assert result == {
-        "matches": ["viking://resources/.hidden_dir/nested.md"],
-        "count": 1,
+        "matches": [
+            "viking://resources/.hidden.md",
+            "viking://resources/.hidden_dir/nested.md",
+        ],
+        "count": 2,
     }
 
 
@@ -1051,3 +1055,44 @@ async def test_glob_uses_path_to_uri_for_non_legacy_namespace(monkeypatch, fs):
     )
 
     assert result == {"matches": ["viking://resources/actual-root/demo.md"], "count": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root", ["viking://user/alice/resources", "viking://user/alice/peers/bot/resources"]
+)
+async def test_glob_remote_lists_user_dotfiles_in_user_and_peer_resources(monkeypatch, fs, root):
+    vector_store = _RemoteGlobVectorStore(
+        [
+            {"uri": f"{root}/.gitlab-ci.yml", "level": 2, "name": ".gitlab-ci.yml"},
+            {"uri": f"{root}/.overview.md", "level": 2, "name": ".overview.md"},
+            {"uri": f"{root}/app.yml", "level": 2, "name": "app.yml"},
+        ],
+        count=1000,
+    )
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
+
+    result = await fs.glob("*", uri=root, node_limit=10, ctx=_default_ctx())
+
+    assert vector_store.random_calls
+    assert sorted(result["matches"]) == [f"{root}/.gitlab-ci.yml", f"{root}/app.yml"]
+
+
+@pytest.mark.asyncio
+async def test_glob_remote_keeps_hiding_dotfiles_in_user_memories(monkeypatch, fs):
+    root = "viking://user/alice/memories"
+    vector_store = _RemoteGlobVectorStore(
+        [
+            {"uri": f"{root}/.gitlab-ci.yml", "level": 2, "name": ".gitlab-ci.yml"},
+            {"uri": f"{root}/profile.md", "level": 2, "name": "profile.md"},
+        ],
+        count=1000,
+    )
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
+
+    result = await fs.glob("*", uri=root, node_limit=10, ctx=_default_ctx())
+
+    assert vector_store.random_calls
+    assert result["matches"] == [f"{root}/profile.md"]

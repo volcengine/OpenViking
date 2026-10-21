@@ -29,7 +29,11 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import (
+    is_hidden_entry_name,
+    is_storage_internal_name,
+    may_list_user_dotfiles,
+)
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
     _ABSTRACT_WORKER_COUNT,
@@ -1256,7 +1260,7 @@ class _OpsMixin:
             page = await self._async_agfs.glob_directory(
                 path,
                 pattern,
-                show_hidden=False,
+                show_hidden=may_list_user_dotfiles(uri),
                 page_size=page_size,
                 level_limit=None,
                 continuation_token=continuation_token,
@@ -1266,9 +1270,10 @@ class _OpsMixin:
             # results need a trailing slash to identify directory matches.
             page_matches: List[tuple[str, str, Dict[str, Any]]] = []
             for entry in page.get("entries", []):
+                name = entry.get("name") or entry["path"].rsplit("/", 1)[-1]
                 if not self._is_path_entry_visible(
                     entry["path"],
-                    entry.get("name") or entry["path"].rsplit("/", 1)[-1],
+                    name,
                     path,
                     real_ctx,
                     acl_enabled=acl_enabled,
@@ -1282,6 +1287,8 @@ class _OpsMixin:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
+                if not entry.get("is_dir") and is_hidden_entry_name(name, entry_uri):
+                    continue
                 match_uri = _glob_match_uri(entry_uri, entry.get("is_dir"))
                 page_matches.append((entry_uri, match_uri, entry))
 
@@ -1557,7 +1564,7 @@ class _OpsMixin:
                 return False
 
         relative_parts = entry_parts[len(root_parts) :]
-        if not is_dir and name.startswith("."):
+        if not is_dir and is_hidden_entry_name(name, entry_uri):
             return False
         if is_storage_internal_name(name):
             return False
@@ -2387,7 +2394,7 @@ class _OpsMixin:
                 new_entry["uri"] = entry_uri
             if new_entry.get("isDir"):
                 all_entries.append(new_entry)
-            elif not name.startswith("."):
+            elif not is_hidden_entry_name(name, entry_uri):
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
@@ -2452,8 +2459,8 @@ class _OpsMixin:
                 item
                 for item in entry_items
                 if item[0].get("isDir")
-                or not str(item[0].get("name", "")).startswith(".")
                 or show_all_hidden
+                or not is_hidden_entry_name(str(item[0].get("name", "")), item[1])
             ]
             access = await self._can_access_many([entry_uri for _, entry_uri in entry_items], ctx)
             for entry, entry_uri in entry_items:
