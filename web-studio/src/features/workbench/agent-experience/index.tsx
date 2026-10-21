@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { getRouteApi, Link } from '@tanstack/react-router'
 import {
   ArrowUpRightIcon,
   BrainCircuitIcon,
@@ -50,12 +50,15 @@ import {
   searchExperiences,
 } from '#/features/workbench/agent-experience/lib/api'
 import {
+  EXPERIENCE_PAGE_SIZE_OPTIONS,
   buildExperiencesUri,
   formatTimestamp,
   isExperienceUpdatedSinceLastSeen,
   markExperiencesSeen,
 } from '#/features/workbench/agent-experience/lib/experience'
 import type { ExperienceFileItem } from '#/features/workbench/agent-experience/lib/types'
+
+const routeApi = getRouteApi('/agent-experience/')
 
 function getErrorMessage(error: unknown): string {
   if (isOvClientError(error) || error instanceof Error) {
@@ -119,8 +122,6 @@ function EmptyHelpChecklist() {
     </div>
   )
 }
-
-const EXPERIENCE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const
 
 function ExperiencePagination({
   onPageChange,
@@ -203,21 +204,30 @@ function ExperiencePagination({
 export function AgentExperienceRoute() {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { connection, identityScopeKey } = useAppConnection()
-  const [keyword, setKeyword] = React.useState('')
-  const [searchKeyword, setSearchKeyword] = React.useState('')
-  const [page, setPage] = React.useState(1)
-  const [pageSize, setPageSize] = React.useState(10)
+  const {
+    page = 1,
+    pageSize = 10,
+    q: searchKeyword = '',
+  } = routeApi.useSearch()
+  const navigate = routeApi.useNavigate()
+  const [keyword, setKeyword] = React.useState(searchKeyword)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
   const experiencesUri = buildExperiencesUri(connection.userId)
   React.useEffect(() => {
+    setKeyword(searchKeyword)
+  }, [searchKeyword])
+  React.useEffect(() => {
+    if (keyword.trim() === searchKeyword) return
     const timeout = window.setTimeout(() => {
-      setSearchKeyword(keyword.trim())
-      setPage(1)
+      void navigate({
+        search: (previous) => ({ ...previous, q: keyword.trim(), page: 1 }),
+        replace: true,
+      })
     }, 300)
     return () => window.clearTimeout(timeout)
-  }, [keyword])
+  }, [keyword, searchKeyword, navigate])
   const experiencesQuery = useQuery({
     queryFn: ({ signal }) =>
       searchKeyword
@@ -516,6 +526,7 @@ export function AgentExperienceRoute() {
                           render={
                             <Link
                               params={{ experienceUri: experience.uri }}
+                              search={true}
                               to="/agent-experience/$experienceUri"
                             />
                           }
@@ -543,10 +554,19 @@ export function AgentExperienceRoute() {
               hasMore={hasMore}
               disabled={experiencesQuery.isFetching}
               pageSize={pageSize}
-              onPageChange={setPage}
+              onPageChange={(nextPage) => {
+                void navigate({
+                  search: (previous) => ({ ...previous, page: nextPage }),
+                })
+              }}
               onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize)
-                setPage(1)
+                void navigate({
+                  search: (previous) => ({
+                    ...previous,
+                    pageSize: nextPageSize,
+                    page: 1,
+                  }),
+                })
               }}
             />
           )}
