@@ -129,6 +129,8 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (limitConfigured) body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const decayProtection = String(cfg.recallEventsDecayProtection || "").trim();
+  if (decayProtection) body.events_time_decay_protection = decayProtection;
 
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {

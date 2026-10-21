@@ -357,6 +357,7 @@ Config knobs:
 | `OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS` | `604800000` | Cache TTL used by `UserPromptSubmit` when reading the latest profile. |
 | `OPENVIKING_RECALL_MAX_TOKENS` | `1600` | Token budget the server assembles the context block within, independent of the local compressor input limit. |
 | `OPENVIKING_RECALL_DEDUP_TURNS` | `5` | Cross-turn cooldown: URIs served in the last N turns are skipped. |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | (off) | Event memories keep their score for this period (`7d`, `12h`) and decay after it, so older events stop outranking recent ones. Sent as `events_time_decay_protection`. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION` | `auto` | `auto` lets the server widen short prompts using session context; `off` disables it. |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | Comma-separated regex rules applied to the prompt before it becomes a query — see [Input filters](#input-filters). |
 
