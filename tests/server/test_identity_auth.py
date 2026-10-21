@@ -124,6 +124,61 @@ async def test_trusted_explicit_user_role_with_root_key(runtime):
     assert identity.role == Role.USER
 
 
+async def test_trusted_group_header_overrides_internal_group_lookup(runtime):
+    await runtime.create_group("acme", "local-team")
+    await runtime.add_group_member("acme", "local-team", "alice")
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b"gateway-team, finance, gateway-team")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    identity = await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+    )
+    ctx = await get_request_context(request, identity, None, "root", None)
+
+    assert identity.group_ids == ("gateway-team", "finance")
+    assert ctx.group_ids == ("gateway-team", "finance")
+
+
+async def test_trusted_empty_group_header_falls_back_to_internal_group_lookup(runtime):
+    await runtime.create_group("acme", "local-team")
+    await runtime.add_group_member("acme", "local-team", "alice")
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b" , ")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    identity = await plugin.resolve_identity(
+        request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+    )
+    ctx = await get_request_context(request, identity, None, "root", None)
+
+    assert identity.group_ids == ()
+    assert ctx.group_ids == ("local-team",)
+
+
+async def test_trusted_group_header_rejects_invalid_group_id(runtime):
+    request = await make_request(
+        runtime,
+        "trusted",
+        "root",
+        headers=[(b"x-openviking-groups", b"good,bad/group")],
+    )
+    plugin = request.app.state.auth_plugin
+
+    with pytest.raises(InvalidArgumentError, match="group_id"):
+        await plugin.resolve_identity(
+            request, api_key="root", x_openviking_account="acme", x_openviking_user="alice"
+        )
+
+
 async def test_oversized_trusted_identity_does_not_block_valid_registration(runtime):
     request = await make_request(runtime, "trusted", trusted_flush_interval=300)
     plugin = request.app.state.auth_plugin
