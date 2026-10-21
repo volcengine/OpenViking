@@ -1,96 +1,131 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Regression tests for POSIX command handling in the Windows direct backend."""
+"""Regression tests for the Windows POSIX shim used by Compile sandboxes."""
+
+import asyncio
+import shlex
 
 import pytest
+from vikingbot.compile.sandbox import _CompileSandbox
+from vikingbot.config.schema import Config
 from vikingbot.sandbox.backends import direct
 
 
-@pytest.mark.asyncio
-async def test_mkdir_p_is_translated(tmp_path):
-    target = tmp_path / "credentials" / "nested"
+class _FakeProcess:
+    returncode = 0
 
-    result = await direct._translate_windows_posix(f"mkdir -p {target}", str(tmp_path))
-
-    assert result == "(no output)"
-    assert target.is_dir()
+    async def communicate(self):
+        return b"ok", b""
 
 
-@pytest.mark.asyncio
-async def test_env_prefix_is_stripped_before_translation(tmp_path):
-    target = tmp_path / "credentials"
-    command = (
-        "unset OPENVIKING_CLI_CONFIG_FILE; "
-        f"export OPENVIKING_CLI_CONFIG_FILE={tmp_path / 'ov.conf'}; "
-        f"mkdir -p {target}"
-    )
-
-    result = await direct._translate_windows_posix(command, str(tmp_path))
-
-    assert result == "(no output)"
-    assert target.is_dir()
+async def _acl_ok(path, *, directory):
+    return None
 
 
-@pytest.mark.asyncio
-async def test_restricted_mkdir_uses_acl(tmp_path, monkeypatch):
+@pytest.fixture
+def windows_backend(tmp_path, monkeypatch):
+    """A DirectBackend forced through the Windows code path with a stubbed shell."""
+    monkeypatch.setattr(direct.os, "name", "nt")
     calls = []
 
-    async def fake_restrict(path, *, directory):
-        calls.append((path, directory))
-        return None
+    async def fake_create_subprocess_shell(command, **kwargs):
+        calls.append((command, kwargs.get("env")))
+        return _FakeProcess()
 
-    monkeypatch.setattr(direct, "_restrict_windows_acl", fake_restrict)
-    target = tmp_path / "credentials"
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create_subprocess_shell)
+    backend = direct.DirectBackend(Config().sandbox, "test", tmp_path)
+    backend._running = True
+    return backend, calls
 
-    result = await direct._translate_windows_posix(f"mkdir -m 700 -- {target}", str(tmp_path))
 
+@pytest.mark.asyncio
+async def test_initialize_handles_posix_quoted_paths(tmp_path, monkeypatch):
+    workspace = tmp_path / "Anne O'Brien & R&D work"
+    workspace.mkdir()
+
+    class Backend:
+        sandbox_cwd = str(workspace)
+
+        async def execute(self, command, timeout=60, **kwargs):
+            return await direct._translate_windows_posix(command, self.sandbox_cwd)
+
+        async def write_file(self, path, content):
+            (workspace / path).write_text(content, encoding="utf-8")
+
+        @staticmethod
+        def _ensure_command_succeeded(output, operation):
+            direct.DirectBackend._ensure_command_succeeded(output, operation)
+
+    monkeypatch.setattr(direct, "_restrict_windows_acl", _acl_ok)
+    sandbox = _CompileSandbox(Backend())
+    await sandbox.initialize({"url": "http://127.0.0.1:1933"})
+
+    credential_dir = workspace / sandbox._directory
+    assert credential_dir.is_dir()
+    assert (credential_dir / "ovcli.conf").is_file()
+
+
+@pytest.mark.asyncio
+async def test_initialize_and_execute_use_child_env(windows_backend, monkeypatch):
+    backend, calls = windows_backend
+    monkeypatch.setenv("OPENVIKING_URL", "http://host-override")
+    monkeypatch.setattr(direct, "_restrict_windows_acl", _acl_ok)
+    sandbox = _CompileSandbox(backend)
+
+    await sandbox.initialize({"url": "http://127.0.0.1:1933"})
+    result = await sandbox.execute('python -c "print(123)"')
+
+    assert result == "ok"
+    command, env = calls[-1]
+    assert command == 'python -c "print(123)"'
+    assert "unset" not in command and "OPENVIKING_CLI_CONFIG_FILE=" not in command
+    assert env["OPENVIKING_CLI_CONFIG_FILE"] == sandbox._config_path
+    assert "OPENVIKING_URL" not in env
+
+
+@pytest.mark.asyncio
+async def test_direct_execute_moves_env_prefix_into_child_env(windows_backend):
+    backend, calls = windows_backend
+    command = (
+        "unset OPENVIKING_URL OPENVIKING_API_KEY; "
+        "export OPENVIKING_CLI_CONFIG_FILE='C:\\work\\ovcli.conf'; "
+        'python -c "print(123)"'
+    )
+
+    result = await backend.execute(command)
+
+    assert result == "ok"
+    captured, env = calls[-1]
+    assert captured == 'python -c "print(123)"'
+    assert env["OPENVIKING_CLI_CONFIG_FILE"] == r"C:\work\ovcli.conf"
+    assert "OPENVIKING_URL" not in env and "OPENVIKING_API_KEY" not in env
+
+
+@pytest.mark.asyncio
+async def test_chmod_only_supports_exact_form(tmp_path, monkeypatch):
+    target = tmp_path / "ovcli.conf"
+    target.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(direct, "_restrict_windows_acl", _acl_ok)
+    quoted = shlex.quote(str(target))
+
+    result = await direct._translate_windows_posix(f"chmod 600 {quoted}", str(tmp_path))
     assert result == "(no output)"
-    assert target.is_dir()
-    assert calls == [(str(target), True)]
-
-
-@pytest.mark.asyncio
-async def test_chmod_missing_file_reports_error(tmp_path):
-    result = await direct._translate_windows_posix(
-        f"chmod 600 {tmp_path / 'missing.conf'}", str(tmp_path)
+    assert await direct._translate_windows_posix(f"chmod 000 {quoted}", str(tmp_path)) is None
+    assert (
+        await direct._translate_windows_posix(f"chmod 600 {quoted} {quoted}", str(tmp_path)) is None
     )
-
-    assert result is not None
-    assert "chmod: cannot access" in result
-    assert "Exit code: 1" in result
+    assert await direct._translate_windows_posix(f"chmod -R 600 {quoted}", str(tmp_path)) is None
 
 
 @pytest.mark.asyncio
-async def test_unrelated_command_falls_back_to_shell(tmp_path):
-    assert await direct._translate_windows_posix("python -c 'print(1)'", str(tmp_path)) is None
-    assert await direct._translate_windows_posix("mkdir -p a && chmod 600 a", str(tmp_path)) is None
+async def test_mkdir_rejects_unsupported_flags(tmp_path):
+    target = shlex.quote(str(tmp_path / "credentials"))
 
-
-@pytest.mark.asyncio
-async def test_windows_backslash_path_is_preserved(monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        direct, "_resolve_windows_path", lambda target, base: seen.append(target) or target
-    )
-    monkeypatch.setattr(direct.os, "makedirs", lambda path, exist_ok: None)
-
-    result = await direct._translate_windows_posix(r"mkdir -p D:\data\credentials", r"C:\work")
-
+    result = await direct._translate_windows_posix(f"mkdir -p {target}", str(tmp_path))
     assert result == "(no output)"
-    assert seen == [r"D:\data\credentials"]
-
-
-@pytest.mark.asyncio
-async def test_quoted_windows_path_is_preserved(monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        direct, "_resolve_windows_path", lambda target, base: seen.append(target) or target
+    assert await direct._translate_windows_posix(f"mkdir -m 755 -- {target}", str(tmp_path)) is None
+    assert (
+        await direct._translate_windows_posix(f"mkdir -p {target} && echo ok", str(tmp_path))
+        is None
     )
-    monkeypatch.setattr(direct.os, "makedirs", lambda path, exist_ok: None)
-
-    result = await direct._translate_windows_posix(
-        r'mkdir -p "D:\Program Data\credentials"', r"C:\work"
-    )
-
-    assert result == "(no output)"
-    assert seen == [r"D:\Program Data\credentials"]
+    assert await direct._translate_windows_posix("echo hi", str(tmp_path)) is None

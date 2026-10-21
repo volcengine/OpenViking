@@ -15,14 +15,75 @@ from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend
 
 # On Windows the shell path uses COMSPEC (cmd.exe), which cannot parse the POSIX
-# commands Compile runs during sandbox setup (`mkdir -m 700 --`, `chmod 600`,
-# `mkdir -p`, and the `unset ...; export ...;` prefix). Only those fixed forms are
-# handled natively here; every other command keeps using the existing shell path.
-_POSIX_ENV_PREFIX = re.compile(
-    r"^unset\s+[^;]*;\s*export\s+OPENVIKING_CLI_CONFIG_FILE=.*?;\s*(.*)$",
+# commands Compile runs: `mkdir -m 700 --`, `chmod 600`, and the
+# `unset ...; export OPENVIKING_CLI_CONFIG_FILE=...;` prefix. The prefix is moved
+# into a per-invocation child environment for every command; only the fixed
+# mkdir/chmod forms are executed natively. Every other command still runs through
+# the shell with that child environment.
+_ENV_PREFIX = re.compile(
+    r"^unset\s+([^;]*);\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*?);\s*(.+)$",
     re.DOTALL,
 )
-_SHELL_METACHARS = re.compile(r"[&|;<>$`]")
+_CHMOD_MODE = "600"
+_MKDIR_RESTRICTED_MODE = "700"
+
+
+def _decode_posix_value(raw: str) -> str:
+    """Decode a single POSIX-quoted shell value emitted by ``shlex.quote``."""
+    try:
+        parts = shlex.split(raw, posix=True)
+    except ValueError:
+        return raw.strip()
+    return parts[0] if len(parts) == 1 else raw.strip()
+
+
+def _prepare_windows_shell(command: str) -> tuple[str, dict[str, str] | None]:
+    """Move the Compile env prefix into a child env; return (command, child_env)."""
+    match = _ENV_PREFIX.match(command)
+    if match is None:
+        return command, None
+    unset_names, name, raw_value, remaining = match.groups()
+    child_env = dict(os.environ)
+    for key in unset_names.split():
+        child_env.pop(key, None)
+    child_env[name] = _decode_posix_value(raw_value)
+    return remaining.strip(), child_env
+
+
+def _has_unquoted_shell_control(command: str) -> bool:
+    """Return True when a shell control character appears outside quotes."""
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if not quote:
+            if char in "'\"":
+                quote = char
+            elif char in ";&|<>`":
+                return True
+            elif char == "$" and index + 1 < len(command) and command[index + 1] == "(":
+                return True
+        elif quote == "'":
+            if char == "'":
+                quote = ""
+        elif char == "\\":
+            index += 2
+            continue
+        elif char == '"':
+            quote = ""
+        index += 1
+    return False
+
+
+def _split_posix_command(command: str) -> list[str] | None:
+    """Split a POSIX-quoted command while rejecting unquoted shell operators."""
+    if not command or _has_unquoted_shell_control(command):
+        return None
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    return tokens or None
 
 
 def _resolve_windows_path(target: str, base: str) -> str:
@@ -59,31 +120,45 @@ async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
     return None
 
 
+def _mkdir_operands(tokens: list[str]) -> tuple[list[str], bool] | None:
+    """Validate ``mkdir`` flags and return (paths, restricted); None if unsupported."""
+    paths: list[str] = []
+    restricted = False
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            paths.extend(tokens[index + 1 :])
+            break
+        if token == "-p":
+            index += 1
+            continue
+        if token == "-m":
+            if index + 1 >= len(tokens) or tokens[index + 1] != _MKDIR_RESTRICTED_MODE:
+                return None
+            restricted = True
+            index += 2
+            continue
+        if token.startswith("-"):
+            return None
+        paths.append(token)
+        index += 1
+    if not paths:
+        return None
+    return paths, restricted
+
+
 async def _translate_windows_posix(command: str, cwd: str) -> str | None:
-    """Run the POSIX command forms Compile needs; return None to fall back to shell."""
-    match = _POSIX_ENV_PREFIX.match(command)
-    raw = (match.group(1) if match else command).strip()
-    if not raw or _SHELL_METACHARS.search(raw):
-        return None
-    try:
-        # posix=False keeps Windows backslashes; strip the quotes it preserves.
-        tokens = shlex.split(raw, posix=False)
-        tokens = [
-            token[1:-1]
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
-            else token
-            for token in tokens
-        ]
-    except ValueError:
-        return None
-    if not tokens:
+    """Run the fixed POSIX forms Compile needs; return None to fall back to the shell."""
+    tokens = _split_posix_command(command)
+    if tokens is None:
         return None
     try:
         if tokens[0] == "chmod":
-            targets = [token for token in tokens[1:] if not token.startswith("-")]
-            if not targets:
+            # Only the exact `chmod 600 <file>` form is implemented.
+            if len(tokens) != 3 or tokens[1] != _CHMOD_MODE:
                 return None
-            target = _resolve_windows_path(targets[-1], cwd)
+            target = _resolve_windows_path(tokens[2], cwd)
             if not os.path.isfile(target):
                 return (
                     f"STDERR:\nchmod: cannot access '{target}': "
@@ -92,17 +167,10 @@ async def _translate_windows_posix(command: str, cwd: str) -> str | None:
             error = await _restrict_windows_acl(target, directory=False)
             return error if error else "(no output)"
         if tokens[0] == "mkdir":
-            paths: list[str] = []
-            if "-p" in tokens:
-                paths = [token for token in tokens[1:] if not token.startswith("-")]
-            elif "--" in tokens:
-                index = tokens.index("--")
-                paths = tokens[index + 1 : index + 2]
-            elif len(tokens) == 2:
-                paths = tokens[1:2]
-            if not paths:
+            operands = _mkdir_operands(tokens)
+            if operands is None:
                 return None
-            restricted = "-m" in tokens
+            paths, restricted = operands
             for path in paths:
                 absolute = _resolve_windows_path(path, cwd)
                 os.makedirs(absolute, exist_ok=True)
@@ -143,7 +211,9 @@ class DirectBackend(SandboxBackend):
 
         cwd = kwargs.get("working_dir", str(self._workspace))
 
+        child_env = None
         if os.name == "nt":
+            command, child_env = _prepare_windows_shell(command)
             translated = await _translate_windows_posix(command, cwd)
             if translated is not None:
                 logger.info("[Direct] Windows POSIX command translated: {}", repr(command))
@@ -156,6 +226,7 @@ class DirectBackend(SandboxBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=child_env,
                 start_new_session=os.name == "posix",
             )
 
