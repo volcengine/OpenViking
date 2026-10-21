@@ -257,9 +257,9 @@ async function buildResumeArchiveContext(newSessionId) {
  *
  * Returns { committed: bool, ovSessionId: string|null, traceId: string }.
  */
-async function commitAndRelease(state, reason, endToken) {
+async function commitAndRelease(state, reason, endToken, sessionFetchJSONRes) {
   const ovSessionId = state.ovSessionId;
-  const commit = await commitOvSession(fetchJSONRes, ovSessionId);
+  const commit = await commitOvSession(sessionFetchJSONRes, ovSessionId);
   if (!commit?.ok) {
     log("commit", {
       reason,
@@ -343,7 +343,7 @@ runHookStage({
     const state = await loadState(newSessionId);
     await saveState({
       ...state,
-      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      workspacePeerId: effectivePeer.peerId,
     });
   }
   log("start", {
@@ -442,14 +442,21 @@ runHookStage({
         }
       }
 
+      // The historical session owns both message attribution and request headers.
+      // Its empty pin means user-level capture, even in a new project workspace.
+      const sweepPeerId = fresh.workspacePeerId || "";
+      const { fetchJSONRes: sweepFetchJSONRes } = makeFetchJSON(cfg, {
+        getActorPeerId: () => sweepPeerId,
+      });
+
       // Turns the session's own workers never sent would be lost by an
       // archive-now commit, so catch them up first and keep the session live
       // for the next sweep if any of them failed to land.
       const { newTurns, added, skipped, unreadable } = await catchUpTurns({
         state: fresh,
         transcriptPath: fresh.transcriptPath,
-        fetchJSONRes,
-        activePeerId: fresh.workspacePeerId || activePeerId,
+        fetchJSONRes: sweepFetchJSONRes,
+        activePeerId: sweepPeerId,
         cfg,
         log,
         logError,
@@ -497,7 +504,7 @@ runHookStage({
         return null;
       }
 
-      return commitAndRelease(fresh, reason, endToken);
+      return commitAndRelease(fresh, reason, endToken, sweepFetchJSONRes);
     }, { waitMs: 0 });
 
     if (outcome.skipped) {
