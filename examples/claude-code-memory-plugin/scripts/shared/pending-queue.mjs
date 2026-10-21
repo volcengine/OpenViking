@@ -362,9 +362,30 @@ export async function cleanStale() {
 }
 
 /**
+ * Whether any addMessage writes for `sessionId` are still parked in the
+ * pending queue. Entries currently claimed for replay (`.processing`) do not
+ * count: a live claim already has an owner driving it to completion.
+ */
+export async function hasPendingWrites(sessionId) {
+  const pending = await listPending();
+  return pending.some(
+    ({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId,
+  );
+}
+
+/**
  * Replay pending entries. Call this during session-start when the server is
  * healthy. Each run processes at most OPENVIKING_PENDING_REPLAY_LIMIT items so
  * a just-recovered server is not hit with an unbounded replay burst.
+ *
+ * After the replay loop, every session whose writes this run just delivered
+ * and that does not keep parked writes gets a commit: replay only writes, and
+ * a session whose host conversation already ended is never committed by
+ * anyone else, so its replayed turns would linger in the live region forever.
+ * The caller names its own still-active session(s) via `skipCommitFor` —
+ * their hooks commit them as designed. A commit that fails retryably is
+ * parked as a pending `commitSession` entry so the next replay sends it after
+ * the writes (createdAt order).
  *
  * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
  * @param {Function} log - logger function
@@ -374,14 +395,16 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
- * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
+ * @param {string|string[]} [options.skipCommitFor] - session id(s) whose
+ *   commits the caller owns (typically the hook run's own active session).
+ * @returns {{ replayed: number, failed: number, skipped: number, deferred: number, commitsSent: number, commitsQueued: number }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
   const pending = await listPending();
 
   if (pending.length === 0) {
-    return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
+    return { replayed: 0, failed: 0, skipped: 0, deferred: 0, commitsSent: 0, commitsQueued: 0 };
   }
 
   const replayLimit = getReplayLimit();
@@ -392,6 +415,7 @@ export async function replayPending(fetchJSON, log, options = {}) {
   let skipped = 0;
   let deferred = 0;
   let processed = 0;
+  const replayedWriteSessions = new Set();
 
   for (const { filename, entry } of pending) {
     if (processed >= replayLimit) {
@@ -448,6 +472,7 @@ export async function replayPending(fetchJSON, log, options = {}) {
     if (res?.ok) {
       await dequeue(claimedFilename);
       replayed++;
+      if (entry.type === "addMessage") replayedWriteSessions.add(entry.sessionId);
     } else if (!isRetryableReplayFailure(res)) {
       await dequeue(claimedFilename);
       skipped++;
@@ -472,6 +497,13 @@ export async function replayPending(fetchJSON, log, options = {}) {
     }
   }
 
+  const { commitsSent, commitsQueued } = await commitReplayedSessions(
+    fetchJSON,
+    log,
+    replayedWriteSessions,
+    options,
+  );
+
   const cleaned = await cleanStale();
 
   log("pending-queue", {
@@ -481,7 +513,95 @@ export async function replayPending(fetchJSON, log, options = {}) {
     skipped,
     deferred,
     cleaned,
+    commitsSent,
+    commitsQueued,
   });
 
-  return { replayed, failed, skipped, deferred };
+  return { replayed, failed, skipped, deferred, commitsSent, commitsQueued };
+}
+
+/**
+ * Commit the sessions whose writes a replay just delivered, minus the
+ * caller's own session(s) (`options.skipCommitFor`) and any session that
+ * still keeps parked writes — committing those now would archive a partial
+ * turn window and strand the deferred writes outside it, so they wait for the
+ * replay that finally drains their queue.
+ *
+ * The commit is sent directly so the archive lands in this run; on a
+ * retryable failure it is parked as a pending `commitSession` entry, which
+ * the next replay sends after the writes (createdAt order) with full retry
+ * semantics. Non-retryable failures are dropped, like any other replay entry.
+ */
+async function commitReplayedSessions(fetchJSON, log, sessionIds, options) {
+  let commitsSent = 0;
+  let commitsQueued = 0;
+  if (sessionIds.size === 0) return { commitsSent, commitsQueued };
+
+  const skip = Array.isArray(options.skipCommitFor)
+    ? options.skipCommitFor
+    : options.skipCommitFor
+      ? [options.skipCommitFor]
+      : [];
+  const skipped = new Set(skip);
+  const remaining = await listPending();
+  const hasParkedWrites = (sessionId) =>
+    remaining.some(({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId);
+
+  for (const sessionId of sessionIds) {
+    if (skipped.has(sessionId)) continue;
+    if (hasParkedWrites(sessionId)) {
+      log("pending-queue", {
+        action: "commit-after-replay-skipped",
+        sessionId,
+        reason: "writes_still_pending",
+      });
+      continue;
+    }
+
+    const encodedSid = encodeURIComponent(sessionId);
+    let res;
+    try {
+      res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    } catch {
+      res = { ok: false };
+    }
+
+    if (res?.ok) {
+      commitsSent++;
+      log("pending-queue", {
+        action: "commit-after-replay",
+        sessionId,
+        ok: true,
+        status: res?.result?.status || res?.status,
+        trace_id: res?.traceId || res?.result?.trace_id,
+      });
+      continue;
+    }
+
+    if (!isRetryableReplayFailure(res)) {
+      log("pending-queue", {
+        action: "commit-after-replay",
+        sessionId,
+        ok: false,
+        status: res?.result?.status || res?.status,
+        error: res?.error?.message || res?.error?.code,
+      });
+      continue;
+    }
+
+    const queued = await enqueue("commitSession", sessionId, {});
+    if (queued.ok) commitsQueued++;
+    log("pending-queue", {
+      action: "commit-after-replay",
+      sessionId,
+      ok: false,
+      status: res?.result?.status || res?.status,
+      error: res?.error?.message || res?.error?.code,
+      queued: Boolean(queued.ok),
+    });
+  }
+  return { commitsSent, commitsQueued };
 }

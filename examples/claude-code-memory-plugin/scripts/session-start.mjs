@@ -116,9 +116,14 @@ runHookStage({
 
   // Pending replay is independent from profile/archive injection. A user may
   // disable injection but still expect failed writes from prior short-lived
-  // coding sessions to be recovered when OpenViking is healthy again.
+  // coding sessions to be recovered when OpenViking is healthy again. Replay
+  // commits the finished sessions whose writes it just delivered (their host
+  // conversation has ended, so nobody else would); this hook's own session is
+  // still live and stays owned by its own Stop/SessionEnd commits.
   try {
-    const replayResult = await replayPending(fetchJSON, log);
+    const replayResult = await replayPending(fetchJSON, log, {
+      skipCommitFor: sessionId ? [deriveOvSessionId(sessionId)] : [],
+    });
     if (replayResult.replayed > 0 || replayResult.failed > 0 || replayResult.deferred > 0) {
       log("pending-replay", replayResult);
     }
