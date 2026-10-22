@@ -143,6 +143,8 @@ def render_template(
     template: str,
     fields: Dict[str, Any],
     extract_context: Any = None,
+    *,
+    strip: bool = True,
 ) -> str:
     """
     Generic Jinja2 template rendering method.
@@ -154,6 +156,7 @@ def render_template(
         template: The template string with Jinja2 placeholders
         fields: Dictionary of field values for substitution
         extract_context: ExtractContext instance for template access to message ranges
+        strip: Whether to strip leading/trailing whitespace from the rendered output
 
     Returns:
         Rendered template string
@@ -163,6 +166,7 @@ def render_template(
         fields,
         extract_context=extract_context,
         debug_undefined=True,
+        strip=strip,
     )
 
 
