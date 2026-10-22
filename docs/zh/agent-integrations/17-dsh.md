@@ -50,6 +50,26 @@ curl -fsSL https://openviking.ai/install | bash
 
 排查 MCP 代理问题时，在启动 DSH 前设置 `OPENVIKING_DEBUG=1` 和 `OPENVIKING_DEBUG_LOG=/tmp/ov-dsh.log`，然后查看该文件。自动记忆回调使用 DSH 自身的日志系统。旧别名 `OV_DEBUG_LOG=/tmp/ov-dsh.log` 仍然支持，并且优先于这两个规范配置项。
 
+## DSH 内打开 OpenViking 控制台
+
+插件的浏览器半边会在左侧栏的面板列表里增加一个 **OpenViking** 入口（与**插件**、**自动化任务**、**上下文洞察**同一组）。点击它，服务端的 Studio（`/studio/home`）会在 DSH 的中间列打开；刷新和在浏览器打开悬浮在控制台右下角，切换到其他侧栏面板即可返回。插件有两个 Host 组件：`openviking-memory-runtime` 和 `openviking-console`；浏览器半边挂入口。插件总开关会一起卸载两个 Host 组件和浏览器半边，控制台组件行只开关它自己的路由。页面框架使用 DSH 主题 token。插件把 Studio 通过 DSH 同源的 `/studio` 代理出来，嵌入的 frame 与 DSH 同源，所以浏览器半边可以读取宿主的 `--dsw-alias-*` 并写到 Studio 自己的 CSS 变量上：背景、边框、按钮、侧栏、图表和热力图都会使用宿主的品牌色与表面色，明暗两种模式都生效。代理只抓取配置的控制台主机，不携带 API key；嵌在面板里时 Studio 自己的主题开关会被覆盖。代理不转发 OpenViking API，Studio 仍直接访问配置的 `endpoint`，因此该服务需要允许 DSH 来源的 CORS。
+
+控制台组件（`openviking-console`）默认使用解析出的 `endpoint`。如果浏览器访问不到该地址（Docker 内部域名、私有网络，或托管 API 与控制台不同域），可以设置浏览器可访问的控制台地址。两个组件各自保留独立配置，自定义 endpoint 时要在控制台行再写一遍：
+
+```yaml
+- id: openviking-memory-runtime
+  config:
+    endpoint: https://<api-endpoint>
+- id: openviking-console
+  config:
+    endpoint: https://<api-endpoint>
+    consoleUrl: https://<console-host>/<optional-path>
+```
+
+两个组件的 `config` 是独立的。公共连接参数放到 `ov.conf` 的 `plugin`/`dsh` 段或环境变量（`OPENVIKING_URL`/`OPENVIKING_BASE_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_AUTH_MODE`），两个组件都会读；行配置只放各自差异（记忆参数 vs `consoleUrl`）。
+
+也可以设置 `OPENVIKING_CONSOLE_URL`。该地址可以是控制台 base（插件会补 `/studio/home`），也可以是完整的 `/studio/home` URL。服务端需要提供 `/studio`；旧版服务或纯 API 端点会给出提示。需要登录的服务在 Studio 自己的页面里登录一次即可，插件不会把 API key 送进浏览器。如果控制台禁止被嵌入（`X-Frame-Options` 或 CSP `frame-ancestors`），面板会给出“在浏览器打开”的入口，而不是空白 iframe。
+
 ## 工作方式
 
 插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`；模型步骤带有新的用户输入时，用用户输入的文本做语义检索，把结果作为持久消息追加到同一步骤，因此注入会随会话重放，也对压缩可见。DSH 或其他插件注入的上下文（例如 `time-context`、job 通知）和工具结果既不触发召回，也不拼进检索文本。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，并跳过注入的上下文，待同步 token 超过阈值或 DSH 开始压缩时即 commit，每次 commit 都归档全部已捕获的消息。写入失败会进入待写队列，在下次会话开始时重放。

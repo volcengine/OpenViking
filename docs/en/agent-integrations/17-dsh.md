@@ -50,6 +50,26 @@ Start `dsh --profile web` and open a conversation. You should see an OpenViking 
 
 For MCP proxy diagnostics, set `OPENVIKING_DEBUG=1` and `OPENVIKING_DEBUG_LOG=/tmp/ov-dsh.log` before starting DSH, then check that file. Automatic memory callbacks use DSH's own logger. The legacy `OV_DEBUG_LOG=/tmp/ov-dsh.log` alias is still supported and takes precedence over both canonical settings.
 
+## OpenViking console in DSH
+
+The bundle's browser half adds an **OpenViking** entry to the left sidebar's panel list, beside **Plugins**, **Automation tasks**, and **Context insights**. Click it to open the server's Studio (`/studio/home`) in the center column inside DSH; refresh and open-in-browser controls float over the console, and selecting another sidebar panel switches back. The plugin has two Host components: `openviking-memory-runtime` and `openviking-console`; the browser half adds the entry. The plugin switch unloads both Host components and the browser half; the console component row toggles only its routes. The page chrome uses DSH theme tokens. The plugin proxies the Studio through the DSH origin under `/studio` so the embedded frame is same-origin; the browser half then applies the host's `--dsw-alias-*` tokens to the Studio's CSS variables, so its surfaces, borders, buttons, sidebar, charts and heatmap use the host's brand and surface colors in both light and dark modes. The proxy only fetches the configured console host and never carries the API key; the Studio's own theme toggle is overridden only inside the embedded panel. The proxy does not proxy the OpenViking API: the Studio calls the configured `endpoint` directly, so that server must allow the DSH origin in CORS.
+
+The console component (`openviking-console`) uses the resolved `endpoint` by default. When the browser cannot reach that address — a Docker-internal name, a private network, or a managed API endpoint whose Studio lives on another host — set a browser-facing address. The two components keep separate configs, so mirror a custom `endpoint` on the console row:
+
+```yaml
+- id: openviking-memory-runtime
+  config:
+    endpoint: https://<api-endpoint>
+- id: openviking-console
+  config:
+    endpoint: https://<api-endpoint>
+    consoleUrl: https://<console-host>/<optional-path>
+```
+
+The two rows have independent `config` objects. Put shared connection settings in `ov.conf`'s `plugin`/`dsh` section or the environment (`OPENVIKING_URL`/`OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_AUTH_MODE`); both components read them, and the rows should carry only their own differences (memory knobs vs `consoleUrl`).
+
+or set `OPENVIKING_CONSOLE_URL`. The address may be a console base (the bundle appends `/studio/home`) or a full `/studio/home` URL. The server must serve `/studio`; older servers and pure API endpoints show a hint instead. Authenticated services sign in through the Studio's own page once — the plugin never sends the API key to the browser. If the console forbids framing (`X-Frame-Options` or a CSP `frame-ancestors`), the panel offers a browser link instead of an empty iframe.
+
 ## How it works
 
 The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills. When a model step takes new user input, it searches OpenViking with the text the user typed and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. Context that DSH or other plugins inject (for example `time-context` or job notices) and tool results neither trigger recall nor enter the query. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, skipping injected context, and commits to OpenViking once pending tokens cross the threshold or when DSH begins a compaction, archiving every captured message. Writes that fail land in a pending queue and replay at the next session start.

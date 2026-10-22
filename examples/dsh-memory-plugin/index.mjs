@@ -105,6 +105,11 @@ export function apply(ctx, input = {}) {
   ctx.on("tools/pre-execute", guardVikingUri);
   ctx.on("tools/post-execute", noticeVikingUri);
 
+  // The console routes live in this bundle's separate `openviking-console`
+  // component row (console-host.mjs); the package's dsh.client draws the
+  // sidebar entry. Both Host components and the browser half belong to this
+  // one plugin bundle.
+
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
   // its first tools/list, so a server that accepts the connection but never
   // answers would otherwise hold up every registration above it.

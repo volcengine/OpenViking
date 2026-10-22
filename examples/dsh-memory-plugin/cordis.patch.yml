@@ -1,3 +1,8 @@
+# 一个插件 bundle，两个 Host 组件：记忆运行时 + 控制台组件。dsh.client 提供
+# 侧栏 UI；插件总开关关闭时 DSH 同时卸载两个 Host 组件和浏览器半边。控制台
+# 组件行只开关它自己的状态路由和 Studio 代理，浏览器半边属于整个插件包。
 - insert:
     - id: openviking-memory-runtime
       name: '@openviking/dsh-memory-plugin'
+    - id: openviking-console
+      name: '@openviking/dsh-memory-plugin/console'

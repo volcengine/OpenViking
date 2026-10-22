@@ -1,6 +1,6 @@
 # OpenViking Memory for DeepSeek Harness
 
-An installable DeepSeek Harness bundle that adds OpenViking auto-recall, session capture, `viking://` URI protection, and the OpenViking MCP tool surface.
+An installable DeepSeek Harness bundle that adds OpenViking auto-recall, session capture, `viking://` URI protection, the OpenViking MCP tool surface, and a sidebar entry that opens the server's Web console inside DSH.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
@@ -32,6 +32,68 @@ be a real package. Linking a source checkout (`dsh plugin --profile web add
 tree's realpath rather than from the profile.
 It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
 `shared/` modules the bundle imports are generated, not committed.
+
+## OpenViking console in DSH
+
+The bundle ships a browser half beside the Host plugin. In a DSH Web or Desktop
+session an **OpenViking** entry appears in the left sidebar's panel list, beside
+**Plugins**, **Automation tasks** and **Context insights**. Click it to open the
+server's Studio (`/studio/home`) in the center column, inside DSH: refresh and
+open-in-browser controls float over the console, and selecting another sidebar
+panel switches back. Nothing else is installed; the memory behavior is unchanged.
+The bundle has two Host components: `openviking-memory-runtime` (memory) and
+`openviking-console` (the console's fenced status route and Studio proxy). The
+package's `dsh.client` draws the sidebar entry. The plugin master switch
+unloads both Host components and the browser half; the console component row
+toggles only its routes (the browser half is package-level, so the entry stays
+and reports the unavailable console).
+
+The page chrome uses DSH theme tokens. The plugin also proxies the Studio
+through the DSH origin under `/studio`, so the embedded frame is same-origin:
+the browser half reads the host's `--dsw-alias-*` tokens and applies them to
+the Studio's own CSS variables, so backgrounds, borders, buttons, sidebar,
+charts and heatmap take the host's brand and surface colors in both light and
+dark. The proxy only fetches the configured console host and never carries the
+API key; the Studio's own theme toggle is overridden only inside the embedded
+panel, while opening `/studio` directly on the OpenViking server is unchanged.
+The proxy does not proxy the OpenViking API: the Studio calls the configured
+`endpoint` directly, so that server has to allow the DSH origin in CORS.
+
+The console component (`openviking-console`) uses the resolved `endpoint` by
+default; `consoleUrl` is the browser-facing address when they differ. Set a
+browser-facing address when the Host's endpoint is not usable from the browser —
+a Docker DNS name, a private network, or a managed API gateway whose Studio lives
+on another host. The two components keep separate configs, so mirror a custom
+`endpoint` on the console row:
+
+```yaml
+- id: openviking-memory-runtime
+  config:
+    endpoint: https://<api-endpoint>
+- id: openviking-console
+  config:
+    endpoint: https://<api-endpoint>
+    consoleUrl: https://<console-host>/<optional-path>
+```
+
+The two rows have independent `config` objects. Put shared connection settings
+in `ov.conf`'s `plugin`/`dsh` section or the environment (`OPENVIKING_URL` /
+`OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_AUTH_MODE`); both
+components read them. Keep only component-specific values in the rows — memory
+knobs on `openviking-memory-runtime`, `consoleUrl` on `openviking-console`. A
+row's `config` replaces that row's fields wholesale, so restate what it needs.
+
+`OPENVIKING_CONSOLE_URL` is the environment spelling. The value may be a console
+base (`https://console.example`; the bundle appends `/studio/home`) or a full
+`/studio/home` page URL.
+
+The server must serve `/studio`; older servers and pure API endpoints show a
+hint instead. The iframe uses the Studio's own browser session, so a service
+that requires authentication is signed in once inside the Studio itself — the
+plugin never puts the API key in the browser. A console that forbids framing
+(`X-Frame-Options` or a CSP `frame-ancestors`) is detected by the Host and
+offered as a browser link instead of an empty frame. Older DSH versions without
+browser-half support ignore this entry; the memory plugin is unaffected.
 
 ## Requirements
 
@@ -201,6 +263,7 @@ Common environment variables:
 | `OPENVIKING_PEER_ID` | Explicit actor peer |
 | `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace's git identity by default; `0` sends no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
+| `OPENVIKING_CONSOLE_URL` | Browser-facing console base or `/studio/home` URL; defaults to the endpoint |
 
 The profile's `cordis.patch.yml` can also carry plugin config:
 

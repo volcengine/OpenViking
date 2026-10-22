@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "OpenViking Memory",
-    "description": "Long-term semantic memory for DeepSeek Harness: auto-recall before each step, session capture and commit, viking:// URI protection, and the OpenViking MCP tools and skills."
+    "description": "Long-term semantic memory for DeepSeek Harness: auto-recall before each step, session capture and commit, viking:// URI protection, the OpenViking MCP tools and skills, and an OpenViking console component in the left sidebar."
   }
 }

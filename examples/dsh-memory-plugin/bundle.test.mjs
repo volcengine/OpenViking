@@ -48,6 +48,11 @@ test("bundle uses neutral DSH naming and bounded peers", async () => {
     patch,
     /- id: openviking-memory-runtime\n\s+name: '@openviking\/dsh-memory-plugin'/,
   );
+  // One plugin bundle, two Host components: the memory runtime and the console.
+  assert.match(
+    patch,
+    /- id: openviking-console\n\s+name: '@openviking\/dsh-memory-plugin\/console'/,
+  );
   assert.doesNotMatch(JSON.stringify(manifest), FORBIDDEN_PATTERN);
   assert.doesNotMatch(patch, FORBIDDEN_PATTERN);
 });

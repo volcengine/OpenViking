@@ -125,3 +125,27 @@ test("a configured peer survives an empty credential peer", async () => {
   assert.equal(config.peerId, "dsh-peer");
   assert.equal(config.explicitPeerId, "dsh-peer");
 });
+
+// The console is an iframe in the browser, so it needs a browser-reachable
+// address. A managed API endpoint or a private Docker DNS name is often not
+// that address, hence its own knob above the endpoint fallback.
+test("the console address is browser-facing and falls back to the endpoint", () => {
+  const env = {
+    OPENVIKING_CONFIG_FILE: "/nonexistent/ov.conf",
+    OPENVIKING_CLI_CONFIG_FILE: "/nonexistent/ovcli.conf",
+    OPENVIKING_URL: "http://127.0.0.1:19464/",
+  };
+  assert.equal(resolveConfig({}, env, "/workspace/project").consoleUrl, "http://127.0.0.1:19464");
+  assert.equal(
+    resolveConfig({}, { ...env, OPENVIKING_CONSOLE_URL: "https://console.example/openviking" }, "/workspace/project").consoleUrl,
+    "https://console.example/openviking",
+  );
+  assert.equal(
+    resolveConfig(
+      { consoleUrl: "https://plugin.example/console" },
+      { ...env, OPENVIKING_CONSOLE_URL: "https://console.example" },
+      "/workspace/project",
+    ).consoleUrl,
+    "https://plugin.example/console",
+  );
+});

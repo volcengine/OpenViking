@@ -43,5 +43,12 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
     deriveEffectivePeer: true,
   });
 
-  return { ...config, peerId: config.effectivePeer.peerId };
+  // The console renders in the browser, so its address has to be reachable
+  // there. The endpoint this Host talks to may not be (Docker DNS, a private
+  // network, or a managed API gateway whose Studio lives on another host), so
+  // this is a separate knob: patch input first, then the environment, then the
+  // endpoint itself.
+  const consoleUrl = String(input.consoleUrl || env.OPENVIKING_CONSOLE_URL || "").trim()
+    || config.baseUrl;
+  return { ...config, peerId: config.effectivePeer.peerId, consoleUrl };
 }

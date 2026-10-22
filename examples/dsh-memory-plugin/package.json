@@ -1,20 +1,25 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.5.28",
+  "version": "0.5.29",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "icon": "./icon.svg",
   "type": "module",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./console": "./console-host.mjs",
+    "./client": "./client-ui.mjs",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "icon.svg",
     "index.mjs",
+    "console-host.mjs",
     "client.mjs",
+    "client-ui.mjs",
     "config.mjs",
+    "console.mjs",
     "capture.mjs",
     "lifecycle.mjs",
     "mcp.mjs",
@@ -33,6 +38,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "scripts": {
