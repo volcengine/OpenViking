@@ -3,18 +3,15 @@
 """Restore user-owned references only at the public Session content boundary."""
 
 import json
-import re
+from collections.abc import Callable
+from typing import Any
 
-from openviking.privacy.reference import PrivacyFieldReference
-from openviking.privacy.restore import PrivacyRestorer, restore_text
+from openviking.privacy.restore import PrivacyRestorer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_extractor import session_privacy_target
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InvalidArgumentError
 
-_SESSION_REFERENCE = re.compile(
-    r"\{\{[ \t]*ov_privacy:session:([A-Za-z0-9_.@-]+):([A-Za-z0-9_-]{8})[ \t]*\}\}"
-)
 _TEXT_FIELDS = {
     "text": ("text",),
     "context": ("abstract",),
@@ -47,50 +44,58 @@ async def restore_session_content(
     jsonl: bool = False,
 ) -> str:
     """Resolve user-owned references from current values without rewriting disk."""
-    target_key = session_privacy_target(session_id)
-    references = {
-        match[0]: PrivacyFieldReference(ctx.user.user_id, "session", target_key, match[2])
-        for match in _SESSION_REFERENCE.finditer(content)
-        if match[1] == target_key
-    }
-    restorer = PrivacyRestorer(privacy, ctx)
-    resolved = await restorer.resolve(content, references)
-    if not resolved:
-        return content
+    restorer = PrivacyRestorer(
+        privacy, ctx, category="session", target_key=session_privacy_target(session_id)
+    )
     if not jsonl:
-        return restore_text(content, resolved)
+        restorer.collect_text(content)
+        await restorer.load_values()
+        return restorer.restore_text(content)
 
-    def structured(value):
-        if isinstance(value, str):
-            if value in resolved:
-                return resolved[value]
-            return restore_text(value, resolved)
-        if isinstance(value, list):
-            return [structured(item) for item in value]
-        if isinstance(value, dict):
-            result = {}
-            for key, item in value.items():
-                clean_key = restore_text(key, resolved)
-                if clean_key in result:
-                    raise InvalidArgumentError("Session privacy restored object key collision")
-                result[clean_key] = structured(item)
-            return result
-        return value
+    lines = content.split("\n")
 
-    lines = []
-    for line in content.split("\n"):
-        if not line.strip():
-            lines.append(line)
-            continue
-        try:
-            message = json.loads(line)
+    def map_content(replace_text: Callable[[str], str]) -> None:
+        def structured(value: Any) -> Any:
+            if isinstance(value, str):
+                if value in restorer.values:
+                    return restorer.values[value]
+                return replace_text(value)
+            if isinstance(value, list):
+                return [structured(item) for item in value]
+            if isinstance(value, dict):
+                result = {}
+                for key, item in value.items():
+                    clean_key = replace_text(key)
+                    if clean_key in result:
+                        raise InvalidArgumentError("Session privacy restored object key collision")
+                    result[clean_key] = structured(item)
+                return result
+            return value
+
+        for line, message in zip(lines, messages, strict=True):
+            if not line.strip():
+                continue
+            if not isinstance(message, dict):
+                raise TypeError("Session message must be an object")
             for part in message.get("parts", []):
                 for field in _TEXT_FIELDS.get(part.get("type"), ()):
                     if isinstance(part.get(field), str):
-                        part[field] = restore_text(part[field], resolved)
+                        part[field] = replace_text(part[field])
                 if part.get("type") == "tool" and "tool_input" in part:
                     part["tool_input"] = structured(part["tool_input"])
-        except (ValueError, TypeError, AttributeError):
-            raise InvalidArgumentError("Session privacy requires valid message JSONL") from None
-        lines.append(json.dumps(message, ensure_ascii=False))
-    return "\n".join(lines)
+
+    try:
+        messages = [json.loads(line) if line.strip() else None for line in lines]
+        map_content(restorer.collect_text)
+    except (ValueError, TypeError, AttributeError):
+        raise InvalidArgumentError("Session privacy requires valid message JSONL") from None
+
+    await restorer.load_values()
+    if not restorer.values:
+        return content
+
+    map_content(restorer.restore_text)
+    return "\n".join(
+        json.dumps(message, ensure_ascii=False) if line.strip() else line
+        for line, message in zip(lines, messages, strict=True)
+    )

@@ -182,11 +182,11 @@ fs.read(uri)
 
 `restore_session_content` 的行为如下：
 
-1. **content 中有占位符，且 privacy value 存在**
+1. **content 中有占位符，且 privacy value 存在且非空**
 
    -> 直接替换为对应值；工具输入中的整值占位符按原始 JSON 类型还原。
 
-2. **content 中有占位符，但 privacy value 缺失**
+2. **content 中有占位符，但 privacy value 缺失或为空**
 
    -> 保留占位符不替换。
 

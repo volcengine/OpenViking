@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from openviking.core.namespace import canonical_user_root
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_extractor import build_session_placeholder
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.privacy.validation import PRIVACY_MAX_FIELDS, SESSION_PRIVACY_MAX_FIELDS
@@ -308,6 +310,53 @@ async def test_skill_default_read_preserves_references_and_raw_restores_credenti
     assert raw.status_code == 200, raw.text
     assert raw.json()["result"] == 'token=pin\nlocal=pin\nmanaged=quote"secret\n'
     assert read.await_count == 2
+
+
+@pytest.mark.parametrize("entrypoint", ["skill", "session"])
+async def test_read_preserves_empty_privacy_references(client, service, entrypoint):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.initialize_user_directories(ctx)
+    values = {"empty000": "", "null0000": None, "false000": False, "zero0000": 0}
+    references, expected = [], []
+    for category in ["skill", "credential", "session"]:
+        await service.privacy_configs.upsert(ctx, category, "empty-values", values)
+        placeholders = [
+            build_privacy_field_reference(ctx.user.user_id, category, "empty-values", field)
+            for field in values
+        ]
+        references.extend(placeholders)
+        expected.extend([*placeholders[:2], False, 0])
+    if entrypoint == "session":
+        placeholders = [build_session_placeholder("empty-values", field) for field in values]
+        references.extend(placeholders)
+        expected.extend([*placeholders[:2], False, 0])
+    text = "\n".join(references)
+    expected_text = "\n".join(map(str, expected))
+    if entrypoint == "skill":
+        root = f"{canonical_user_root(ctx)}/skills/empty-values"
+        await service.viking_fs.mkdir(root, exist_ok=True, ctx=ctx)
+        uri, content = root + "/SKILL.md", text
+    else:
+        session = await service.sessions.create(ctx, "empty-values")
+        uri = session.uri + "/messages.jsonl"
+        content = json.dumps(
+            {
+                "parts": [
+                    {"type": "text", "text": text},
+                    {"type": "tool", "tool_input": {"rows": references}},
+                ]
+            }
+        )
+    await service.viking_fs.write_file(uri, content, ctx=ctx)
+    response = await client.get("/api/v1/content/read", params={"uri": uri, "raw": True})
+    assert response.status_code == 200, response.text
+    restored = response.json()["result"]
+    if entrypoint == "skill":
+        assert restored == expected_text
+    else:
+        parts = json.loads(restored)["parts"]
+        assert parts[0]["text"] == expected_text
+        assert json.dumps(parts[1]["tool_input"]["rows"]) == json.dumps(expected)
 
 
 @pytest.mark.asyncio

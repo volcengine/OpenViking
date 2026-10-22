@@ -182,11 +182,11 @@ Restoration is supported for these files under the current user's Session direct
 
 `restore_session_content` behavior:
 
-1. **Placeholder exists in content and privacy value exists**
+1. **Placeholder exists in content and privacy value exists and is non-empty**
 
    -> Replace directly with the corresponding value. Whole-value placeholders in tool input restore the original JSON type.
 
-2. **Placeholder exists in content but privacy value is missing**
+2. **Placeholder exists in content but privacy value is missing or empty**
 
    -> Keep the placeholder unchanged.
 

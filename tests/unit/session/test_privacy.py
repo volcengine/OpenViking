@@ -13,7 +13,6 @@ import pytest
 
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
 from openviking.privacy import session_extractor as extraction
-from openviking.privacy.reference import build_privacy_field_reference
 from openviking.privacy.session_extractor import extract_session_privacy_values
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
@@ -190,10 +189,9 @@ def test_restore_is_scoped_to_session_content(owner, path, expected):
     assert get_session_id_from_uri(f"viking://user/{owner}/sessions/demo/{path}", root) == expected
 
 
-async def test_invalid_message_jsonl_is_rejected(privacy, request_context):
-    reference = build_privacy_field_reference("default", "session", "demo", "one")
-    privacy.get_current.return_value = SimpleNamespace(values={"one": "secret"})
+@pytest.mark.parametrize("content", ["not json", '{"parts": null}'])
+async def test_invalid_message_jsonl_is_rejected(privacy, request_context, content):
     with pytest.raises(InvalidArgumentError):
         await restore_session_content(
-            privacy, f"not json {reference}", request_context, session_id="demo", jsonl=True
+            privacy, content, request_context, session_id="demo", jsonl=True
         )
