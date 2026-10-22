@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem router tests."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -17,6 +18,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
 from openviking.service.fs_service import ListingPage
+from openviking.storage.queuefs.queue_manager import get_queue_manager
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
@@ -113,7 +115,71 @@ def test_cp_request_defaults_to_non_recursive():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "source", "target", "recursive", "indexed_file"),
+    [
+        (
+            "cp",
+            "viking://system/compile/example-skills/llm-wiki/SKILL.md",
+            "viking://resources/transferred-file-copy.md",
+            False,
+            "viking://resources/transferred-file-copy.md",
+        ),
+        (
+            "mv",
+            "viking://system/compile/example-skills/llm-wiki/SKILL.md",
+            "viking://resources/transferred-file-move.md",
+            False,
+            "viking://resources/transferred-file-move.md",
+        ),
+        (
+            "cp",
+            "viking://system/compile/example-skills/llm-wiki",
+            "viking://resources/transferred-dir-copy",
+            True,
+            "viking://resources/transferred-dir-copy/SKILL.md",
+        ),
+        (
+            "mv",
+            "viking://system/compile/example-skills/llm-wiki",
+            "viking://resources/transferred-dir-move",
+            True,
+            "viking://resources/transferred-dir-move/SKILL.md",
+        ),
+    ],
+)
+async def test_file_only_transfer_builds_searchable_target_index(
+    service,
+    operation,
+    source,
+    target,
+    recursive,
+    indexed_file,
+):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+
+    if operation == "cp":
+        await service.fs.cp(source, target, recursive=recursive, ctx=ctx)
+    else:
+        await service.fs.mv(source, target, ctx=ctx)
+    await asyncio.wait_for(get_queue_manager().wait_complete(), 30)
+
+    record = await service.viking_fs.vector_store.fetch_by_uri(indexed_file, ctx=ctx)
+    assert record is not None
+    assert record["level"] == 2
+    result = await service.search.search(
+        query="Fake summary for testing",
+        target_uri=target if recursive else target.rsplit("/", 1)[0],
+        level=[2],
+        score_threshold=0,
+        ctx=ctx,
+    )
+    assert any(item.uri == indexed_file for item in result.resources)
+
+
+@pytest.mark.asyncio
 async def test_cp_canonicalizes_home_aliases(monkeypatch):
+    calls = []
     calls = []
 
     async def fake_cp(from_uri, to_uri, recursive=False, ctx=None):

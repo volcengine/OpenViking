@@ -1444,6 +1444,51 @@ async def test_transfer_refresh_message_records_deleted_source_entry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+async def test_file_only_transfer_rebuild_uses_fresh_semantic_processing(
+    request_context,
+    monkeypatch,
+    recursive,
+):
+    service = FSService(viking_fs=_FakeVikingFS())
+    queue_manager = _FakeQueueManager()
+    mark_pending = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.service.fs_service.get_queue_manager",
+        lambda: queue_manager,
+    )
+    monkeypatch.setattr(
+        "openviking.service.fs_service.mark_abstract_overview_pending",
+        mark_pending,
+    )
+    target = (
+        "viking://resources/archive/copied"
+        if recursive
+        else "viking://resources/archive/copied.md"
+    )
+    root = target if recursive else "viking://resources/archive"
+
+    status = await service._enqueue_transfer_rebuild(
+        root_uri=root,
+        target_uri=target,
+        recursive=recursive,
+        context_type="resource",
+        ctx=request_context,
+    )
+
+    assert status == "queued"
+    msg = queue_manager.messages[0]
+    assert msg.uri == root
+    assert msg.recursive is recursive
+    assert msg.changes is None if recursive else msg.changes == {"added": [target]}
+    assert msg.generation_trigger == "content_transfer_rebuild"
+    if recursive:
+        mark_pending.assert_not_awaited()
+    else:
+        mark_pending.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_resource_rm_does_not_cleanup_memory_if_resource_delete_fails(request_context):
     delete_error = RuntimeError("delete failed")
     viking_fs = _FakeVikingFS(rm_error=delete_error)
@@ -1624,6 +1669,45 @@ async def test_copy_to_system_uses_physical_file_strategy(request_context):
 
 
 @pytest.mark.asyncio
+async def test_indexed_copy_preserves_native_vectors_and_content_copy_refresh(request_context):
+    source = "viking://resources/source/demo.md"
+    target = "viking://resources/target/demo.md"
+    viking_fs = SimpleNamespace(
+        cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
+    )
+    service = FSService(viking_fs=viking_fs)
+    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+
+    await service.cp(source, target, recursive=False, ctx=request_context)
+
+    viking_fs.cp.assert_awaited_once_with(
+        source,
+        target,
+        recursive=False,
+        ctx=request_context,
+    )
+    service._enqueue_copy_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_indexed_move_preserves_native_vector_transfer(request_context):
+    source = "viking://resources/source/demo.md"
+    target = "viking://resources/target/demo.md"
+    viking_fs = SimpleNamespace(mv=AsyncMock())
+    service = FSService(viking_fs=viking_fs)
+    service._refresh_move_parents = AsyncMock()
+
+    await service.mv(source, target, ctx=request_context)
+
+    viking_fs.mv.assert_awaited_once_with(source, target, ctx=request_context)
+    service._refresh_move_parents.assert_awaited_once_with(
+        from_uri=source,
+        to_uri=target,
+        ctx=request_context,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cp", "mv"])
 async def test_transfer_to_registered_memory_template_is_rejected(request_context, operation):
     source = "viking://resources/project/demo.yaml"
@@ -1704,9 +1788,10 @@ async def test_copy_from_system_rebuilds_target_index(request_context):
     target = "viking://resources/project/demo.md"
     viking_fs = SimpleNamespace(
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": False}),
+        stat=AsyncMock(return_value={"isDir": False}),
     )
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
 
     result = await service.cp(source, target, recursive=False, ctx=request_context)
 
@@ -1716,12 +1801,12 @@ async def test_copy_from_system_rebuilds_target_index(request_context):
         recursive=False,
         ctx=request_context,
         maintain_vectors=False,
-        copy_semantic_sidecars=True,
+        copy_semantic_sidecars=False,
     )
-    service._enqueue_copy_refresh.assert_awaited_once_with(
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
         root_uri="viking://resources/project",
-        source_uri=source,
-        copied_uri=target,
+        target_uri=target,
+        recursive=False,
         context_type="resource",
         ctx=request_context,
     )
@@ -1734,15 +1819,17 @@ async def test_recursive_copy_from_system_rebuilds_target_subtree(request_contex
     target = "viking://resources/project/demo"
     viking_fs = SimpleNamespace(
         cp=AsyncMock(return_value={"from": source, "to": target, "recursive": True}),
+        stat=AsyncMock(return_value={"isDir": True}),
     )
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
-    service._enqueue_recursive_transfer_refresh = AsyncMock()
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
 
     await service.cp(source, target, recursive=True, ctx=request_context)
 
-    service._enqueue_recursive_transfer_refresh.assert_awaited_once_with(
-        uri=target,
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri=target,
+        target_uri=target,
+        recursive=True,
         context_type="resource",
         ctx=request_context,
     )
@@ -1757,7 +1844,8 @@ async def test_move_from_system_rebuilds_target_index(request_context):
         stat=AsyncMock(return_value={"isDir": False}),
     )
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+    service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
 
@@ -1766,13 +1854,18 @@ async def test_move_from_system_rebuilds_target_index(request_context):
         target,
         ctx=request_context,
         vector_mode="none",
-        copy_semantic_sidecars=True,
+        copy_semantic_sidecars=False,
     )
-    service._enqueue_copy_refresh.assert_awaited_once_with(
+    service._refresh_move_parents.assert_awaited_once_with(
+        from_uri=source,
+        to_uri=target,
+        ctx=request_context,
+        refresh_target=False,
+    )
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
         root_uri="viking://resources/project",
-        source_uri=source,
-        copied_uri=target,
-        change_kind="added",
+        target_uri=target,
+        recursive=False,
         context_type="resource",
         ctx=request_context,
     )
@@ -1787,12 +1880,12 @@ async def test_move_target_refresh_failure_does_not_roll_back_physical_move(requ
         stat=AsyncMock(return_value={"isDir": False}),
     )
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock(side_effect=RuntimeError("queue unavailable"))
+    service._enqueue_transfer_rebuild = AsyncMock(side_effect=RuntimeError("queue unavailable"))
 
     await service.mv(source, target, ctx=request_context)
 
     viking_fs.mv.assert_awaited_once()
-    service._enqueue_copy_refresh.assert_awaited_once()
+    service._enqueue_transfer_rebuild.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1804,13 +1897,15 @@ async def test_recursive_move_from_system_rebuilds_target_subtree(request_contex
         stat=AsyncMock(return_value={"isDir": True}),
     )
     service = FSService(viking_fs=viking_fs)
-    service._enqueue_copy_refresh = AsyncMock(return_value="queued")
-    service._enqueue_recursive_transfer_refresh = AsyncMock()
+    service._enqueue_transfer_rebuild = AsyncMock(return_value="queued")
+    service._refresh_move_parents = AsyncMock()
 
     await service.mv(source, target, ctx=request_context)
 
-    service._enqueue_recursive_transfer_refresh.assert_awaited_once_with(
-        uri=target,
+    service._enqueue_transfer_rebuild.assert_awaited_once_with(
+        root_uri=target,
+        target_uri=target,
+        recursive=True,
         context_type="resource",
         ctx=request_context,
     )

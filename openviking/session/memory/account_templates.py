@@ -92,21 +92,21 @@ def _managed_memory_type_for_uri(uri: str) -> str | None:
     return memory_type or None
 
 
-def validate_account_memory_template_write(
+def normalize_account_memory_template_write(
     uri: str,
     content: str | bytes,
     mode: str,
     *,
     registry: MemoryTypeRegistry | None = None,
-) -> None:
-    """Enforce the managed template contract for generic content writes."""
+) -> str | bytes:
+    """Enforce managed template rules and replace server-owned metadata."""
     memory_type = _managed_memory_type_for_uri(uri)
     if memory_type is None:
-        return
+        return content
     registry = registry or get_default_registry()
     schema = registry.get(memory_type)
     if schema is None:
-        return
+        return content
     if memory_type not in EDITABLE_MEMORY_TEMPLATE_FIELDS:
         raise InvalidArgumentError(f"Memory template is not editable: {memory_type}")
     if mode == "append":
@@ -119,10 +119,23 @@ def validate_account_memory_template_write(
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):
             raise ValueError("Expected a YAML mapping")
+        supplied = dict(data)
+        supplied.pop("_updated_at", None)
         defaults = memory_template_data(schema)
-        complete = _complete_template(defaults, data, memory_type)
-        if complete != data:
+        complete = _complete_template(defaults, supplied, memory_type)
+        if complete != supplied:
             raise ValueError("generic writes require the complete deployment template")
+        complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
+        normalized = yaml.dump(
+            complete,
+            Dumper=_ReadableTemplateDumper,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        normalized_raw = normalized.encode("utf-8")
+        if len(normalized_raw) > _MAX_CONFIG_BYTES:
+            raise ValueError("A memory template must not exceed 1 MiB")
+        return normalized if isinstance(content, str) else normalized_raw
     except DescriptionTemplateError as exc:
         raise InvalidArgumentError(
             str(exc),

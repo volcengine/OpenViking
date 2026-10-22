@@ -46,7 +46,7 @@ from openviking.service.task_work_index import (
     get_enqueued_work_ids,
     get_task_context,
 )
-from openviking.session.memory.account_templates import validate_account_memory_template_write
+from openviking.session.memory.account_templates import normalize_account_memory_template_write
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.resource_refs import (
@@ -526,7 +526,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
         if isinstance(content, str):
             content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
-        validate_account_memory_template_write(normalized_uri, content, mode)
+        content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:
             ingest_options = replace(
@@ -698,7 +698,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
         await self._sanitize_batch_operations(normalized_operations, ctx=ctx)
         for operation in normalized_operations:
-            validate_account_memory_template_write(
+            operation["content"] = normalize_account_memory_template_write(
                 operation["uri"], operation["content"], operation["mode"]
             )
         root_policy = namespace_policy_for_uri(normalized_root)

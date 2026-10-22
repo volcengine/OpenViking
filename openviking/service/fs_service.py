@@ -849,20 +849,34 @@ class FSService:
         await semantic_queue.enqueue(msg)
         return "queued"
 
-    async def _enqueue_recursive_transfer_refresh(
+    async def _enqueue_transfer_rebuild(
         self,
         *,
-        uri: str,
+        root_uri: str,
+        target_uri: str,
+        recursive: bool,
         context_type: str,
         ctx: RequestContext,
-    ) -> None:
-        queue_manager = get_queue_manager()
+    ) -> str:
+        """Queue fresh semantic processing when the source has no index artifacts."""
+        if not recursive:
+            await mark_abstract_overview_pending(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=1,
+                ctx=ctx,
+            )
+        try:
+            queue_manager = get_queue_manager()
+        except RuntimeError as exc:
+            logger.warning("QueueManager not available, skipping transfer rebuild: %s", exc)
+            return "skipped"
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
-            uri=uri,
+            uri=root_uri,
             context_type=context_type,
-            recursive=True,
+            recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             group_ids=ctx.group_ids,
@@ -870,9 +884,22 @@ class FSService:
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry_id,
-            generation_trigger="content_copy",
+            coalesce_key=(
+                ""
+                if recursive
+                else build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    peer_id=ctx.user.user_id,
+                )
+            ),
+            changes=None if recursive else {"added": [target_uri]},
+            generation_trigger="content_transfer_rebuild",
         )
         await semantic_queue.enqueue(msg)
+        return "queued"
 
     async def _wait_for_refresh(self) -> Dict[str, Any]:
         context = get_task_context()
@@ -937,7 +964,7 @@ class FSService:
                     if not (source_indexed and target_indexed):
                         options.update(
                             maintain_vectors=False,
-                            copy_semantic_sidecars=target_indexed,
+                            copy_semantic_sidecars=False,
                         )
                     return await viking_fs.cp(
                         from_uri,
@@ -964,6 +991,37 @@ class FSService:
         result.setdefault("to", to_uri)
         result.setdefault("recursive", recursive)
         context_type = context_type_for_uri(to_uri)
+        if not source_indexed and target_indexed:
+            target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
+            target_is_dir = bool(target_stat.get("isDir"))
+            rebuild_root_uri = (
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
+            )
+            if not rebuild_root_uri:
+                result["semantic_status"] = "skipped"
+                result["vector_status"] = "skipped"
+                return result
+            result["semantic_root_uri"] = rebuild_root_uri
+            try:
+                result["semantic_status"] = await self._enqueue_transfer_rebuild(
+                    root_uri=rebuild_root_uri,
+                    target_uri=to_uri,
+                    recursive=target_is_dir,
+                    context_type=context_type,
+                    ctx=ctx,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Copy committed but semantic rebuild failed for %s: %s",
+                    to_uri,
+                    exc,
+                )
+                result["semantic_status"] = "failed"
+                result["semantic_error"] = str(exc)
+            return result
+
         refresh_parent_uri = self._semantic_refresh_parent_uri(to_uri, context_type)
         if not refresh_parent_uri:
             if target_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
@@ -988,25 +1046,6 @@ class FSService:
             )
             result["semantic_status"] = "failed"
             result["semantic_error"] = str(exc)
-        if (
-            source_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
-            and target_policy.processing_mode is NamespaceProcessingMode.INDEXED
-            and bool(result.get("recursive"))
-        ):
-            try:
-                await self._enqueue_recursive_transfer_refresh(
-                    uri=to_uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Copy committed but recursive semantic refresh failed for %s: %s",
-                    to_uri,
-                    exc,
-                )
-                result["semantic_status"] = "failed"
-                result["semantic_error"] = str(exc)
         return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
@@ -1064,7 +1103,7 @@ class FSService:
                     if vector_mode != "transfer":
                         options.update(
                             vector_mode=vector_mode,
-                            copy_semantic_sidecars=target_indexed,
+                            copy_semantic_sidecars=False,
                         )
                     await viking_fs.mv(
                         from_uri,
@@ -1096,25 +1135,39 @@ class FSService:
                 move,
                 recursive=True,
             )
-        await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
-        if (
-            namespace_policy_for_uri(from_uri).processing_mode is NamespaceProcessingMode.FILE_ONLY
-            and namespace_policy_for_uri(to_uri).processing_mode is NamespaceProcessingMode.INDEXED
-        ):
+        rebuild_target = not source_indexed and target_indexed
+        if rebuild_target:
+            await self._refresh_move_parents(
+                from_uri=from_uri,
+                to_uri=to_uri,
+                ctx=ctx,
+                refresh_target=False,
+            )
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
-            if target_stat.get("isDir"):
+            target_is_dir = bool(target_stat.get("isDir"))
+            context_type = context_type_for_uri(to_uri)
+            rebuild_root_uri = (
+                to_uri
+                if target_is_dir
+                else self._semantic_refresh_parent_uri(to_uri, context_type)
+            )
+            if rebuild_root_uri:
                 try:
-                    await self._enqueue_recursive_transfer_refresh(
-                        uri=to_uri,
-                        context_type=context_type_for_uri(to_uri),
+                    await self._enqueue_transfer_rebuild(
+                        root_uri=rebuild_root_uri,
+                        target_uri=to_uri,
+                        recursive=target_is_dir,
+                        context_type=context_type,
                         ctx=ctx,
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Move committed but recursive semantic refresh failed for %s: %s",
+                        "Move committed but semantic rebuild failed for %s: %s",
                         to_uri,
                         exc,
                     )
+        else:
+            await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
 
     @asynccontextmanager
     async def _record_transfer(
@@ -1232,6 +1285,7 @@ class FSService:
         from_uri: str,
         to_uri: str,
         ctx: RequestContext,
+        refresh_target: bool = True,
     ) -> None:
         """Queue transfer refreshes for both affected parents after mv commits."""
         if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
@@ -1245,7 +1299,7 @@ class FSService:
         refreshes: List[tuple[str, str, Literal["added", "deleted"], str]] = []
         if source_parent_uri and source_parent_uri != target_parent_uri:
             refreshes.append((source_parent_uri, from_uri, "deleted", source_context_type))
-        if target_parent_uri:
+        if target_parent_uri and refresh_target:
             refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
 
         for parent_uri, changed_uri, change_kind, context_type in refreshes:

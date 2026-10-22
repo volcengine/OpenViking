@@ -5,9 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.account_templates import memory_template_data
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage import content_write as content_write_module
 from openviking.storage.abstract_overview import (
@@ -263,6 +266,27 @@ async def test_managed_template_is_validated_before_single_write(ctx):
 
     coordinator._write_file_only.assert_not_awaited()
     assert fake_fs._async_agfs.exact_acquire_calls == []
+
+
+@pytest.mark.asyncio
+async def test_managed_template_single_write_replaces_server_timestamp(ctx):
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    coordinator._write_file_only = AsyncMock(return_value={"semantic_status": "skipped"})
+    data = memory_template_data(get_default_registry().get("profile"))
+    data["description"] += "\nAccount instructions."
+    data["_updated_at"] = "forged"
+
+    await coordinator._write(
+        uri="viking://system/memory/memory_templates/custom/profile.yaml",
+        content=yaml.safe_dump(data),
+        mode="replace",
+        ctx=ctx,
+    )
+
+    normalized = yaml.safe_load(coordinator._write_file_only.await_args.kwargs["content"])
+    assert normalized.pop("_updated_at") != "forged"
+    assert normalized == {key: value for key, value in data.items() if key != "_updated_at"}
 
 
 @pytest.mark.asyncio

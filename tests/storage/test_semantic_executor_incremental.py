@@ -1171,6 +1171,85 @@ async def test_content_copy_rebuilds_target_overview_from_target_l2_summaries(mo
 
 
 @pytest.mark.asyncio
+async def test_transfer_rebuild_generates_file_summary_and_vector(monkeypatch):
+    root_uri = "viking://resources/archive"
+    copied_uri = f"{root_uri}/copied.md"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "copied.md", "isDir": False}]},
+        file_contents={copied_uri: "copied body"},
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"added": [copied_uri]},
+        generation_trigger="content_transfer_rebuild",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.summarized_files == [copied_uri]
+    assert processor.vectorized_files == [copied_uri]
+    assert processor.transfer_summary_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recursive_transfer_rebuild_generates_subtree_vectors(monkeypatch):
+    root_uri = "viking://resources/archive/copied"
+    child_uri = f"{root_uri}/nested"
+    root_file = f"{root_uri}/root.md"
+    child_file = f"{child_uri}/child.md"
+    fake_fs = _FakeVikingFS(
+        tree={
+            root_uri: [
+                {"name": "nested", "isDir": True},
+                {"name": "root.md", "isDir": False},
+            ],
+            child_uri: [{"name": "child.md", "isDir": False}],
+        },
+        file_contents={
+            root_file: "root body",
+            child_file: "child body",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        recursive=True,
+        generation_trigger="content_transfer_rebuild",
+    )
+
+    await executor.run(root_uri)
+
+    assert set(processor.summarized_files) == {root_file, child_file}
+    assert set(processor.vectorized_files) == {root_file, child_file}
+    assert set(processor.vectorized_dirs) == {root_uri, child_uri}
+    assert processor.transfer_summary_calls == []
+
+
+@pytest.mark.asyncio
 async def test_content_copy_samples_before_loading_summaries(monkeypatch):
     root_uri = "viking://resources/archive"
     file_paths = [f"{root_uri}/{name}.txt" for name in "abcde"]
