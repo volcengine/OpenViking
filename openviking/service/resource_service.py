@@ -87,6 +87,7 @@ from openviking.utils.git_auth import (
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
@@ -154,6 +155,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "tag_mode",
         "acl",
         "internal_task",
+        "target_validator",
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
@@ -174,6 +176,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "parser_backend",
         "resolved_extension",
         "prepared_resource",
+        "target_validator",
     }
 )
 
@@ -227,6 +230,7 @@ class ResourceService:
         self._runtime_config_manager = runtime_config_manager
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connector_delegate: Optional["ConnectorDelegate"] = None
+        self.compile_versions: Optional[Any] = None
 
     def set_dependencies(
         self,
@@ -251,6 +255,29 @@ class ResourceService:
         if not self._watch_scheduler:
             return None
         return self._watch_scheduler.watch_manager
+
+    async def _ensure_resource_target_available(
+        self, uri: str, ctx: RequestContext, *, is_parent: bool = False
+    ) -> None:
+        """Reject active Compile output destinations in this account before ingestion.
+
+        A parent only supplies a new child's location; an exact destination mirrors
+        its subtree and must also exclude Compile targets nested beneath it.
+        """
+        if self.compile_versions is None or not uri:
+            return
+        uri = normalize_storage_target_uri(uri)
+        await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        target = await self.compile_versions.owning_target(ctx.account_id, uri)
+        if target is None and not is_parent:
+            targets = await self.compile_versions._targets_under(ctx.account_id, uri)
+            if targets:
+                target = targets[0]
+        if target is not None:
+            raise ConflictError(
+                "Add-resource destination overlaps a Compile target.",
+                resource="COMPILE_TARGET",
+            )
 
     async def _hold_watch_execution(self, task_id: str) -> bool:
         """Keep the scheduler from running *task_id* while its first round is in flight."""
@@ -1462,6 +1489,9 @@ class ResourceService:
             create_parent=create_parent,
         )
         if candidate_uri and defer_candidate_resolution:
+            await self._ensure_resource_target_available(
+                candidate_uri.rpartition("/")[0], ctx, is_parent=True
+            )
             await self._resource_processor.ensure_candidate_parent_write_access(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
@@ -1471,9 +1501,11 @@ class ResourceService:
             root_uri, resource_lock = await self._resource_processor.reserve_unique_candidate(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
+                target_validator=self._ensure_resource_target_available,
             )
             return root_uri, resource_lock, False, True
 
+        await self._ensure_resource_target_available(root_uri, ctx)
         await self._viking_fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
         # A tree lock may materialize an empty directory marker, so ownership
         # must be recorded immediately before acquiring it. The zero-timeout
@@ -1831,6 +1863,10 @@ class ResourceService:
         self._ensure_single_resource_target(to=to, parent=parent)
         target_to = to or ""
         target_parent = parent or ""
+        await self._ensure_resource_target_available(
+            target_to, ctx, is_parent=is_content_root_uri(target_to, kind="resource")
+        )
+        await self._ensure_resource_target_available(target_parent, ctx, is_parent=True)
         target_create_parent = bool(kwargs.get("create_parent", False))
         if acl is not None:
             acl = AclSpec.model_validate(acl)
@@ -2156,6 +2192,10 @@ class ResourceService:
             self._ensure_single_resource_target(to=to, parent=parent)
             target_to = to or ""
             target_parent = parent or ""
+            await self._ensure_resource_target_available(
+                target_to, ctx, is_parent=is_content_root_uri(target_to, kind="resource")
+            )
+            await self._ensure_resource_target_available(target_parent, ctx, is_parent=True)
             if to_is_directory is None:
                 to_is_directory = bool(target_to)
             watch_to_is_directory = to_is_directory
@@ -2180,6 +2220,7 @@ class ResourceService:
                 stage_callback=stage_callback,
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
+                target_validator=self._ensure_resource_target_available,
                 defer_post_processing=True,
                 tags=tags,
                 tag_mode=tag_mode,
@@ -2487,6 +2528,25 @@ class ResourceService:
         telemetry_id = get_current_telemetry().telemetry_id
         telemetry_cleanup_scheduled = False
 
+        async def record_package(skill_uri: str, lease_ref: Any) -> None:
+            """Preserve standalone ordinary packages under their lease for Compile rollback."""
+            if (
+                self.compile_versions is not None
+                and owner_lease_ref is None
+                and (source_metadata or {}).get("source") != "compile"
+                and (target := await self.compile_versions.owning_target(ctx.account_id, skill_uri))
+                and await self.compile_versions._write_meta(ctx.account_id, target)
+            ):
+                await self.compile_versions.record_operation(
+                    [skill_uri],
+                    ctx,
+                    "agent_revise",
+                    {},
+                    lambda: self.compile_versions.register_transfer(
+                        skill_uri, skill_uri, ctx, lease_ref=lease_ref
+                    ),
+                )
+
         try:
             # Establish ownership before any queue work can start. Descendant
             # semantic and embedding messages inherit this same cancellable task.
@@ -2528,6 +2588,7 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            on_package_written=record_package,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2541,6 +2602,7 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
+                            on_package_written=record_package,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]

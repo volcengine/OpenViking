@@ -5,7 +5,7 @@
 import asyncio
 import math
 
-from fastapi import APIRouter, Depends, Header, Path, status
+from fastapi import APIRouter, Depends, Header, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -14,7 +14,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.service.compile_service import CompileRequest
+from openviking.service.compile_service import CompileConfigUpdate, CompileRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["compile"])
@@ -47,6 +47,64 @@ async def create_compile(
 
 
 __all__ = ["router"]
+
+
+@router.get("/compile/config")
+async def get_compile_config(
+    to: str = Query(..., min_length=1),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    return Response(status="ok", result=await get_service().compile.get_config(to, ctx))
+
+
+@router.post("/compile/config/update")
+async def update_compile_config(
+    body: CompileConfigUpdate,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    return Response(status="ok", result=await get_service().compile.update_config(body, ctx))
+
+
+@router.get("/compile/configs")
+async def list_compile_configs(
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    return Response(
+        status="ok",
+        result=await get_service().compile.list_configs(ctx, limit=limit, cursor=cursor),
+    )
+
+
+@router.get("/compile/operations")
+async def list_compile_operations(
+    to: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().compile.list_operations(to, ctx, limit=limit, cursor=cursor)
+    return Response(status="ok", result=result)
+
+
+@router.get("/compile/operations/{operation_id}/outputs")
+async def operation_outputs(
+    operation_id: str = Path(
+        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9:._-]*$"
+    ),
+    to: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List one operation's output files and frozen version references."""
+    return Response(
+        status="ok",
+        result=await get_service().compile.operation_outputs(
+            to, operation_id, ctx, limit=limit, cursor=cursor
+        ),
+    )
 
 
 @router.get("/compile/capabilities")

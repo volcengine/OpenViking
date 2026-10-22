@@ -8,6 +8,7 @@ from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
     VikingAddResourceTool,
+    VikingDiffPathsTool,
     VikingExportTool,
     VikingGlobTool,
     VikingGrepTool,
@@ -98,6 +99,7 @@ def register_default_tools(
     if include_viking_tools:
         registry.register(VikingMultiReadTool(config=config))
         registry.register(VikingListTool(config=config))
+        registry.register(VikingDiffPathsTool(config=config))
         registry.register(VikingSearchTool(config=config))
         registry.register(VikingGrepTool(config=config))
         registry.register(VikingGlobTool(config=config))

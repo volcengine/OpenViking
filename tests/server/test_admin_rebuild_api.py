@@ -602,8 +602,9 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["stat", "lock"])
-async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fails(
-    monkeypatch, failure
+@pytest.mark.parametrize("has_work", [False, True])
+async def test_reindex_submit_failure_only_fails_tasks_without_accepted_work(
+    monkeypatch, failure, has_work
 ):
     from openviking.service.reindex_executor import ReindexExecutor
 
@@ -612,6 +613,7 @@ async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fail
 
     tracker = SimpleNamespace(
         create_if_no_running=AsyncMock(return_value=FakeTask()),
+        has_work=AsyncMock(return_value=has_work),
         fail=AsyncMock(),
     )
 
@@ -652,12 +654,15 @@ async def test_reindex_wait_false_marks_task_failed_when_submit_preparation_fail
             ctx=ctx,
         )
 
-    tracker.fail.assert_awaited_once_with(
-        "task-1",
-        "Failed to enqueue reindex processing",
-        account_id="test",
-        user_id="alice",
-    )
+    if has_work:
+        tracker.fail.assert_not_awaited()
+    else:
+        tracker.fail.assert_awaited_once_with(
+            "task-1",
+            "Failed to enqueue reindex processing",
+            account_id="test",
+            user_id="alice",
+        )
 
 
 @pytest.mark.asyncio

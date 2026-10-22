@@ -561,7 +561,11 @@ describe("OpenVikingClient", () => {
           },
         },
       ],
-      { processingMode: "vectors_only", extra: { future_flag: 0 } },
+      {
+        processingMode: "vectors_only",
+        deferProcessing: true,
+        extra: { future_flag: 0 },
+      },
     );
     await expect(
       client.downloadBytes("resources/project/a.txt"),
@@ -590,6 +594,7 @@ describe("OpenVikingClient", () => {
       },
     ]);
     expect(batchWriteBody.processing_mode).toBe("vectors_only");
+    expect(batchWriteBody.defer_processing).toBe(true);
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");

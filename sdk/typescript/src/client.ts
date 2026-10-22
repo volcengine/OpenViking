@@ -708,6 +708,7 @@ export class OpenVikingClient {
       wait: options.wait,
       telemetry: options.telemetry,
       processing_mode: options.processingMode,
+      defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/batch-write", {
       body: mergeExtra(body, options.extra),

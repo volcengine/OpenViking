@@ -390,11 +390,16 @@ impl HttpClient {
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
+        edit_source: &str,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
+        }
+        // Omit the default so the request stays valid for servers without edit_source.
+        if edit_source != "agent" {
+            body["edit_source"] = Value::from(edit_source);
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -1982,6 +1987,27 @@ impl HttpClient {
             params.push(("from".to_string(), from_ref.to_string()));
         }
         self.get("/api/v1/snapshot/diff", &params).await
+    }
+
+    /// Return one stable page of source-file changes; no base compares an empty tree.
+    pub async fn snapshot_diff_paths(
+        &self,
+        paths: &[String],
+        from_ref: Option<&str>,
+        to_ref: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Value> {
+        let mut params = vec![
+            ("to".to_string(), to_ref.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
+        params.extend(paths.iter().map(|path| ("paths".to_string(), path.clone())));
+        if let Some(from_ref) = from_ref {
+            params.push(("from".to_string(), from_ref.to_string()));
+        }
+        self.get("/api/v1/snapshot/diff-paths", &params).await
     }
 
     pub async fn snapshot_ignore_get(&self) -> Result<Value> {

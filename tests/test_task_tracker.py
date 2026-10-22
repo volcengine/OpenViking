@@ -478,6 +478,23 @@ async def test_create_if_no_running_isolated_by_owner(tracker: TaskTracker):
     assert bob_task is not None
     assert alice_task.task_id != bob_task.task_id
 
+    replay = await tracker.create_if_no_running(
+        "reindex",
+        "viking://resources/demo",
+        account_id="acme",
+        user_id="alice",
+        task_id=alice_task.task_id,
+    )
+    assert replay.task_id == alice_task.task_id
+    with pytest.raises(ValueError, match="Task ID belongs to another operation"):
+        await tracker.create_if_no_running(
+            "reindex",
+            "viking://resources/other",
+            account_id="acme",
+            user_id="alice",
+            task_id=alice_task.task_id,
+        )
+
 
 # ── Serialization ──
 

@@ -347,6 +347,7 @@ Write multiple files below one Resource or Memory directory, then refresh the af
 | `wait` | boolean | No | `true` | Wait for semantic/vector refresh |
 | `telemetry` | boolean/object | No | `false` | Include operation telemetry |
 | `processing_mode` | string | No | `semantic_and_vectors` | One processing mode for the whole batch: `semantic_and_vectors` or `vectors_only` |
+| `defer_processing` | boolean | No | `false` | Save files without scheduling semantic or vector work; the caller schedules later processing |
 
 Each operation contains:
 
@@ -368,7 +369,7 @@ Each operation contains:
 - `create`, `replace`, and `upsert` are compatible spellings for setting the requested final body: they overwrite an existing file and create a missing one. `append` appends when the file exists and creates it with the supplied body when it does not.
 - `processing_mode` applies to the whole batch; operations cannot mix semantic modes. `vectors_only` maintains changed-file vectors without refreshing parent semantics.
 - `tags`, `tag_mode`, and `acl` apply per operation. Tags travel with the file's first vector upsert; `clear` does not require `tags` and ignores supplied tag values.
-- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
+- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Without deferral, asynchronous processing retains the file locks until the associated work settles, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.

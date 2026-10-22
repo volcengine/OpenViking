@@ -57,6 +57,7 @@ class _FakePathLock:
 class _FakeVikingFS:
     def __init__(self):
         self.write_file = AsyncMock()
+        self.write_file_bytes = AsyncMock()
         self.read_file = AsyncMock(return_value="previous")
         self._async_agfs = _FakePathLock()
 

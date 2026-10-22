@@ -120,6 +120,8 @@ claude mcp add --transport http openviking \
 
 以下列出内置 MCP 工具。实际可用工具以所连接服务的 `tools/list` 响应为准：
 
+<div v-pre>
+
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
 | `find` | 无 session 上下文的快速语义检索。只传 `context_type="skill"` 时改走包级 skill 检索：每个 skill 包只返回一条命中，URI 指向该包的 `SKILL.md`，摘要取自 skill 本身，即使命中的是包内辅助文件也是如此；不传 `target_uri` 时同时检索自己的 skill 和账户共享的 `viking://agent/skills`。`skill` 与其它 context_type 混用时仍走通用检索路径 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选), `context_type`(可选), `read_content`(可选——直接内联每条命中的内容), `events_time_decay_protection`(可选) |
@@ -146,6 +148,8 @@ claude mcp add --transport http openviking \
 | `list_groups` | 查询当前 account 的组 ID，不返回成员名单 | 无 |
 | `get_acl` | 查看共享资源的直接、继承和有效 ACL；要求该节点的 manage 或账号 ADMIN | `uri` |
 | `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
+
+</div>
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此

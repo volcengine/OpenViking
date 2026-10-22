@@ -18,7 +18,9 @@ from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
+from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
 from openviking.service.compile_service import CompileService
+from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.fs_service import FSService
@@ -110,6 +112,7 @@ class OpenVikingService:
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
+        self._compile_scheduler: Optional[CompileScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._privacy_sanitizer: Optional[PrivacySanitizer] = None
@@ -382,6 +385,11 @@ class OpenVikingService:
         return self._session_compressor
 
     @property
+    def compile_scheduler(self) -> Optional[CompileScheduler]:
+        """Get CompileScheduler instance (None when disabled)."""
+        return self._compile_scheduler
+
+    @property
     def watch_scheduler(self) -> Optional[WatchScheduler]:
         """Get WatchScheduler instance."""
         return self._watch_scheduler
@@ -631,6 +639,26 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
         )
         self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+        compile_config = self._config.compile_api
+        compile_store = CompileStateStore(self._agfs_client)
+        self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
+        get_task_tracker().compile_history_cleanup = compile_store.delete_expired
+        if compile_config.scheduler_enabled:
+            self._compile_scheduler = CompileScheduler(
+                self._compile_service,
+                compile_store,
+                self._viking_fs,
+            )
+            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
+                self._config.encryption
+            )
+            self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
+            self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
+            self._compile_service.lifecycle.save_credential = (
+                self._compile_scheduler.save_credential
+            )
+        self._fs_service.compile_versions = self._compile_service.lifecycle.versions
+        self._resource_service.compile_versions = self._compile_service.lifecycle.versions
 
         if self._queue_manager:
             for queue_name in (
@@ -693,7 +721,8 @@ class OpenVikingService:
             logger.info("QueueManager workers started")
         await system_asset_synchronizer.sync(default_ctx)
 
-        if session_expiry_enabled:
+        compile_expiry_enabled = self._compile_scheduler is not None
+        if session_expiry_enabled or compile_expiry_enabled:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
             self._expiry_runtime = ExpiryRuntime(
@@ -705,16 +734,23 @@ class OpenVikingService:
                 ),
             )
             try:
-                self._session_service.configure_expiry(
-                    self._expiry_runtime.scheduler,
-                    consumer_concurrency=expiry_config.session_consumer_concurrency,
-                )
+                if session_expiry_enabled:
+                    self._session_service.configure_expiry(
+                        self._expiry_runtime.scheduler,
+                        consumer_concurrency=expiry_config.session_consumer_concurrency,
+                    )
+                if compile_expiry_enabled:
+                    self._compile_scheduler.install_expiry(self._expiry_runtime.scheduler)
                 await self._expiry_runtime.start_storage()
                 await self._expiry_runtime.start_roles()
             except Exception:
                 await self._stop_expiry()
                 raise
             logger.info("Expiry roles started")
+
+        if self._compile_scheduler is not None:
+            await self._compile_scheduler.start()
+            logger.info("CompileScheduler started (backend=redis)")
 
         # Preflight the MinerU endpoint when it will be used, so endpoint
         # misconfiguration or a stopped service surfaces now instead of on the
@@ -764,6 +800,11 @@ class OpenVikingService:
         """Close OpenViking and release resources."""
         await self._resource_service.close_background_tasks()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
+
+        if self._compile_scheduler is not None:
+            await self._compile_scheduler.stop()
+            self._compile_scheduler = None
+            logger.info("CompileScheduler stopped")
 
         await self._stop_expiry()
 
@@ -858,8 +899,9 @@ class OpenVikingService:
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
-        """Reindex semantic/vector artifacts for a URI."""
+        """Reindex a URI; task_id preserves internal async submission identity."""
         if not self._initialized:
             await self.initialize()
 
@@ -883,6 +925,8 @@ class OpenVikingService:
         if tags is not None or tag_mode == "clear":
             execute_kwargs["tags"] = tags
             execute_kwargs["tag_mode"] = tag_mode
+        if task_id is not None:
+            execute_kwargs["task_id"] = task_id
         return await executor.execute(**execute_kwargs)
 
     async def check_consistency(

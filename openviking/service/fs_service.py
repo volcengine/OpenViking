@@ -8,7 +8,9 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 import asyncio
 from collections.abc import Coroutine
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
@@ -30,6 +32,7 @@ from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
@@ -59,6 +62,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
@@ -118,6 +122,8 @@ class FSService:
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_scheduler = watch_scheduler
         self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
+        # Installed by OpenVikingService; records Compile output versions after writes.
+        self.compile_versions: Optional[Any] = None
 
     def set_dependencies(
         self,
@@ -300,10 +306,7 @@ class FSService:
         """
         viking_fs = self._ensure_initialized()
         extra_fields = extra_fields or []
-        if (
-            namespace_policy_for_uri(uri).processing_mode
-            is NamespaceProcessingMode.FILE_ONLY
-        ):
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)
             unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
                 extra_fields
@@ -412,14 +415,10 @@ class FSService:
 
     @staticmethod
     def _reject_file_only_semantic_sidecar_target(uri: str) -> None:
-        if (
-            namespace_policy_for_uri(uri).processing_mode
-            is NamespaceProcessingMode.FILE_ONLY
-            and is_abstract_overview_uri(uri)
-        ):
-            raise InvalidArgumentError(
-                f"semantic sidecars are not supported for namespace: {uri}"
-            )
+        if namespace_policy_for_uri(
+            uri
+        ).processing_mode is NamespaceProcessingMode.FILE_ONLY and is_abstract_overview_uri(uri):
+            raise InvalidArgumentError(f"semantic sidecars are not supported for namespace: {uri}")
 
     async def mkdir(
         self,
@@ -441,56 +440,89 @@ class FSService:
                 raise InvalidArgumentError(
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
-        async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
-            acl_update = (
-                await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
-                if acl is not None
-                else None
-            )
-            await viking_fs.mkdir(uri, ctx=ctx)
-            if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
+            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+                await viking_fs.mkdir(uri, ctx=ctx)
                 return
 
-            lock_path = viking_fs._uri_to_path(abstract_uri, ctx=ctx)
-            lease = await viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
-            try:
-                abstract = self._normalize_directory_description(description)
-                if not abstract:
-                    abstract = f"# {uri_leaf_name(directory_uri)}"
+        versions = self.compile_versions
+        managed = versions is not None and await versions.owning_target(
+            ctx.account_id, directory_uri
+        )
 
-                await viking_fs.write_file(
-                    abstract_uri,
-                    render_abstract_overview(
-                        ContextLevel.ABSTRACT,
-                        directory_uri,
-                        abstract,
-                        {
-                            "generated_by": {
-                                "component": "FSService",
-                                "trigger": "mkdir",
-                            },
-                            "freshness": {
-                                "total_entries": 0,
-                                "sampled_entries": 0,
-                                "unsampled_entries": 0,
-                                "pending_child_changes": 0,
-                            },
+        async def create():
+            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+                acl_update = (
+                    await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
+                    if acl is not None
+                    else None
+                )
+                lease = None
+                if managed:
+                    await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
+                    parent = VikingURI(directory_uri).parent.uri
+                    while not await viking_fs.exists(parent, ctx=ctx):
+                        parent = VikingURI(parent).parent.uri
+                    lease = await viking_fs._async_agfs.pathlock_acquire_tree(
+                        viking_fs._uri_to_path(parent, ctx=ctx)
+                    )
+                try:
+                    await viking_fs.mkdir(uri, ctx=ctx, **({"lease_ref": lease} if lease else {}))
+                    if managed:
+                        await versions.record_effects(
+                            [{"uri": directory_uri, "kind": "directory"}], ctx
+                        )
+                    else:
+                        lease = await viking_fs._async_agfs.pathlock_acquire_exact(
+                            viking_fs._uri_to_path(abstract_uri, ctx=ctx)
+                        )
+                    await initialize(acl_update, lease)
+                finally:
+                    if lease is not None:
+                        await viking_fs._async_agfs.pathlock_release(lease)
+
+        async def initialize(acl_update, lease):
+            abstract = self._normalize_directory_description(description)
+            if not abstract:
+                abstract = f"# {uri_leaf_name(directory_uri)}"
+
+            await viking_fs.write_file(
+                abstract_uri,
+                render_abstract_overview(
+                    ContextLevel.ABSTRACT,
+                    directory_uri,
+                    abstract,
+                    {
+                        "generated_by": {
+                            "component": "FSService",
+                            "trigger": "mkdir",
                         },
-                    ),
-                    ctx=ctx,
-                    lease_ref=lease,
-                )
-                await vectorize_directory_meta(
-                    uri=directory_uri,
-                    abstract=abstract,
-                    overview="",
-                    context_type=context_type_for_uri(directory_uri),
-                    ctx=ctx,
-                    ingest_options=IngestOptions(acl_update=acl_update),
-                    include_overview=False,
-                )
-            finally:
-                await viking_fs._async_agfs.pathlock_release(lease)
+                        "freshness": {
+                            "total_entries": 0,
+                            "sampled_entries": 0,
+                            "unsampled_entries": 0,
+                            "pending_child_changes": 0,
+                        },
+                    },
+                ),
+                ctx=ctx,
+                lease_ref=lease,
+            )
+            await vectorize_directory_meta(
+                uri=directory_uri,
+                abstract=abstract,
+                overview="",
+                context_type=context_type_for_uri(directory_uri),
+                ctx=ctx,
+                ingest_options=IngestOptions(acl_update=acl_update),
+                include_overview=False,
+            )
+
+        if managed:
+            await run_to_completion(
+                lambda: versions.record_operation([directory_uri], ctx, "mkdir", {}, create)
+            )
+        else:
+            await create()
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
@@ -551,7 +583,34 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        if self.compile_versions is not None:
+            async with self.compile_versions.before_remove(uri, ctx) as lease:
+
+                async def remove():
+                    result = await viking_fs.rm(
+                        uri,
+                        recursive=recursive,
+                        ctx=ctx,
+                        **({"lease_ref": lease} if lease is not None else {}),
+                    )
+                    await self.compile_versions.record_effects(
+                        [{"uri": uri, "kind": "deleted"}], ctx
+                    )
+                    await self.compile_versions.after_remove(uri, ctx)
+                    return result
+
+                async def record_remove():
+                    return await self.compile_versions.record_operation(
+                        [uri], ctx, "rm", {"recursive": recursive}, remove, recursive=True
+                    )
+
+                result = (
+                    await run_to_completion(record_remove)
+                    if lease is not None
+                    else await record_remove()
+                )
+        else:
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
@@ -631,10 +690,7 @@ class FSService:
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
-        if (
-            namespace_policy_for_uri(uri).processing_mode
-            is NamespaceProcessingMode.FILE_ONLY
-        ):
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             return None
         if context_type not in {"resource", "skill"}:
             return None
@@ -863,34 +919,41 @@ class FSService:
     ) -> Dict[str, Any]:
         """Commit copy and enqueue its parent refresh as one cancellation-safe unit."""
         viking_fs = self._ensure_initialized()
-        async with self._uri_mutation_coordinator.mutation(
-            ctx.account_id,
-            [from_uri, to_uri],
-        ):
-            source_policy = namespace_policy_for_uri(from_uri)
-            target_policy = namespace_policy_for_uri(to_uri)
-            source_indexed = (
-                source_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        source_policy = namespace_policy_for_uri(from_uri)
+        target_policy = namespace_policy_for_uri(to_uri)
+        source_indexed = source_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
+
+        async def copy() -> Dict[str, Any]:
+            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
+                async with self._record_transfer(
+                    from_uri, to_uri, ctx, recursive=recursive
+                ) as lease:
+                    options = {"lease_ref": lease} if lease is not None else {}
+                    if not (source_indexed and target_indexed):
+                        options.update(
+                            maintain_vectors=False,
+                            copy_semantic_sidecars=target_indexed,
+                        )
+                    return await viking_fs.cp(
+                        from_uri,
+                        to_uri,
+                        recursive=recursive,
+                        ctx=ctx,
+                        **options,
+                    )
+
+        if self.compile_versions is None:
+            transfer_result = await copy()
+        else:
+            transfer_result = await self.compile_versions.record_operation(
+                [to_uri],
+                ctx,
+                "cp",
+                {"from": from_uri, "to": to_uri, "recursive": recursive},
+                copy,
+                recursive=True,
             )
-            target_indexed = (
-                target_policy.processing_mode is NamespaceProcessingMode.INDEXED
-            )
-            if source_indexed and target_indexed:
-                transfer_result = await viking_fs.cp(
-                    from_uri,
-                    to_uri,
-                    recursive=recursive,
-                    ctx=ctx,
-                )
-            else:
-                transfer_result = await viking_fs.cp(
-                    from_uri,
-                    to_uri,
-                    recursive=recursive,
-                    ctx=ctx,
-                    maintain_vectors=False,
-                    copy_semantic_sidecars=target_indexed,
-                )
 
         result = dict(transfer_result or {})
         result.setdefault("from", from_uri)
@@ -969,52 +1032,69 @@ class FSService:
             and context_type_for_uri(to_uri) == "resource"
             and namespace_policy_for_uri(from_uri).processing_mode
             is NamespaceProcessingMode.INDEXED
-            and namespace_policy_for_uri(to_uri).processing_mode
-            is NamespaceProcessingMode.INDEXED
+            and namespace_policy_for_uri(to_uri).processing_mode is NamespaceProcessingMode.INDEXED
             and not is_watch_task_control_uri(from_uri)
             and not is_watch_task_control_uri(to_uri)
         )
-        if not use_watch_transaction:
-            source_policy = namespace_policy_for_uri(from_uri)
-            target_policy = namespace_policy_for_uri(to_uri)
-            source_indexed = (
-                source_policy.processing_mode is NamespaceProcessingMode.INDEXED
-            )
-            target_indexed = (
-                target_policy.processing_mode is NamespaceProcessingMode.INDEXED
-            )
-            vector_mode: Literal["transfer", "delete_source", "none"]
-            if source_indexed and target_indexed:
-                vector_mode = "transfer"
-            elif source_indexed:
-                vector_mode = "delete_source"
-            else:
-                vector_mode = "none"
-            if vector_mode == "transfer":
-                await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            else:
-                await viking_fs.mv(
-                    from_uri,
-                    to_uri,
-                    ctx=ctx,
-                    vector_mode=vector_mode,
-                    copy_semantic_sidecars=target_indexed,
-                )
+        source_policy = namespace_policy_for_uri(from_uri)
+        target_policy = namespace_policy_for_uri(to_uri)
+        source_indexed = source_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        target_indexed = target_policy.processing_mode is NamespaceProcessingMode.INDEXED
+        vector_mode: Literal["transfer", "delete_source", "none"]
+        if source_indexed and target_indexed:
+            vector_mode = "transfer"
+        elif source_indexed:
+            vector_mode = "delete_source"
         else:
-            assert watch_manager is not None
-            await self._move_resource_with_watch_transaction(
-                viking_fs,
-                watch_manager,
-                from_uri,
-                to_uri,
+            vector_mode = "none"
+
+        async def move() -> None:
+            async with self._uri_mutation_coordinator.mutation(ctx.account_id, [from_uri, to_uri]):
+                if use_watch_transaction:
+                    await watch_manager.validate_target_prefix_rewrite_internal(
+                        from_uri, to_uri, account_id=ctx.account_id
+                    )
+                async with self._record_transfer(from_uri, to_uri, ctx, move=True) as lease:
+                    options = {"lease_ref": lease} if lease is not None else {}
+                    if vector_mode != "transfer":
+                        options.update(
+                            vector_mode=vector_mode,
+                            copy_semantic_sidecars=target_indexed,
+                        )
+                    await viking_fs.mv(
+                        from_uri,
+                        to_uri,
+                        ctx=ctx,
+                        **options,
+                    )
+                    if use_watch_transaction:
+                        try:
+                            await watch_manager.rewrite_target_prefix_internal(
+                                from_uri, to_uri, account_id=ctx.account_id
+                            )
+                        except Exception as commit_error:
+                            try:
+                                await viking_fs.mv(to_uri, from_uri, ctx=ctx, **options)
+                            except Exception as rollback_error:
+                                logger.exception("Move rollback failed: %s -> %s", to_uri, from_uri)
+                                raise rollback_error from commit_error
+                            raise
+
+        if self.compile_versions is None:
+            await move()
+        else:
+            await self.compile_versions.record_operation(
+                [from_uri, to_uri],
                 ctx,
+                "mv",
+                {"from": from_uri, "to": to_uri},
+                move,
+                recursive=True,
             )
         await self._refresh_move_parents(from_uri=from_uri, to_uri=to_uri, ctx=ctx)
         if (
-            namespace_policy_for_uri(from_uri).processing_mode
-            is NamespaceProcessingMode.FILE_ONLY
-            and namespace_policy_for_uri(to_uri).processing_mode
-            is NamespaceProcessingMode.INDEXED
+            namespace_policy_for_uri(from_uri).processing_mode is NamespaceProcessingMode.FILE_ONLY
+            and namespace_policy_for_uri(to_uri).processing_mode is NamespaceProcessingMode.INDEXED
         ):
             target_stat = await viking_fs.stat(to_uri, ctx=ctx, skip_count=True)
             if target_stat.get("isDir"):
@@ -1030,6 +1110,86 @@ class FSService:
                         to_uri,
                         exc,
                     )
+
+    @asynccontextmanager
+    async def _record_transfer(
+        self,
+        from_uri: str,
+        to_uri: str,
+        ctx: RequestContext,
+        *,
+        move: bool = False,
+        recursive: bool = True,
+    ):
+        """Hold managed transfer scopes through their final snapshot registration.
+
+        The yielded lease extends the native transfer's existing locking. Once
+        native transfer is attempted, its final directory state forms an ordinary
+        rollback baseline even on failure. Service-level guards run before locking.
+        """
+        versions = self.compile_versions
+        if versions is None:
+            yield None
+            return
+        viking_fs = self._ensure_initialized()
+        manager = self._get_watch_manager()
+        watched_uris = (
+            [
+                task.to_uri
+                for task in await manager.get_all_tasks(ctx.account_id, ctx.user.user_id, "root")
+                if task.account_id == ctx.account_id and task.to_uri
+            ]
+            if manager is not None
+            else []
+        )
+        if not await versions.guard_transfer(from_uri, to_uri, ctx, watched_uris=watched_uris):
+            yield None
+            return
+        if move:
+            await versions.before_move(from_uri.rstrip("/"), to_uri.rstrip("/"), ctx)
+            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.WRITE)
+        else:
+            await viking_fs._ensure_copy_source_access(from_uri, recursive=recursive, ctx=ctx)
+        await viking_fs._ensure_access(to_uri, ctx, action=AclAction.WRITE)
+        source_path = viking_fs._uri_to_path(from_uri, ctx=ctx)
+        target_path = viking_fs._uri_to_path(to_uri, ctx=ctx)
+        viking_fs._validate_transfer_paths(source_path, target_path)
+        is_dir = (await viking_fs.stat(from_uri, ctx=ctx, skip_count=True)).get("isDir", False)
+        if is_dir and not recursive:
+            raise InvalidArgumentError(f"Cannot copy directory without --recursive: {from_uri}")
+        if move and is_dir:
+            await viking_fs._ensure_access(from_uri, ctx, action=AclAction.MANAGE)
+        if not is_dir and to_uri.rstrip("/") != to_uri:
+            raise InvalidArgumentError(
+                f"Transfer destination for a file must include the target file name: {to_uri}"
+            )
+        await viking_fs._ensure_transfer_parent_directory(
+            target_path, to_uri, operation="mv" if move else "cp"
+        )
+        await viking_fs._ensure_transfer_target_type(target_path, to_uri, is_dir=is_dir)
+        if is_dir:
+            if not await viking_fs.exists(to_uri, ctx=ctx):
+                target_path = viking_fs._transfer_parent_path(target_path)
+            roots = sorted({source_path, target_path}, key=len)
+            requests = [
+                {"path": path, "kind": "tree"}
+                for path in roots
+                if path == roots[0] or not path.startswith(roots[0] + "/")
+            ]
+        else:
+            requests = [{"path": path, "kind": "exact"} for path in (source_path, target_path)]
+        lease = await viking_fs._async_agfs.pathlock_acquire_batch(requests)
+        try:
+            yield lease
+        finally:
+            try:
+                await run_to_completion(
+                    lambda: versions.register_transfer(
+                        from_uri, to_uri, ctx, lease_ref=lease, move=move
+                    )
+                )
+            finally:
+                await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _finish_transfer_after_caller_cancel(
         self,
@@ -1101,43 +1261,6 @@ class FSService:
                     exc,
                 )
 
-    async def _move_resource_with_watch_transaction(
-        self,
-        viking_fs: VikingFS,
-        watch_manager: "WatchManager",
-        from_uri: str,
-        to_uri: str,
-        ctx: RequestContext,
-    ) -> None:
-        async with self._uri_mutation_coordinator.mutation(
-            ctx.account_id,
-            [from_uri, to_uri],
-        ):
-            await watch_manager.validate_target_prefix_rewrite_internal(
-                from_uri,
-                to_uri,
-                account_id=ctx.account_id,
-            )
-            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-            try:
-                await watch_manager.rewrite_target_prefix_internal(
-                    from_uri,
-                    to_uri,
-                    account_id=ctx.account_id,
-                )
-            except Exception as commit_error:
-                try:
-                    await viking_fs.mv(to_uri, from_uri, ctx=ctx)
-                except Exception as rollback_error:
-                    logger.error(
-                        "Failed to roll back resource move from %s to %s",
-                        to_uri,
-                        from_uri,
-                        exc_info=True,
-                    )
-                    raise rollback_error from commit_error
-                raise
-
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
             return
@@ -1174,10 +1297,7 @@ class FSService:
     ) -> ListingPage:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        if (
-            namespace_policy_for_uri(uri).processing_mode
-            is NamespaceProcessingMode.FILE_ONLY
-        ):
+        if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             await viking_fs._ensure_access(uri, ctx)
             unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
                 extra_fields or []
@@ -1407,8 +1527,7 @@ class FSService:
             "include_tags": include_tags or bool(normalized_tags),
             "before_context": before_context,
             "after_context": after_context,
-            "force_fs": namespace_policy.processing_mode
-            is NamespaceProcessingMode.FILE_ONLY,
+            "force_fs": namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
         }
         if _may_include_memory_content(uri):
             kwargs["content_transform"] = _visible_grep_content
@@ -1464,8 +1583,7 @@ class FSService:
                 if extra_fields is not None
                 else ([] if project_tags else None),
                 tag_filter=tag_filter,
-                force_fs=namespace_policy.processing_mode
-                is NamespaceProcessingMode.FILE_ONLY,
+                force_fs=namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
             )
         )
         if not project_tags:
@@ -1488,7 +1606,7 @@ class FSService:
     async def write(
         self,
         uri: str,
-        content: str,
+        content: str | bytes,
         ctx: RequestContext,
         mode: str = "replace",
         wait: bool = False,
@@ -1496,15 +1614,30 @@ class FSService:
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
+        edit_source: Literal["manual", "agent", "compile"] = "agent",
+        record_version: bool = True,
+        commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
     ) -> Dict[str, Any]:
-        """Create or update a file and refresh semantics/vectors."""
+        """Write content and refresh it after persisting managed output versions.
+
+        Internal restores supply ``commit_content`` to record their own version.
+        """
         viking_fs = self._ensure_initialized()
+        if commit_content is None and self.compile_versions is not None:
+            commit_content = partial(
+                self.compile_versions.record_write,
+                ctx=ctx,
+                edit_source=edit_source,
+                record_version=record_version and edit_source != "compile",
+            )
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
+            commit_content=commit_content,
         )
-        return await coordinator.write(
+        write = partial(
+            coordinator.write,
             uri=uri,
             content=content,
             ctx=ctx,
@@ -1515,6 +1648,11 @@ class FSService:
             tag_mode=tag_mode,
             acl=acl,
         )
+        if self.compile_versions is None or edit_source == "compile":
+            return await write()
+        return await self.compile_versions.record_operation(
+            [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
+        )
 
     async def batch_write(
         self,
@@ -1524,7 +1662,9 @@ class FSService:
         ctx: RequestContext,
         wait: bool = True,
         skip_conflicts: bool = False,
+        defer_processing: bool = False,
         processing_mode: str = "semantic_and_vectors",
+        edit_source: Literal["manual", "agent", "compile"] = "agent",
     ) -> Dict[str, Any]:
         """Apply multiple file writes and aggregate downstream refresh."""
         viking_fs = self._ensure_initialized()
@@ -1532,14 +1672,40 @@ class FSService:
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
+            commit_batch=(
+                partial(self.compile_versions.finish_batch, ctx=ctx, edit_source=edit_source)
+                if self.compile_versions is not None and edit_source != "compile"
+                else None
+            ),
+            commit_content=(
+                partial(
+                    self.compile_versions.record_write,
+                    ctx=ctx,
+                    edit_source=edit_source,
+                    record_version=False,
+                )
+                if self.compile_versions is not None
+                else None
+            ),
         )
-        return await coordinator.batch_write(
+        write = partial(
+            coordinator.batch_write,
             root_uri=root_uri,
             operations=operations,
             ctx=ctx,
             wait=wait,
             skip_conflicts=skip_conflicts,
+            defer_processing=defer_processing,
             processing_mode=processing_mode,
+        )
+        if self.compile_versions is None or edit_source == "compile":
+            return await write()
+        return await self.compile_versions.record_operation(
+            [operation["uri"] for operation in operations],
+            ctx,
+            f"{edit_source}_revise",
+            {"batch": True},
+            write,
         )
 
     async def set_tags(
@@ -1622,7 +1788,8 @@ class FSService:
     ) -> Dict[str, Any]:
         """Forward to VikingFS.restore. See viking_fs.restore for semantics."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.restore(
+        restore = partial(
+            viking_fs.restore,
             project_dir=project_dir,
             source_commit=source_commit,
             branch=branch,
@@ -1631,6 +1798,27 @@ class FSService:
             author_name=author_name,
             author_email=author_email,
             ctx=ctx,
+            record_restore=(
+                partial(self.compile_versions.record_restored, ctx=ctx)
+                if self.compile_versions is not None and not dry_run
+                else None
+            ),
+        )
+        if self.compile_versions is None or dry_run:
+            return await restore()
+        return await self.compile_versions.record_operation(
+            [
+                viking_fs._tree_path_to_uri(
+                    viking_fs._uri_to_tree_path(project_dir, ctx=ctx)
+                ).rstrip("/")
+                if project_dir
+                else "viking://"
+            ],
+            ctx,
+            "restore",
+            {"source_commit": source_commit, "branch": branch},
+            restore,
+            recursive=True,
         )
 
     async def show(
@@ -1673,6 +1861,46 @@ class FSService:
             raw=raw,
             ctx=ctx,
         )
+
+    async def diff_paths(
+        self,
+        paths: List[str],
+        *,
+        from_ref: Optional[str],
+        to_ref: str,
+        ctx: RequestContext,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Page changed source URIs between snapshots; a null base means an empty tree.
+
+        Every changed path requires current read permission, including deleted paths.
+        Any denied descendant rejects the whole query without exposing its URI.
+        """
+        viking_fs = self._ensure_initialized()
+        if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
+            raise InvalidArgumentError("paths and non-empty snapshot refs are required")
+        if offset < 0 or not 1 <= limit <= 1000:
+            raise InvalidArgumentError("offset must be non-negative and limit must be 1..1000")
+        changes = await viking_fs.diff_paths(
+            dirs=list(dict.fromkeys(paths)), base=from_ref, head=to_ref, ctx=ctx
+        )
+        changes_by_uri = {change["uri"]: change for change in changes}
+        uris = sorted(changes_by_uri)
+        access = await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
+        if any(not access.get(uri, False) for uri in uris):
+            raise PermissionDeniedError("Snapshot changes include inaccessible paths")
+        page = [changes_by_uri[uri] for uri in uris[offset : offset + limit]]
+        next_offset = offset + len(page)
+        has_more = next_offset < len(uris)
+        return {
+            "changes": page,
+            "offset": offset,
+            "limit": limit,
+            "total": len(uris),
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
+        }
 
     async def log(
         self,

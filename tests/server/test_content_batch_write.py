@@ -315,6 +315,57 @@ def _last_content_write_refresh(queue_fixture):
 
 
 @pytest.mark.asyncio
+async def test_batch_coalesces_compile_target_updates(service, monkeypatch):
+    """A batch saves its managed target's content-update time once."""
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    root = "viking://resources/batch-metadata"
+    store = service.compile.lifecycle.store
+    await service.viking_fs.write_file(f"{root}/seed.md", "seed", ctx=ctx)
+    await store.register(ctx.account_id, root)
+    update_time = AsyncMock(wraps=store.mark_content_updated)
+    monkeypatch.setattr(store, "mark_content_updated", update_time)
+    ops = [{"uri": f"{root}/{i}.md", "content": "changed"} for i in range(100)]
+    await service.fs.batch_write(root_uri=root, operations=ops, ctx=ctx, defer_processing=True)
+    update_time.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deferred_batch_versions_content_before_dispatch_without_refresh(
+    _coordinator_queue_for_unit_tests,
+):
+    """Compile publication records bytes under its lease without scheduling index work."""
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root)
+
+    async def commit(uris, *, lease_ref, write):
+        assert uris == [uri] and lease_ref == {"lease_ref": "lock-1"}
+        assert vfs._async_agfs.held
+        return await write()
+
+    commit_content = AsyncMock(side_effect=commit)
+    commit_batch = AsyncMock()
+    coordinator = ContentWriteCoordinator(
+        vfs, commit_content=commit_content, commit_batch=commit_batch
+    )
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    result = await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": uri, "content": "x", "mode": "upsert"}],
+        ctx=ctx,
+        wait=False,
+        defer_processing=True,
+    )
+
+    commit_content.assert_awaited_once()
+    commit_batch.assert_awaited_once_with(lease_ref={"lease_ref": "lock-1"})
+    assert vfs.writes == [uri]
+    assert result["semantic_status"] == result["vector_status"] == "deferred"
+    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    assert vfs._async_agfs.releases == 1 and vfs._async_agfs.handoffs == 0
+
+
+@pytest.mark.asyncio
 async def test_batch_accepts_more_than_256_operations(monkeypatch):
     root = "viking://resources/wiki"
     vfs = _VFS(root)
@@ -521,10 +572,7 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(
     assert direct_actions == []
     assert refresh_calls == []
     refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
-    plans = [
-        ContextUpdatePlan.from_dict(item["plan"])
-        for item in refresh["resource_plans"]
-    ]
+    plans = [ContextUpdatePlan.from_dict(item["plan"]) for item in refresh["resource_plans"]]
     assert {plan.file_refresh.file_uri for plan in plans if plan.file_refresh is not None} == {
         first,
         second,

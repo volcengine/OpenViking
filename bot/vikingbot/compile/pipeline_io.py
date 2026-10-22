@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import posixpath
 import shlex
@@ -17,7 +18,6 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 
 from openviking.models.model_error import ModelError
-from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.models import COMPILE_STAGING_ROOT
@@ -270,13 +270,6 @@ class JsonModel:
         Diagnostics contain budgets, usage and failure categories, never reasoning.
         A cancelled or timed-out request cannot be accepted as a partial response.
         """
-        if stage == "compile":
-            # ponytail: estimated tokens; use an endpoint tokenizer for exact accounting.
-            tokens = estimate_text_tokens(json.dumps([messages, tools], ensure_ascii=False))
-            if tokens > self.limits.direct_input_tokens:
-                raise ValueError("Direct Compile input exceeds token budget")
-            # Leave output space with 110k input on a 128k-context endpoint.
-            max_tokens = min(max_tokens, 18_000)
         self.metrics[f"{stage}_calls"] += 1
         number = self.metrics[f"{stage}_calls"]
         started = time.monotonic()
@@ -405,7 +398,9 @@ class JsonModel:
             try:
                 result = schema.model_validate(cached["result"])
                 if validate:
-                    validate(result)
+                    checked = validate(result)
+                    if inspect.isawaitable(checked):
+                        await checked
                 self.metrics["model_cache_hits"] += 1
                 return result
             except ValueError:
@@ -563,7 +558,9 @@ class JsonModel:
                 result = schema.model_validate(raw)
                 category = "semantic"
                 if validate:
-                    validate(result)
+                    checked = validate(result)
+                    if inspect.isawaitable(checked):
+                        await checked
                 return result
             except (ValueError, TypeError) as exc:
                 if isinstance(exc, ValidationError):
