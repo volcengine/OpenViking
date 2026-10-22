@@ -70,9 +70,9 @@ class MemoryConfig(BaseModel):
         default=5,
         ge=1,
         description=(
-            "Number of top search results to read during prefetch. "
-            "Only applies when eager_prefetch is enabled. "
-            "When multiple directories are searched, results are merged and top-N are read."
+            "Deprecated and ignored. Prefetch retains all unique results returned by "
+            "the conversation and maintenance queries, and reads all of them when "
+            "eager_prefetch is enabled. Each search keeps its own result limit."
         ),
     )
     maintenance_review_tokens: int = Field(

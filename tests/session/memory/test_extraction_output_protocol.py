@@ -170,6 +170,33 @@ def _bind(protocol, context: ExtractionOutputContext) -> str:
     return protocol.render_new_bindings(context, source="test read")
 
 
+@pytest.mark.asyncio
+async def test_local_patch_keeps_existing_title_and_amount():
+    old_content = "- Favorite film: Spirited Away.\n- Helmet price: 120 yuan.\n- Plays piano."
+    memory = _existing_preference(
+        "viking://user/test/memories/preferences/music.md", "music", old_content
+    )
+    context = _context([_preference_schema()], files=[memory])
+    protocol = create_extraction_output_protocol("python")
+    _bind(protocol, context)
+    binding = protocol.binding_name(memory.uri)
+    response = (
+        f'{binding}.content.edit(search="""- Plays piano.""", '
+        'replace="""- Plays piano and violin.""")\nsdk.commit()'
+    )
+
+    operations, error = protocol.parse(response, context)
+
+    assert error is None
+    from openviking.session.memory.merge_op import MergeOpFactory
+
+    content_field = context.schemas[0].fields[1]
+    new_content = await MergeOpFactory.from_field(content_field).apply(
+        old_content, operations.preferences[0].content
+    )
+    assert new_content == old_content.replace("- Plays piano.", "- Plays piano and violin.")
+
+
 def test_json_protocol_preserves_stable_parser_and_empty_contract():
     context = _context([_preference_schema()])
     protocol = create_extraction_output_protocol("json")

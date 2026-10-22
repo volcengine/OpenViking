@@ -380,10 +380,14 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `custom_templates_dir` | path | `""` | Custom memory template directory; a matching `memory_type` overrides the loaded template |
 | `experimental_memory_switch` | boolean | `false` | Enable experimental templates |
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
-| `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
+| `prefetch_search_topn` | integer, `>= 1` | `5` | Deprecated and ignored; all unique results returned by prefetch queries are retained |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+
+Prefetch searches with the original conversation query and supplements it with planned maintenance queries in the same permitted memory directories. Each query returns at most five files. Results are deduplicated by URI without a shared top-N cutoff. With `eager_prefetch` enabled, all returned unique files are read before extraction; otherwise, their URIs remain available for on-demand reads. An empty or failed maintenance plan still keeps the original query.
+
+Session extraction considers new facts in the full conversation independently of maintenance-query targets. It checks Event source ranges and asks the model to preserve unaffected facts when updating existing cards, preferring local patches where supported. An Event records an occurrence, an Entity describes an object, and a Preference records a reusable choice; each enabled schema and its role/peer rules still apply. One fact does not require a card of every type, and add-only Events are not mandatory for every batch.
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
 
