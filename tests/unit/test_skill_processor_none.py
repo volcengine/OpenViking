@@ -188,3 +188,53 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     assert written["skill_dict"]["tags"] == ["dict"]
     processor._enqueue_skill_package.assert_awaited_once()
     viking_fs._async_agfs.pathlock_release.assert_not_awaited()
+
+
+class TestWriteSkillContentPrivacy:
+    """Generated sidecars must be written verbatim (identity stays literal)."""
+
+    async def test_sidecars_are_not_resanitized(self, monkeypatch):
+        from openviking.storage import abstract_overview as abstract_overview_module
+
+        written: dict[str, str] = {}
+        captured: dict[str, str] = {}
+
+        class _FS:
+            async def write_file(self, uri, content, **_kwargs):
+                written[uri] = content
+
+        async def _fake_write_abstract_overview(**kwargs):
+            captured["abstract"] = kwargs["abstract"]
+            captured["overview"] = kwargs["overview"]
+
+        monkeypatch.setattr(
+            abstract_overview_module, "write_abstract_overview", _fake_write_abstract_overview
+        )
+
+        reference = "{{ov_privacy:alice:viking://~/privacy/skill/other#/values/pg_user}}"
+        processor = SkillProcessor(vikingdb=None)
+
+        # stand in for the catalog: it rewrites "analytics" wherever it appears
+        async def _sanitize(text, **_kwargs):
+            return text.replace("analytics", reference)
+
+        processor._sanitize_registered_privacy = _sanitize
+
+        await processor._write_skill_content(
+            viking_fs=_FS(),
+            skill_dict={
+                "name": "email-analytics",
+                "description": "analytics for email",
+                "content": "body mentions analytics",
+            },
+            skill_dir_uri="viking://user/default/skills/email-analytics",
+            abstract="name: email-analytics\ndescription: analytics for email",
+            overview="# Email analytics\n\nanalytics body",
+            ctx=RequestContext(user=UserIdentifier("account-a", "alice"), role=Role.USER),
+            lease_ref={"lease_ref": "lease"},
+        )
+
+        skill_md = written["viking://user/default/skills/email-analytics/SKILL.md"]
+        assert reference in skill_md  # SKILL.md is sanitized
+        assert captured["abstract"] == "name: email-analytics\ndescription: analytics for email"
+        assert captured["overview"] == "# Email analytics\n\nanalytics body"

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -233,3 +234,60 @@ async def test_sanitizer_never_rewrites_privacy_storage_itself():
     assert result.content == "secret"
     assert not result.changed
     assert catalog.build_reads == 0
+
+
+async def test_sanitizer_leaves_yaml_frontmatter_literal_and_rewrites_the_body():
+    catalog = _PrivacyCatalog({"skill": {"mailserver": {"container_name": "mailserver"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    uri = "viking://user/alice/skills/mailserver/SKILL.md"
+    document = (
+        "---\n"
+        "name: mailserver\n"
+        "description: mailserver runs on the homelab\n"
+        "---\n"
+        "connect to mailserver now\n"
+    )
+
+    result = await sanitizer.sanitize(document, ctx=_ctx(), uri=uri)
+    frontmatter, body = result.content.split("\n---\n", 1)
+
+    # identity and description stay literal: a `{{...}}` scalar is a YAML flow
+    # mapping, and `name` must remain the key callers look skills up by
+    assert frontmatter == "---\nname: mailserver\ndescription: mailserver runs on the homelab"
+    assert "{{ov_privacy:" in body
+    # the literal survives only inside the reference path, not as content
+    assert "mailserver" not in re.sub(r"\{\{ov_privacy:[^{}\r\n]*\}\}", "", body)
+    assert all(replacement.start >= len(frontmatter) + len("\n---\n") for replacement in result.replacements)
+
+
+def test_split_yaml_frontmatter_requires_a_real_block():
+    from openviking.privacy.sanitizer import split_yaml_frontmatter
+
+    assert split_yaml_frontmatter("no frontmatter\n") == ("", "no frontmatter\n")
+    assert split_yaml_frontmatter("---\nname: x\nbody without a close\n") == (
+        "",
+        "---\nname: x\nbody without a close\n",
+    )
+    assert split_yaml_frontmatter("---\nname: x\n---\nbody\n") == (
+        "---\nname: x\n---\n",
+        "body\n",
+    )
+
+
+async def test_generated_sidecar_metadata_is_not_sanitized():
+    # The L0 abstract is a frontmatter-free YAML mapping, so without an explicit
+    # rule the body pass rewrites identity (name/description) inside it.
+    catalog = _PrivacyCatalog({"skill": {"other": {"pg_user": "analytics"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    abstract = "name: email-analytics\ndescription: analytics for email\ntags:\n- email\n"
+
+    sidecar = await sanitizer.sanitize(
+        abstract, ctx=_ctx(), uri="viking://user/alice/skills/email-analytics/.abstract.md"
+    )
+    assert sidecar.content == abstract
+
+    body = await sanitizer.sanitize(
+        abstract, ctx=_ctx(), uri="viking://user/alice/skills/email-analytics/SKILL.md"
+    )
+    assert body.content != abstract
+    assert "{{ov_privacy:" in body.content

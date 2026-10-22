@@ -671,16 +671,13 @@ class SkillProcessor:
             ctx=ctx,
             uri=skill_md_uri,
         )
-        abstract = await self._sanitize_registered_privacy(
-            abstract,
-            ctx=ctx,
-            uri=f"{skill_dir_uri}/.abstract.md",
-        )
-        overview = await self._sanitize_registered_privacy(
-            overview,
-            ctx=ctx,
-            uri=f"{skill_dir_uri}/.overview.md",
-        )
+        # The sidecars are derived text: they summarise `serialized` above, which
+        # is already sanitized. Sanitizing them again rewrites *identity* when a
+        # skill name or description contains a literal that happens to be
+        # registered elsewhere - `email-analytics` becomes
+        # `email-{{ov_privacy:...:skill/tweetvault#/values/pg_user}}` because
+        # tweetvault registers `pg_user=analytics`, and the skill then no longer
+        # matches its directory name and drops out of the skills index.
         await viking_fs.write_file(
             skill_md_uri,
             serialized,

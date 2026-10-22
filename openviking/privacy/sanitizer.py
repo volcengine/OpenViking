@@ -43,6 +43,21 @@ class PrivacySanitizationResult:
         return bool(self.replacements)
 
 
+def split_yaml_frontmatter(content: str) -> tuple[str, str]:
+    """Split a leading ``---`` frontmatter block from the document body.
+
+    Returns ``("", content)`` for documents without frontmatter.
+    """
+
+    if not content.startswith("---\n"):
+        return "", content
+    end = content.find("\n---\n", 3)
+    if end == -1:
+        return "", content
+    split_at = end + len("\n---\n")
+    return content[:split_at], content[split_at:]
+
+
 class PrivacySanitizer:
     """Sanitize text with the active sensitive values owned by the current user."""
 
@@ -87,6 +102,43 @@ class PrivacySanitizer:
     ) -> PrivacySanitizationResult:
         if not content or self._is_privacy_storage_uri(uri, ctx):
             return PrivacySanitizationResult(content=content)
+        # Generated sidecars are metadata, not prose: the L0 abstract is a
+        # frontmatter-free YAML mapping (name/description/tags), so the
+        # body-only rule below cannot protect it, and sanitizing it rewrites
+        # identity - a skill whose name contains a literal registered elsewhere
+        # is stored as `name: <ref>` and stops matching its directory. Sidecars
+        # are sanitized where they are generated; the stored copy is written
+        # verbatim.
+        if uri.endswith(("/.abstract.md", "/.overview.md")):
+            return PrivacySanitizationResult(content=content)
+        # Frontmatter is structured metadata: rewriting a value into a plain
+        # scalar that starts with `{{` makes that scalar a YAML flow mapping, so
+        # one substituted value can make the whole stored document (a SKILL.md,
+        # for instance) unparsable for every later consumer, and identity fields
+        # such as `name` must stay literal. Sanitize the body only.
+        frontmatter, body = split_yaml_frontmatter(content)
+        if frontmatter:
+            body_result = await self.sanitize(
+                body,
+                ctx=ctx,
+                uri=uri,
+                max_replacements=max_replacements,
+                fail_on_match_limit=fail_on_match_limit,
+            )
+            offset = len(frontmatter)
+            return PrivacySanitizationResult(
+                content=frontmatter + body_result.content,
+                replacements=tuple(
+                    PrivacyReplacement(
+                        start=replacement.start + offset,
+                        end=replacement.end + offset,
+                        reference=replacement.reference,
+                    )
+                    for replacement in body_result.replacements
+                ),
+                ambiguous_references=body_result.ambiguous_references,
+                match_limit_exceeded=body_result.match_limit_exceeded,
+            )
         content_bytes = len(content.encode("utf-8"))
         if content_bytes > self._max_content_bytes:
             raise ResourceExhaustedError(
