@@ -2804,6 +2804,63 @@ async def test_declared_add_type_routes_generic_type_to_connector(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_oauth_ref", [False, True])
+async def test_confluence_uses_oauth_ref_only_when_present(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+    with_oauth_ref,
+):
+    connector_config.allowed_add_types = ["confluence"]
+    connector_config.auth = "https://connector.example/oauth/access_token"
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+    reference = {
+        "account_id": "cloud-account",
+        "user_id": "cloud-user",
+        "ov_user_id": "alice",
+        "platform": "confluence",
+        "type": "oauth",
+    }
+    fetch = Mock(return_value={"access_token": " oauth-token ", "expires_at": 4102444800})
+    monkeypatch.setattr(auth.ConnectorClient, "get_oauth_access_token", fetch)
+    args = {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+    }
+    expected_auth = {"email": "user@example.com", "api_token": "api-token"}
+    if with_oauth_ref:
+        args[auth.OAUTH_REF_ARG] = reference
+    else:
+        args["auth_config"] = expected_auth
+
+    await service.add_resource(
+        path="https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+        ctx=ctx,
+        add_type="confluence",
+        to="viking://resources/kb/confluence",
+        args=args,
+    )
+
+    request = connector_client.submit_doc_add.await_args.kwargs
+    assert request["param_config"] == {
+        "cloud_id": "cloud-1",
+        "resources": [{"type": "page", "id": "123"}],
+        "path": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Page",
+    }
+    if with_oauth_ref:
+        assert request["auth_config"] == {"access_token": "oauth-token"}
+        fetch.assert_called_once_with(connector_config.auth, ctx.api_key, reference)
+    else:
+        assert request["auth_config"] == expected_auth
+        fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_declared_registry_type_routes_like_probed(
     monkeypatch,
     connector_config,

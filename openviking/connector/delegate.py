@@ -26,7 +26,12 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from openviking.connector.auth import OAUTH_REF_ARG, document_auth_config, project_auth_config
+from openviking.connector.auth import (
+    OAUTH_REF_ARG,
+    confluence_auth_config,
+    document_auth_config,
+    project_auth_config,
+)
 from openviking.connector.client import ConnectorClient
 from openviking.connector.routing import (
     CONNECTOR_ARGS_AUTH_CONFIG_KEY,
@@ -579,6 +584,9 @@ class ConnectorDelegate:
             forwarded_args.pop(OAUTH_REF_ARG, None)
         if add_type == "feishu_doc" and OAUTH_REF_ARG in (connector_args or {}):
             auth_config = await document_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
+        if add_type == "confluence" and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await confluence_auth_config(connector_args or {}, ctx)
             forwarded_args.pop(OAUTH_REF_ARG, None)
 
         tos_path: Optional[str] = None
