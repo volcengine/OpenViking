@@ -231,7 +231,7 @@ peer_enabled: true
   - 生效环节：经验型记忆落盘与更新阶段
   - 影响能力：从任务结果中沉淀可复用指导
   - 作用：记录持久的执行经验及其替代的旧记忆
-  - 关键字段：`experience_name`、`content`、`supersedes`
+  - 关键字段：`experience_name`、`content`、`supersedes`（可选；不替换其他经验时可省略）
 
 - `identity`
   - 生效环节：agent identity 记忆落盘阶段

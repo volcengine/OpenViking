@@ -49,6 +49,7 @@ fields:
 
   - name: supersedes
     type: string
+    required: false
     description: |
       The experience_name of an existing experience that this one supersedes.
       Set ONLY when this experience replaces a narrower existing experience with a DIFFERENT name.

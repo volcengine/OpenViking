@@ -172,6 +172,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             f"  - Identity fields (primary key): {identity_label}. Calls with identical "
             "identity field values address the same memory object.",
         ]
+        for memory_field in schema.fields:
+            if not memory_field.required:
+                lines.append(
+                    f"  - {_identifier_alias(memory_field.name)} is optional; may be omitted."
+                )
         operation_field = context.operations_model.model_fields.get(schema.memory_type)
         schema_description = getattr(operation_field, "description", None)
         if schema_description:
@@ -915,7 +920,9 @@ class _PythonProgramCompiler:
                     f"field edits (obj.field.edit/drop) cannot be used when {action} a memory; "
                     "pass the complete field value",
                 )
-            missing_fields = [field.name for field in schema.fields if field.name not in kwargs]
+            missing_fields = [
+                field.name for field in schema.fields if field.required and field.name not in kwargs
+            ]
             if missing_fields:
                 self._error(
                     node,
